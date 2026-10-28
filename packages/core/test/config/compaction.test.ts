@@ -1,4 +1,6 @@
 import { describe, expect } from "bun:test"
+import { SessionRehydration } from "@orbit/core/session/rehydration"
+import { FileLedger } from "@orbit/core/file-ledger"
 import { LanguageModel, LLMClient, LLMEvent } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { Bus } from "@orbit/core/bus"
@@ -51,6 +53,12 @@ const it = testEffect(
       ),
       Config.node.replace(config),
       SessionReminders.node.replace(SessionReminders.configured(SessionReminders.production)),
+
+      // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+
+      SessionRehydration.node.replace(SessionRehydration.noopLayer),
+
+      FileLedger.node.replace(FileLedger.permissiveLayer),
     ]),
   ),
 )

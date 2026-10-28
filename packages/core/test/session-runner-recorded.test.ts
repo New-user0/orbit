@@ -1,4 +1,5 @@
 import { HttpRecorder } from "@orbit/http-recorder"
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import { OpenAIChat } from "@orbit/ai/protocols/openai-chat"
 import { Auth, LLMClient, type LLMClientService, RequestExecutor } from "@orbit/ai/route"
 import { Model } from "@orbit/core/model"
@@ -106,6 +107,8 @@ const runnerLayer = (llmClient: Layer.Layer<LLMClientService>) =>
     LayerNodePlatform.llmClient.replace(llmClient),
     SessionRunnerModel.node.replace(models),
     InstructionBuiltIns.node.replace(systemContext),
+    // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+    SessionRehydration.node.replace(SessionRehydration.noopLayer),
     InstructionDiscovery.node.replace(instructionContext),
     noScratchpad,
     noMemory,
@@ -166,6 +169,8 @@ const testLayer = (llmClient: Layer.Layer<LLMClientService>) =>
       Model.node.replace(promptModels),
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(systemContext),
+      // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+      SessionRehydration.node.replace(SessionRehydration.noopLayer),
       InstructionDiscovery.node.replace(instructionContext),
       noScratchpad,
       noMemory,

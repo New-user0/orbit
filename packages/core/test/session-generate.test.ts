@@ -1,4 +1,5 @@
 import { expect } from "bun:test"
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import path from "path"
 import { App } from "@orbit/core/app"
 import {
@@ -179,6 +180,8 @@ const it = testEffect(
       noScratchpad,
       noMemory,
       noVcsSnapshot,
+      // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+      SessionRehydration.node.replace(SessionRehydration.noopLayer),
       InstructionDiscovery.node.replace(discovery),
       SkillInstructions.node.replace(skills),
       ReferenceInstructions.node.replace(references),

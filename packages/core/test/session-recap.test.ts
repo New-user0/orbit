@@ -2,6 +2,7 @@
 // Session, an empty system prompt, no tools and the recap instruction as the last user message. It is recorded as
 // `session.recap.recorded`, projected as a `recap` message, never lowered into a model request, and written at most
 // once per user turn, however many clients ask.
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import { beforeEach, expect } from "bun:test"
 import { LLMEvent, LLMRequest, LanguageModel, SystemPart, ToolDefinition } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
@@ -150,6 +151,8 @@ const it = testEffect(
         noScratchpad,
         noMemory,
         noVcsSnapshot,
+        // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+        SessionRehydration.node.replace(SessionRehydration.noopLayer),
         InstructionDiscovery.node.replace(
           Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
         ),

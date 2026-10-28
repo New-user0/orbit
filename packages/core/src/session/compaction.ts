@@ -21,10 +21,11 @@ import type { StreamOptions } from "@orbit/ai/route"
 import type { SessionCompactionResult } from "@orbit/plugin/effect/session"
 import type { SessionError } from "@orbit/schema/session-error"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
-import { Context, DateTime, Effect, Layer, Result, Stream } from "effect"
+import { Cause, Context, DateTime, Effect, Layer, Result, Stream } from "effect"
 import { Bus } from "../bus.js"
 import { Database } from "../database/database.js"
 import { llmClient } from "../effect/app-node-platform.js"
+import { FileLedger } from "../file-ledger.js"
 import { State } from "../state.js"
 import { Token } from "../util/token.js"
 import type { SessionContext } from "./context.js"
@@ -36,6 +37,7 @@ import { SessionModelRequest } from "./model-request.js"
 import { SessionReminders } from "./reminders.js"
 import { SessionToolText } from "./tool-text.js"
 import { SessionProviderContext } from "./provider-context.js"
+import { SessionRehydration } from "./rehydration.js"
 import { SessionRunnerRetry } from "./runner/retry.js"
 import { CLEARED_RESULT, clearedCalls, toLLMMessages, withoutReplaced } from "./runner/to-llm-message.js"
 import { isReminder } from "./reminder-text.js"
@@ -206,6 +208,8 @@ export const layer = Layer.effect(
     const requests = yield* SessionModelRequest.Service
     const reminders = yield* SessionReminders.Service
     const toolOutput = yield* ToolOutput.Service
+    const ledger = yield* FileLedger.Service
+    const rehydration = yield* SessionRehydration.Service
 
     const state = State.create<Settings, Editor>({
       name: "session-compaction",
@@ -244,25 +248,40 @@ export const layer = Layer.effect(
           ? compactNatively(trigger, budget, settings.keep)
           : summarize(trigger, budget, compactable(kept?.summarized ?? context.messages), true)
       // A result that keeps messages must leave room below the automatic threshold. On the automatic paths one that does
-      // not is dropped for a full summary, which the person's own request is spared (the window is known).
+      // not is dropped for a full summary, which the person's own request is spared (the window is known). The sections
+      // of the rehydration that are not budgeted (the background subagents and the plan) will follow it, so they count.
       const crowded = (result: Result) =>
-        kept?.start !== undefined &&
-        trigger.reason !== "manual" &&
-        found !== undefined &&
-        estimateRequest({
-          system: [],
-          tools: [],
-          messages: toLLMMessages([...kept.kept, checkpointOf(result.text)], context.model.ref, undefined, [], {
-            minimal: reminders.minimal,
-            toolOutput: toolOutput.root,
-          }),
-        }) >= found.threshold
+        kept?.start !== undefined && trigger.reason !== "manual" && found !== undefined
+          ? rehydration.fixed(context.session).pipe(
+              Effect.map((fixed) => fixed.tokens),
+              // What cannot be read here is not restored either, so it counts for nothing.
+              Effect.catchCauseIf(
+                (cause) => !Cause.hasInterruptsOnly(cause),
+                () => Effect.succeed(0),
+              ),
+              Effect.map(
+                (fixed) =>
+                  fixed +
+                    estimateRequest({
+                      system: [],
+                      tools: [],
+                      messages: toLLMMessages([...kept.kept, checkpointOf(result.text)], context.model.ref, undefined, [], {
+                        minimal: reminders.minimal,
+                        toolOutput: toolOutput.root,
+                      }),
+                    }) >=
+                  found.threshold,
+              ),
+            )
+          : Effect.succeed(false)
       return yield* compaction.pipe(
         Effect.map((result): Result => ({ ...result, retain: kept?.start })),
         Effect.flatMap((result) =>
-          crowded(result)
-            ? summarize(trigger, budget, compactable(context.messages), false)
-            : Effect.succeed(result),
+          crowded(result).pipe(
+            Effect.flatMap((full) =>
+              full ? summarize(trigger, budget, compactable(context.messages), false) : Effect.succeed(result),
+            ),
+          ),
         ),
         Effect.matchEffect({
           onSuccess: (result) => publish(trigger, result),
@@ -280,9 +299,10 @@ export const layer = Layer.effect(
 
     const due = (context: SessionContext.Loaded, ceiling: number) => {
       const messages = context.messages
-      // A compaction just completed; let the runner rebuild the request from it first.
-      const last = messages.at(-1)
-      if (last?.type === "compaction" && last.status === "completed") return false
+      // A compaction just completed (nothing follows it but its rehydration row); let the runner rebuild the request from
+      // it first.
+      const latest = messages.findLastIndex((message) => message.type === "compaction" && message.status === "completed")
+      if (latest !== -1 && messages.slice(latest + 1).every(SessionRehydration.isRow)) return false
       // An encrypted native window estimates as nothing, so wait for a response to measure it.
       const measured = messages.findLastIndex((message) => hasMeasuredPrompt(message, context.model.ref))
       if (measured < messages.findLastIndex(SessionProviderContext.isCheckpoint)) return false
@@ -754,6 +774,8 @@ export const layer = Layer.effect(
      * compaction's message shows the total across all of its calls. A session never runs two compactions at once.
      */
     const spent = new Map<SessionContext.Loaded["session"]["id"], SessionUsage.Recorded>()
+    // The sessions whose running compaction has stored its end.
+    const settled = new Set<SessionContext.Loaded["session"]["id"]>()
     const spend = (sessionID: SessionContext.Loaded["session"]["id"], usage: SessionUsage.Recorded | undefined) =>
       Effect.gen(function* () {
         if (!usage) return
@@ -782,7 +804,10 @@ export const layer = Layer.effect(
         return { status: "failed", error: outcome.error }
       }
 
-      yield* bus.publish(
+      // What the ledger held before the end, which tells the rehydration which files this process read and where the
+      // session's writes put them.
+      const held = yield* ledger.held(sessionID)
+      const ended = yield* bus.publish(
         SessionEvent.Compaction.Ended,
         {
           sessionID,
@@ -797,7 +822,44 @@ export const layer = Layer.effect(
         },
         { metadata: outcome.metadata },
       )
+      settled.add(sessionID)
+      // Cleared here, in this fiber, so the ledger's own subscriber skips this end and what the rehydration records stays.
+      yield* ledger.compacted(sessionID, ended.id)
+      yield* rehydrate(context, held).pipe(
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logWarning("The context after a compaction could not be restored, so the compaction stands alone").pipe(
+              Effect.annotateLogs({ sessionID, cause: Cause.pretty(cause) }),
+            ),
+        ),
+      )
       return { status: "completed" }
+    })
+
+    /**
+     * The rehydration of a compaction that just ended. Its room is what the history after the checkpoint leaves below the
+     * automatic threshold, estimated as the runner will load it; an unknown window leaves the room unset.
+     */
+    const rehydrate = Effect.fnUntraced(function* (
+      context: SessionContext.Loaded,
+      held: ReadonlyMap<string, FileLedger.Seen>,
+    ) {
+      const view = yield* SessionHistory.load(
+        db,
+        context.session.id,
+        SessionProviderContext.provenance(context.model) ?? "local",
+      ).pipe(Effect.orDie)
+      const found = thresholds(context, state.get())
+      yield* rehydration.after({
+        before: context,
+        held,
+        view,
+        room:
+          found === undefined
+            ? undefined
+            : found.threshold - estimateContext({ ...context, messages: view }, reminders.minimal, toolOutput.root),
+      })
     })
 
     return Service.of({
@@ -816,12 +878,18 @@ export const layer = Layer.effect(
       },
       compact: (trigger) =>
         compact(trigger).pipe(
+          // A compaction that already ended stays completed, even when its rehydration is interrupted.
           Effect.onInterrupt(() =>
-            trigger.reason === "manual"
+            trigger.reason === "manual" || settled.has(trigger.context.session.id)
               ? Effect.void
               : publish(trigger, { error: { type: "compaction.interrupted", message: "Compaction was interrupted" } }),
           ),
-          Effect.ensuring(Effect.sync(() => spent.delete(trigger.context.session.id))),
+          Effect.ensuring(
+            Effect.sync(() => {
+              spent.delete(trigger.context.session.id)
+              settled.delete(trigger.context.session.id)
+            }),
+          ),
         ),
     })
   }),
@@ -830,7 +898,16 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Bus.node, Database.node, llmClient, SessionModelRequest.node, SessionReminders.node, ToolOutput.node],
+  deps: [
+    Bus.node,
+    Database.node,
+    llmClient,
+    SessionModelRequest.node,
+    SessionReminders.node,
+    ToolOutput.node,
+    FileLedger.node,
+    SessionRehydration.node,
+  ],
 })
 
 /** What a compaction reads: no replaced attempts and no reminder rows, which are collected again after the checkpoint. */

@@ -4,6 +4,7 @@
 // own prompt takes the default prompt's place, to a system prompt of the person's, or to a minimal instance. It stands
 // after the scratchpad and before the entries of the API (class 12), reads the setting the runner clears by (class 3),
 // and the request's system part and tool list stay as they were across every event that changes only the history.
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import os from "os"
@@ -152,6 +153,8 @@ const it = testEffect(
       ]),
       [
         Global.node.replace(tempGlobalLayer),
+        // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+        SessionRehydration.node.replace(SessionRehydration.noopLayer),
         Config.node.replace(config),
         FSUtil.node.replace(recorded.layer),
         SessionRunnerModel.node.replace(models),

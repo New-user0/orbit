@@ -1,8 +1,9 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { LLMClient, LLMEvent, LanguageModel, Message, type LLMRequest } from "@orbit/ai"
+import { CompactionResponse, LLMClient, LLMEvent, LanguageModel, Message, type LLMRequest } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
+import { OpenAI } from "@orbit/ai/providers"
 import { Agent } from "@orbit/core/agent"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { llmClient } from "@orbit/core/effect/app-node-platform"
@@ -28,6 +29,7 @@ import { PermissionSaved } from "@orbit/core/permission/saved"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PlanMode } from "@orbit/core/plan-mode"
 import { Project } from "@orbit/core/project"
+import { AbsolutePath } from "@orbit/core/schema"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { Session } from "@orbit/core/session"
 import { SessionCompaction } from "@orbit/core/session/compaction"
@@ -57,7 +59,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
-import { Deferred, Effect, Exit, Fiber, Layer, Logger, Stream } from "effect"
+import { DateTime, Deferred, Effect, Exit, Fiber, Layer, Logger, Stream } from "effect"
 import { tempLocationLayer } from "./fixture/location"
 import { recordedFileSystem, sharesTouched } from "./fixture/recorded-fs"
 import { canLinkFile } from "./fixture/symlink"
@@ -87,7 +89,15 @@ const client = Layer.mock(LLMClient.Service)({
     return Stream.make(LLMEvent.textDelta({ id: "summary", text: "the summary" }))
   },
   generate: () => Effect.die("unused"),
+  // A provider's own compaction answers with the window that replaces the history.
+  compact: (() =>
+    Effect.succeed(new CompactionResponse({ replacement: [Message.user("the window")] }))) as never,
 })
+// A model whose compaction is the provider's own, at its compaction endpoint.
+const nativeModel = (() => {
+  const native = OpenAI.configure({ apiKey: "fixture", baseURL: "http://127.0.0.1:9/v1" }).responses("gpt-5.4-mini")
+  return LanguageModel.update(native, { route: native.route.with({ compact: { endpoint: native.route.compact.endpoint } }) })
+})()
 
 const writerDeps = [
   FileLedger.node,
@@ -99,27 +109,45 @@ const writerDeps = [
   Location.node,
   Permission.node,
 ] as const
-const toolNode = (name: string, plugin: Parameters<typeof registerToolPlugin>[0], deps: ReadonlyArray<LayerNode.Any>) =>
-  makeLocationNode({ name, layer: Layer.effectDiscard(registerToolPlugin(plugin)), deps: [...deps] })
-const readNode = toolNode("test/rehydration-read", ReadTool.Plugin, [
-  Config.node,
-  Environment.node,
-  FileLedger.node,
-  Tool.node,
-  ReadToolFileSystem.node,
-  FileAccess.node,
-  Image.node,
-  Permission.node,
-  SessionInstructions.node,
-  InstructionTriggers.node,
-  InstructionDiscovery.node,
-  FSUtil.node,
-  Location.node,
-])
-const editNode = toolNode("test/rehydration-edit", EditTool.Plugin, writerDeps)
-const writeNode = toolNode("test/rehydration-write", WriteTool.Plugin, writerDeps)
-const patchNode = toolNode("test/rehydration-patch", PatchTool.Plugin, writerDeps)
-const notebookNode = toolNode("test/rehydration-notebook", NotebookEditTool.Plugin, writerDeps)
+const readNode = makeLocationNode({
+  name: "test/rehydration-read",
+  layer: Layer.effectDiscard(registerToolPlugin(ReadTool.Plugin)),
+  deps: [
+    Config.node,
+    Environment.node,
+    FileLedger.node,
+    Tool.node,
+    ReadToolFileSystem.node,
+    FileAccess.node,
+    Image.node,
+    Permission.node,
+    SessionInstructions.node,
+    InstructionTriggers.node,
+    InstructionDiscovery.node,
+    FSUtil.node,
+    Location.node,
+  ],
+})
+const editNode = makeLocationNode({
+  name: "test/rehydration-edit",
+  layer: Layer.effectDiscard(registerToolPlugin(EditTool.Plugin)),
+  deps: [...writerDeps],
+})
+const writeNode = makeLocationNode({
+  name: "test/rehydration-write",
+  layer: Layer.effectDiscard(registerToolPlugin(WriteTool.Plugin)),
+  deps: [...writerDeps],
+})
+const patchNode = makeLocationNode({
+  name: "test/rehydration-patch",
+  layer: Layer.effectDiscard(registerToolPlugin(PatchTool.Plugin)),
+  deps: [...writerDeps],
+})
+const notebookNode = makeLocationNode({
+  name: "test/rehydration-notebook",
+  layer: Layer.effectDiscard(registerToolPlugin(NotebookEditTool.Plugin)),
+  deps: [...writerDeps],
+})
 
 const config = Config.testLayer()
 const recorded = recordedFileSystem()
@@ -237,7 +265,33 @@ const graph = (replacements: LayerNode.Replacements = []) =>
 const it = testEffect(Layer.merge(graph(), config))
 const failing = testEffect(Layer.merge(graph([Job.node.replace(dyingJob)]), config))
 const holding = testEffect(Layer.merge(graph([Job.node.replace(heldJob)]), config))
-const shared = testEffect(Layer.merge(graph([Global.node.replace(homeLayer("\\\\host\\share\\home"))]), config))
+// Only the rehydration sees a home on a share: other services read the home folder when they start.
+const shared = testEffect(
+  Layer.merge(
+    graph([
+      SessionRehydration.node.replace(
+        makeLocationNode({
+          service: SessionRehydration.Service,
+          layer: SessionRehydration.layer.pipe(Layer.provide(homeLayer("\\\\host\\share\\home"))),
+          deps: [
+            Bus.node,
+            SessionStore.node,
+            FileLedger.node,
+            FileAccess.node,
+            ReadToolFileSystem.node,
+            Permission.node,
+            ProjectTrust.node,
+            InstructionTriggers.node,
+            InstructionDiscovery.node,
+            Job.node,
+            FSUtil.node,
+          ],
+        }),
+      ),
+    ]),
+    config,
+  ),
+)
 const linked = canLinkFile ? it.live : it.live.skip
 
 const build = Agent.ID.make("build")
@@ -423,9 +477,22 @@ const setup = (rules: Permission.Ruleset = [allowAll]) =>
         readonly retain?: SessionMessage.ID
         readonly target?: Session.Info
         readonly limit?: { readonly context: number; readonly output: number }
+        /** The provider's own compaction instead of a summary. */
+        readonly native?: boolean
       } = {},
     ) {
-      const given = yield* context(options.target, options.limit)
+      const plain = yield* context(options.target, options.limit)
+      const given = options.native
+        ? {
+            ...plain,
+            model: SessionRunnerModel.resolved(nativeModel, {
+              capabilities: { tools: true, input: ["text"], output: ["text"] },
+              cost: [],
+              limit: { context: 200_000, output: 8_000 },
+              compaction: { type: "native" },
+            }),
+          }
+        : plain
       const reason = options.reason ?? "manual"
       return yield* compaction.compact(
         reason === "manual"
@@ -434,7 +501,7 @@ const setup = (rules: Permission.Ruleset = [allowAll]) =>
       )
     })
     const rows = Effect.fnUntraced(function* (target: Session.Info = session) {
-      return (yield* store.messages({ sessionID: target.id })).filter(isRow)
+      return (yield* store.messages({ sessionID: target.id, order: "asc" })).filter(isRow)
     })
     const row = Effect.fnUntraced(function* (target: Session.Info = session) {
       const found = yield* rows(target)
@@ -530,7 +597,7 @@ const outside = () => Effect.acquireRelease(Effect.promise(() => tmpdir()), (tmp
 const status = (result: unknown) => (result as { status: string }).status
 const errorType = (result: unknown) => (result as { error?: { type?: string } }).error?.type
 const wholeRead = (absolute: string, content: string) =>
-  ReadTool.toModelContent(absolute, undefined, { type: "file", content, mime: "text/plain", encoding: "utf8" } as never)
+  ReadTool.toModelContent(absolute, undefined, { type: "file", content, mime: "text/plain", encoding: "utf8" } as never) as string
 
 describe("rehydration after a compaction", () => {
   // RH1
@@ -552,10 +619,10 @@ describe("rehydration after a compaction", () => {
       yield* h.readFile(file("five.ipynb"), notebook("print(5)"))
       expect(
         status(
-          yield* h.run("NotebookEdit", { notebook_path: file("five.ipynb"), cell_id: "calc", new_source: "print(55)" }),
+          yield* h.run("NotebookEdit", { notebook_path: file("five.ipynb"), mode: "replace", cellId: "calc", source: "print(55)" }),
         ),
       ).toBe("completed")
-      yield* h.put(file("six.txt"), "six\n")
+      yield* h.readFile(file("six.txt"), "six\n")
       expect(
         status(
           yield* h.run("Patch", {
@@ -625,7 +692,9 @@ describe("rehydration after a compaction", () => {
       )
       expect(texts[0]).toContain("the summary")
       expect(texts[1]).toBe("kept prompt")
-      expect(texts.slice(-2)).toEqual([found.text, "after the compaction"])
+      expect(texts.at(-2)).toBe(found.text)
+      // The kept step ended on a call, so the prompt after it reads as one sent while that work went on.
+      expect(texts.at(-1)).toEndWith("after the compaction")
     }),
   )
 
@@ -642,22 +711,30 @@ describe("rehydration after a compaction", () => {
       // About 1,500 tokens: more than the files leave of the room.
       yield* h.record("Skill", { id: "tiny" }, { content: [{ type: "text", text: "TINY-SKILL ".repeat(550) }], metadata: { name: "tiny" } })
 
-      // A window whose room after the checkpoint is about 6,000 tokens: the threshold moves one for one with the window.
-      const probe = yield* h.context(h.session, { context: 100_000, output: 8_000 })
-      const at = h.compaction.thresholds(probe).thresholds!.threshold
-      const checkpointOnly = SessionCompaction.estimateContext({ ...probe, messages: [] })
-      const room = (left: number) => ({ context: 100_000 + (checkpointOnly + 50 + left - at), output: 8_000 })
-
-      expect(yield* h.compact({ limit: room(6_000) })).toEqual({ status: "completed" })
-      const budgeted = (yield* h.rows()).at(-1)!
-      expect(h.restored(budgeted)).toEqual([first, small])
-      expect(budgeted.text).not.toContain("TINY-SKILL")
+      // A window whose room after the checkpoint (about 50 tokens) is `left` tokens, found by a few steps of the window.
+      const checkpointOnly = SessionCompaction.estimateContext({ ...(yield* h.context()), messages: [] }) + 50
+      const roomAt = (context: number) =>
+        h.compaction.thresholds(h.loaded(h.session, [], { context, output: 8_000 })).thresholds!.threshold - checkpointOnly
+      const room = (left: number) => {
+        let context = 100_000
+        for (let step = 0; step < 8; step++) context += left - roomAt(context)
+        return { context, output: 8_000 }
+      }
 
       // An unknown window: the reference totals apply.
       expect(yield* h.compact({ limit: { context: 0, output: 8_000 } })).toEqual({ status: "completed" })
       const unknown = (yield* h.rows()).at(-1)!
       expect(h.restored(unknown)).toEqual([first, second, small])
       expect(unknown.text).toContain("TINY-SKILL")
+
+      // About 6,000 tokens of room: the second file does not fit, the smaller third still does, and the skill gets
+      // only what the files left.
+      expect(yield* h.compact({ limit: room(6_000) })).toEqual({ status: "completed" })
+      const budgeted = (yield* h.rows()).at(-1)!
+      expect(h.restored(budgeted)).toEqual([first, small])
+      expect(budgeted.text).not.toContain("TINY-SKILL")
+      // With the skill alone it would have fitted.
+      expect(Token.estimate("TINY-SKILL ".repeat(550))).toBeLessThan(6_000)
 
       // No room: no file and no skill, while a running agent and the plan still come.
       yield* h.seedJob({ notificationID: "msg_job_running", status: "running" })
@@ -800,8 +877,20 @@ describe("rehydration after a compaction", () => {
       const rule = h.inside(".orbit", "rules", "style.md")
       const index = path.join(h.memory.folder, "MEMORY.md")
       const plain = h.inside("plain.txt")
-      yield* h.readFile(project, "project instructions\n")
-      yield* h.readFile(rule, "a rule\n")
+      const personal = path.join(h.global.config, "AGENTS.md")
+      yield* h.put(project, "project instructions\n")
+      yield* h.put(personal, "personal instructions\n")
+      yield* h.put(rule, "a rule\n")
+      // What the instruction-file plugin hands discovery when it loads these files.
+      const discovery = yield* InstructionDiscovery.Service
+      yield* discovery.transform((editor) => {
+        editor.add({ path: AbsolutePath.make(project), content: "project instructions" })
+        editor.add({ path: AbsolutePath.make(personal), content: "personal instructions" })
+        editor.add({ path: AbsolutePath.make(rule), content: "a rule", kind: "rule" })
+      })
+      yield* h.readFile(project)
+      yield* h.readFile(personal)
+      yield* h.readFile(rule)
       yield* h.readFile(index, "- [note](note.md)\n")
       yield* h.readFile(plain, "plain\n")
       expect(yield* h.compact()).toEqual({ status: "completed" })
@@ -843,7 +932,7 @@ describe("rehydration after a compaction", () => {
       expect(yield* h.compact()).toEqual({ status: "completed" })
       const notes = sectionsOf((yield* h.row()).text)
       const named = (id: string) => notes.findIndex((section) => section.harness.includes(`ses_child_msg_job_${id}`))
-      expect([1, 2, 3, 4].map(named)).toEqual([0, 1, 2, 3])
+      expect(["1", "2", "3", "4"].map(named)).toEqual([0, 1, 2, 3])
       expect(notes[0]!.harness).toContain("running one")
       expect(notes[1]!.harness).toContain("finished one")
       expect(notes[2]!.harness).toContain("failed one")
@@ -880,8 +969,9 @@ describe("rehydration after a compaction", () => {
         expect(found.text).toContain("ses_child_msg_job_u")
         expect(found.text).toContain("the plan")
         expect(recorded.touched.filter((file) => file.includes("plain.txt"))).toEqual([])
-        // The trusted control.
+        // The trusted control: the same file, named again.
         yield* h.trust.grant({ persist: false, via: "test" })
+        yield* h.record("Read", { file_path: h.inside("plain.txt") })
         expect(yield* h.compact()).toEqual({ status: "completed" })
         expect((yield* h.rows()).at(-1)!.text).toContain("MARKER-UNTRUSTED")
       }),
@@ -1175,6 +1265,11 @@ describe("rehydration after a compaction", () => {
         yield* h.prompt("more again")
         expect(yield* h.compact({ reason: "manual" })).toEqual({ status: "completed" })
         expect(yield* h.rows()).toHaveLength(3)
+        yield* h.prompt("native")
+        expect(yield* h.compact({ reason: "manual", native: true })).toEqual({ status: "completed" })
+        const native = yield* h.store.messages({ sessionID: h.session.id, order: "asc" })
+        expect(native.findLast((message) => message.type === "compaction")).toMatchObject({ status: "completed" })
+        expect(native.filter(isRow)).toHaveLength(4)
         const child = yield* h.sessions.create({ parentID: h.session.id })
         yield* h.prompt("child work", undefined, child)
         yield* h.seedJob({ notificationID: "msg_job_c", status: "running", parent: child.id })
@@ -1186,7 +1281,7 @@ describe("rehydration after a compaction", () => {
         expect(yield* h.compact({ reason: "auto" })).toEqual({ status: "skipped" })
         failSummary = true
         expect((yield* h.compact()).status).toBe("failed")
-        expect(yield* h.rows()).toHaveLength(3)
+        expect(yield* h.rows()).toHaveLength(4)
       }),
     )
 
@@ -1326,7 +1421,20 @@ describe("rehydration after a compaction", () => {
       const checkpoint = SessionCompaction.estimateRequest({
         system: [],
         tools: [],
-        messages: [Message.user("the summary")],
+        messages: toLLMMessages(
+          [
+            SessionMessage.CompactionCompleted.make({
+              id: SessionMessage.ID.create(),
+              type: "compaction",
+              status: "completed",
+              reason: "auto",
+              summary: "the summary",
+              recent: "",
+              time: { created: DateTime.makeUnsafe(0) },
+            }),
+          ],
+          fakeModel,
+        ),
       })
       const kept = yield* h.prompt("k".repeat((at - checkpoint - 30) * 4))
 

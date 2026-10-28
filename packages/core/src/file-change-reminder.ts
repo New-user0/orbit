@@ -181,7 +181,8 @@ export const gate = Effect.fnUntraced(function* (
   sessionID: Session.ID,
   agent: Agent.ID,
   file: string,
-  place?: string,
+  /** The place the session's write recorded, or how to find it for the target once `file` is resolved. */
+  place?: string | ((target: FileAccess.Target) => string | undefined),
 ) {
   const target = yield* services.access.locate(file, "file").pipe(Effect.orElseSucceed(() => undefined))
   if (target === undefined) return undefined
@@ -193,7 +194,8 @@ export const gate = Effect.fnUntraced(function* (
   // compares them.
   if (target.externalDirectory !== undefined) {
     const now = FileAccess.realPlace(target)
-    if (place === undefined || !(FSUtil.contains(place, now) && FSUtil.contains(now, place))) return undefined
+    const recorded = typeof place === "function" ? place(target) : place
+    if (recorded === undefined || !(FSUtil.contains(recorded, now) && FSUtil.contains(now, recorded))) return undefined
   }
   const base = { sessionID, agent }
   const external = services.access.externalRequest([target], base)
@@ -204,7 +206,8 @@ export const gate = Effect.fnUntraced(function* (
   return denied.some(Boolean) ? undefined : target
 })
 
-const readRequest = (
+/** The request a whole read of `target` makes, so a check without a read asks exactly what the read tool would. */
+export const readRequest = (
   target: FileAccess.Target,
   base: Pick<Permission.AssertInput, "sessionID" | "agent">,
 ): Permission.AssertInput => ({
