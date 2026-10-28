@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { SessionContextUsage } from "../src/session-context-usage"
+import { SessionContextUsage } from "../src/session-context-usage.js"
 
 // clients-ux-23, class 7: a client decodes `/context`'s payload entry by entry, so one entry it cannot read (a category
 // kind from a newer server, a malformed file or tool row) costs only that entry, and a payload whose own fields do not
