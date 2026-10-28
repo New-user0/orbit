@@ -145,3 +145,37 @@ test("warnings come first, then savings largest first", () => {
   expect(found.map((item) => item.title).join("\n")).toContain("Bash")
   expect(found[2]!.title).toContain("Read")
 })
+
+test("savings round down, as the reference's do", () => {
+  const savings = (window: number, tools: ReadonlyArray<Tool>, files?: ReadonlyArray<number>) =>
+    contextSuggestions(info({ window, tools, files })).map((item) => item.savings)
+  // Half of 15,001 is 7,500.5; 30% of 10,005 is 3,001.5; 40% of 15,004 is 6,001.6; 20% of 20,003 is 4,000.6.
+  expect(savings(100_000, [tool("Bash", 5_001, 10_000)])).toEqual([7_500])
+  expect(savings(200_000, [tool("Read", 0, 10_005)])).toEqual([3_001])
+  expect(savings(100_000, [tool("WebFetch", 5_004, 10_000)])).toEqual([6_001])
+  expect(savings(100_000, [tool("Search", 5_003, 15_000)])).toEqual([4_000])
+  // 30% of 5,005 instruction tokens is 1,501.5.
+  expect(savings(100_000, [], [5_005])).toEqual([1_501])
+})
+
+test("the Read results and instruction files titles carry their share of the window, as the large tool title does", () => {
+  const [read] = contextSuggestions(info({ window: 200_000, tools: [tool("Read", 0, 13_000)] }))
+  expect(read!.title).toContain("(7%)")
+  const [files] = contextSuggestions(info({ window: 100_000, files: [4_000, 2_400] }))
+  expect(files!.title).toContain("(6%)")
+  const [bash] = contextSuggestions(info({ window: 100_000, tools: [tool("Bash", 5_000, 12_000)] }))
+  expect(bash!.title).toContain("(17%)")
+})
+
+test("instruction files are named by the path the view shows, escaped", () => {
+  const found = contextSuggestions(info({ window: 100_000, files: [3_000, 2_000, 1_000] }), (path) =>
+    path.replace("/repo/", "docs/\x1b[2K"),
+  )
+  expect(found[0]!.detail).toContain("docs/\\x1b[2Kfile-0.md (3")
+  expect(found[0]!.detail).not.toContain("/repo/")
+  expect(/\p{C}/u.test(found[0]!.detail)).toBe(false)
+  // Without a display, the path is the payload's.
+  expect(contextSuggestions(info({ window: 100_000, files: [3_000, 2_000, 1_000] }))[0]!.detail).toContain(
+    "/repo/file-0.md",
+  )
+})

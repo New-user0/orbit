@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import type { SessionContextUsage } from "@orbit/schema/session-context-usage"
 import { DialogContext } from "../../src/component/dialog-context"
+import type { LogSink } from "../../src/context/log"
 import { json } from "../fixture/tui-client"
 import { renderLocal, session } from "../fixture/local"
 
@@ -60,11 +61,13 @@ async function open(input: {
   readonly timeout?: number
   readonly done: (frame: string) => boolean
   readonly messages?: unknown[]
+  readonly log?: LogSink
 }) {
   const asked: string[] = []
   const setup = await renderLocal({
     width: input.width ?? 100,
     height: 90,
+    log: input.log,
     sessions: [session(ROOT), { ...session(CHILD), parentID: ROOT }],
     fetch: async (url) => {
       if (url.pathname.endsWith("/context/usage")) {
@@ -155,14 +158,31 @@ test("each counted category gets at least one square in order, a partial last sq
   )
 })
 
-// TD4: a deferred row is listed, with N/A for its share, and takes no square.
-test("deferred rows are listed with N/A and take no square", async () => {
-  const result = await open({ answer: answering(fixture()), done: drawn })
+// TD4: deferred categories are in no sum, so, as in the reference's view, they are neither in the legend nor in the grid.
+test("deferred rows are left out of the legend and take no square", async () => {
+  const result = await open({
+    answer: answering(
+      fixture({
+        categories: [
+          { kind: "system", tokens: 2_600 },
+          { kind: "tools", tokens: 300 },
+          { kind: "mcp-deferred", tokens: 5_000 },
+          { kind: "tools-deferred", tokens: 4_000 },
+          { kind: "messages", tokens: 4_800 },
+          { kind: "auto-buffer", tokens: 10_000 },
+          { kind: "free", tokens: 82_300 },
+        ],
+      }),
+    ),
+    done: drawn,
+  })
   await using _ = result.setup
 
-  expect(result.frame).toContain("MCP tools (deferred): 5.0K tokens (N/A)")
-  expect(grid(result.frame).join("").length).toBe(100)
-  expect(grid(result.frame).join("").split(FREE).length - 1).toBe(81)
+  for (const hidden of ["(deferred)", "N/A", "5.0K", "4.0K"]) expect(result.frame).not.toContain(hidden)
+  expect(result.frame).toContain("Messages: 4.8K tokens (4.8%)")
+  expect(grid(result.frame).join("")).toBe(
+    `${FULL}${FULL}${PARTIAL}` + PARTIAL + FULL.repeat(5) + FREE.repeat(81) + BUFFER.repeat(10),
+  )
 })
 
 // TD5: the legend, and the compact buffer listed as a category when automatic compaction is off.
@@ -176,7 +196,6 @@ test("the legend shows the model, total of window and percent, each category to 
     "Estimated usage by category",
     "System prompt: 2.6K tokens (2.6%)",
     "System tools: 300 tokens (0.3%)",
-    "MCP tools (deferred): 5.0K tokens (N/A)",
     "Messages: 4.8K tokens (4.8%)",
     "Free space: 82.3K tokens (82.3%)",
     "Autocompact buffer: 10.0K tokens (10.0%)",
@@ -260,6 +279,8 @@ test("MCP tools (loaded and available), custom agents by scope, instruction file
   ].map(at)
   expect(order.every((index) => index >= 0)).toBe(true)
   expect(order).toEqual(order.toSorted((a, b) => a - b))
+  // Some tools are deferred, so the heading says that some are loaded on demand.
+  expect(lines[at("MCP tools · /mcps")]).toContain("MCP tools · /mcps (some are loaded on demand)")
   expect(lines[at("docs_search")]).toContain("2.0K")
   expect(lines[at("ORBIT.md")]).toContain("1.2K")
   for (const hidden of ["SysToolZed", "SectionQuux", "ToolBreakX", "AttachKindY"]) expect(result.frame).not.toContain(hidden)
@@ -273,6 +294,7 @@ test("MCP tools (loaded and available), custom agents by scope, instruction file
   expect(loaded.frame).toContain("docs_search (docs): 2.0K tokens")
   expect(loaded.frame).not.toContain("Loaded")
   expect(loaded.frame).not.toContain("Available")
+  expect(loaded.frame).not.toContain("on demand")
 })
 
 // TD7: the suggestions, under everything else, warnings first, each with its saving.
@@ -309,6 +331,27 @@ test("suggestions are drawn under the view, warnings first, with their savings",
   expect(bash).toBeGreaterThan(heading)
   expect(read).toBeGreaterThan(bash)
   expect(lines[bash]).toContain("!")
+})
+
+// TD7b: the instruction files suggestion names each file as the view's own list does, by its path in the session's folder.
+test("the instruction files suggestion names each file by its path in the session's folder", async () => {
+  const directory = session(ROOT).location.directory
+  const result = await open({
+    answer: answering(
+      fixture({
+        files: [
+          { path: `${directory}/ORBIT.md`, type: "file", tokens: 4_000 },
+          { path: `${directory}/docs/NOTES.md`, type: "file", tokens: 2_000 },
+        ],
+      }),
+    ),
+    done: (frame) => frame.includes("Suggestions"),
+  })
+  await using _ = result.setup
+  const detail = result.frame.split("\n").find((line) => line.includes("The largest are"))
+
+  expect(detail).toContain("The largest are ORBIT.md (4.0K)")
+  expect(detail).not.toContain(directory)
 })
 
 // TD8, D1 and D10: the figure is the payload's, not one worked out from the messages the store holds.
@@ -448,6 +491,57 @@ test("a refusal, a missing session, an old server, a body that does not decode a
     expect(grid(result.frame)).toEqual([])
     expect(result.frame).not.toContain("Estimated usage")
   }
+})
+
+// TD11b, class 7: one entry the client cannot read, such as a category kind from a newer server, costs only itself and
+// is logged once; the rest of the view is drawn.
+test("an entry that does not decode is left out with one log line, and the rest of the view is drawn", async () => {
+  const logged: Array<{ level: string; message: string; tags: unknown }> = []
+  const result = await open({
+    answer: () =>
+      json({
+        data: {
+          ...fixture(),
+          categories: [
+            { kind: "system", tokens: 2_600 },
+            { kind: "newer-kind", tokens: 7_000 },
+            { kind: "messages", tokens: 4_800 },
+            { kind: "auto-buffer", tokens: 10_000 },
+            { kind: "free", tokens: 75_600 },
+          ],
+          skills: [{ id: "release", tokens: 700 }, { id: 42 }],
+        },
+      }),
+    done: (frame) => frame.includes("release"),
+    log: (level, message, tags) => logged.push({ level, message, tags }),
+  })
+  await using _ = result.setup
+
+  expect(result.frame).toContain("System prompt: 2.6K tokens (2.6%)")
+  expect(result.frame).toContain("Messages: 4.8K tokens (4.8%)")
+  expect(result.frame).toContain("release: 700 tokens")
+  expect(result.frame).not.toContain("7.0K")
+  expect(result.frame).not.toContain("could not be read")
+  expect(grid(result.frame).join("")).toBe(
+    `${FULL}${FULL}${PARTIAL}` + FULL.repeat(5) + FREE.repeat(82) + BUFFER.repeat(10),
+  )
+  expect(logged.filter((line) => line.level === "warn")).toEqual([
+    {
+      level: "warn",
+      message: "Left out context usage entries this client could not read",
+      tags: { component: "context", dropped: ["categories[1]", "skills[1]"] },
+    },
+  ])
+
+  // The control: a whole payload logs nothing.
+  const whole: typeof logged = []
+  const control = await open({
+    answer: answering(fixture()),
+    done: drawn,
+    log: (level, message, tags) => whole.push({ level, message, tags }),
+  })
+  await using __ = control.setup
+  expect(whole.filter((line) => line.level === "warn")).toEqual([])
 })
 
 // TD12, D8: a child session's context is its root's, so the dialog asks for the root.

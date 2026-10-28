@@ -39,6 +39,9 @@ const info: Info = {
 const answers: Record<string, () => Response> = {
   [SESSION]: () => Response.json({ data: info }),
   ses_malformed: () => Response.json({ data: { model: "not a payload" } }),
+  // One category kind from a newer server, next to the ones this client knows.
+  ses_newer: () =>
+    Response.json({ data: { ...info, categories: [...info.categories.slice(0, 1), { kind: "newer-kind", tokens: 9 }, ...info.categories.slice(1)] } }),
   ses_old: () => new Response(null, { status: 404 }),
   ses_child: () =>
     Response.json(
@@ -71,7 +74,8 @@ afterEach(() => {
 })
 
 test("readContextUsage decodes the payload, and names an unreadable answer, an old server and the server's refusal", async () => {
-  expect(await readContextUsage(client, SESSION, 5_000)).toEqual({ info })
+  expect(await readContextUsage(client, SESSION, 5_000)).toEqual({ info, dropped: [] })
+  expect(await readContextUsage(client, "ses_newer", 5_000)).toEqual({ info, dropped: ["categories[1]"] })
   expect(await readContextUsage(client, "ses_malformed", 5_000)).toEqual({
     error: "The server's answer about context usage could not be read",
   })
@@ -105,6 +109,20 @@ test("the JSON formats print one context_usage line with the payload", async () 
     expect(run.stdout.trimEnd().split("\n")).toHaveLength(1)
     expect(JSON.parse(run.stdout)).toEqual({ type: "context_usage", sessionID: SESSION, usage: info })
   }
+})
+
+test("an entry the client cannot read costs only itself: the report is printed and one line names it", async () => {
+  const run = await capture({ format: "default", session: "ses_newer" })
+  expect(run.exitCode).toBe(0)
+  expect(run.stdout).toContain("## Context usage")
+  expect(run.stdout).toContain("| System prompt | 4,000 | 4.0% |")
+  expect(run.stdout).toContain("| Messages | 16,000 | 16.0% |")
+  expect(run.stderr.trimEnd().split("\n")).toEqual([
+    "Left out context usage entries this client could not read: categories[1]",
+  ])
+
+  // A whole payload prints nothing on the error stream.
+  expect((await capture({ format: "default" })).stderr).toBe("")
 })
 
 test("a refusal exits 1 with the server's message in the run's error form", async () => {

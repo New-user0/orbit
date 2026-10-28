@@ -60,7 +60,8 @@ const base: Info = {
 }
 
 // Fixtures: a usual session, one near full with every suggestion, automatic compaction off, a million-token window, a
-// model whose window is unknown, and names that carry terminal control characters.
+// model whose window is unknown, and names that carry terminal control characters. The usual session has a deferred MCP
+// tool: its category is in neither the legend nor the grid, and the MCP tools heading says some load on demand.
 const FIXTURES: ReadonlyArray<{ label: string; info: Info }> = [
   { label: "typical", info: base },
   {

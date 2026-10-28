@@ -283,6 +283,9 @@ async function printContext(input: RunCommandInput, client: OrbitClient, session
   const { contextMarkdown, contextUsageLine, readContextUsage } = await import("./context-report")
   const answer = await readContextUsage(client, sessionID, CONTEXT_TIMEOUT)
   if ("error" in answer) return reportRunError(input, answer.error, sessionID)
+  // The places are the payload's own field names and indexes, so the line is safe to print as it is.
+  if (answer.dropped.length > 0)
+    UI.println(`Left out context usage entries this client could not read: ${answer.dropped.join(", ")}`)
   if (input.format === "json" || (input.format === "stream-json" && !input.envelope)) {
     process.stdout.write(contextUsageLine(sessionID, answer.info) + EOL)
     return

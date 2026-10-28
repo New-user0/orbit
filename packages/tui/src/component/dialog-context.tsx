@@ -3,10 +3,10 @@ import { useTerminalDimensions } from "@opentui/solid"
 import type { OrbitClient } from "@orbit/client"
 import { SessionContextUsage } from "@orbit/schema/session-context-usage"
 import { plain } from "@orbit/util/plain"
-import { Option, Schema } from "effect"
 import { createMemo, createResource, For, Show } from "solid-js"
 import { useClient } from "../context/client"
 import { useData } from "../context/data"
+import { useLog } from "../context/log"
 import { useTuiPaths } from "../context/runtime"
 import { useTheme } from "../context/theme"
 import { contextSuggestions } from "../util/context-suggestions"
@@ -47,7 +47,9 @@ const DEFERRED = new Set<SessionContextUsage.CategoryKind>(["mcp-deferred", "too
 const RESERVE = new Set<SessionContextUsage.CategoryKind>(["auto-buffer", "compact-buffer"])
 const SCOPES = ["project", "local", "user", "flag", "managed", "remote"]
 
-type Answer = { readonly info: SessionContextUsage.Info } | { readonly error: string }
+type Answer =
+  | { readonly info: SessionContextUsage.Info; readonly dropped: ReadonlyArray<string> }
+  | { readonly error: string }
 type Square = { readonly kind: SessionContextUsage.CategoryKind; readonly whole: boolean }
 
 /** /context for the session in view. A child's context is its main session's, so the dialog asks for that one (D8). */
@@ -55,6 +57,7 @@ export function DialogContext(props: { readonly sessionID: string; readonly time
   const client = useClient()
   const data = useData()
   const theme = useTheme()
+  const log = useLog({ component: "context" })
 
   // The session's main session, by its parents. A chain that comes back to a session already seen stops there.
   const rootOf = async (sessionID: string, seen: ReadonlySet<string>): Promise<string> => {
@@ -70,8 +73,16 @@ export function DialogContext(props: { readonly sessionID: string; readonly time
   }
   const [answer] = createResource(
     () => props.sessionID,
-    async (sessionID) =>
-      readContextUsage(client.api, await rootOf(sessionID, new Set([sessionID])), props.timeout ?? TIMEOUT),
+    async (sessionID) => {
+      const answer = await readContextUsage(
+        client.api,
+        await rootOf(sessionID, new Set([sessionID])),
+        props.timeout ?? TIMEOUT,
+      )
+      if ("info" in answer && answer.dropped.length > 0)
+        log.warn("Left out context usage entries this client could not read", { dropped: answer.dropped })
+      return answer
+    },
   )
 
   return (
@@ -93,7 +104,8 @@ export function DialogContext(props: { readonly sessionID: string; readonly time
 /**
  * Asks the server for a session's context usage, and turns each way it can fail into one line a person can read: the
  * server's own refusal (an untrusted folder, a child session, a missing session or model), a server older than the
- * route, an answer that is not the payload, and no answer in time (classes 7 and 13).
+ * route, an answer that is not the payload, and no answer in time (classes 7 and 13). An entry of the payload that does
+ * not decode is left out and named in `dropped`, so that it costs only itself (class 7).
  */
 async function readContextUsage(api: OrbitClient, sessionID: string, timeout: number): Promise<Answer> {
   const signal = AbortSignal.timeout(timeout)
@@ -101,11 +113,7 @@ async function readContextUsage(api: OrbitClient, sessionID: string, timeout: nu
     signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
   )
   return Promise.race([api.session.contextUsage({ sessionID }, { signal }), expired]).then(
-    (value) =>
-      Option.match(Schema.decodeUnknownOption(SessionContextUsage.Info)(value), {
-        onNone: () => ({ error: "The server's answer about context usage could not be read." }),
-        onSome: (info) => ({ info }),
-      }),
+    (value) => SessionContextUsage.decode(value) ?? { error: "The server's answer about context usage could not be read." },
     (error: unknown) => ({ error: failure(error) }),
   )
 }
@@ -148,8 +156,11 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
     const known = window()
     return known === undefined ? [] : grid(props.info.categories, known, dimensions().width < NARROW)
   })
+  // Deferred categories are in no sum, so the reference leaves them out of the legend as it does out of the grid.
   const legend = createMemo(() =>
-    props.info.categories.filter((item) => item.tokens > 0 && item.kind !== "free" && item.kind !== "auto-buffer"),
+    props.info.categories.filter(
+      (item) => item.tokens > 0 && item.kind !== "free" && item.kind !== "auto-buffer" && !DEFERRED.has(item.kind),
+    ),
   )
   // Free space, then the autocompact buffer, as the reference lists them under the categories.
   const tail = createMemo(() =>
@@ -175,9 +186,11 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
       agents: props.info.agents.filter((agent) => agent.scope === scope).toSorted((a, b) => b.tokens - a.tokens),
     }))
   })
-  const display = (file: string) =>
-    plain(props.directory === undefined ? file : formatPath(file, { base: props.directory, home: paths.home }))
-  const suggestions = createMemo(() => contextSuggestions(props.info))
+  // An instruction file's path relative to the session's folder; the formatter only shortens text.
+  const shown = (file: string) =>
+    props.directory === undefined ? file : formatPath(file, { base: props.directory, home: paths.home })
+  const display = (file: string) => plain(shown(file))
+  const suggestions = createMemo(() => contextSuggestions(props.info, shown))
 
   return (
     <box gap={1}>
@@ -207,11 +220,9 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
           <For each={legend()}>
             {(item) => (
               <text fg={theme.text.base}>
-                <span style={{ fg: color(item.kind) }}>{DEFERRED.has(item.kind) ? " " : FULL}</span>
+                <span style={{ fg: color(item.kind) }}>{FULL}</span>
                 {` ${LABELS[item.kind]}: `}
-                <span style={{ fg: theme.text.muted }}>
-                  {`${Locale.number(item.tokens)} tokens${DEFERRED.has(item.kind) ? (window() === undefined ? "" : " (N/A)") : percent(item.tokens)}`}
-                </span>
+                <span style={{ fg: theme.text.muted }}>{`${Locale.number(item.tokens)} tokens${percent(item.tokens)}`}</span>
               </text>
             )}
           </For>
@@ -228,7 +239,11 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
       </box>
       <Show when={props.info.mcp.length > 0}>
         <box>
-          <Heading title="MCP tools" command="/mcps" />
+          <Heading
+            title="MCP tools"
+            command="/mcps"
+            note={available().length > 0 ? "some are loaded on demand" : undefined}
+          />
           {/* The two groups are named only when some tools are deferred; otherwise every tool is a loaded one. */}
           <Show when={available().length > 0 && loaded().length > 0}>
             <text fg={theme.text.muted}>Loaded</text>
@@ -309,12 +324,14 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
   )
 }
 
-function Heading(props: { readonly title: string; readonly command: string }) {
+function Heading(props: { readonly title: string; readonly command: string; readonly note?: string }) {
   const theme = useTheme()
   return (
     <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
       {props.title}
-      <span style={{ fg: theme.text.muted }}>{` · ${props.command}`}</span>
+      <span style={{ fg: theme.text.muted }}>
+        {` · ${props.command}${props.note === undefined ? "" : ` (${props.note})`}`}
+      </span>
     </text>
   )
 }

@@ -1,7 +1,6 @@
 import type { OrbitClient } from "@orbit/client/promise"
 import { SessionContextUsage } from "@orbit/schema/session-context-usage"
 import { jsonLine, plain } from "@orbit/flow/plain"
-import { Option, Schema } from "effect"
 import { errorMessage } from "../util/error"
 
 // `orb run "/context"` and `orb -p "/context"`: the server's estimate of what the session's next request carries, as the
@@ -104,23 +103,23 @@ export function contextUsageLine(sessionID: string, usage: SessionContextUsage.I
 /**
  * Asks the server for a session's context usage, and turns each way it can fail into one message: the server's own
  * refusal (an untrusted folder, a child session, a missing session or model), a server older than the route, an answer
- * that is not the payload, and no answer in time (classes 7 and 13).
+ * that is not the payload, and no answer in time (classes 7 and 13). An entry of the payload that does not decode is
+ * left out and named in `dropped`, so that it costs only itself (class 7).
  */
 export async function readContextUsage(
   client: OrbitClient,
   sessionID: string,
   timeout: number,
-): Promise<{ readonly info: SessionContextUsage.Info } | { readonly error: string }> {
+): Promise<
+  | { readonly info: SessionContextUsage.Info; readonly dropped: ReadonlyArray<string> }
+  | { readonly error: string }
+> {
   const signal = AbortSignal.timeout(timeout)
   const expired = new Promise<never>((_, reject) =>
     signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
   )
   return Promise.race([client.session.contextUsage({ sessionID }, { signal }), expired]).then(
-    (value) =>
-      Option.match(Schema.decodeUnknownOption(SessionContextUsage.Info)(value), {
-        onNone: () => ({ error: "The server's answer about context usage could not be read" }),
-        onSome: (info) => ({ info }),
-      }),
+    (value) => SessionContextUsage.decode(value) ?? { error: "The server's answer about context usage could not be read" },
     (error: unknown) => ({ error: failure(error) }),
   )
 }

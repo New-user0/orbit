@@ -24,15 +24,20 @@ const SAVINGS = { shell: 0.5, read: 0.3, grep: 0.3, fetch: 0.4, other: 0.2, file
 /**
  * What a person could do about the context window, worked out from `/context`'s payload alone, as the reference does
  * under its own view: warnings first, then the largest saving first. Tool names and file paths come from the session's
- * history and the folder, so they are written through `plain` (class 9). With no window there is nothing to be a share
- * of, and so nothing to suggest.
+ * history and the folder, so they are written through `plain` (class 9); `display` shortens a file's path for showing,
+ * as the view's own list does. With no window there is nothing to be a share of, and so nothing to suggest. Savings round
+ * down, as the reference's do.
  */
-export function contextSuggestions(info: SessionContextUsage.Info): ContextSuggestion[] {
+export function contextSuggestions(
+  info: SessionContextUsage.Info,
+  display: (path: string) => string = (path) => path,
+): ContextSuggestion[] {
   const window = info.window
   if (window === undefined || window === 0) return []
   const percentage = info.percentage ?? 0
   // `tokens` is at least `share` percent of the window, compared in whole numbers.
   const reaches = (tokens: number, share: number) => tokens * 100 >= window * share
+  const share = (tokens: number) => ((tokens / window) * 100).toFixed(0)
   const found: ContextSuggestion[] = []
 
   if (percentage >= NEAR_CAPACITY)
@@ -52,12 +57,11 @@ export function contextSuggestions(info: SessionContextUsage.Info): ContextSugge
     if (advice === undefined && !reaches(tokens, OTHER_TOOL_SHARE)) return
     large.add(tool.name)
     const name = plain(tool.name)
-    const share = ((tokens / window) * 100).toFixed(0)
     found.push({
       severity: advice?.severity ?? "info",
-      title: `${name} calls and results take ${Locale.number(tokens)} tokens (${share}%)`,
+      title: `${name} calls and results take ${Locale.number(tokens)} tokens (${share(tokens)}%)`,
       detail: advice?.detail ?? `Ask for narrower ${name} calls, or for less of what each one returns.`,
-      savings: Math.round(tokens * (advice?.savings ?? SAVINGS.other)),
+      savings: Math.floor(tokens * (advice?.savings ?? SAVINGS.other)),
     })
   })
 
@@ -70,9 +74,9 @@ export function contextSuggestions(info: SessionContextUsage.Info): ContextSugge
   )
     found.push({
       severity: "info",
-      title: `Read results take ${Locale.number(read.results)} tokens`,
+      title: `Read results take ${Locale.number(read.results)} tokens (${share(read.results)}%)`,
       detail: "Read the part of a file you need, with an offset and a limit, instead of the whole file.",
-      savings: Math.round(read.results * SAVINGS.read),
+      savings: Math.floor(read.results * SAVINGS.read),
     })
 
   const files = info.files.reduce((sum, file) => sum + file.tokens, 0)
@@ -80,12 +84,12 @@ export function contextSuggestions(info: SessionContextUsage.Info): ContextSugge
     const largest = info.files
       .toSorted((a, b) => b.tokens - a.tokens)
       .slice(0, 3)
-      .map((file) => `${plain(file.path)} (${Locale.number(file.tokens)})`)
+      .map((file) => `${plain(display(file.path))} (${Locale.number(file.tokens)})`)
     found.push({
       severity: "info",
-      title: `Instruction files take ${Locale.number(files)} tokens`,
+      title: `Instruction files take ${Locale.number(files)} tokens (${share(files)}%)`,
       detail: `The largest are ${largest.join(", ")}. Trim them with /memory.`,
-      savings: Math.round(files * SAVINGS.files),
+      savings: Math.floor(files * SAVINGS.files),
     })
   }
 
