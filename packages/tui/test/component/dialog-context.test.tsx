@@ -263,6 +263,16 @@ test("MCP tools (loaded and available), custom agents by scope, instruction file
   expect(lines[at("docs_search")]).toContain("2.0K")
   expect(lines[at("ORBIT.md")]).toContain("1.2K")
   for (const hidden of ["SysToolZed", "SectionQuux", "ToolBreakX", "AttachKindY"]) expect(result.frame).not.toContain(hidden)
+
+  // With no deferred tool, every tool is listed with its tokens and the groups go unnamed.
+  const loaded = await open({
+    answer: answering(fixture({ mcp: [{ name: "docs_search", server: "docs", tokens: 2_000, deferred: false }] })),
+    done: (frame) => frame.includes("docs_search"),
+  })
+  await using __ = loaded.setup
+  expect(loaded.frame).toContain("docs_search (docs): 2.0K tokens")
+  expect(loaded.frame).not.toContain("Loaded")
+  expect(loaded.frame).not.toContain("Available")
 })
 
 // TD7: the suggestions, under everything else, warnings first, each with its saving.

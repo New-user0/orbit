@@ -232,16 +232,14 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
       <Show when={props.info.mcp.length > 0}>
         <box>
           <Heading title="MCP tools" command="/mcps" />
-          <Show
-            when={available().length > 0}
-            fallback={<For each={props.info.mcp}>{(tool) => <Item text={`${plain(tool.name)} (${plain(tool.server)}): ${Locale.number(tool.tokens)} tokens`} />}</For>}
-          >
-            <Show when={loaded().length > 0}>
-              <text fg={theme.text.muted}>Loaded</text>
-              <For each={loaded()}>
-                {(tool) => <Item text={`${plain(tool.name)} (${plain(tool.server)}): ${Locale.number(tool.tokens)} tokens`} />}
-              </For>
-            </Show>
+          {/* The two groups are named only when some tools are deferred; otherwise every tool is a loaded one. */}
+          <Show when={available().length > 0 && loaded().length > 0}>
+            <text fg={theme.text.muted}>Loaded</text>
+          </Show>
+          <For each={loaded()}>
+            {(tool) => <Item text={`${plain(tool.name)} (${plain(tool.server)}): ${Locale.number(tool.tokens)} tokens`} />}
+          </For>
+          <Show when={available().length > 0}>
             <text fg={theme.text.muted}>Available</text>
             <For each={available()}>{(tool) => <Item text={`${plain(tool.name)} (${plain(tool.server)})`} />}</For>
           </Show>
