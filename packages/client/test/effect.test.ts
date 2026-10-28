@@ -282,6 +282,54 @@ test("location.memory and the memory toggle use the public HTTP contract and dec
   expect(requests[2]!.body).toEqual({ shell: null, output_style: null, language: null, memory: { enabled: false } })
 })
 
+// clients-ux-23: `/context` reads the session's context usage from `GET /api/session/:sessionID/context/usage`.
+test("session.contextUsage uses the public HTTP contract and decodes the payload", async () => {
+  const usage = {
+    model: { providerID: "provider", id: "model" },
+    window: 100_000,
+    percentage: 20,
+    threshold: 90_000,
+    total: 20_000,
+    measured: true,
+    auto: false,
+    categories: [
+      { kind: "messages", tokens: 20_000 },
+      { kind: "compact-buffer", tokens: 3_000 },
+      { kind: "free", tokens: 77_000 },
+    ],
+    files: [{ path: "/repo/ORBIT.md", type: "file", tokens: 100 }],
+    mcp: [{ name: "search", server: "docs", tokens: 50, deferred: true }],
+    agents: [{ id: "review", scope: "project", tokens: 10 }],
+    skills: [{ id: "release", tokens: 20 }],
+    systemTools: [{ name: "Read", tokens: 300 }],
+    deferredTools: [],
+    sections: [{ name: "Environment", tokens: 40 }],
+    messages: {
+      toolCalls: 1,
+      toolResults: 2,
+      attachments: 3,
+      assistant: 4,
+      user: 5,
+      tools: [{ name: "Read", calls: 1, results: 2 }],
+      attachmentKinds: [{ name: "todo", tokens: 3 }],
+    },
+  }
+  const requests: Array<{ method: string; url: URL }> = []
+  const httpClient = HttpClient.make((request) => {
+    requests.push({ method: request.method, url: new URL(request.url) })
+    return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ data: usage })))
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    return yield* client.session.contextUsage({ sessionID: Session.ID.make("ses_usage") })
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result).toEqual(usage as unknown as typeof result)
+  expect(requests.map((request) => [request.method, request.url.pathname])).toEqual([
+    ["GET", "/api/session/ses_usage/context/usage"],
+  ])
+})
+
 test("event.subscribe exposes and decodes the native Effect event stream", async () => {
   const httpClient = HttpClient.make((request) =>
     Effect.succeed(

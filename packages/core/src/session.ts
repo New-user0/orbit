@@ -50,6 +50,7 @@ import { SessionInbox } from "./session/inbox.js"
 import { InstructionState } from "./session/instruction-state.js"
 import { SessionGenerate } from "./session/generate.js"
 import { SessionInstructionPreview } from "./session/instruction-preview.js"
+import { SessionContextUsage } from "./session/context-usage.js"
 import { SessionCommand } from "./session/command.js"
 import {
   SessionMove,
@@ -208,6 +209,10 @@ export interface Interface {
   readonly instructions: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<SessionInstructionPreview.Result, NotFoundError | SessionInstructionPreview.Error>
+  /** What the next request would carry, by category, without recording or sending anything; main sessions only. */
+  readonly contextUsage: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<SessionContextUsage.Info, Effect.Error<ReturnType<typeof SessionContextUsage.analyze>>>
   readonly command: (input: {
     sessionID: SessionSchema.ID
     command: string
@@ -485,6 +490,12 @@ const layer = Layer.effect(
           Effect.provideService(Database.Service, database),
         )
       }),
+      contextUsage: (sessionID) =>
+        SessionContextUsage.analyze(sessionID).pipe(
+          Effect.provideService(SessionStore.Service, store),
+          Effect.provideService(Instance.Service, instances),
+          Effect.provideService(Database.Service, database),
+        ),
       command: Effect.fn("Session.command")(function* (input) {
         const session = yield* result.get(input.sessionID)
         return yield* SessionCommand.execute({ ...input, session }).pipe(

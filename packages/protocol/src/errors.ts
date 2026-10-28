@@ -163,6 +163,20 @@ export class SessionNotFoundError extends Schema.TaggedError<SessionNotFoundErro
   { httpApiStatus: 404 },
 ) {}
 
+/**
+ * The request is only answered for a main session, and this one is a child of `parentID`. The message names both, so a
+ * client can ask for the main session instead.
+ */
+export class MainSessionOnlyError extends Schema.TaggedError<MainSessionOnlyError>()(
+  "MainSessionOnlyError",
+  {
+    sessionID: Schema.String,
+    parentID: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
+
 export class MessageNotFoundError extends Schema.TaggedError<MessageNotFoundError>()(
   "MessageNotFoundError",
   {

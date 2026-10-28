@@ -1,6 +1,6 @@
 export * as SessionContextUsage from "./session-context-usage.js"
 
-import { Schema } from "effect"
+import { Option, Schema } from "effect"
 import { Model } from "./model.js"
 import { NonNegativeInt, optional } from "./schema.js"
 
@@ -103,3 +103,57 @@ export const Info = Schema.Struct({
   messages: Breakdown,
 }).annotate({ identifier: "SessionContextUsage.Info" })
 export type Info = typeof Info.Type
+
+// The payload with each list taken as it came, so that its entries can be decoded one by one.
+const Entries = Schema.Array(Schema.Unknown)
+const Envelope = Schema.Struct({
+  ...Info.fields,
+  categories: Entries,
+  files: Entries,
+  mcp: Entries,
+  agents: Entries,
+  skills: Entries,
+  systemTools: Entries,
+  deferredTools: Entries,
+  sections: Entries,
+  messages: Schema.Struct({ ...Breakdown.fields, tools: Entries, attachmentKinds: Entries }),
+})
+
+/**
+ * Decodes a server's answer for a client. The payload's own fields must decode, else there is no answer (`undefined`).
+ * Each list is decoded entry by entry, so an entry this client cannot read, such as a category kind a newer server adds,
+ * costs only itself: it is left out, and `dropped` names where it was (as `categories[2]`) for the caller to log once.
+ */
+export function decode(input: unknown): { readonly info: Info; readonly dropped: ReadonlyArray<string> } | undefined {
+  const envelope = Schema.decodeUnknownOption(Envelope)(input)
+  if (Option.isNone(envelope)) return undefined
+  const dropped: string[] = []
+  const entries = <S extends Schema.ConstraintDecoder<unknown>>(schema: S, list: ReadonlyArray<unknown>, path: string) =>
+    list.flatMap((raw, index): S["Type"][] =>
+      Option.match(Schema.decodeUnknownOption(schema)(raw), {
+        onNone: () => {
+          dropped.push(`${path}[${index}]`)
+          return []
+        },
+        onSome: (value) => [value],
+      }),
+    )
+  const value = envelope.value
+  const info: Info = {
+    ...value,
+    categories: entries(Category, value.categories, "categories"),
+    files: entries(File, value.files, "files"),
+    mcp: entries(McpTool, value.mcp, "mcp"),
+    agents: entries(Agent, value.agents, "agents"),
+    skills: entries(Skill, value.skills, "skills"),
+    systemTools: entries(Named, value.systemTools, "systemTools"),
+    deferredTools: entries(Named, value.deferredTools, "deferredTools"),
+    sections: entries(Named, value.sections, "sections"),
+    messages: {
+      ...value.messages,
+      tools: entries(Breakdown.fields.tools.value, value.messages.tools, "messages.tools"),
+      attachmentKinds: entries(Named, value.messages.attachmentKinds, "messages.attachmentKinds"),
+    },
+  }
+  return { info, dropped }
+}

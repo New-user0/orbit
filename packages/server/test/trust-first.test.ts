@@ -136,6 +136,8 @@ it.live("a session whose folder is no longer trusted takes no more work, though 
         ["recap", "POST", `/api/session/${id}/recap`, {}],
         ["title", "PATCH", `/api/session/${id}`, { title: "" }],
         ["instructions", "GET", `/api/experimental/session/${id}/instructions`, undefined],
+        // clients-ux-23: the context usage analysis reads the instruction sources and runs the `context` hooks.
+        ["context usage", "GET", `/api/session/${id}/context/usage`, undefined],
         // A terminal for the session starts a program in its folder.
         ["terminal", "POST", `/api/experimental/session/${id}/terminal`, { args: [], cwd: folders.repo, title: "Terminal", env: {} }],
       ] as const
