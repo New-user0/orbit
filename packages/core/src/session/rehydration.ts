@@ -264,7 +264,6 @@ export const layer = Layer.effect(
           absolute: target.absolute,
           seen: read.seen,
           digest: createHash("sha256").update(content).digest("hex"),
-          inside: target.externalDirectory === undefined,
         },
       }
     })
@@ -334,8 +333,10 @@ export const layer = Layer.effect(
                 .pipe(Effect.andThen(ledger.markRead(sessionID, file.absolute, "1:default", file.digest))),
             { discard: true },
           )
-          const inside = restored.filter((file) => file.inside).map((file) => ({ path: file.absolute }))
-          if (inside.length > 0) yield* triggers.touched({ sessionID, targets: inside })
+          // The nested instruction files of the restored files are due, as after a read. The triggers bring nothing for a
+          // file outside the folder the session started in, and a PDF is never restored here.
+          if (restored.length > 0)
+            yield* triggers.touched({ sessionID, targets: restored.map((file) => ({ path: file.absolute })) })
         }),
       )
 
@@ -372,7 +373,6 @@ interface Restored {
   readonly absolute: string
   readonly seen: FileLedger.Seen
   readonly digest: string
-  readonly inside: boolean
 }
 
 const pointerNote = (file: string) =>

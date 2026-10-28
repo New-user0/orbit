@@ -799,6 +799,29 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   from a failed write, a write, a read, an edit and a patch, outside spellings named in a patch, and a pipe marker server and device names that are never opened).
   The rows that link a file need links, so they run on Linux or with Developer Mode; the rows that swap a folder use a
   junction on Windows, which needs no privilege.
+- The rehydration after a compaction (`SessionRehydration`, `packages/core/src/session/rehydration.ts`) reads again,
+  with no one watching, the five newest files that the history before the checkpoint names (its reads, edits, writes,
+  notebook edits and patches, and the files the previous rehydration row lists, which an import or a fork can supply),
+  and the session's plan file. In a folder that `ProjectTrust.trusted()` does not trust it reads no file at all (class
+  1). Each name is resolved once with the read tool's resolver (`FileAccess.locate`, which refuses a share or device
+  spelling before any disk is read), and the target then passes `FileChangeReminder.gate` at this moment (class 4):
+  `ProjectTrust.reachable` on the real path, a file outside the project only while its real path is the place the
+  session's write recorded (a file outside that the session only read is skipped), and the `Read` and
+  `external_directory` deny rules on the file and on where a link leads (class 8). A file the ledger held no record of
+  before the compaction, which only history names, is read only when `Permission.allowed` says the read tool would read
+  it with no question, so an imported `Read` of an ask-ruled `.env` is never read unattended (class 5). The read is the
+  read tool's reader on the target the gate returned; a folder, a binary file, a missing file or a refusal is dropped,
+  and an image, a PDF, a truncated page or a file over 5,000 tokens becomes a one-line note that names it (class 7).
+  The plan file (`~/.orbit/plan/<session>.md`) is refused when its path is spelled as a share or a link on its way names
+  one, before any disk is read; then the real plan folder and the real file are taken once, and the file is read from
+  that real path only while it is in that folder, so a link out of it or a dangling link gives no plan (class 4). File,
+  plan, skill and subagent text goes only in the row's fenced data blocks, and a path, description or error in harness
+  text is put on one line (class 9). Proof: `test/session-rehydration.test.ts` (the untrusted row and its trusted
+  control; a file swapped for a link to an outside marker, a dangling link, an in-project link, `..`, case and Git
+  Bash spellings, three share spellings and two device names; deny rules on the file and on a link's target, an
+  `external_directory` deny, an ask rule in both columns; an outside file written, only read, and with its folder
+  swapped for a junction; imported names outside the project and a previous row's forged list; the plan file as a link
+  out, a dangling link and on a share home with no share touched). The link rows run on Linux or with Developer Mode.
 - Executables that Orbit looks up itself (`git`, `rg`, shells, formatters, language servers, the sandbox tool, the
   Azure CLI check): `which` in `packages/util/src/which.ts` reads `PATH` and Orbit's own `bin` folder and never the
   working folder. It skips an empty or relative `PATH` entry such as `.`, so the working folder is reached only through

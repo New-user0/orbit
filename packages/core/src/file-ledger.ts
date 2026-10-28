@@ -136,7 +136,7 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileLedger") {}
 
-const layer = Layer.effect(
+export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service

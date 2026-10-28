@@ -292,6 +292,34 @@ const shared = testEffect(
     config,
   ),
 )
+// The ledger hears of a compaction's end only well after the restore, as a busy bus can deliver it.
+const lateBus = Layer.effect(
+  Bus.Service,
+  Effect.gen(function* () {
+    const real = yield* Bus.Service
+    return Bus.Service.of({
+      ...real,
+      subscribe: ((definitions: ReadonlyArray<{ readonly type: string }>) =>
+        definitions.some((definition) => definition.type === SessionEvent.Compaction.Ended.type)
+          ? real.subscribe(definitions as never).pipe(Stream.tap(() => Effect.sleep("300 millis")))
+          : real.subscribe(definitions as never)) as never,
+    })
+  }),
+)
+const late = testEffect(
+  Layer.merge(
+    graph([
+      FileLedger.node.replace(
+        makeLocationNode({
+          service: FileLedger.Service,
+          layer: FileLedger.layer.pipe(Layer.provide(lateBus)),
+          deps: [Bus.node, Environment.node, SessionStore.node],
+        }),
+      ),
+    ]),
+    config,
+  ),
+)
 const linked = canLinkFile ? it.live : it.live.skip
 
 const build = Agent.ID.make("build")
@@ -732,6 +760,8 @@ describe("rehydration after a compaction", () => {
       expect(yield* h.compact({ limit: room(6_000) })).toEqual({ status: "completed" })
       const budgeted = (yield* h.rows()).at(-1)!
       expect(h.restored(budgeted)).toEqual([first, small])
+      // Only what the row shows counts as read.
+      expect(carried(budgeted).files).toEqual([first, small])
       expect(budgeted.text).not.toContain("TINY-SKILL")
       // With the skill alone it would have fitted.
       expect(Token.estimate("TINY-SKILL ".repeat(550))).toBeLessThan(6_000)
@@ -814,6 +844,15 @@ describe("rehydration after a compaction", () => {
       expect(h.restored(found)).toEqual([h.inside("plain.txt")])
       const section = sectionsOf(found.text).find((item) => item.harness.includes(plan))
       expect(section?.blocks.map((block) => block.content)).toEqual(["step one\nstep two\n"])
+
+      // A compaction that asks for the plan alone (the notes compaction of context-memory-13) gets no file.
+      const rehydration = yield* SessionRehydration.Service
+      yield* rehydration.after({ before: yield* h.context(), held: new Map(), view: [], only: "plan" })
+      const planOnly = (yield* h.rows()).at(-1)!
+      expect(h.restored(planOnly)).toEqual([])
+      expect(sectionsOf(planOnly.text).map((item) => item.blocks.map((block) => block.content))).toEqual([
+        ["step one\nstep two\n"],
+      ])
 
       for (const state of ["empty", "missing"] as const) {
         if (state === "empty") yield* h.put(plan, "")
@@ -1214,6 +1253,21 @@ describe("rehydration after a compaction", () => {
     }),
   )
 
+  late.live("a restored file stays fresh when the ledger hears of the compaction's end only after the restore", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const file = h.inside("restored.txt")
+      yield* h.readFile(file, "restored text\n")
+      expect(yield* h.compact()).toEqual({ status: "completed" })
+      expect(h.restored(yield* h.row())).toEqual([file])
+      // Past the late delivery.
+      yield* Effect.sleep("600 millis")
+      expect(status(yield* h.run("Edit", { file_path: file, old_string: "restored", new_string: "edited" }))).toBe(
+        "completed",
+      )
+    }),
+  )
+
   // RH15
   it.live("restored project files load their nested instruction files", () =>
     Effect.gen(function* () {
@@ -1296,6 +1350,14 @@ describe("rehydration after a compaction", () => {
         expect(yield* h.compact().pipe(Effect.provide(Logger.layer([logger])))).toEqual({ status: "completed" })
         expect(warnings).toHaveLength(1)
         expect(yield* h.rows()).toEqual([])
+        // On an automatic path that keeps messages, the sections it cannot read count for nothing in the check.
+        yield* h.prompt("older work")
+        const kept = yield* h.prompt("keep this")
+        expect(yield* h.compact({ reason: "overflow", retain: kept })).toEqual({ status: "completed" })
+        const ended = (yield* h.store.messages({ sessionID: h.session.id, order: "asc" })).findLast(
+          (message) => message.type === "compaction",
+        )
+        expect(ended).toMatchObject({ status: "completed", retain: kept })
       }),
     )
 
@@ -1311,7 +1373,8 @@ describe("rehydration after a compaction", () => {
           Stream.runCollect,
           Effect.forkScoped({ startImmediately: true }),
         )
-        const running = yield* h.compact().pipe(Effect.forkChild({ startImmediately: true }))
+        // Not manual: only the automatic paths report an interrupted compaction.
+        const running = yield* h.compact({ reason: "overflow" }).pipe(Effect.forkChild({ startImmediately: true }))
         yield* Deferred.await(jobGate.reached)
         yield* Fiber.interrupt(running)
         jobGate.held = undefined

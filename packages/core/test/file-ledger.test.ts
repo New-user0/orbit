@@ -1,8 +1,10 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Exit } from "effect"
+import { Effect, Exit, Layer, Queue, Stream } from "effect"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
+import { Bus } from "@orbit/core/bus"
+import { SessionEvent } from "@orbit/core/session/event"
 import { FileLedger } from "@orbit/core/file-ledger"
 import { readNow } from "./fixture/ledger"
 import { Location } from "@orbit/core/location"
@@ -428,4 +430,44 @@ describe("FileLedger bounds", () => {
         expect(yield* ledger.watched(sessionID)).toEqual([])
       }).pipe(Effect.provide(ledgerLayer)),
     )
+
+  // context-memory-5 (FU-M3-084): a compaction clears the ledger itself, restores files, and only then may the bus
+  // deliver its end to the ledger's own subscriber. The bus here hands the ends over when the test says, so the late
+  // delivery is certain.
+  it.live("an end of a compaction that the ledger already handled leaves what was recorded since; any other clears", () =>
+    Effect.gen(function* () {
+      const ends = yield* Queue.unbounded<{ readonly id: string; readonly data: { readonly sessionID: Session.ID } }>()
+      const bus = Layer.mock(Bus.Service, {
+        subscribe: ((definitions: ReadonlyArray<{ readonly type: string }>) =>
+          definitions.some((definition) => definition.type === SessionEvent.Compaction.Ended.type)
+            ? Stream.fromQueue(ends)
+            : Stream.never) as never,
+      })
+      const tmp = yield* tmpdirScoped()
+      const file = path.join(tmp.path, "a.ts")
+      yield* Effect.promise(() => Bun.write(file, "one\n"))
+      yield* Effect.gen(function* () {
+        const ledger = yield* FileLedger.Service
+        const settled = Effect.sleep("50 millis")
+        yield* readNow(sessionID, file)
+        expect([...(yield* ledger.held(sessionID)).keys()]).toEqual([file])
+        yield* ledger.compacted(sessionID, "evt_handled")
+        expect(yield* ledger.held(sessionID)).toEqual(new Map())
+        expect((yield* ledger.assertRead(sessionID, file, "a.ts").pipe(Effect.flip)).code).toBe("file.unread")
+
+        yield* readNow(sessionID, file)
+        yield* Queue.offer(ends, { id: "evt_handled", data: { sessionID } })
+        yield* settled
+        yield* ledger.assertRead(sessionID, file, "a.ts")
+
+        yield* Queue.offer(ends, { id: "evt_other", data: { sessionID } })
+        yield* settled
+        expect((yield* ledger.assertRead(sessionID, file, "a.ts").pipe(Effect.flip)).code).toBe("file.unread")
+      }).pipe(
+        Effect.provide(
+          AppNodeBuilder.build(FileLedger.node, [Location.node.replace(tempLocationLayer), Bus.node.replace(bus)]),
+        ),
+      )
+    }),
+  )
 })
