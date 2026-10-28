@@ -42,10 +42,11 @@ import { SessionStore } from "./store.js"
  * The row is built once, when the compaction completes, and stored. Nothing builds it again: a restart, a fork or an
  * import finds it in history. It is not a reminder row, so a later compaction summarizes it like any message.
  *
- * Files and skills are budgeted from the room left below the automatic threshold after the checkpoint, so the row never
- * starts the next compaction; the agent notes and the plan come first and are not budgeted. Each file is re-read through
- * the read tool's own reader after the checks a read of it would pass, made on its real path at this moment (classes 1,
- * 4, 5 and 8), and a file the model is shown counts as read for the edit tools.
+ * Files and skills are budgeted from the room left below the automatic threshold after the checkpoint; the agent notes
+ * and the plan come first and are not budgeted. While only this row follows the checkpoint, `SessionCompaction.due` does
+ * not compact again. Each file is re-read through the read tool's own reader after the checks a read of it would pass,
+ * made on its real path at this moment (classes 1, 4, 5 and 8), and a file the model is shown counts as read for the
+ * edit tools.
  */
 
 /** How many of the newest files are read again. */
@@ -129,7 +130,7 @@ export const layer = Layer.effect(
       if (text === "") return []
       return [
         ReminderText.render({
-          text: `A plan file from Plan mode exists at ${ReminderText.oneLine(file)}, and its contents follow. Go on with this plan only if it still applies to the current work and is not finished.`,
+          text: `Plan mode left a plan at ${ReminderText.oneLine(file)}; its text follows. Continue it only where it still fits the task and has steps left.`,
           data: { label: "Plan file", content: text },
         }),
       ]
@@ -162,7 +163,8 @@ export const layer = Layer.effect(
     /**
      * The newest files the session touched before the compaction, read again. Each candidate is resolved once, as the
      * read tool resolves it (a share or device spelling is refused before any disk is read), and one file is one entry
-     * whatever spellings named it. The five newest are taken before any is read, so a file that fails leaves fewer.
+     * whatever spellings named it. A folder a Read listed takes no place. The five newest are taken before any is read,
+     * so a file that fails leaves fewer.
      */
     const files = Effect.fnUntraced(function* (
       input: Parameters<Interface["after"]>[0],
@@ -180,7 +182,7 @@ export const layer = Layer.effect(
         const real = FileAccess.realPlace(target)
         return process.platform === "win32" ? real.toLowerCase() : real
       }
-      // What the kept span already shows: its whole reads, but not a read answered with the unchanged stub.
+      // What the kept span already shows: its reads of any range, but not a read answered with the unchanged stub.
       const checkpoint = input.view.findLastIndex(
         (message) => message.type === "compaction" && message.status === "completed",
       )
@@ -199,6 +201,8 @@ export const layer = Layer.effect(
         if (visible.has(key(target)) || same(target.absolute, plan)) continue
         if (instructions.some((file) => same(file, target.absolute))) continue
         if (path.basename(target.absolute) === "MEMORY.md" && (yield* access.inMemory(target.absolute))) continue
+        // Read lists a folder too, but only files are restored, so a listing must not take one of the five places.
+        if (yield* fs.isDir(target.absolute)) continue
         chosen.push(target)
       }
       const read = yield* Effect.forEach(chosen, (target) => restore(input, target), { concurrency: "unbounded" })
@@ -378,7 +382,7 @@ interface Restored {
 
 const pointerNote = (file: string) =>
   ReminderText.render({
-    text: `The file ${ReminderText.oneLine(file)} was read before the conversation was summarized. It is left out here because of its size; call Read on it when you need it.`,
+    text: `${ReminderText.oneLine(file)} is left out of this message because it is long or not plain text. It was in the context before the summary; Read it again when you need it.`,
   })
 
 // One note per background subagent, by its state. The description and the error come from the model and the child, so
@@ -452,7 +456,7 @@ const named = (part: Extract<SessionMessage.AssistantContent, { type: "tool" }>)
   return [given.file_path]
 }
 
-// The paths of whole reads that showed text: a read answered with the unchanged stub shows nothing new.
+// The paths of reads (any range) that showed text: a read answered with the unchanged stub shows nothing new.
 const shownReads = (messages: ReadonlyArray<SessionMessage.Info>) =>
   messages.flatMap((message) =>
     message.type === "assistant"

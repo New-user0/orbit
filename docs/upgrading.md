@@ -5013,11 +5013,12 @@ session) now stores one more message right after the checkpoint. It is hidden fr
 the model reads it after the summary. Before, the model saw only the summary.
 
 - **Files.** The five files the session touched most recently before the compaction (read, edited, written, notebook
-  edits and patches, newest first) are read again now and shown as `Read` shows them. A file that cannot be read is left
-  out, and the next one is not taken in its place. An image, a PDF, a file cut short by `Read`'s page limit or one over
-  5,000 tokens is named in one line instead, with a pointer to `Read`. A file whose full read the checkpoint kept is not
-  repeated, and the plan file, instruction files such as `AGENTS.md` (rule files excepted) and a memory folder's
-  `MEMORY.md` never come back this way.
+  edits and patches, newest first) are read again now and shown as `Read` shows them. A folder that `Read` listed takes
+  none of the five places. A file that cannot be read is left out, and the next one is not taken in its place. An image,
+  a PDF, a file cut short by `Read`'s page limit or one over 5,000 tokens is named in one line instead, with a pointer
+  to `Read`. A file that a read in the part of the history the checkpoint kept shows (any range, but not a read answered
+  with the unchanged stub) is not repeated, and the plan file, instruction files such as `AGENTS.md` (rule files
+  excepted) and a memory folder's `MEMORY.md` never come back this way.
 - **Who decides what is read.** No file is read in a folder that is not trusted. Each file passes, at that moment and on
   its real path, the checks the read tool would make: a link that now leads out of the project, a dangling link, a
   share or device path, a deny rule (also on where a link leads, and `external_directory` for a file outside the
@@ -5033,14 +5034,17 @@ the model reads it after the summary. Before, the model saw only the summary.
 - **Room.** Files take at most 50,000 tokens and skills 25,000, and both take only what the room below the automatic
   compaction threshold allows after the checkpoint and after the subagent notes and the plan, which are not limited. A
   file or skill that does not fit is left out, and a smaller one after it can still fit. With no room left, files and
-  skills are left out. The message itself never makes the next step compact again.
+  skills are left out. The limits count each file and skill, but not the skills' heading or the lines that join the
+  parts, so the message can pass the room by a little. Right after the compaction, while nothing but this message
+  follows the checkpoint, it does not start another compaction; the subagent notes and the plan are not limited, so a
+  large plan can still bring a later step over the threshold.
 - **The todo and task lists survive a compaction.** The message carries them (in its metadata, not its text), so the
   periodic todo reminder after the checkpoint lists them again, until the model writes a new list.
 - **A restored file counts as read.** The model can edit a file it was shown here without reading it again, and an
   identical whole `Read` of it answers that the file is unchanged. A file only named in a one-line note, or left out,
   still needs a read before an edit.
 - **Failures.** A problem while building this message logs one warning and leaves the compaction completed. A restarted,
-  forked or imported session keeps the message it has and never builds a second one.
+  forked, or exported and imported session keeps the message it has and does not build a second one.
 
 **Affects:** everyone whose sessions compact; SDK callers and clients that read `session.context` see one more hidden
 `synthetic` message after a completed checkpoint, with `metadata.rehydration`.

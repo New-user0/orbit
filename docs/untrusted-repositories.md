@@ -804,7 +804,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   notebook edits and patches, and the files the previous rehydration row lists, which an import or a fork can supply),
   and the session's plan file. In a folder that `ProjectTrust.trusted()` does not trust it reads no file at all (class
   1). Each name is resolved once with the read tool's resolver (`FileAccess.locate`, which refuses a share or device
-  spelling before any disk is read), and the target then passes `FileChangeReminder.gate` at this moment (class 4):
+  spelling before any disk is read; a name that is a folder there takes none of the five places), and the target then
+  passes `FileChangeReminder.gate` at this moment (class 4):
   `ProjectTrust.reachable` on the real path, a file outside the project only while its real path is the place the
   session's write recorded (a file outside that the session only read is skipped), and the `Read` and
   `external_directory` deny rules on the file and on where a link leads (class 8). A file the ledger held no record of

@@ -45,6 +45,7 @@ import { SessionReminders } from "@orbit/core/session/reminders"
 import { SessionRunnerModel } from "@orbit/core/session/runner/model"
 import { toLLMMessages } from "@orbit/core/session/runner/to-llm-message"
 import { SessionStore } from "@orbit/core/session/store"
+import { SessionTransfer } from "@orbit/core/session/transfer"
 import { Tool } from "@orbit/core/tool"
 import { EditTool } from "@orbit/core/tool/plugin/edit"
 import { NotebookEditTool } from "@orbit/core/tool/plugin/notebook-edit"
@@ -60,7 +61,7 @@ import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { DateTime, Deferred, Effect, Exit, Fiber, Layer, Logger, Stream } from "effect"
-import { tempLocationLayer } from "./fixture/location"
+import { location, tempLocationLayer } from "./fixture/location"
 import { recordedFileSystem, sharesTouched } from "./fixture/recorded-fs"
 import { canLinkFile } from "./fixture/symlink"
 import { tmpdir } from "./fixture/tmpdir"
@@ -234,6 +235,7 @@ const graph = (replacements: LayerNode.Replacements = []) =>
       SessionCompaction.node,
       SessionModelRequest.node,
       SessionRehydration.node,
+      SessionTransfer.node,
       MemoryStore.node,
       Job.node,
       KV.node,
@@ -663,6 +665,11 @@ type Harness = Effect.Success<ReturnType<typeof setup>>
 const outside = () => Effect.acquireRelease(Effect.promise(() => tmpdir()), (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()))
 const status = (result: unknown) => (result as { status: string }).status
 const errorType = (result: unknown) => (result as { error?: { type?: string } }).error?.type
+// Whether the request built from this history holds the marker in exactly one text part.
+const carriedOnce = (messages: ReadonlyArray<SessionMessage.Info>, marker: string) =>
+  toLLMMessages(messages, fakeModel)
+    .flatMap((message) => message.content)
+    .filter((part) => part.type === "text" && part.text.includes(marker)).length === 1
 const wholeRead = (absolute: string, content: string) =>
   ReadTool.toModelContent(absolute, undefined, { type: "file", content, mime: "text/plain", encoding: "utf8" } as never) as string
 
@@ -732,6 +739,24 @@ describe("rehydration after a compaction", () => {
       expect(yield* h.compact()).toEqual({ status: "completed" })
       const second = (yield* h.rows()).at(-1)!
       expect(h.restored(second)).toEqual([file("nine.txt"), file("seven.txt"), file("five.ipynb"), file("four.txt")])
+    }),
+  )
+
+  // RH1: only files take the five places, as the reference's Read reads only files.
+  it.live("a folder that Read listed last takes none of the five places", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const names = ["f1.txt", "f2.txt", "f3.txt", "f4.txt", "f5.txt", "f6.txt"]
+      yield* Effect.forEach(names, (name) => h.readFile(h.inside(name), `${name}\n`), { discard: true })
+      yield* h.put(h.inside("dir", "inner.txt"), "inner\n")
+      expect(status(yield* h.run("Read", { file_path: h.inside("dir") }))).toBe("completed")
+      expect(yield* h.compact()).toEqual({ status: "completed" })
+      expect(h.restored(yield* h.row())).toEqual(
+        names
+          .toReversed()
+          .slice(0, 5)
+          .map((name) => h.inside(name)),
+      )
     }),
   )
 
@@ -1506,12 +1531,69 @@ describe("rehydration after a compaction", () => {
       const fork = yield* h.sessions.fork({ sessionID: h.session.id })
       const forked = (yield* h.store.context(fork.id)).filter(isRow)
       expect(forked.map((row) => row.text)).toEqual([found.text])
-      const lowered = toLLMMessages(yield* h.store.context(fork.id), fakeModel)
-      expect(
-        lowered
-          .flatMap((message) => message.content)
-          .filter((part) => part.type === "text" && part.text.includes("MARKER-ONCE")),
-      ).toHaveLength(1)
+      expect(carriedOnce(yield* h.store.context(fork.id), "MARKER-ONCE")).toBe(true)
+
+      // Exported, then imported into another process (a fresh build) with a database of its own: the row comes along once, the next
+      // prompt does not build a second one, and the request after it carries the file once.
+      const transfer = yield* SessionTransfer.Service
+      const data = yield* transfer.export({ sessionID: h.session.id })
+      yield* Effect.gen(function* () {
+        const other = yield* setup()
+        expect(yield* other.store.get(h.session.id)).toBeUndefined()
+        const target = yield* SessionTransfer.Service
+        const imported = yield* target.import({
+          data,
+          location: Location.Ref.make({ directory: other.location.directory }),
+        })
+        expect((yield* other.rows(imported)).map((row) => row.text)).toEqual([found.text])
+        yield* other.prompt("after the import", undefined, imported)
+        expect(yield* other.compact({ reason: "auto", target: imported })).toEqual({ status: "skipped" })
+        expect(yield* other.rows(imported)).toHaveLength(1)
+        expect(carriedOnce(yield* other.store.context(imported.id), "MARKER-ONCE")).toBe(true)
+      }).pipe(Effect.provide(Layer.fresh(Layer.merge(graph(), config))))
+    }),
+  )
+
+  // RH19: a real restart, a second process on the same database file and project folder.
+  it.live("a restarted process answers the next prompt without building a second row", () =>
+    Effect.gen(function* () {
+      const tmp = yield* outside()
+      const project = path.join(tmp.path, "project")
+      yield* Effect.promise(() => fs.mkdir(project, { recursive: true }))
+      // Fresh, so no service of this test's own process is shared with the restarted one.
+      const started = () =>
+        Layer.fresh(
+          Layer.merge(
+            graph([
+              Database.node.replace(Database.configured({ path: path.join(tmp.path, "orbit.db") })),
+              Location.node.replace(
+                Layer.succeed(
+                  Location.Service,
+                  Location.Service.of(location(Location.Ref.make({ directory: AbsolutePath.make(project) }))),
+                ),
+              ),
+            ]),
+            config,
+          ),
+        )
+      const first = yield* Effect.gen(function* () {
+        const h = yield* setup()
+        yield* h.readFile(h.inside("plain.txt"), "MARKER-RESTART\n")
+        expect(yield* h.compact()).toEqual({ status: "completed" })
+        return { id: h.session.id, text: (yield* h.row()).text }
+      }).pipe(Effect.provide(started()))
+      yield* Effect.gen(function* () {
+        const h = yield* setup()
+        const restarted = yield* h.sessions.get(first.id)
+        expect((yield* h.rows(restarted)).map((row) => row.text)).toEqual([first.text])
+        // The file is still there, so a second restore would find it.
+        yield* h.prompt("after the restart", undefined, restarted)
+        const reminders = yield* SessionReminders.Service
+        yield* reminders.collect({ loaded: yield* h.context(restarted), step: 1 })
+        expect(yield* h.compact({ reason: "auto", target: restarted })).toEqual({ status: "skipped" })
+        expect((yield* h.rows(restarted)).map((row) => row.text)).toEqual([first.text])
+        expect(carriedOnce(yield* h.store.context(first.id), "MARKER-RESTART")).toBe(true)
+      }).pipe(Effect.provide(started()))
     }),
   )
 
