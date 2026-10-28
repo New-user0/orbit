@@ -768,6 +768,52 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
+  // MF1, D10: the Mini footer's figure is what the response's prompt held (input, cache read and cache write), the same
+  // figure as the terminal UI's footer and /context; the response's own output and reasoning are left out.
+  test("the Mini footer's context figure leaves out output and reasoning", async () => {
+    const events = feed()
+    events.push(connected())
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: sdk({ streams: [events] }),
+      sessionID: "ses_1",
+      thinking: false,
+      footer: ui.api,
+      contextLimit: (model) => (model.providerID === "test" && model.modelID === "model" ? 10_000 : undefined),
+    })
+
+    events.push({
+      id: "evt_step_started",
+      created: 1,
+      type: "session.step.started",
+      durable: durable("ses_1", 1),
+      data: {
+        started: 1,
+        sessionID: "ses_1",
+        assistantMessageID: "msg_assistant",
+        agent: "build",
+        model: { providerID: "test", id: "model" },
+      },
+    })
+    events.push({
+      id: "evt_step_ended",
+      created: 2,
+      type: "session.step.ended",
+      durable: durable("ses_1", 2),
+      data: {
+        sessionID: "ses_1",
+        assistantMessageID: "msg_assistant",
+        finish: "stop",
+        cost: 0,
+        tokens: { input: 3_000, output: 2_000, reasoning: 1_000, cache: { read: 1_500, write: 500 } },
+      },
+    })
+
+    while (!ui.events.some((event) => event.type === "stream.patch" && event.patch.usage)) await Bun.sleep(0)
+    expect(ui.events).toContainEqual({ type: "stream.patch", patch: { usage: { tokens: 5_000, percent: 50 } } })
+    await transport.close()
+  })
+
   test("hides tool-side assistant narration when tools are disabled", async () => {
     const events = feed()
     events.push(connected())

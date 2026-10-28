@@ -31,6 +31,9 @@ export async function renderLocal(
     directory?: string
     /** The address the client says the server listens on; none by default. */
     url?: string
+    /** The terminal's size; 100 by 30 by default. */
+    width?: number
+    height?: number
   } = {},
 ) {
   const temporary = await tmpdir()
@@ -90,7 +93,7 @@ export async function renderLocal(
         </ArgsProvider>
       </TestTuiContexts>
     ),
-    { width: 100, height: 30, kittyKeyboard: true },
+    { width: input.width ?? 100, height: input.height ?? 30, kittyKeyboard: true },
   )
   await waitForModel(() => local !== undefined && local.model.ready)
   await data.location.sync()
