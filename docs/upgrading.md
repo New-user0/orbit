@@ -2033,6 +2033,49 @@ until the file watch caught up, or for good with watching off.
 
 **What to do:** Nothing. Set `$VISUAL` or `$EDITOR` to choose the editor `/memory` opens.
 
+### `/context` draws a grid of what fills the window, and `orb run "/context"` prints a report
+
+The terminal UI's `/context` used to estimate the conversation from the messages it had loaded, at four characters a
+token, and draw one bar per row. It now asks the server, which counts what the session's next request would carry by
+category: the system prompt, system tools, MCP tools, deferred tools (listed, counted in no total), custom agents,
+instruction files, skills and messages, with the reserve kept below the window (the autocompact buffer, or a 3,000-token
+compact buffer with automatic compaction off) and the free space. The dialog draws a grid of squares beside a legend
+(10 by 10, 20 by 10 for a window of a million tokens or more, and 5 by 5 or 5 by 10 below 80 columns), then lists the
+MCP tools, the custom agents by scope, the instruction files and the skills, then suggestions: the context is nearly
+full, one tool's calls and results take a large share, Read results are large, instruction files are large, or
+automatic compaction is off. Viewing a subagent's session shows its main session's context. A model whose window is
+not known gets the rows and the total, with no grid, percentages or suggestions. A folder that is not trusted, a server
+older than this client, an answer that cannot be read and no answer in time each show one line.
+
+`orb run "/context"` and `orb -p "/context"` used to send the text to the model as a prompt. They now print the same
+counts as a Markdown report, with every table (the system tools, the system prompt sections and the message breakdown
+too), and send nothing to the model. `--format result` and `orb -p --output-format json` print one result line whose
+`result` is the report; `orb run --format json` prints one `{"type":"context_usage","sessionID","usage"}` line. `--file`
+with `/context` is refused. The run's own session is reported (`--session`, `--continue`, `--resume`, or a new one), a
+subagent's session is refused, and the folder must be trusted, as for any run.
+
+The server answers at `GET /api/session/:sessionID/context/usage` (`client.session.contextUsage`). It refuses a folder
+that is not trusted with `UntrustedFolderError` (403), a subagent's session with the new `MainSessionOnlyError` (409,
+naming the parent), an unknown agent with `AgentNotFoundError` (404), and a model that does not resolve or an
+instruction source that cannot be read with `ServiceUnavailableError` (503, `service` `model` or `instructions`). It
+records nothing and asks no model.
+
+**Affects:** terminal UI users, scripts that ran `orb run "/context"` or `orb -p "/context"` and read the model's answer,
+and SDK callers.
+
+**What to do:** Nothing, unless a script relied on `/context` reaching the model; send other text for that.
+
+### The context figure counts what the prompt held, without the response's output
+
+The context figure in the terminal UI's footer, the sidebar, the prompt and Mini's footer added the newest response's
+output and reasoning tokens to its prompt. It now counts input, cache read and cache write only, the same figure
+`/context` shows: the response's own output is not in the window until the next request carries it. The figure and
+its percentage read lower than before after a long answer.
+
+**Affects:** terminal UI and Mini users who watch the context figure.
+
+**What to do:** Nothing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -2668,6 +2711,18 @@ client types, which gain one optional field. `@orbit/flow/plain` still exports t
 `@orbit/util/plain`.
 
 **What to do:** Nothing. Show `displayName` when it is present and fall back to `name`.
+
+### A `session.context` hook can be called for a request that is only measured
+
+`/context` builds the request the next step would send, through the same `session.context` hooks, to count it, and
+never sends it. The hook's event then carries `analysis: true`, in the effect plugin API and now in the promise plugin
+API's `SessionContext` type too. A hook that only shapes the request needs no change; a hook with a side effect, such as
+one that starts work or records something for each request, should return early when `analysis` is set, as Orbit's own
+warming hook does.
+
+**Affects:** plugins with a `session.context` hook that has side effects.
+
+**What to do:** Skip the side effect when `event.analysis` is `true`.
 
 ## Agent loop
 
