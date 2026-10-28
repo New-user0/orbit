@@ -244,10 +244,11 @@ export const layer = Layer.effect(
       )
         return undefined
       const read = yield* reader.read(target.absolute, target.resource).pipe(Effect.orElseSucceed(() => undefined))
-      if (read === undefined || read.seen === undefined || read.content.type === "list-page") return undefined
+      // A folder's listing comes without `seen`, so it is never restored.
+      if (read === undefined || read.seen === undefined) return undefined
       const pointer = { section: pointerNote(target.absolute) }
-      if (read.content.type === "file" && read.content.encoding === "base64")
-        return ReadToolFileSystem.MEDIA_MIMES.has(read.content.mime) ? pointer : undefined
+      // The reader encodes only an image or a PDF, and refuses any other binary file.
+      if (read.content.type === "file" && read.content.encoding === "base64") return pointer
       const page =
         read.content.type === "file" && Notebook.isNotebook(target.absolute)
           ? ((yield* ReadTool.notebookPage(read.content.content, undefined, undefined).pipe(

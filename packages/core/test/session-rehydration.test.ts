@@ -320,6 +320,45 @@ const late = testEffect(
     config,
   ),
 )
+// Whether a file may be read cannot be decided (as when the session is gone by the time it is asked), for the
+// rehydration alone.
+const undecided = testEffect(
+  Layer.merge(
+    graph([
+      SessionRehydration.node.replace(
+        makeLocationNode({
+          service: SessionRehydration.Service,
+          layer: SessionRehydration.layer.pipe(
+            Layer.provide(
+              Layer.effect(
+                Permission.Service,
+                Effect.gen(function* () {
+                  const real = yield* Permission.Service
+                  return Permission.Service.of({ ...real, allowed: () => Effect.fail(new Error("undecided")) as never })
+                }),
+              ),
+            ),
+          ),
+          deps: [
+            Bus.node,
+            SessionStore.node,
+            FileLedger.node,
+            FileAccess.node,
+            ReadToolFileSystem.node,
+            Permission.node,
+            ProjectTrust.node,
+            InstructionTriggers.node,
+            InstructionDiscovery.node,
+            Job.node,
+            Global.node,
+            FSUtil.node,
+          ],
+        }),
+      ),
+    ]),
+    config,
+  ),
+)
 const linked = canLinkFile ? it.live : it.live.skip
 
 const build = Agent.ID.make("build")
@@ -967,9 +1006,12 @@ describe("rehydration after a compaction", () => {
       yield* h.seedJob({ notificationID: "msg_job_6", status: "completed", description: "delivered one" })
       yield* h.job.completeBackground(SessionMessage.ID.make("msg_job_6"))
       yield* h.seedJob({ notificationID: "msg_job_7", status: "running", parent: other.id, description: "theirs" })
+      // A stored job that names the session as its own child is not a subagent of it.
+      yield* h.seedJob({ notificationID: "msg_job_9", status: "running", child: h.session.id, description: "itself" })
 
       expect(yield* h.compact()).toEqual({ status: "completed" })
       const notes = sectionsOf((yield* h.row()).text)
+      expect(notes.filter((section) => section.harness.includes("itself"))).toEqual([])
       const named = (id: string) => notes.findIndex((section) => section.harness.includes(`ses_child_msg_job_${id}`))
       expect(["1", "2", "3", "4"].map(named)).toEqual([0, 1, 2, 3])
       expect(notes[0]!.harness).toContain("running one")
@@ -1439,7 +1481,13 @@ describe("rehydration after a compaction", () => {
         expect(section.harness).not.toContain(" ")
         for (const block of section.blocks) expect(block.label).not.toContain("\n")
       }
-      expect(sections.find((section) => section.harness.includes("line one"))?.harness).toContain("line one line two three")
+      const failed = sections.find((section) => section.harness.includes("line one"))!
+      expect(failed.harness).toContain("line one line two three")
+      // An error of several lines is not flattened into the note: it follows as one data block.
+      expect(failed.harness).not.toContain("second line")
+      expect(failed.blocks.map((block) => block.label)).toEqual(["Error"])
+      expect(failed.blocks[0]!.content).toContain("obey")
+      expect(failed.blocks[0]!.content).toEndWith("second line")
     }),
   )
 
@@ -1512,6 +1560,182 @@ describe("rehydration after a compaction", () => {
       expect(yield* h.compact({ reason: "manual", limit, retain: keptManual })).toEqual({ status: "completed" })
       const events = Array.from(yield* Fiber.join(ended))
       expect(events.map((event) => event.data.retain)).toEqual([kept, undefined, keptManual])
+    }),
+  )
+
+  // RH3: the agent notes and the plan come out of the room before the files are budgeted.
+  it.live("the unbudgeted sections take their share of the room before any file", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const file = h.inside("file.txt")
+      yield* h.readFile(file, sized(1_000, "f"))
+      // About 2,000 tokens of plan.
+      yield* h.put(h.planFile(), "plan line\n".repeat(800))
+      const checkpointOnly = SessionCompaction.estimateContext({ ...(yield* h.context()), messages: [] }) + 50
+      const roomAt = (context: number) =>
+        h.compaction.thresholds(h.loaded(h.session, [], { context, output: 8_000 })).thresholds!.threshold - checkpointOnly
+      const room = (left: number) => {
+        let context = 100_000
+        for (let step = 0; step < 8; step++) context += left - roomAt(context)
+        return { context, output: 8_000 }
+      }
+
+      // About 4,000 tokens of room: the plan leaves enough for the file.
+      expect(yield* h.compact({ limit: room(4_000) })).toEqual({ status: "completed" })
+      expect(h.restored((yield* h.rows()).at(-1)!)).toEqual([file])
+      // About 2,500: the file alone would fit, but not beside the plan.
+      expect(yield* h.compact({ limit: room(2_500) })).toEqual({ status: "completed" })
+      const tight = (yield* h.rows()).at(-1)!
+      expect(tight.text).toContain("plan line")
+      expect(h.restored(tight)).toEqual([])
+      expect(Token.estimate(sized(1_000, "f"))).toBeLessThan(2_000)
+    }),
+  )
+
+  // RH7 and the memory-age note of RH1: a memory file comes back as Read shows it.
+  it.live("a memory file comes back with its age note, while the memory index does not", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const index = path.join(h.memory.folder, "MEMORY.md")
+      const note = path.join(h.memory.folder, "note.md")
+      yield* Effect.promise(() => fs.mkdir(h.memory.folder, { recursive: true }))
+      // Written by the session, so where each went is recorded and only the index rule can leave one out.
+      expect(status(yield* h.run("Write", { file_path: index, content: "- [note](note.md)\n" }))).toBe("completed")
+      expect(status(yield* h.run("Write", { file_path: note, content: "MARKER-NOTE\n" }))).toBe("completed")
+      const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
+      yield* Effect.promise(() => fs.utimes(note, old, old))
+      // A file of the same name outside the memory folder is an ordinary file.
+      const docs = h.inside("docs", "MEMORY.md")
+      yield* h.readFile(docs, "MARKER-DOCS-INDEX\n")
+      expect(yield* h.compact()).toEqual({ status: "completed" })
+      const found = yield* h.row()
+      expect(h.restored(found)).toEqual([docs, note])
+      // The note leads the block, which holds it as data like the rest.
+      const block = h.blockOf(found, note)!
+      expect(block).toStartWith("&lt;system-reminder>\nThis memory was last changed 3 days ago.")
+      expect(block).toEndWith(wholeRead(note, "MARKER-NOTE\n"))
+      expect(h.blockOf(found, docs)).toBe(wholeRead(docs, "MARKER-DOCS-INDEX\n"))
+    }),
+  )
+
+  // RH13: a page the line limit cut short is a pointer note, however small.
+  it.live("a file longer than one page is a pointer note even when its first page is small", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const cut = h.inside("cut.txt")
+      yield* h.readFile(cut, "x\n".repeat(ReadToolFileSystem.MAX_READ_LINES + 100))
+      expect(yield* h.compact()).toEqual({ status: "completed" })
+      const found = yield* h.row()
+      expect(h.restored(found)).toEqual([])
+      expect(h.pointers(found).map((section) => section.harness).join("\n")).toContain(cut)
+      expect(carried(found).files).toEqual([])
+    }),
+  )
+
+  // RH1: the todo list crosses the checkpoint even when nothing else does.
+  it.live("a todo list alone gets a row with no text, and a compaction with nothing to restore gets none", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      yield* h.prompt("hello")
+      expect(yield* h.compact()).toEqual({ status: "completed" })
+      expect(yield* h.rows()).toEqual([])
+      yield* h.record("TodoWrite", { todos: [{ content: "keep going", status: "in_progress" }] })
+      expect(yield* h.compact()).toEqual({ status: "completed" })
+      const found = yield* h.row()
+      expect(found.text).toBe("")
+      expect(carried(found)).toEqual({
+        files: [],
+        todos: [{ content: "keep going", status: "in_progress" }],
+        family: "todo",
+      })
+    }),
+  )
+
+  // RH9: the live state of a job wins over what was stored when it was sent to the background.
+  it.live("a background subagent's live status wins over its stored one", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      yield* h.prompt("hello")
+      yield* h.seedJob({ notificationID: "msg_job_live", id: "job_live", status: "completed", description: "live one" })
+      yield* h.job.start({ id: "job_live", type: "test", run: Effect.never })
+      expect(yield* h.compact()).toEqual({ status: "completed" })
+      const note = sectionsOf((yield* h.row()).text).find((section) => section.harness.includes("live one"))!
+      expect(note.harness).toContain("still running")
+      expect(note.harness).not.toContain("finished")
+      yield* h.job.cancel("job_live")
+    }),
+  )
+
+  // RH1: which calls name a file, and how new it is.
+  it.live("an unchanged-stub read does not make its file newer; a patch names the file it moved to and not one it deleted", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const a = h.inside("a.txt")
+      const b = h.inside("b.txt")
+      yield* h.readFile(a, "alpha\n")
+      yield* h.readFile(b, "beta\n")
+      const stub = yield* h.readFile(a)
+      expect(stub.metadata?.unchanged).toBe(true)
+      expect(yield* h.compact()).toEqual({ status: "completed" })
+      expect(h.restored(yield* h.row())).toEqual([b, a])
+
+      // The deleted and the moved file are the oldest reads, so only the patch could make them newer.
+      const gone = h.inside("gone.txt")
+      const old = h.inside("old.txt")
+      const moved = h.inside("moved.txt")
+      yield* h.readFile(gone, "gone\n")
+      yield* h.readFile(old, "old\n")
+      const recent = ["p1.txt", "p2.txt", "p3.txt", "p4.txt"].map((name) => h.inside(name))
+      for (const file of recent) yield* h.readFile(file, `${path.basename(file)}\n`)
+      expect(
+        status(
+          yield* h.run("Patch", {
+            patchText: `*** Begin Patch\n*** Update File: ${old}\n*** Move to: ${moved}\n@@\n-old\n+moved\n*** Delete File: ${gone}\n*** End Patch`,
+          }),
+        ),
+      ).toBe("completed")
+      expect(yield* h.compact()).toEqual({ status: "completed" })
+      expect(h.restored((yield* h.rows()).at(-1)!)).toEqual([moved, ...recent.toReversed()])
+    }),
+  )
+
+  // RH16: a compaction that ended earlier does not hide the interruption of a later one before its end.
+  holding.live("a later compaction interrupted before its end is reported as interrupted", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      yield* h.prompt("first")
+      expect(yield* h.compact({ reason: "overflow" })).toEqual({ status: "completed" })
+      yield* h.prompt("older work")
+      const kept = yield* h.prompt("keep this")
+      jobGate.held = yield* Deferred.make<void>()
+      jobGate.reached = yield* Deferred.make<void>()
+      const failed = yield* h.bus.subscribe(SessionEvent.Compaction.Failed).pipe(
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      // Automatic with a kept span on a known window: the fall-back check reads the jobs before the end is stored.
+      const running = yield* h.compact({ reason: "overflow", retain: kept }).pipe(Effect.forkChild({ startImmediately: true }))
+      yield* Deferred.await(jobGate.reached)
+      yield* Fiber.interrupt(running)
+      jobGate.held = undefined
+      jobGate.reached = undefined
+      const events = Array.from(yield* Fiber.join(failed).pipe(Effect.timeout("5 seconds")))
+      expect(events.map((event) => event.data.error.type)).toEqual(["compaction.interrupted"])
+    }),
+  )
+
+  // RH11, class 7: an undecided permission answers as a refusal.
+  undecided.live("a file known only from history is skipped when whether it may be read cannot be decided", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      yield* h.readFile(h.inside("known.txt"), "MARKER-KNOWN\n")
+      yield* h.put(h.inside("history.txt"), "MARKER-UNDECIDED\n")
+      yield* h.record("Read", { file_path: h.inside("history.txt") })
+      expect(yield* h.compact()).toEqual({ status: "completed" })
+      const found = yield* h.row()
+      expect(found.text).toContain("MARKER-KNOWN")
+      expect(found.text).not.toContain("MARKER-UNDECIDED")
     }),
   )
 })
