@@ -259,8 +259,6 @@ export const layer = Layer.effect(
       // A folder's listing comes without `seen`, so it is never restored.
       if (read === undefined || read.seen === undefined) return undefined
       const pointer = { section: pointerNote(target.absolute) }
-      // The reader encodes only an image or a PDF, and refuses any other binary file.
-      if (read.content.type === "file" && read.content.encoding === "base64") return pointer
       const page =
         read.content.type === "file" && Notebook.isNotebook(target.absolute)
           ? ((yield* ReadTool.notebookPage(read.content.content, undefined, undefined).pipe(
@@ -269,6 +267,8 @@ export const layer = Layer.effect(
           : read.content
       if (page.type === "text-page" && page.truncated) return pointer
       const content = ReadTool.toModelContent(target.absolute, undefined, page)
+      // The reader encodes only an image or a PDF, which Read shows as parts rather than text, and refuses any other
+      // binary file.
       if (typeof content !== "string" || Token.estimate(content) > FILE_TOKENS) return pointer
       const note = yield* ReadTool.memoryNote(access, fs, target.absolute)
       return {
