@@ -855,6 +855,47 @@ describe("rehydration after a compaction", () => {
     }),
   )
 
+  it.live("a file or a skill exactly the size of what is left is admitted, and one token less leaves it out", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      const file = h.inside("exact.txt")
+      yield* h.readFile(file, sized(500, "e"))
+      const rehydration = yield* SessionRehydration.Service
+      const restore = (room?: number) =>
+        Effect.gen(function* () {
+          yield* rehydration.after({
+            before: yield* h.context(),
+            held: new Map(),
+            view: [],
+            ...(room === undefined ? {} : { room }),
+          })
+          return (yield* h.rows()).at(-1)!
+        })
+      // Measured with no limit: the file's section alone, then the skill's block, which follows its header line.
+      const alone = yield* restore()
+      expect(h.restored(alone)).toEqual([file])
+      const fileSize = Token.estimate(alone.text)
+      yield* h.record(
+        "Skill",
+        { id: "exact" },
+        { content: [{ type: "text", text: "EXACT-SKILL ".repeat(100) }], metadata: { name: "exact" } },
+      )
+      const whole = (yield* restore()).text
+      const skillSize = Token.estimate(whole.slice(whole.lastIndexOf("\n\n") + 2))
+
+      const exact = yield* restore(fileSize + skillSize)
+      expect(h.restored(exact)).toEqual([file])
+      expect(exact.text).toContain("EXACT-SKILL")
+      const short = yield* restore(fileSize + skillSize - 1)
+      expect(h.restored(short)).toEqual([file])
+      expect(short.text).not.toContain("EXACT-SKILL")
+      const fileOnly = yield* restore(fileSize)
+      expect(h.restored(fileOnly)).toEqual([file])
+      expect(fileOnly.text).not.toContain("EXACT-SKILL")
+      expect(h.restored(yield* restore(fileSize - 1))).toEqual([])
+    }),
+  )
+
   // RH4
   it.live("skills invoked anywhere in the session are restored newest first, each cut to its head", () =>
     Effect.gen(function* () {
@@ -902,6 +943,9 @@ describe("rehydration after a compaction", () => {
       const plan = h.planFile()
       expect(status(yield* h.run("Write", { file_path: plan, content: "step one\nstep two\n" }))).toBe("completed")
       yield* h.readFile(plan)
+      // A write after the read leaves the plan file's place in the ledger, so the gate would pass it: only the plan
+      // rule keeps it out of the recent files.
+      expect(status(yield* h.run("Write", { file_path: plan, content: "step one\nstep two\n" }))).toBe("completed")
       yield* h.readFile(h.inside("plain.txt"), "plain\n")
       expect(yield* h.compact()).toEqual({ status: "completed" })
       const found = yield* h.row()
@@ -954,6 +998,19 @@ describe("rehydration after a compaction", () => {
       yield* h.put(plan, "MARKER-PLAN-OWN\n")
       expect(yield* h.compact()).toEqual({ status: "completed" })
       expect((yield* h.rows()).at(-1)!.text).toContain("MARKER-PLAN-OWN")
+      // A link to another file in the plan folder passes, and the text is read from the real file it was checked as,
+      // never again through the link, which could have been swapped since.
+      yield* h.prompt("last")
+      const own = path.join(path.dirname(plan), "own.md")
+      yield* h.put(own, "MARKER-PLAN-INSIDE\n")
+      yield* Effect.promise(() => fs.rm(plan))
+      yield* Effect.promise(() => fs.symlink(own, plan))
+      recorded.calls.length = 0
+      expect(yield* h.compact()).toEqual({ status: "completed" })
+      expect((yield* h.rows()).at(-1)!.text).toContain("MARKER-PLAN-INSIDE")
+      const reads = recorded.calls.filter((call) => call.startsWith("readFileString "))
+      expect(reads.some((call) => call.endsWith(`${path.sep}own.md`))).toBe(true)
+      expect(reads).not.toContain(`readFileString ${plan}`)
     }),
   )
 
