@@ -341,6 +341,40 @@ it.live("unknown session, unresolvable model, unknown agent and a blocked source
   }).pipe(Effect.scoped),
 )
 
+// SV8, class 9: a refusal's message names the session's agent or model, which a config can spell with terminal control
+// characters, so the message is written out; the agent field keeps the name as data.
+it.live("a refusal's message writes out the control characters of the agent or model it names", () =>
+  Effect.gen(function* () {
+    const hostile = "\x1b]0;x\x07\x1b[2K"
+    const control = /[\u0000-\u001f\u007f-\u009f]/
+    const agents = yield* server()
+    const unknownAgent = yield* agents.usage((yield* agents.session(agents.project, `agent${hostile}`)).id)
+    expect({ status: unknownAgent.status, tag: unknownAgent.body._tag, agent: unknownAgent.body.agentID }).toEqual({
+      status: 404,
+      tag: "AgentNotFoundError",
+      agent: `agent${hostile}`,
+    })
+    expect(String(unknownAgent.body.message)).toContain("agent\\x1b]0;x")
+    expect(String(unknownAgent.body.message)).not.toMatch(control)
+
+    const unresolved = yield* server({ provider: false })
+    const session = yield* unresolved.sessions.create({
+      id: Session.ID.create(),
+      agent: Agent.ID.make("build"),
+      model: { ...model.ref, id: `usage-model${hostile}` as typeof model.ref.id },
+      location: Location.Ref.make({ directory: AbsolutePath.make(unresolved.project) }),
+    })
+    const unknownModel = yield* unresolved.usage(session.id)
+    expect({ status: unknownModel.status, tag: unknownModel.body._tag, service: unknownModel.body.service }).toEqual({
+      status: 503,
+      tag: "ServiceUnavailableError",
+      service: "model",
+    })
+    expect(String(unknownModel.body.message)).toContain("usage-model\\x1b]0;x")
+    expect(String(unknownModel.body.message)).not.toMatch(control)
+  }).pipe(Effect.scoped),
+)
+
 // SV6, classes 6 and 12: the route is read only. It asks no model, and adds no message, durable event or inbox row.
 it.live("the route sends no model request and records nothing", () =>
   Effect.gen(function* () {

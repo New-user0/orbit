@@ -130,12 +130,9 @@ function failure(error: unknown) {
     typeof value === "object" && value !== null && "name" in value && value.name === name
   if (named(error, "TimeoutError") || (error instanceof Error && named(error.cause, "TimeoutError")))
     return "The server did not answer in time"
-  // A server from before the route answers 404 with no body.
-  if (
-    error instanceof Error &&
-    error.name === "ClientError" &&
-    (error.message === "UnsupportedContentType" || error.message === "UnexpectedStatus: 404")
-  )
+  // A server from before the route answers 404 with no body. The route declares 404, so the client reads that body as
+  // a typed error and finds no content type.
+  if (error instanceof Error && error.name === "ClientError" && error.message === "UnsupportedContentType")
     return "The server is older than this client and does not report context usage"
   return errorMessage(error)
 }

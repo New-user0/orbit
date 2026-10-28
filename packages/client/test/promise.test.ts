@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test"
-import { isRewindFilesError, isSessionNotFoundError, isUnauthorizedError, Orbit } from "../src/promise/index"
+import {
+  isMainSessionOnlyError,
+  isRewindFilesError,
+  isSessionNotFoundError,
+  isUnauthorizedError,
+  Orbit,
+} from "../src/promise/index"
 
 test("exposes every standard HTTP API group", () => {
   const client = Orbit.make({ baseUrl: "http://localhost:3000" })
@@ -1100,6 +1106,40 @@ test("session.diff sends the scope", async () => {
   })
   expect(await client.session.diff({ sessionID: "ses_test", from: "msg_prompt", scope: "prompt" })).toEqual([])
   expect(new URL(urls[0]!).searchParams.get("scope")).toBe("prompt")
+})
+
+// clients-ux-23: `/context` of a child session is a typed refusal that names its main session (class 13).
+test("session.contextUsage returns the payload, and a child session's MainSessionOnlyError is typed", async () => {
+  const usage = { model: { providerID: "provider", id: "model" }, total: 10, measured: false, auto: true, categories: [] }
+  const urls: string[] = []
+  const answer = (response: () => Response) =>
+    Orbit.make({
+      baseUrl: "http://localhost:3000",
+      fetch: async (input) => {
+        urls.push(new URL(input instanceof Request ? input.url : String(input)).pathname)
+        return response()
+      },
+    })
+      .session.contextUsage({ sessionID: "ses_test" })
+      .then(
+        (value) => ({ value, cause: undefined }),
+        (cause: unknown) => ({ value: undefined, cause }),
+      )
+  expect((await answer(() => Response.json({ data: usage }))).value).toEqual(usage as never)
+  const refusal = {
+    _tag: "MainSessionOnlyError",
+    sessionID: "ses_test",
+    parentID: "ses_root",
+    message: "Context usage is reported for a main session only",
+  }
+  const refused = await answer(() => Response.json(refusal, { status: 409 }))
+  expect(isMainSessionOnlyError(refused.cause)).toBe(true)
+  expect(refused.cause).toMatchObject(refusal)
+  const missing = await answer(() =>
+    Response.json({ _tag: "SessionNotFoundError", sessionID: "ses_test", message: "Session not found" }, { status: 404 }),
+  )
+  expect(isMainSessionOnlyError(missing.cause)).toBe(false)
+  expect(urls).toEqual(Array(3).fill("/api/session/ses_test/context/usage"))
 })
 
 const session = {

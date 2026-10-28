@@ -117,12 +117,9 @@ function failure(error: unknown) {
     return "The server did not answer in time."
   // A typed refusal: the server's message, which names the folder or the session.
   if (typeof error === "object" && error !== null && "_tag" in error) return plain(errorMessage(error))
-  // A server from before the route answers 404 with no body.
-  if (
-    error instanceof Error &&
-    error.name === "ClientError" &&
-    (error.message === "UnsupportedContentType" || error.message === "UnexpectedStatus: 404")
-  )
+  // A server from before the route answers 404 with no body. The route declares 404, so the client reads that body as
+  // a typed error and finds no content type.
+  if (error instanceof Error && error.name === "ClientError" && error.message === "UnsupportedContentType")
     return "The server is older than this client and does not report context usage."
   return plain(`Could not read context usage: ${errorMessage(error)}`)
 }
