@@ -2037,15 +2037,18 @@ until the file watch caught up, or for good with watching off.
 
 The terminal UI's `/context` used to estimate the conversation from the messages it had loaded, at four characters a
 token, and draw one bar per row. It now asks the server, which counts what the session's next request would carry by
-category: the system prompt, system tools, MCP tools, deferred tools (listed, counted in no total), custom agents,
-instruction files, skills and messages, with the reserve kept below the window (the autocompact buffer, or a 3,000-token
-compact buffer with automatic compaction off) and the free space. The dialog draws a grid of squares beside a legend
-(10 by 10, 20 by 10 for a window of a million tokens or more, and 5 by 5 or 5 by 10 below 80 columns), then lists the
-MCP tools, the custom agents by scope, the instruction files and the skills, then suggestions: the context is nearly
-full, one tool's calls and results take a large share, Read results are large, instruction files are large, or
-automatic compaction is off. Viewing a subagent's session shows its main session's context. A model whose window is
-not known gets the rows and the total, with no grid, percentages or suggestions. A folder that is not trusted, a server
-older than this client, an answer that cannot be read and no answer in time each show one line.
+category: the system prompt, system tools, MCP tools, custom agents, instruction files, skills and messages, with the
+reserve kept below the window (the autocompact buffer, or a 3,000-token compact buffer with automatic compaction off)
+and the free space. Deferred tools are counted in no total: the dialog leaves them out of its legend and its grid, and
+its MCP tools heading says when some are loaded on demand, while the report below lists them. The dialog draws a grid
+of squares beside a legend (10 by 10, 20 by 10 for a window of a million tokens or more, and 5 by 5 or 5 by 10 below
+80 columns), then lists the MCP tools, the custom agents by scope, the instruction files and the skills, then
+suggestions: the context is nearly full, one tool's calls and results take a large share, Read results are large,
+instruction files are large (named by their paths in the session's folder), or automatic compaction is off. Viewing a
+subagent's session shows its main session's context. A model whose window is not known gets the rows and the total,
+with no grid, percentages or suggestions. A folder that is not trusted, a server older than this client, an answer
+that cannot be read and no answer in time each show one line; one entry of the answer that cannot be read, such as a
+category from a newer server, is left out with a log line and the rest is shown.
 
 `orb run "/context"` and `orb -p "/context"` used to send the text to the model as a prompt. They now print the same
 counts as a Markdown report, with every table (the system tools, the system prompt sections and the message breakdown
@@ -2067,12 +2070,14 @@ and SDK callers.
 
 ### The context figure counts what the prompt held, without the response's output
 
-The context figure in the terminal UI's footer, the sidebar, the prompt and Mini's footer added the newest response's
-output and reasoning tokens to its prompt. It now counts input, cache read and cache write only, the same figure
-`/context` shows: the response's own output is not in the window until the next request carries it. The figure and
-its percentage read lower than before after a long answer.
+The context figure in the terminal UI's footer, the sidebar, the prompt, Mini's footer and the payload the terminal UI
+hands a status-line command (`context.used` and `context.percent`) added the newest response's output and reasoning
+tokens to its prompt. It now counts input, cache read and cache write only, the same figure `/context` shows: the
+response's own output is not in the window until the next request carries it. The figure and its percentage read lower
+than before after a long answer.
 
-**Affects:** terminal UI and Mini users who watch the context figure.
+**Affects:** terminal UI and Mini users who watch the context figure, and authors of status-line scripts that read
+`context.used` or `context.percent`.
 
 **What to do:** Nothing.
 

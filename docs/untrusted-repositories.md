@@ -1093,6 +1093,11 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   every one through `plain`, the Markdown report writes each cell through `plain` with every pipe escaped so that a name
   cannot add a column, and the JSON formats use `jsonLine` (class 9; proof: "every string from the payload is escaped
   in the frame" in `packages/tui/test/component/dialog-context.test.tsx`, and `packages/cli/test/run/context-report.test.ts`).
+  Both clients decode the answer with `SessionContextUsage.decode`, which needs the payload's own fields and takes each
+  list entry by entry, so one entry a client cannot read, such as a category kind from a newer server, is left out with
+  one log line and the rest is shown (class 7; proof: `packages/schema/test/session-context-usage.test.ts`, "an entry
+  that does not decode is left out with one log line" in `dialog-context.test.tsx`, and "an entry the client cannot
+  read costs only itself" in `packages/cli/test/run/context-run.test.ts`).
   Proof of the analysis: `packages/core/test/session-context-usage.test.ts`.
 - Session retention (`SessionRetention`, `packages/core/src/session/retention.ts`, started by the server process and
   never by a bare run's private server): a pass removes session families idle past `cleanup_period_days`, then deletes
