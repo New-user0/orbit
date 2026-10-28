@@ -5081,7 +5081,8 @@ the model reads it after the summary. Before, the model saw only the summary.
   excepted) and a memory folder's `MEMORY.md` never come back this way.
 - **Who decides what is read.** No file is read in a folder that is not trusted. Each file passes, at that moment and on
   its real path, the checks the read tool would make: a link that now leads out of the project, a dangling link, a
-  share or device path, a deny rule (also on where a link leads, and `external_directory` for a file outside the
+  share or device path, a link that leads to a share (which is refused without being opened, so no connection is made
+  to the host it names), a deny rule (also on where a link leads, and `external_directory` for a file outside the
   project) or a file outside the project that the session only read keeps it out. A file named only by history (after a
   restart, a fork or an import) is read only when the read tool would read it without asking, so an ask rule such as
   the one on `.env` keeps it out. So does an ask rule on where a file leads once it has become a link.

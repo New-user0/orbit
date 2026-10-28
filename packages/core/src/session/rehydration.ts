@@ -207,9 +207,18 @@ export const layer = Layer.effect(
         seen.add(key(target))
         if (visible.has(key(target)) || same(target.absolute, plan)) continue
         if (instructions.some((file) => same(file, target.absolute))) continue
+        // A file whose links lead to a share is not opened to learn what it is: that would connect to the host the link
+        // names. It keeps its place, and the gate refuses it unread (class 4). A chain of links never followed to its end
+        // is answered with a name that reads as a share, so it is held back here too.
+        const place = FileAccess.realPlace(target)
+        if (LinkShare.isShare(place)) {
+          chosen.push(target)
+          continue
+        }
         if (path.basename(target.absolute) === "MEMORY.md" && (yield* access.inMemory(target.absolute))) continue
-        // Read lists a folder too, but only files are restored, so a listing must not take one of the five places.
-        if (yield* fs.isDir(target.absolute)) continue
+        // Read lists a folder too, but only files are restored, so a listing must not take one of the five places. The
+        // place checked above is the one asked about.
+        if (yield* fs.isDir(place)) continue
         chosen.push(target)
       }
       const read = yield* Effect.forEach(chosen, (target) => restore(input, target), { concurrency: "unbounded" })

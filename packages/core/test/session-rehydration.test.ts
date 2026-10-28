@@ -1199,11 +1199,14 @@ describe("rehydration after a compaction", () => {
         yield* h.readFile(link)
         yield* Effect.promise(() => fs.rm(swapped).then(() => fs.symlink(marker, swapped)))
         yield* Effect.promise(() => fs.rm(dangling).then(() => fs.symlink(path.join(away.path, "gone.txt"), dangling)))
+        recorded.calls.length = 0
         expect(yield* h.compact()).toEqual({ status: "completed" })
         const found = yield* h.row()
         expect(found.text).not.toContain("MARKER-HOME-SECRET")
         expect(found.text).not.toContain(dangling)
         expect(found.text.split("MARKER-TARGET").length - 1).toBe(1)
+        // Whether a candidate is a folder is asked of the real place its links were checked to lead to, not of the link.
+        expect(recorded.calls).not.toContain(`isDir ${link}`)
       }),
     )
 
@@ -1226,6 +1229,110 @@ describe("rehydration after a compaction", () => {
         const found = yield* h.row()
         expect(found.text.split("MARKER-ONE").length - 1).toBe(1)
         expect(found.text).not.toContain("host")
+        expect(sharesTouched(recorded.touched)).toEqual([])
+      }),
+    )
+
+    // Class 4, one row per door that could reach a share through a link before its check: a recent file the ledger
+    // knew, one only history names, the plan file, and the skills and agent notes, which are names only and touch no disk.
+    // A link to a share is followed one part at a time with readlink, which connects to nothing; a stat, a real path or a
+    // read of it would open the share. Only Windows has such links.
+    linked("a link that leads to a share is refused at every door without being opened", () =>
+      Effect.gen(function* () {
+        const h = yield* setup()
+        const away = yield* outside()
+        const share = "\\\\orbit-probe-nohost.invalid\\share"
+        const marker = path.join(away.path, "secret.txt")
+        yield* h.put(marker, "MARKER-HOME-SECRET\n")
+        const windows = process.platform === "win32"
+        const rows = [
+          // The oldest: the five newest are chosen before any is read, so a file refused at the door is not replaced by
+          // it. Without the two share rows (off Windows) it is among the five.
+          {
+            name: "share-sixth.txt",
+            shown: !windows,
+            make: (file: string) => h.readFile(file, "MARKER-SIXTH\n").pipe(Effect.asVoid),
+          },
+          // A file the ledger knew, swapped for a link to a file on a share.
+          ...(windows
+            ? [
+                {
+                  name: "share-swapped.txt",
+                  shown: false,
+                  make: (file: string) =>
+                    Effect.gen(function* () {
+                      yield* h.readFile(file, "MARKER-SHARE-SWAPPED\n")
+                      yield* Effect.promise(() => fs.rm(file).then(() => fs.symlink(`${share}\\x.txt`, file, "file")))
+                    }),
+                },
+                // A file only history names, a link to a file in a folder of the project that links to a share.
+                {
+                  name: "share-deep.txt",
+                  shown: false,
+                  make: (file: string) =>
+                    Effect.gen(function* () {
+                      yield* Effect.promise(() => fs.symlink(share, h.inside("remote"), "dir"))
+                      yield* Effect.promise(() => fs.symlink(h.inside("remote", "y.txt"), file, "file"))
+                      yield* h.record("Read", { file_path: file })
+                    }),
+                },
+              ]
+            : []),
+          // A link that leads nowhere.
+          {
+            name: "share-dangling.txt",
+            shown: false,
+            make: (file: string) =>
+              Effect.gen(function* () {
+                yield* h.readFile(file, "MARKER-DANGLING\n")
+                yield* Effect.promise(() => fs.rm(file).then(() => fs.symlink(path.join(away.path, "gone.txt"), file)))
+              }),
+          },
+          // A link to a secret outside the project, in the home folder's place.
+          {
+            name: "share-secret.txt",
+            shown: false,
+            make: (file: string) =>
+              Effect.gen(function* () {
+                yield* h.readFile(file, "MARKER-SECRET-BEFORE\n")
+                yield* Effect.promise(() => fs.rm(file).then(() => fs.symlink(marker, file)))
+              }),
+          },
+          // The trusted control: a plain project file.
+          {
+            name: "share-control.txt",
+            shown: true,
+            make: (file: string) => h.readFile(file, "MARKER-CONTROL\n").pipe(Effect.asVoid),
+          },
+        ]
+        for (const row of rows) yield* row.make(h.inside(row.name))
+        // The plan file, a link to a file on a share.
+        const plan = h.planFile()
+        if (windows) {
+          yield* Effect.promise(() => fs.mkdir(path.dirname(plan), { recursive: true }))
+          yield* Effect.promise(() => fs.symlink(`${share}\\plan.md`, plan, "file"))
+        }
+        // A skill and an agent note that name a share are text only.
+        yield* h.prompt("use it", [{ id: "skill_share", name: "share-skill", text: "See \\\\skill-host\\docs\\a.md." }])
+        yield* h.seedJob({ notificationID: "msg_job_share", status: "running", description: "copy \\\\job-host\\x" })
+        recorded.calls.length = 0
+        recorded.touched.length = 0
+        expect(yield* h.compact()).toEqual({ status: "completed" })
+        const found = yield* h.row()
+        const files = carried(found).files
+        for (const row of rows) expect(files.includes(h.inside(row.name))).toBe(row.shown)
+        expect(found.text).toContain("MARKER-CONTROL")
+        for (const text of ["MARKER-HOME-SECRET", "MARKER-SECRET-BEFORE", "MARKER-DANGLING", "orbit-probe-nohost", plan])
+          expect(found.text).not.toContain(text)
+        expect(found.text).toContain("\\\\skill-host\\docs\\a.md")
+        expect(found.text).toContain("\\\\job-host\\x")
+        // Nothing but readlink reached a path that leads to a share, and no share was named to the file system.
+        const leadsToShare = windows ? [h.inside("share-swapped.txt"), h.inside("share-deep.txt"), h.inside("remote"), plan] : []
+        expect(
+          recorded.calls.filter(
+            (call) => leadsToShare.some((file) => call.includes(file)) && !call.startsWith("readLink "),
+          ),
+        ).toEqual([])
         expect(sharesTouched(recorded.touched)).toEqual([])
       }),
     )
