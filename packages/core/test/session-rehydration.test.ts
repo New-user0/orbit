@@ -1014,6 +1014,42 @@ describe("rehydration after a compaction", () => {
     }),
   )
 
+  // RH6, class 5: an imported session ID is data, so one that would lead its plan file out of the plan folder, or into a
+  // folder below it, names no plan file at all.
+  it.live("an imported session ID that leads out of the plan folder names no plan file", () =>
+    Effect.gen(function* () {
+      const h = yield* setup()
+      yield* h.prompt("hello")
+      const data = yield* (yield* SessionTransfer.Service).export({ sessionID: h.session.id })
+      const away = yield* outside()
+      const ids = [
+        ["ses_x/../../../notes", "MARKER-SLASH"],
+        ["ses_x\\..\\..\\..\\notes", "MARKER-BACKSLASH"],
+        [`ses_x/${away.path.replace(/^[A-Za-z]:/, "").replaceAll("\\", "/")}/notes`, "MARKER-NESTED"],
+      ] as const
+      yield* Effect.gen(function* () {
+        const other = yield* setup()
+        const target = yield* SessionTransfer.Service
+        for (const [id, marker] of ids) {
+          const imported = yield* target.import({
+            data: { ...data, info: { ...data.info, id: Session.ID.make(id) } },
+            location: Location.Ref.make({ directory: other.location.directory }),
+          })
+          const file = other.planFile(imported)
+          yield* other.put(file, `${marker}\n`)
+          yield* other.prompt("after the import", undefined, imported)
+          expect(yield* other.compact({ target: imported })).toEqual({ status: "completed" })
+          expect((yield* other.rows(imported)).map((row) => row.text).join("")).not.toContain(marker)
+        }
+        // The control: the same build restores the plan of a session whose ID is plain.
+        yield* other.put(other.planFile(), "MARKER-PLAIN-PLAN\n")
+        yield* other.prompt("control")
+        expect(yield* other.compact()).toEqual({ status: "completed" })
+        expect((yield* other.row()).text).toContain("MARKER-PLAIN-PLAN")
+      }).pipe(Effect.provide(Layer.fresh(Layer.merge(graph(), config))))
+    }),
+  )
+
   shared.live("a plan folder on a share is never touched", () =>
     Effect.gen(function* () {
       const h = yield* setup()
@@ -1229,6 +1265,35 @@ describe("rehydration after a compaction", () => {
         const found = yield* h.row()
         expect(found.text).not.toContain("MARKER-LINKED-SECRET")
         expect(found.text).toContain("MARKER-CONTROL")
+      }),
+    )
+
+    // A file the ledger knew keeps the deny-only rule only while it is still itself: once it is a link, the read tool would
+    // ask about where it leads, so an ask rule there skips it as it skips a file known only from history.
+    linked("an ask rule on where a link leads skips it in both columns", () =>
+      Effect.gen(function* () {
+        const h = yield* setup()
+        // One secret for each column, so neither link stands in for the other as one file.
+        const links = [
+          ["config.txt", ".env", "MARKER-ENV-LEDGER"],
+          ["named.txt", "other.env", "MARKER-ENV-HISTORY"],
+        ] as const
+        for (const [, secret, marker] of links) yield* h.put(h.inside(secret), `${marker}\n`)
+        yield* h.readFile(h.inside("config.txt"), "plain\n")
+        yield* h.put(h.inside("named.txt"), "plain\n")
+        yield* h.record("Read", { file_path: h.inside("named.txt") })
+        yield* h.readFile(h.inside("direct.env"), "MARKER-DIRECT-ASKED\n")
+        for (const [file, secret] of links) {
+          yield* Effect.promise(() => fs.rm(h.inside(file)))
+          yield* Effect.promise(() => fs.symlink(h.inside(secret), h.inside(file)))
+        }
+        yield* h.permit([allowAll, { action: "Read", resource: "*.env", effect: "ask" }])
+        expect(yield* h.compact()).toEqual({ status: "completed" })
+        const found = yield* h.row()
+        expect(found.text).not.toContain("MARKER-ENV-LEDGER")
+        expect(found.text).not.toContain("MARKER-ENV-HISTORY")
+        // The control: an ask rule on a file the ledger knew, read directly, does not stop it.
+        expect(found.text).toContain("MARKER-DIRECT-ASKED")
       }),
     )
 
