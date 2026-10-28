@@ -568,6 +568,57 @@ export type SessionContextInput = { readonly sessionID: Session.ID }
 export type SessionContextOutput = ReadonlyArray<SessionMessage.Info>
 export type SessionContextOperation<E = never> = (input: SessionContextInput) => Effect.Effect<SessionContextOutput, E>
 
+export type SessionContextUsageInput = { readonly sessionID: Session.ID }
+export type SessionContextUsageOutput = {
+  readonly model: Model.Ref
+  readonly window?: number | undefined
+  readonly total: number
+  readonly measured: boolean
+  readonly percentage?: number | undefined
+  readonly auto: boolean
+  readonly threshold?: number | undefined
+  readonly categories: ReadonlyArray<{
+    readonly kind:
+      | "system"
+      | "tools"
+      | "mcp"
+      | "mcp-deferred"
+      | "tools-deferred"
+      | "agents"
+      | "instructions"
+      | "skills"
+      | "messages"
+      | "auto-buffer"
+      | "compact-buffer"
+      | "free"
+    readonly tokens: number
+  }>
+  readonly files: ReadonlyArray<{ readonly path: string; readonly type: string; readonly tokens: number }>
+  readonly mcp: ReadonlyArray<{
+    readonly name: string
+    readonly server: string
+    readonly tokens: number
+    readonly deferred: boolean
+  }>
+  readonly agents: ReadonlyArray<{ readonly id: string; readonly scope: string; readonly tokens: number }>
+  readonly skills: ReadonlyArray<{ readonly id: string; readonly tokens: number }>
+  readonly systemTools: ReadonlyArray<{ readonly name: string; readonly tokens: number }>
+  readonly deferredTools: ReadonlyArray<{ readonly name: string; readonly tokens: number }>
+  readonly sections: ReadonlyArray<{ readonly name: string; readonly tokens: number }>
+  readonly messages: {
+    readonly toolCalls: number
+    readonly toolResults: number
+    readonly attachments: number
+    readonly assistant: number
+    readonly user: number
+    readonly tools: ReadonlyArray<{ readonly name: string; readonly calls: number; readonly results: number }>
+    readonly attachmentKinds: ReadonlyArray<{ readonly name: string; readonly tokens: number }>
+  }
+}
+export type SessionContextUsageOperation<E = never> = (
+  input: SessionContextUsageInput,
+) => Effect.Effect<SessionContextUsageOutput, E>
+
 export type SessionDiffInput = {
   readonly sessionID: Session.ID
   readonly from?: SessionMessage.ID | undefined
@@ -1838,6 +1889,7 @@ export interface SessionApi<E = never> {
     readonly commit: SessionRevertCommitOperation<E>
   }
   readonly context: SessionContextOperation<E>
+  readonly contextUsage: SessionContextUsageOperation<E>
   readonly diff: SessionDiffOperation<E>
   readonly inbox: {
     readonly list: SessionInboxListOperation<E>

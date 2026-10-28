@@ -9,6 +9,7 @@ import { readStdin } from "../util/io"
 import { ServerConnection } from "../services/server-connection"
 import { parseSessionTargetModel, resolveSessionTarget } from "../session-target"
 import { toolInlineInfo, toolOutputText } from "@orbit/tui/mini/tool"
+import { envelopeResultLine, markResultWritten } from "./format"
 import { runNonInteractivePrompt, wroteResult } from "./noninteractive"
 import { runStream } from "./stream"
 import { UI } from "./ui"
@@ -84,6 +85,7 @@ class RunTargetError extends Error {
 }
 
 const ATTACH_FILE_MAX_BYTES = 10 * 1024 * 1024
+const CONTEXT_TIMEOUT = 60_000
 
 export function runNonInteractive(input: RunCommandInput) {
   return runNonInteractiveWithOptions(input, {})
@@ -104,6 +106,8 @@ async function run(input: RunCommandInput, options: ExecutionOptions) {
     ? (formatMessage(input.message) ?? "")
     : mergeInput(formatMessage(input.message), process.stdin.isTTY ? undefined : await readStdin())
   if (!input.stream && !message?.trim()) fail("You must provide a message")
+  if (!input.stream && contextCommand(message) && input.file.length > 0)
+    fail("/context takes no --file: it reports the session's context and sends nothing")
   const files = await Promise.all(input.file.map((file) => prepareFile(file, root, options)))
   const prepared = { directory, message: message ?? "", files }
   return execute(input, prepared, input.server.endpoint, options, root)
@@ -183,6 +187,8 @@ async function execute(
     return undefined
   })
   if (!target) return
+  // `/context` reports the session the run resolved and sends nothing to the model. Stream input reads its own lines.
+  if (!input.stream && contextCommand(prepared.message)) return printContext(input, client, target.session.id)
   const model = target.model ? { providerID: target.model.providerID, modelID: target.model.id } : undefined
   const variant = target.model?.variant
   if (!target.resume && input.title !== undefined) {
@@ -262,6 +268,64 @@ async function execute(
     renderTool: (part) => renderTool(part, target.location.directory, input.verbose),
     renderToolError: (part) => renderToolError(part, target.location.directory),
   }).catch((error) => reportRunError(input, errorMessage(error), target.session.id))
+}
+
+/** Whether the message is `/context`; anything after the command is ignored, as the reference ignores it. */
+function contextCommand(message: string | undefined) {
+  return message?.trim().split(/\s+/)[0] === "/context"
+}
+
+/**
+ * Prints the context usage report in the format the run asked for: the Markdown text, the text as the result of one
+ * result line, or the payload as one `context_usage` line. A refusal goes out as any run error does, and exits 1.
+ */
+async function printContext(input: RunCommandInput, client: OrbitClient, sessionID: string) {
+  const { contextMarkdown, contextUsageLine, readContextUsage } = await import("./context-report")
+  const answer = await readContextUsage(client, sessionID, CONTEXT_TIMEOUT)
+  if ("error" in answer) return reportRunError(input, answer.error, sessionID)
+  // The places are the payload's own field names and indexes, so the line is safe to print as it is.
+  if (answer.dropped.length > 0)
+    UI.println(`Left out context usage entries this client could not read: ${answer.dropped.join(", ")}`)
+  if (input.format === "json" || (input.format === "stream-json" && !input.envelope)) {
+    process.stdout.write(contextUsageLine(sessionID, answer.info) + EOL)
+    return
+  }
+  const text = contextMarkdown(answer.info)
+  if (input.format !== "result" && !(input.envelope && input.format === "stream-json")) {
+    process.stdout.write(text + EOL)
+    return
+  }
+  const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  markResultWritten()
+  process.stdout.write(
+    (input.envelope
+      ? envelopeResultLine({
+          sessionID,
+          text,
+          failed: false,
+          schema: undefined,
+          structured: undefined,
+          subtype: "success",
+          truncated: false,
+          outcome: "succeeded",
+          reason: undefined,
+          error: undefined,
+          steps: 0,
+          duration: 0,
+          cost: 0,
+          tokens,
+          rejected: [],
+        }).line
+      : jsonLine({
+          type: "result",
+          sessionID,
+          is_error: false,
+          subtype: "success",
+          result: text,
+          usage: { steps: 0, cost: 0, tokens },
+          truncated: false,
+        })) + EOL,
+  )
 }
 
 export function mergeInput(message: string | undefined, piped: string | undefined) {

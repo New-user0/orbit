@@ -1064,22 +1064,41 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   export and import rows, one span for every reader, the chain walk and the reminder placement), `test/session-runner-message.test.ts`,
   `test/session-projector.test.ts`; the import doors with a control: `packages/cli/test/import-export.test.ts` and
   `packages/server/test/session-import.test.ts`.
-- Context usage (`SessionContextUsage.analyze`, `packages/core/src/session/context-usage.ts`; the endpoint, headless
-  report and SDK call are clients-ux-23's): it counts what the next request would carry, by category, and adds no reader.
-  A session that holds a baseline is counted from its stored values and reads no source (class 1; a file changed on disk
-  after the baseline was stored is reported with its stored text and size). A session with no baseline yet goes through
-  the step's own instruction sources under their own gates, so a folder that is not trusted contributes what a step
-  would read from it and no more, and nothing is stored; an unavailable source fails with the typed
-  `Instructions.InitializationBlocked` as a step would (class 7). The request is built by the `context` hooks the runner
-  runs, so `system_prompt_file` and `append_system_prompt` count only as `PromptConfigPlugin` reads them, under its
-  scope rule. It writes no event, inbox row or wake, clears nothing at 61 minutes idle and makes no model request (the `context` event carries `analysis`, which the warming hook skips, so the analysis starts
-  no session warming), so
-  every entry point that will call it starts no work (class 12). Only a main session of the Location it runs in is
-  analysed: another Location's session interrupts at selection (class 3) and a child session fails before any source is
-  touched with the typed `Session.MainSessionOnlyError` (classes 7 and 13; the HTTP and client cells are
-  clients-ux-23's). Recorded tool names, reminder kinds and file paths are only labels in the result, never joined into
-  a path (class 5), and are carried raw, so each client escapes them at its own sink (class 9; clients-ux-23). Proof:
-  `test/session-context-usage.test.ts`.
+- Context usage (`SessionContextUsage.analyze`, `packages/core/src/session/context-usage.ts`, served at
+  `GET /api/session/:sessionID/context/usage` and called by `/context` in the terminal UI, by `orb run "/context"` and
+  `orb -p "/context"`, and by SDK callers as `client.session.contextUsage`): it counts what the next request would carry,
+  by category, and adds no reader. A session that holds a baseline is counted from its stored values and reads no source
+  (class 1; a file changed on disk after the baseline was stored is reported with its stored text and size). A session
+  with no baseline yet goes through the step's own instruction sources under their own gates, and nothing is stored; an
+  unavailable source fails with the typed `Instructions.InitializationBlocked` as a step would (class 7). The request is
+  built by the `context` hooks the runner runs, so `system_prompt_file` and `append_system_prompt` count only as
+  `PromptConfigPlugin` reads them, under its scope rule. It writes no event, inbox row or wake, clears nothing at 61
+  minutes idle and makes no model request (the `context` event carries `analysis`, which the warming hook skips, so the
+  analysis starts no session warming), so every entry point that calls it starts no work (classes 6 and 12; proof: "the
+  route sends no model request and records nothing" in `packages/server/test/session-context-usage.test.ts`, and
+  "orb run "/context" prints the report and sends nothing to the model" in `packages/cli/test/context-command.test.ts`).
+  The route runs in the session's own Location (`sessionLocationMiddleware`) and asks `requireTrusted()` for it before
+  the analysis, so a folder that is not trusted gets `UntrustedFolderError` before any instruction file is read, a
+  session whose baseline was stored while trusted is refused too once its folder is not, and a request whose header
+  names another folder changes neither the folder checked nor the folder analysed (classes 1, 3 and 12; proof: the
+  "untrusted folder" and "the folder checked is the session's own" rows of `session-context-usage.test.ts`, and its row
+  in `packages/server/test/trust-first.test.ts`). `orb run` and `orb -p` reach it only after `trustRefusal` for the run's
+  folder (proof: "an untrusted folder refuses /context before any request" in `context-command.test.ts`); the terminal
+  UI and the SDK reach it only through the route. Only a main session of the Location it runs in is analysed: another
+  Location's session interrupts at selection (class 3), and a child session fails before any source is touched with
+  `Session.MainSessionOnlyError`, which the route answers as the typed `MainSessionOnlyError` (409) naming the parent;
+  the terminal UI asks for the root of a session in view, and the CLI exits 1 with the server's message (classes 7 and
+  13). Recorded tool names, reminder kinds, agent and skill IDs and file paths are only labels in the result, never
+  joined into a path (class 5), and are carried raw, so each client escapes them at its own sink: the terminal UI draws
+  every one through `plain`, the Markdown report writes each cell through `plain` with every pipe escaped so that a name
+  cannot add a column, and the JSON formats use `jsonLine` (class 9; proof: "every string from the payload is escaped
+  in the frame" in `packages/tui/test/component/dialog-context.test.tsx`, and `packages/cli/test/run/context-report.test.ts`).
+  Both clients decode the answer with `SessionContextUsage.decode`, which needs the payload's own fields and takes each
+  list entry by entry, so one entry a client cannot read, such as a category kind from a newer server, is left out with
+  one log line and the rest is shown (class 7; proof: `packages/schema/test/session-context-usage.test.ts`, "an entry
+  that does not decode is left out with one log line" in `dialog-context.test.tsx`, and "an entry the client cannot
+  read costs only itself" in `packages/cli/test/run/context-run.test.ts`).
+  Proof of the analysis: `packages/core/test/session-context-usage.test.ts`.
 - Session retention (`SessionRetention`, `packages/core/src/session/retention.ts`, started by the server process and
   never by a bare run's private server): a pass removes session families idle past `cleanup_period_days`, then deletes
   the folders under `<data>/tool-output` and `<tmp>/sessions` of the sessions this database removed (`session_removed`,
@@ -1168,9 +1187,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   the destination of `move`, `generate`, `recap` (the away summary, which reads the session's history into a call on
   the small model, refused before that read), `assist.label` and `assist.suggestion` (both ask the model about the
   folder's tool output or history; proof: `packages/server/test/session-assist.test.ts`, on a port and in process),
-  `update` when it clears the title for the model to write one,
-  `instructions.preview`, `instruction.note.add`, `shell.create`, `pty.create` and `persistentPty.create` (the
-  Location's or the session's folder and the folder the command or terminal starts in, the stricter answer winning,
+  `update` when it clears the title for the model to write one, `instructions.preview`, `contextUsage` (the context
+  usage analysis, before any instruction file is read), `instruction.note.add`, `shell.create`, `pty.create` and
+  `persistentPty.create` (the Location's or the session's folder and the folder the command or terminal starts in, the stricter answer winning,
   class 3), `worktree.create` (the project's folder and the folder it is asked to make the worktree in), `remove` and
   `refresh`, `mcp.connect`, `mcp.add` (the working folder of a local server), `fs.write` (the Location and the folder
   the file really lands in, except Orbit's temporary folder)): `requireTrusted` and `requireTrustedAt` in

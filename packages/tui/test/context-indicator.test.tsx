@@ -49,7 +49,16 @@ const on: Report = {
   stale: false,
 }
 
-function render(state: string, width: number) {
+function render(
+  state: string,
+  width: number,
+  tokens: { input: number; output: number; reasoning: number; cache: { read: number; write: number } } = {
+    input: 175_000,
+    output: 0,
+    reasoning: 0,
+    cache: { read: 0, write: 0 },
+  },
+) {
   return createAppFixture({
     state,
     width,
@@ -73,7 +82,7 @@ function render(state: string, width: number) {
               time: { created: 1, streamed: 2, completed: 3 },
               finish: "stop",
               cost: 0,
-              tokens: { input: 175_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              tokens,
               content: [{ type: "text", text: "Answer" }],
             },
           ],
@@ -151,4 +160,22 @@ test.each([40, 120])("nothing is drawn at %s columns before a report arrives", a
 
   expect(frame).not.toContain("Context almost full")
   expect(frame).not.toContain("before auto-compaction")
+})
+
+// TF1, D10: the figure is what the response's prompt held, input plus cache read and cache write, as the reference's
+// status line and its /context agree; the response's own output and reasoning are not in the window yet. 100,000 input,
+// 20,000 cache read and 10,000 cache write of a 200,000-token window are 65%; with the 50,000 output and 20,000
+// reasoning it would read 100%.
+test("the context figure is input plus cache read and cache write, without output or reasoning", async () => {
+  await using state = await tmpdir()
+  await using setup = await render(state.path, 120, {
+    input: 100_000,
+    output: 50_000,
+    reasoning: 20_000,
+    cache: { read: 20_000, write: 10_000 },
+  })
+  const frame = await setup.waitForFrame((frame) => ready(frame) && /\d+%/.test(footerRow(frame)))
+
+  expect(footerRow(frame)).toContain("65%")
+  expect(footerRow(frame)).not.toContain("100%")
 })

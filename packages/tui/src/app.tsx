@@ -1002,7 +1002,7 @@ function App() {
         run: () => {
           if (route.data.type !== "session") return
           const sessionID = route.data.sessionID
-          dialog.replace(() => <DialogContext sessionID={sessionID} />)
+          dialog.replace(() => <DialogContext sessionID={sessionID} />, undefined, { size: "large" })
         },
       },
       {
