@@ -16,7 +16,7 @@ function fixture(input: { readonly auto: boolean; readonly window?: number; read
     : { kind: "compact-buffer" as const, tokens: 3_000 }
   const known = input.window !== undefined
   return {
-    model: { providerID: name("provider"), id: name("model") },
+    model: { providerID: name("provider"), id: name("model") } as Info["model"],
     ...(known ? { window: input.window, percentage: 25, threshold: 167_000 } : {}),
     total: 50_000,
     measured: true,

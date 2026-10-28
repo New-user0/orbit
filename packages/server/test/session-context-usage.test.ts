@@ -171,12 +171,17 @@ const server = (
           model: model.ref,
           location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
         }),
-      /** Runs one step that calls a tool and then answers. */
+      /** Runs one step that calls a tool and then answers. A side request (the title) has no tools and gets text. */
       step: (id: Session.ID, text: string) =>
         Effect.gen(function* () {
-          yield* llm.push(
+          const script: TestLLM.Response[] = [
             TestLLM.tool(`call_${text}`, "Read", { file_path: path.join(project, "notes.txt") }),
             TestLLM.textWithUsage(`answer ${text}`, `text_${text}`, 4_000),
+          ]
+          yield* llm.serve((request) =>
+            (request.tools?.length ?? 0) > 0
+              ? (script.shift() ?? TestLLM.text("done", `done_${text}`))
+              : TestLLM.text("side", "side_text"),
           )
           yield* sessions.prompt({ sessionID: id, text, resume: false })
           yield* sessions.resume(id)

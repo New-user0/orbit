@@ -5,6 +5,7 @@ import { SessionAssist } from "@orbit/schema/session-assist"
 import { PromptInput } from "@orbit/schema/prompt-input"
 import { Session } from "@orbit/schema/session"
 import { SessionStats } from "@orbit/schema/session-stats"
+import { SessionContextUsage } from "@orbit/schema/session-context-usage"
 import { InstructionEntry } from "@orbit/schema/instruction-entry"
 import { Instruction } from "@orbit/schema/instruction"
 import { Project } from "@orbit/schema/project"
@@ -20,6 +21,7 @@ import { Event } from "@orbit/schema/event"
 import { Context, Effect, Encoding, Result, Schema, SchemaGetter, Struct } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import {
+  AgentNotFoundError,
   ConflictError,
   CommandExecutionError,
   CommandNotFoundError,
@@ -28,6 +30,7 @@ import {
   FormNotFoundError,
   InvalidCursorError,
   InvalidRequestError,
+  MainSessionOnlyError,
   MessageNotFoundError,
   RewindFilesError,
   ServiceUnavailableError,
@@ -608,6 +611,28 @@ export const makeSessionGroup = <
             "Retrieve the active context messages for a session: the latest checkpoint, the messages it keeps and everything after it, in the order they were recorded.",
         }),
       ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.contextUsage", "/api/session/:sessionID/context/usage", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: SessionContextUsage.Info }),
+        error: [
+          SessionNotFoundError,
+          MainSessionOnlyError,
+          AgentNotFoundError,
+          ServiceUnavailableError,
+          UntrustedFolderError,
+        ],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.contextUsage",
+            summary: "Get context usage",
+            description:
+              "Estimate what the session's next request would carry, by category: the system prompt, tools, MCP tools, custom agents, instruction files, skills and messages, with the reserve and free space of the model's window. The total is the newest response's measured prompt when there is one. Only a main session is answered (a child gets MainSessionOnlyError), and only in a trusted folder. It is read only: nothing is recorded and no model is asked.",
+          }),
+        ),
     )
     .add(
       HttpApiEndpoint.get("session.diff", "/api/session/:sessionID/diff", {

@@ -17,7 +17,7 @@ function info(input: {
 }): SessionContextUsage.Info {
   const known = input.window !== undefined
   return {
-    model: { providerID: "provider", id: "model" },
+    model: { providerID: "provider", id: "model" } as SessionContextUsage.Info["model"],
     ...(known ? { window: input.window, percentage: input.percentage ?? 10, threshold: input.window! - 10_000 } : {}),
     total: 1_000,
     measured: true,

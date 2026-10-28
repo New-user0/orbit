@@ -745,7 +745,7 @@ describe("V2 mini transport", () => {
     })
 
     while (!ui.events.some((event) => event.type === "stream.patch" && event.patch.usage)) await Bun.sleep(0)
-    expect(ui.events).toContainEqual({ type: "stream.patch", patch: { usage: { tokens: 7_508, percent: 5 } } })
+    expect(ui.events).toContainEqual({ type: "stream.patch", patch: { usage: { tokens: 7_000, percent: 4 } } })
 
     events.push({
       id: "evt_cost_only",

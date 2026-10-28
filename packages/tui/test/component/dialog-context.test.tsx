@@ -23,7 +23,7 @@ const route = (id: string) => `/api/session/${id}/context/usage`
 
 function fixture(overrides: Partial<Info> = {}): Info {
   return {
-    model: { providerID: "provider", id: "model" },
+    model: { providerID: "provider", id: "model" } as Info["model"],
     window: 100_000,
     percentage: 18,
     threshold: 90_000,
@@ -79,7 +79,11 @@ async function open(input: {
     undefined,
     { size: "large" },
   )
-  const frame = await setup.waitForFrame(input.done)
+  // The answer arrives on its own time (a slow one only after the timeout), so the frame is drawn again until it shows.
+  for (let attempt = 0; attempt < 200 && !input.done(setup.captureCharFrame()); attempt++) {
+    await Bun.sleep(25)
+    await setup.renderOnce()
+  }
   await Bun.sleep(50)
   await setup.renderOnce()
   return { setup, asked, frame: setup.captureCharFrame() }
@@ -111,7 +115,7 @@ test("a window under 1M draws 10 by 10 squares at 80 columns or more and 5 by 5 
     [100, { rows: 10, columns: [10] }],
     [80, { rows: 10, columns: [10] }],
     [79, { rows: 5, columns: [5] }],
-  ] as const) {
+  ] as Array<[number, { rows: number; columns: number[] }]>) {
     const result = await open({ answer: answering(fixture()), width, done: drawn })
     await using _ = result.setup
     expect({ width, size: sizes(grid(result.frame)) }).toEqual({ width, size: expected })
@@ -133,7 +137,7 @@ test("a window of 1M or more draws 20 by 10, and 5 by 10 below 80 columns", asyn
   for (const [width, expected] of [
     [80, { rows: 10, columns: [20] }],
     [79, { rows: 10, columns: [5] }],
-  ] as const) {
+  ] as Array<[number, { rows: number; columns: number[] }]>) {
     const result = await open({ answer: answering(large), width, done: drawn })
     await using _ = result.setup
     expect({ width, size: sizes(grid(result.frame)) }).toEqual({ width, size: expected })
@@ -202,7 +206,7 @@ test("the legend shows the model, total of window and percent, each category to 
   expect(free).toBeGreaterThan(compact)
   expect(manual.frame).not.toContain("Autocompact buffer")
   // Drawn like a category: full squares at the end, after free space.
-  expect(grid(manual.frame).join("")).toBe(FULL.repeat(3) + FULL.repeat(5) + FREE.repeat(89) + FULL.repeat(3))
+  expect(grid(manual.frame).join("")).toBe(`${FULL}${FULL}${PARTIAL}` + FULL.repeat(5) + FREE.repeat(89) + FULL.repeat(3))
 })
 
 // TD6, D5 and D6: the sections the reference shows, and not the ones it keeps for its report.
@@ -328,7 +332,7 @@ test("every string from the payload is escaped in the frame", async () => {
   const result = await open({
     answer: answering(
       fixture({
-        model: { providerID: `provider${hostile}`, id: `model${hostile}` },
+        model: { providerID: `provider${hostile}`, id: `model${hostile}` } as Info["model"],
         files: [{ path: `/elsewhere/file${hostile}.md`, type: "file", tokens: 1_200 }],
         mcp: [
           { name: `tool${hostile}`, server: `server${hostile}`, tokens: 2_000, deferred: false },

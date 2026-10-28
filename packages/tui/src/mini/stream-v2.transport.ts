@@ -1392,12 +1392,9 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       return
     }
     if (event.type === "session.step.ended") {
-      const total =
-        event.data.tokens.input +
-        event.data.tokens.output +
-        event.data.tokens.reasoning +
-        event.data.tokens.cache.read +
-        event.data.tokens.cache.write
+      // What the step's prompt held, the figure the terminal UI's footer and /context show; the step's own output and
+      // reasoning are not in the window yet.
+      const total = event.data.tokens.input + event.data.tokens.cache.read + event.data.tokens.cache.write
       const limit = state.stepModel ? input.contextLimit?.(state.stepModel) : undefined
       state.stepModel = undefined
       if (!showTools()) flushQuietText(event.data.assistantMessageID)

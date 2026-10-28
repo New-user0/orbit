@@ -300,6 +300,30 @@ export type SessionRewindFiles = {
   deletions?: number
 }
 
+export type SessionContextUsageCategoryKind =
+  | "system"
+  | "tools"
+  | "mcp"
+  | "mcp-deferred"
+  | "tools-deferred"
+  | "agents"
+  | "instructions"
+  | "skills"
+  | "messages"
+  | "auto-buffer"
+  | "compact-buffer"
+  | "free"
+
+export type SessionContextUsageFile = { path: string; type: string; tokens: number }
+
+export type SessionContextUsageMcpTool = { name: string; server: string; tokens: number; deferred: boolean }
+
+export type SessionContextUsageAgent = { id: string; scope: string; tokens: number }
+
+export type SessionContextUsageSkill = { id: string; tokens: number }
+
+export type SessionContextUsageNamed = { name: string; tokens: number }
+
 export type InstructionStatusFile = {
   path: string
   kind: "managed" | "user" | "project" | "local"
@@ -817,6 +841,18 @@ export type SessionInboxCompaction = {
   type: "compaction"
   payload: SessionInboxCompactionPayload
   delivery: SessionInboxDelivery
+}
+
+export type SessionContextUsageCategory = { kind: SessionContextUsageCategoryKind; tokens: number }
+
+export type SessionContextUsageBreakdown = {
+  toolCalls: number
+  toolResults: number
+  attachments: number
+  assistant: number
+  user: number
+  tools: Array<{ name: string; calls: number; results: number }>
+  attachmentKinds: Array<SessionContextUsageNamed>
 }
 
 export type InstructionStatus = {
@@ -2210,6 +2246,25 @@ export type SessionCompactionEnded = {
   }
 }
 
+export type SessionContextUsageInfo = {
+  model: ModelRef
+  window?: number
+  total: number
+  measured: boolean
+  percentage?: number
+  auto: boolean
+  threshold?: number
+  categories: Array<SessionContextUsageCategory>
+  files: Array<SessionContextUsageFile>
+  mcp: Array<SessionContextUsageMcpTool>
+  agents: Array<SessionContextUsageAgent>
+  skills: Array<SessionContextUsageSkill>
+  systemTools: Array<SessionContextUsageNamed>
+  deferredTools: Array<SessionContextUsageNamed>
+  sections: Array<SessionContextUsageNamed>
+  messages: SessionContextUsageBreakdown
+}
+
 export type SessionInstructionsPreview = {
   status: InstructionStatus
   initial?: string | undefined
@@ -3201,6 +3256,15 @@ export type RewindFilesError = {
 }
 export const isRewindFilesError = (value: unknown): value is RewindFilesError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "RewindFilesError"
+
+export type MainSessionOnlyError = {
+  readonly _tag: "MainSessionOnlyError"
+  readonly sessionID: string
+  readonly parentID: string
+  readonly message: string
+}
+export const isMainSessionOnlyError = (value: unknown): value is MainSessionOnlyError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MainSessionOnlyError"
 
 export type InstructionEntryValueTooLargeError = {
   readonly _tag: "InstructionEntryValueTooLargeError"
@@ -5472,6 +5536,10 @@ export type SessionRevertCommitOutput = void
 export type SessionContextInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionContextOutput = { data: Array<SessionMessageInfo> }["data"]
+
+export type SessionContextUsageInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionContextUsageOutput = { data: SessionContextUsageInfo }["data"]
 
 export type SessionDiffInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

@@ -4198,6 +4198,115 @@
         "summary": "Get session context"
       }
     },
+    "/api/session/{sessionID}/context/usage": {
+      "get": {
+        "tags": ["session"],
+        "operationId": "session.contextUsage",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SessionContextUsage.Info"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError | AgentNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AgentNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "MainSessionOnlyError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MainSessionOnlyErrorEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Estimate what the session's next request would carry, by category: the system prompt, tools, MCP tools, custom agents, instruction files, skills and messages, with the reserve and free space of the model's window. The total is the newest response's measured prompt when there is one. Only a main session is answered (a child gets MainSessionOnlyError), and only in a trusted folder. It is read only: nothing is recorded and no model is asked.",
+        "summary": "Get context usage"
+      }
+    },
     "/api/session/{sessionID}/diff": {
       "get": {
         "tags": ["session"],
@@ -19038,6 +19147,26 @@
         "required": ["directory"],
         "additionalProperties": false
       },
+      "MainSessionOnlyErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["MainSessionOnlyError"]
+          },
+          "sessionID": {
+            "type": "string"
+          },
+          "parentID": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "sessionID", "parentID", "message"],
+        "additionalProperties": false
+      },
       "Mcp.LocalConfigEncoded": {
         "type": "object",
         "properties": {
@@ -22617,6 +22746,270 @@
           }
         },
         "required": ["_tag", "sessionID", "message"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.Agent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["id", "scope", "tokens"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.Breakdown": {
+        "type": "object",
+        "properties": {
+          "toolCalls": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "toolResults": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attachments": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "assistant": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "user": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "calls": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "results": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": ["name", "calls", "results"],
+              "additionalProperties": false
+            }
+          },
+          "attachmentKinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Named"
+            }
+          }
+        },
+        "required": ["toolCalls", "toolResults", "attachments", "assistant", "user", "tools", "attachmentKinds"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.Category": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/SessionContextUsage.CategoryKind"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["kind", "tokens"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.CategoryKind": {
+        "type": "string",
+        "enum": [
+          "system",
+          "tools",
+          "mcp",
+          "mcp-deferred",
+          "tools-deferred",
+          "agents",
+          "instructions",
+          "skills",
+          "messages",
+          "auto-buffer",
+          "compact-buffer",
+          "free"
+        ]
+      },
+      "SessionContextUsage.File": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["path", "type", "tokens"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.Info": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "$ref": "#/components/schemas/Model.Ref"
+          },
+          "window": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "measured": {
+            "type": "boolean"
+          },
+          "percentage": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "auto": {
+            "type": "boolean"
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Category"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.File"
+            }
+          },
+          "mcp": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.McpTool"
+            }
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Agent"
+            }
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Skill"
+            }
+          },
+          "systemTools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Named"
+            }
+          },
+          "deferredTools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Named"
+            }
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Named"
+            }
+          },
+          "messages": {
+            "$ref": "#/components/schemas/SessionContextUsage.Breakdown"
+          }
+        },
+        "required": [
+          "model",
+          "total",
+          "measured",
+          "auto",
+          "categories",
+          "files",
+          "mcp",
+          "agents",
+          "skills",
+          "systemTools",
+          "deferredTools",
+          "sections",
+          "messages"
+        ],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.McpTool": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deferred": {
+            "type": "boolean"
+          }
+        },
+        "required": ["name", "server", "tokens", "deferred"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.Named": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["name", "tokens"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.Skill": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["id", "tokens"],
         "additionalProperties": false
       },
       "SessionGenerateResponse": {

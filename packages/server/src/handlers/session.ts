@@ -11,6 +11,7 @@ import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { SessionsCursor } from "@orbit/protocol/groups/session"
 import {
+  AgentNotFoundError,
   ConflictError,
   CommandExecutionError,
   CommandNotFoundError,
@@ -19,6 +20,7 @@ import {
   FormNotFoundError,
   InvalidRequestError,
   InvalidCursorError,
+  MainSessionOnlyError,
   MessageNotFoundError,
   RewindFilesError,
   ServiceUnavailableError,
@@ -28,6 +30,7 @@ import {
 import { AbsolutePath } from "@orbit/core/schema"
 import { Project } from "@orbit/core/project"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { plain } from "@orbit/util/plain"
 import { failedMessageDecode, failedSnapshot, missingMessage, missingSession } from "./session-error"
 import { requireTrusted, requireTrustedAt, untrustedFolder } from "./trust-error"
 
@@ -581,6 +584,32 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 Effect.catchTag("Session.MessageDecodeError", failedMessageDecode),
               ),
           }
+        }),
+      )
+      .handle(
+        "session.contextUsage",
+        Effect.fn(function* (ctx) {
+          // A session with no baseline yet has its folder's instruction sources read, and the `context` hooks read
+          // `system_prompt_file`, so nothing is analysed before the session's own folder is trusted (classes 1 and 12).
+          yield* requireTrusted()
+          const usage = yield* session.contextUsage(ctx.params.sessionID).pipe(
+            Effect.mapError((error) => {
+              if (error._tag === "Session.NotFoundError") return missingSession(error)
+              if (error._tag === "Session.MainSessionOnlyError")
+                return new MainSessionOnlyError({
+                  sessionID: error.sessionID,
+                  parentID: error.parentID,
+                  message: error.message,
+                })
+              if (error._tag === "Session.AgentNotFoundError")
+                return new AgentNotFoundError({ agentID: error.agent, message: plain(error.message) })
+              if (error._tag === "Instructions.InitializationBlocked")
+                return new ServiceUnavailableError({ service: "instructions", message: plain(error.message) })
+              // What is left is the session's model, which did not resolve.
+              return new ServiceUnavailableError({ service: "model", message: plain(error.message) })
+            }),
+          )
+          return { data: usage }
         }),
       )
       .handle(
