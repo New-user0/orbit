@@ -43,23 +43,7 @@ export const Plugin = {
     const ledger = yield* FileLedger.Service
     const environment = yield* Environment.Service
     const fs = yield* FSUtil.Service
-    // A memory file more than a day old starts with a note of its age: it records a moment that has passed, and the code
-    // may have moved on since.
-    const staleness = (file: string) =>
-      access.inMemory(file).pipe(
-        Effect.flatMap((held) =>
-          held
-            ? fs
-                .stat(file)
-                .pipe(
-                  Effect.map((info) =>
-                    MemoryStore.freshnessNote(Option.getOrUndefined(info.mtime)?.getTime() ?? Date.now(), Date.now()),
-                  ),
-                )
-            : Effect.succeed(""),
-        ),
-        Effect.orElseSucceed(() => ""),
-      )
+    const staleness = (file: string) => memoryNote(access, fs, file)
 
     yield* ctx.tool
       .transform((editor) =>
@@ -201,38 +185,12 @@ export const Plugin = {
       )
       .pipe(Effect.orDie)
 
-    // Notebooks read as their cells and outputs rather than raw JSON, paged by rendered line.
     const readNotebook = Effect.fn("ReadTool.readNotebook")(function* (
       absolute: string,
       offset: number | undefined,
       limit: number | undefined,
     ) {
-      const notebook = Notebook.parse((yield* FileMutation.readText(environment.files, absolute)).text)
-      if (!notebook) return
-      const lines = Notebook.render(notebook).split("\n")
-      const start = offset || 1
-      if (start > lines.length && start !== 1)
-        return yield* new ReadToolFileSystem.OffsetOutOfRangeError({ offset: start, lines: lines.length })
-      const count = Math.min(limit || ReadToolFileSystem.MAX_READ_LINES, ReadToolFileSystem.MAX_READ_LINES)
-      // The same budget as a text file: lines are clamped, and the page ends before the line that would pass it.
-      const page: string[] = []
-      let size = 0
-      for (const line of lines.slice(start - 1, start - 1 + count)) {
-        const text = ReadToolFileSystem.clampLine(line)
-        const length = ReadToolFileSystem.renderedLength(start + page.length, text)
-        if (page.length > 0 && !ReadToolFileSystem.withinBudget(size + length)) break
-        page.push(text)
-        size += length
-      }
-      const next = start + page.length
-      return new ReadToolFileSystem.TextPage({
-        type: "text-page",
-        content: page.join("\n"),
-        mime: "application/x-ipynb+json",
-        offset: PositiveInt.make(start),
-        truncated: next <= lines.length,
-        ...(next <= lines.length ? { next: PositiveInt.make(next) } : {}),
-      })
+      return yield* notebookPage((yield* FileMutation.readText(environment.files, absolute)).text, offset, limit)
     })
 
     const alternatePath = Effect.fn("ReadTool.alternatePath")(function* (absolute: string) {
@@ -290,6 +248,63 @@ const parsePages = (value: string | undefined) => {
     )
   return Effect.succeed({ first: PositiveInt.make(range.first), last: PositiveInt.make(range.last) })
 }
+
+/**
+ * A notebook's cells and outputs, as Read shows them in place of the raw JSON, paged by rendered line. Undefined when
+ * the text is not a notebook.
+ */
+export const notebookPage = Effect.fnUntraced(function* (
+  raw: string,
+  offset: number | undefined,
+  limit: number | undefined,
+) {
+  const notebook = Notebook.parse(raw)
+  if (!notebook) return undefined
+  const lines = Notebook.render(notebook).split("\n")
+  const start = offset || 1
+  if (start > lines.length && start !== 1)
+    return yield* new ReadToolFileSystem.OffsetOutOfRangeError({ offset: start, lines: lines.length })
+  const count = Math.min(limit || ReadToolFileSystem.MAX_READ_LINES, ReadToolFileSystem.MAX_READ_LINES)
+  // The same budget as a text file: lines are clamped, and the page ends before the line that would pass it.
+  const page: string[] = []
+  let size = 0
+  for (const line of lines.slice(start - 1, start - 1 + count)) {
+    const text = ReadToolFileSystem.clampLine(line)
+    const length = ReadToolFileSystem.renderedLength(start + page.length, text)
+    if (page.length > 0 && !ReadToolFileSystem.withinBudget(size + length)) break
+    page.push(text)
+    size += length
+  }
+  const next = start + page.length
+  return new ReadToolFileSystem.TextPage({
+    type: "text-page",
+    content: page.join("\n"),
+    mime: "application/x-ipynb+json",
+    offset: PositiveInt.make(start),
+    truncated: next <= lines.length,
+    ...(next <= lines.length ? { next: PositiveInt.make(next) } : {}),
+  })
+})
+
+/**
+ * The note a memory file more than a day old starts with: it records a moment that has passed, and the code may have
+ * moved on since. Empty for any other file, and when the file cannot be looked at.
+ */
+export const memoryNote = (access: FileAccess.Interface, fs: FSUtil.Interface, file: string) =>
+  access.inMemory(file).pipe(
+    Effect.flatMap((held) =>
+      held
+        ? fs
+            .stat(file)
+            .pipe(
+              Effect.map((info) =>
+                MemoryStore.freshnessNote(Option.getOrUndefined(info.mtime)?.getTime() ?? Date.now(), Date.now()),
+              ),
+            )
+        : Effect.succeed(""),
+    ),
+    Effect.orElseSucceed(() => ""),
+  )
 
 /** The model text for a repeat read of a range whose text is the same as the one the model already holds. */
 export const unchangedStub = (path: string) =>

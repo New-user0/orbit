@@ -1,4 +1,5 @@
 import { expect } from "bun:test"
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import { LanguageModel } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { Agent } from "@orbit/core/agent"
@@ -79,6 +80,8 @@ const it = testEffect(
         noScratchpad,
         noMemory,
         noVcsSnapshot,
+        // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+        SessionRehydration.node.replace(SessionRehydration.noopLayer),
         InstructionDiscovery.node.replace(
           Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
         ),

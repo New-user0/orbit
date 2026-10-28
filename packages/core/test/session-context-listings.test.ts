@@ -1,5 +1,6 @@
 // The agent and skill listings among the sources of a session's baseline, on the real session context: which tools turn
 // them on, which model's context window budgets the skill listing, and where the agent source sits.
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Agent } from "@orbit/core/agent"
@@ -87,6 +88,8 @@ const it = testEffect(
             ),
         }),
       ),
+      // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+      SessionRehydration.node.replace(SessionRehydration.noopLayer),
       InstructionDiscovery.node.replace(
         Layer.mock(InstructionDiscovery.Service, {
           project: false,

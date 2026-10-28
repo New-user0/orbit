@@ -53,6 +53,23 @@ describe("toLLMMessages", () => {
     ])
   })
 
+  // context-memory-5: a rehydration row with nothing to restore carries only a list and says nothing to the model.
+  test("a synthetic with no text lowers to nothing", () => {
+    const user = SessionMessage.User.make({ id: id("prompt"), type: "user", text: "go", time: { created } })
+    const empty = SessionMessage.Synthetic.make({
+      id: id("empty"),
+      type: "synthetic",
+      text: "",
+      metadata: { rehydration: { files: [], todos: [{ content: "a", status: "pending" }] } },
+      time: { created },
+    })
+    const filled = SessionMessage.Synthetic.make({ id: id("filled"), type: "synthetic", text: "x", time: { created } })
+    expect(toLLMMessages([user, empty, filled], model)).toEqual([
+      Message.make({ id: user.id, role: "user", content: [Message.text("go")], metadata: {} }),
+      Message.make({ id: filled.id, role: "user", content: [Message.text("x")] }),
+    ])
+  })
+
   test("omits empty assistant turns", () => {
     const assistant = (value: string, content: SessionMessage.Assistant["content"]) =>
       SessionMessage.Assistant.make({

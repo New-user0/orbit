@@ -123,11 +123,20 @@ export interface Interface {
   readonly claim: (sessionID: Session.ID) => Effect.Effect<boolean>
   /** Record each file that has no record yet. A record that is already there wins. */
   readonly seed: (sessionID: Session.ID, files: ReadonlyArray<Watched>) => Effect.Effect<void>
+  /** Every record of the Session, by path. Listing them is not a use. */
+  readonly held: (sessionID: Session.ID) => Effect.Effect<ReadonlyMap<string, Seen>>
+  /**
+   * Forget what a completed compaction summarised away (freshness, the repeat-read marks and the scan; not the rebuild
+   * claim), as the subscriber below does, and remember that this compaction's end (`eventID`) was handled. The compaction
+   * calls it right after it stores its end and before it restores files, so the subscriber, which may see that end later,
+   * cannot wipe what the restore recorded.
+   */
+  readonly compacted: (sessionID: Session.ID, eventID: string) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileLedger") {}
 
-const layer = Layer.effect(
+export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
@@ -140,12 +149,15 @@ const layer = Layer.effect(
     const rebuilt = new Set<Session.ID>()
     // session -> the watched files checked in the current scan, so each step goes on where the last one stopped
     const scans = new Map<Session.ID, Set<string>>()
+    // session -> the end of the newest compaction that `compacted` handled (one slot per session)
+    const handled = new Map<Session.ID, string>()
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
         sessions.clear()
         marks.clear()
         rebuilt.clear()
         scans.clear()
+        handled.clear()
       }),
     )
     const drop = (sessionID: Session.ID) => {
@@ -153,6 +165,7 @@ const layer = Layer.effect(
       marks.delete(sessionID)
       rebuilt.delete(sessionID)
       scans.delete(sessionID)
+      handled.delete(sessionID)
     }
     yield* bus.subscribe([SessionEvent.Deleted, SessionEvent.Moved]).pipe(
       Stream.runForEach((event) => Effect.sync(() => drop(event.data.sessionID))),
@@ -170,13 +183,17 @@ const layer = Layer.effect(
         ),
         Effect.forkScoped({ startImmediately: true }),
       )
-    // A completed compaction summarises away what the model saw, so it must read again before changing anything.
+    const forget = (sessionID: Session.ID) => {
+      sessions.delete(sessionID)
+      marks.delete(sessionID)
+      scans.delete(sessionID)
+    }
+    // A completed compaction summarises away what the model saw, so it must read again before changing anything. An end
+    // that the compaction already handled is left alone: what its restore recorded since must stay.
     yield* bus.subscribe([SessionEvent.Compaction.Ended]).pipe(
       Stream.runForEach((event) =>
         Effect.sync(() => {
-          sessions.delete(event.data.sessionID)
-          marks.delete(event.data.sessionID)
-          scans.delete(event.data.sessionID)
+          if (handled.get(event.data.sessionID) !== event.id) forget(event.data.sessionID)
         }),
       ),
       Effect.forkScoped({ startImmediately: true }),
@@ -302,6 +319,13 @@ const layer = Layer.effect(
           .filter((file) => !sessions.get(sessionID)?.has(file.path))
           .forEach((file) => remember(sessionID, file.path, file.seen))
       }),
+      held: Effect.fn("FileLedger.held")(function* (sessionID) {
+        return new Map(sessions.get(sessionID))
+      }),
+      compacted: Effect.fn("FileLedger.compacted")(function* (sessionID, eventID) {
+        forget(sessionID)
+        handled.set(sessionID, eventID)
+      }),
     })
   }),
 )
@@ -339,6 +363,8 @@ export const permissiveLayer = Layer.succeed(
     settle: () => Effect.void,
     claim: () => Effect.succeed(false),
     seed: () => Effect.void,
+    held: () => Effect.succeed(new Map()),
+    compacted: () => Effect.void,
   }),
 )
 

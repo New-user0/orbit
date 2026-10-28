@@ -2,6 +2,7 @@
 // build (the same `context` hooks, the same lowering), counts it with the runner's own estimators and sends nothing.
 // The rows are estimates and the total is the newest measured prompt, so the two need not agree; the rows, the reserve
 // and the free space add up to the window instead.
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import { describe, expect } from "bun:test"
 import { TestLLM } from "@orbit/ai/testing"
 import { Agent } from "@orbit/core/agent"
@@ -1047,6 +1048,8 @@ const usageLayer = (trusted: boolean) => {
       ]),
       [
         Global.node.replace(tempGlobalLayer),
+        // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+        SessionRehydration.node.replace(SessionRehydration.noopLayer),
         Config.node.replace(config),
         WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: trusted })),
         Watcher.node.replace(watcher),

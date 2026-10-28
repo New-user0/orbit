@@ -578,6 +578,8 @@ function toLLMMessage(
         }),
       ]
     case "synthetic":
+      // A rehydration row with nothing to restore only carries the todo lists across the checkpoint.
+      if (message.text === "") return []
       return [
         Message.make({
           id: message.id,

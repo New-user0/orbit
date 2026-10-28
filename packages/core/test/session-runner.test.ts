@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import {
   AIError,
   CompactionPart,
@@ -636,6 +637,8 @@ const makeLayer = (persist: boolean, real = false) =>
     })
     const replacements: LayerNode.Replacements = [
       Snapshot.node.replace(Snapshot.noopLayer),
+      // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+      SessionRehydration.node.replace(SessionRehydration.noopLayer),
       LayerNodePlatform.llmClient.replace(TestLLM.clientLayer.pipe(Layer.provide(testLLM))),
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(systemContext),

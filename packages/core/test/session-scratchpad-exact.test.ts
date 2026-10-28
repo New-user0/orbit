@@ -1,5 +1,6 @@
 // The scratchpad in the baseline of a session: where it stands among the sources, and who shares it. The sources are the
 // real ones for the date, the environment, the scratchpad and the entries of the API, on the real session context.
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
@@ -77,6 +78,8 @@ const it = testEffect(
       noMemory,
       Config.node.replace(Config.testLayer()),
       SessionRunnerModel.node.replace(models),
+      // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+      SessionRehydration.node.replace(SessionRehydration.noopLayer),
       InstructionDiscovery.node.replace(
         Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
       ),

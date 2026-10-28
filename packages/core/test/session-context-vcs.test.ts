@@ -1,6 +1,7 @@
 // The git snapshot among the sources of a session's baseline, on the real session context, the real trust and the real
 // Git service, over a temporary repository that the Location is bound to. The repository has `core.fsmonitor` planted,
 // which git runs for `status` and which writes a marker line, so that a test sees whether git did any work in the folder.
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
@@ -107,6 +108,8 @@ const harness = (vcs: (root: string) => Project.Vcs | undefined) =>
         ),
         SessionRunnerModel.node.replace(models),
         // A project whose instruction discovery is off, as `orb run --bare` has it: the snapshot does not follow it.
+        // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+        SessionRehydration.node.replace(SessionRehydration.noopLayer),
         InstructionDiscovery.node.replace(
           // What ORBIT_DISABLE_INSTRUCTIONS=1 builds (`project` and `global` off), as `orb run --bare` starts its server.
           Layer.mock(InstructionDiscovery.Service, { project: false, global: false, load: () => Effect.succeed(empty) }),
