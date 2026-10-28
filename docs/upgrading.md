@@ -5024,11 +5024,11 @@ the model reads it after the summary. Before, the model saw only the summary.
   share or device path, a deny rule (also on where a link leads, and `external_directory` for a file outside the
   project) or a file outside the project that the session only read keeps it out. A file named only by history (after a
   restart, a fork or an import) is read only when the read tool would read it without asking, so an ask rule such as
-  the one on `.env` keeps it out.
+  the one on `.env` keeps it out. So does an ask rule on where a file leads once it has become a link.
 - **Background subagents** that are still running, or whose result has not arrived, get a note each: still running (do
   not start another), finished, failed (with the error) or stopped.
 - **The plan file** of the session comes back with its path and content when it has any, read only from its own place
-  in `~/.orbit/plan`.
+  in `~/.orbit/plan`. A session whose ID is not of the plain shape (an imported one, for example) gets no plan here.
 - **Skills** the session used, through the `Skill` tool, `/skill` or a prompt, before any earlier compaction included,
   come back newest first, each cut to its first 5,000 tokens with a note on how to load the rest.
 - **Room.** Files take at most 50,000 tokens and skills 25,000, and both take only what the room below the automatic

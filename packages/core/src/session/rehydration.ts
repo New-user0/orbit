@@ -97,6 +97,12 @@ export const isRow = (message: SessionMessage.Info) =>
 
 const Files = Schema.Array(Schema.String)
 
+// The shape of a session ID that may name a file: no separator, dot, colon or anything else a path reads.
+const PLAIN_ID = /^ses_\w+$/
+
+// Two real paths for one place, compared as the resolver compares them.
+const same = (left: string, right: string) => FSUtil.contains(left, right) && FSUtil.contains(right, left)
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -116,16 +122,18 @@ export const layer = Layer.effect(
     const planPath = (sessionID: SessionSchema.ID) => path.join(PlanMode.directory(global.home), `${sessionID}.md`)
 
     /**
-     * The plan file, read from its real place only. A share spelling is refused before anything touches the disk, then
-     * the real folder and the real file are taken once, and the file is read from that real path only while it is in
-     * that folder: a link out of it, or one that leads nowhere, gives no plan.
+     * The plan file, read from its real place only. An imported session ID is data, so one that is not a plain ID names
+     * no file (class 5). A share spelling is refused before anything touches the disk, then the real plan folder and the
+     * real file are taken once, and the file is read from that real path only while it sits directly in that folder: a
+     * link out of it or below it, or one that leads nowhere, gives no plan (class 4).
      */
     const plan = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      if (!PLAIN_ID.test(sessionID)) return []
       const file = planPath(sessionID)
       if (LinkShare.isShare(file) || (yield* LinkShare.of(fs, file)) !== undefined) return []
-      const folder = yield* fs.realPath(path.dirname(file)).pipe(Effect.orElseSucceed(() => undefined))
+      const folder = yield* fs.realPath(PlanMode.directory(global.home)).pipe(Effect.orElseSucceed(() => undefined))
       const real = yield* fs.realPath(file).pipe(Effect.orElseSucceed(() => undefined))
-      if (folder === undefined || real === undefined || !FSUtil.contains(folder, real)) return []
+      if (folder === undefined || real === undefined || !same(path.dirname(real), folder)) return []
       const text = yield* fs.readFileString(real).pipe(Effect.orElseSucceed(() => ""))
       if (text === "") return []
       return [
@@ -176,7 +184,6 @@ export const layer = Layer.effect(
       const plan = planPath(sessionID)
       const listed = yield* discovery.list()
       const instructions = Array.isArray(listed) ? listed.filter((file) => file.kind !== "rule").map((file) => file.path) : []
-      const same = (left: string, right: string) => FSUtil.contains(left, right) && FSUtil.contains(right, left)
       const locate = (file: string) => access.locate(file, "file").pipe(Effect.orElseSucceed(() => undefined))
       const key = (target: FileAccess.Target) => {
         const real = FileAccess.realPlace(target)
@@ -239,9 +246,10 @@ export const layer = Layer.effect(
       if (target === undefined) return undefined
       // A file only history names (a restart, a fork, an import) may never have been read with the person's answer, so it
       // is read only when the read tool would read it without asking (classes 5 and 8). A file this process read keeps
-      // the reference's rule: an ask rule does not stop it.
+      // the reference's rule, so an ask rule does not stop it, but only while its name leads to itself: once it leads
+      // somewhere else, the read tool would ask about that place, which the person never answered for (class 8).
       if (
-        !input.held.has(target.absolute) &&
+        (!input.held.has(target.absolute) || target.leads !== undefined) &&
         !(yield* permission
           .allowed(FileChangeReminder.readRequest(target, { sessionID, agent }))
           .pipe(Effect.orElseSucceed(() => false)))

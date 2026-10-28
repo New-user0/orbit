@@ -992,6 +992,14 @@ describe("rehydration after a compaction", () => {
       yield* Effect.promise(() => fs.symlink(path.join(away.path, "gone.md"), plan))
       expect(yield* h.compact()).toEqual({ status: "completed" })
       expect((yield* h.rows()).map((row) => row.text).join("")).not.toContain(plan)
+      // A link to a file in a folder below the plan folder: a plan file sits in that folder itself.
+      yield* h.prompt("below")
+      const below = path.join(path.dirname(plan), "sub", "inner.md")
+      yield* h.put(below, "MARKER-PLAN-BELOW\n")
+      yield* Effect.promise(() => fs.rm(plan))
+      yield* Effect.promise(() => fs.symlink(below, plan))
+      expect(yield* h.compact()).toEqual({ status: "completed" })
+      expect((yield* h.rows()).map((row) => row.text).join("")).not.toContain("MARKER-PLAN-BELOW")
       // The control: a regular file.
       yield* h.prompt("once more")
       yield* Effect.promise(() => fs.rm(plan))
@@ -1023,30 +1031,28 @@ describe("rehydration after a compaction", () => {
       const data = yield* (yield* SessionTransfer.Service).export({ sessionID: h.session.id })
       const away = yield* outside()
       const ids = [
-        ["ses_x/../../../notes", "MARKER-SLASH"],
-        ["ses_x\\..\\..\\..\\notes", "MARKER-BACKSLASH"],
-        [`ses_x/${away.path.replace(/^[A-Za-z]:/, "").replaceAll("\\", "/")}/notes`, "MARKER-NESTED"],
+        ["ses_x/../../../notes", "MARKER-SLASH", false],
+        ["ses_x\\..\\..\\..\\notes", "MARKER-BACKSLASH", false],
+        [`ses_x/${away.path.replace(/^[A-Za-z]:/, "").replaceAll("\\", "/")}/notes`, "MARKER-NESTED", false],
+        // One that comes back into the plan folder names another session's plan.
+        ["ses_x/../ses_victim", "MARKER-OTHER-SESSION", false],
+        // The control: an imported plain ID still has its plan.
+        ["ses_imported", "MARKER-PLAIN-IMPORT", true],
       ] as const
-      yield* Effect.gen(function* () {
-        const other = yield* setup()
-        const target = yield* SessionTransfer.Service
-        for (const [id, marker] of ids) {
+      // Each in a build of its own, as one export cannot be imported twice into one database.
+      for (const [id, marker, shown] of ids)
+        yield* Effect.gen(function* () {
+          const other = yield* setup()
+          const target = yield* SessionTransfer.Service
           const imported = yield* target.import({
             data: { ...data, info: { ...data.info, id: Session.ID.make(id) } },
             location: Location.Ref.make({ directory: other.location.directory }),
           })
-          const file = other.planFile(imported)
-          yield* other.put(file, `${marker}\n`)
+          yield* other.put(other.planFile(imported), `${marker}\n`)
           yield* other.prompt("after the import", undefined, imported)
           expect(yield* other.compact({ target: imported })).toEqual({ status: "completed" })
-          expect((yield* other.rows(imported)).map((row) => row.text).join("")).not.toContain(marker)
-        }
-        // The control: the same build restores the plan of a session whose ID is plain.
-        yield* other.put(other.planFile(), "MARKER-PLAIN-PLAN\n")
-        yield* other.prompt("control")
-        expect(yield* other.compact()).toEqual({ status: "completed" })
-        expect((yield* other.row()).text).toContain("MARKER-PLAIN-PLAN")
-      }).pipe(Effect.provide(Layer.fresh(Layer.merge(graph(), config))))
+          expect((yield* other.rows(imported)).map((row) => row.text).join("").includes(marker)).toBe(shown)
+        }).pipe(Effect.provide(Layer.fresh(Layer.merge(graph(), config))))
     }),
   )
 
