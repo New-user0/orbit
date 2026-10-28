@@ -50,12 +50,14 @@ const answers: Record<string, () => Response> = {
     ),
 }
 const unexpected: string[] = []
+const asked: string[] = []
 const stub = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
   fetch(request) {
     const pathname = new URL(request.url).pathname
     const usage = pathname.match(/^\/api\/session\/([^/]+)\/context\/usage$/)
+    if (usage) asked.push(usage[1]!)
     if (usage) return answers[usage[1]!]?.() ?? new Response(null, { status: 404 })
     const session = pathname.match(/^\/api\/session\/([^/]+)$/)
     if (session && request.method === "GET")
@@ -154,6 +156,18 @@ test("--format result prints one result line whose result is the report", async 
   expect(line).toMatchObject({ type: "result", sessionID: SESSION, is_error: false, subtype: "success" })
   expect(line.usage).toEqual({ steps: 0, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
   expect(line.result).toContain("## Context usage")
+})
+
+// Stream input answers `/context` through its own control request (clients-ux-47), so the positional `/context` of a
+// stream run is the stream's first input, and the run does not ask the route. The stub answers none of the stream's own
+// requests, which is all this run needs: it is not a report.
+test("stream input leaves /context to the stream and does not ask the route", async () => {
+  asked.length = 0
+  const run = await capture({ format: "stream-json", envelope: true, stream: true })
+  unexpected.length = 0
+  expect(asked).toEqual([])
+  expect(run.stdout).not.toContain("## Context usage")
+  expect(run.stdout).not.toContain('"context_usage"')
 })
 
 async function capture(input: Partial<RunCommandInput> & Pick<RunCommandInput, "format">) {

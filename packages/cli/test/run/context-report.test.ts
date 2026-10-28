@@ -169,6 +169,12 @@ test("an unknown window prints no percentage", () => {
   expect(text).not.toContain("Free space")
   expect(text).not.toContain("Autocompact buffer")
   expect(tables(text)[0]![0]).toBe("| Category | Tokens |")
+
+  // A window of 0 is as unknown as no window: nothing is a share of it (D9).
+  const zero = contextMarkdown({ ...fixture({ auto: true }), window: 0 })
+  expect(zero).not.toContain("%")
+  expect(zero).toContain("**Tokens:** 50,000\n")
+  expect(tables(zero)[0]![0]).toBe("| Category | Tokens |")
 })
 
 // CR4, class 9: the JSON line keeps every string as it came, and holds no raw control or line separator character.

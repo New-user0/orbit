@@ -603,8 +603,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 })
               if (error._tag === "Session.AgentNotFoundError")
                 return new AgentNotFoundError({ agentID: error.agent, message: plain(error.message) })
+              // The message names source keys, which `Instruction.Key` limits to lower-case letters, digits and `._/-`.
               if (error._tag === "Instructions.InitializationBlocked")
-                return new ServiceUnavailableError({ service: "instructions", message: plain(error.message) })
+                return new ServiceUnavailableError({ service: "instructions", message: error.message })
               // What is left is the session's model, which did not resolve.
               return new ServiceUnavailableError({ service: "model", message: plain(error.message) })
             }),
