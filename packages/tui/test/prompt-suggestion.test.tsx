@@ -98,7 +98,14 @@ async function mount(
         const body = await request.json()
         prompts.push(body)
         return json({
-          data: { id: body.id, sessionID, type: "user", time: { created: 10 }, payload: { text: body.text }, delivery: "steer" },
+          data: {
+            id: body.id,
+            sessionID,
+            type: "user",
+            time: { created: 10 },
+            payload: { text: body.text },
+            delivery: "steer",
+          },
         })
       }
       if (request.method === "POST" && url.pathname === `/api/session/${sessionID}/shell`) {
@@ -137,7 +144,12 @@ async function mount(
     reconnect() {
       running.add(sessionID)
       seq++
-      setup.events.emit({ id: `evt_connected_${seq}`, created: Date.now(), type: "server.connected", data: {} } as never)
+      setup.events.emit({
+        id: `evt_connected_${seq}`,
+        created: Date.now(),
+        type: "server.connected",
+        data: {},
+      } as never)
     },
     execution(
       type:
@@ -162,7 +174,7 @@ async function mount(
         location: { directory: sessionDirectory },
       } as OrbitEvent)
     },
-    async press(key: string, modifiers?: { ctrl?: boolean; shift?: boolean }) {
+    async press(key: "TAB" | "ARROW_RIGHT" | "BACKSPACE", modifiers?: { ctrl?: boolean; shift?: boolean }) {
       setup.mockInput.pressKey(key, modifiers)
       await settle()
     },
@@ -284,8 +296,8 @@ test.each(spellings)("a suggestion is drawn escaped: $name", async ({ text }) =>
 })
 
 const keys = [
-  { key: "Tab", press: (app: App) => app.press("tab") },
-  { key: "Right", press: (app: App) => app.press("right") },
+  { key: "Tab", press: (app: App) => app.press("TAB") },
+  { key: "Right", press: (app: App) => app.press("ARROW_RIGHT") },
   { key: "Enter", press: (app: App) => app.enter() },
 ]
 
@@ -340,8 +352,8 @@ test.each([
   }
   expect(app.frame()).not.toContain(suggestion)
   const before = app.textarea().plainText
-  if (row.case === "tab" || row.case === "reconnect") await app.press("tab")
-  else if (row.case === "right") await app.press("right")
+  if (row.case === "tab" || row.case === "reconnect") await app.press("TAB")
+  else if (row.case === "right") await app.press("ARROW_RIGHT")
   else await app.enter()
   await quiet(app, 150)
   expect(app.prompts.filter((prompt) => prompt.text.includes(suggestion))).toEqual([])
@@ -353,7 +365,7 @@ test("a suggestion starting with ! is taken into shell mode by Tab and sent as t
   {
     await using app = await mount({ suggestions: true, answer: () => json({ data: { suggestion: "!git status" } }) })
     await ghost(app, "!git status")
-    await app.press("tab")
+    await app.press("TAB")
     expect(app.textarea().plainText).toBe("git status")
     // The prompt's marker is `!` in shell mode, where it is `›` otherwise.
     expect(app.frame()).not.toContain("›")
@@ -385,7 +397,7 @@ test("typing, a turn start and a submit end a suggestion as the reference does",
     await app.type("x")
     expect(app.requests[0]!.signal.aborted).toBe(true)
     gate.resolve()
-    await app.press("backspace")
+    await app.press("BACKSPACE")
     await quiet(app)
     expect(app.textarea().plainText).toBe("")
     expect(app.frame()).not.toContain(suggestion)
@@ -396,7 +408,7 @@ test("typing, a turn start and a submit end a suggestion as the reference does",
     await ghost(app)
     await app.type("x")
     expect(app.frame()).not.toContain(suggestion)
-    await app.press("backspace")
+    await app.press("BACKSPACE")
     expect(await app.shows(suggestion)).toBe(true)
     // A turn starting in the session ends it, so it is not drawn again when that turn fails.
     app.execution("session.execution.started")
@@ -423,7 +435,7 @@ test("typing, a turn start and a submit end a suggestion as the reference does",
     app.execution("session.execution.succeeded")
     await quiet(app, 300)
     expect(app.requests).toHaveLength(1)
-    for (const _ of "draft") await app.press("backspace")
+    for (const _ of "draft") await app.press("BACKSPACE")
     await quiet(app)
     expect(app.textarea().plainText).toBe("")
     expect(app.frame()).not.toContain(suggestion)
@@ -431,23 +443,23 @@ test("typing, a turn start and a submit end a suggestion as the reference does",
 })
 
 test("the autocomplete, Shift+Tab and an attached image keep their keys", async () => {
-  // With the autocomplete open there is no ghost, and Tab completes the item.
+  // With the autocomplete open there is no ghost, and Tab completes the item: /rename takes an argument, so completing
+  // it puts the command in the input instead of running it.
   {
     await using app = await mount({ suggestions: true })
     await ghost(app)
     await app.type("/")
     expect(app.frame()).not.toContain(suggestion)
-    await app.press("tab")
-    expect(app.textarea().plainText.length).toBeGreaterThan(1)
-    expect(app.textarea().plainText.startsWith("/")).toBe(true)
-    expect(app.textarea().plainText).not.toContain(suggestion)
+    await app.type("rena")
+    await app.press("TAB")
+    expect(app.textarea().plainText).toBe("/rename ")
   }
   // Shift+Tab cycles the agent while the ghost is drawn, and leaves the input empty.
   {
     await using app = await mount({ suggestions: true })
     await ghost(app)
     expect(app.frame()).toContain("Build")
-    await app.press("tab", { shift: true })
+    await app.press("TAB", { shift: true })
     expect(await app.shows("Plan")).toBe(true)
     expect(app.textarea().plainText).toBe("")
   }

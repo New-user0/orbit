@@ -165,6 +165,10 @@ export const Info = Schema.Struct({
       vim: Schema.optional(Schema.Boolean).annotate({
         description: "Edit the prompt with Vim keys: Escape enters normal mode, i or a returns to insert mode",
       }),
+      suggestions: Schema.optional(Schema.Boolean).annotate({
+        description:
+          "After a turn ends, ask the session's model what you might type next and show it dimmed in the empty prompt: Tab or Right puts it in the input and Enter sends it. Each ask sends the conversation to the model and spends tokens. Off by default, and read only from your own cli.json",
+      }),
     }),
   ).annotate({ description: "Prompt input behavior" }),
   status_line: Schema.optional(

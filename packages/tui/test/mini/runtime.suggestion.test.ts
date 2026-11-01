@@ -37,6 +37,7 @@ async function start(input: { suggestions?: boolean; answer?: () => Promise<unkn
     externalOutputMode: "capture-stdout",
   })
   const asked: AbortSignal[] = []
+  const sessions: string[] = []
   const lifecycle = await createRuntimeLifecycle({
     host: host(),
     createRenderer: async () => app.renderer as CliRenderer,
@@ -57,7 +58,8 @@ async function start(input: { suggestions?: boolean; answer?: () => Promise<unkn
     onPermissionReply: () => {},
     onFormReply: () => {},
     onFormCancel: () => {},
-    suggestion: (signal: AbortSignal) => {
+    suggestion: (sessionID: string, signal: AbortSignal) => {
+      sessions.push(sessionID)
       asked.push(signal)
       return input.answer ? input.answer() : Promise.resolve({ suggestion })
     },
@@ -66,6 +68,7 @@ async function start(input: { suggestions?: boolean; answer?: () => Promise<unkn
     app,
     lifecycle,
     asked,
+    sessions,
     ended(sessionID = "ses_1") {
       lifecycle.observe?.({ type: "session.execution.succeeded", data: { sessionID } })
     },
@@ -91,7 +94,9 @@ test("Mini asks only with prompt.suggestions on", async () => {
     mini.ended()
     await Bun.sleep(100)
     expect({ value: row.value, count: mini.asked.length }).toEqual({ value: row.value, count: row.count })
-    if (row.count) expect(await mini.frame()).toContain(suggestion)
+    if (!row.count) continue
+    expect(mini.sessions).toEqual(["ses_1"])
+    expect(await mini.frame()).toContain(suggestion)
   }
 })
 
