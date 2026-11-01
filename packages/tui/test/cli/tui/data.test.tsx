@@ -4123,6 +4123,18 @@ test("a running compaction keeps a character count and no reply text", async () 
   })
 })
 
+test("evicting a session drops its compaction character count", async () => {
+  await withCompactionData(async ({ data, events }) => {
+    const sessionID = "session-evicted"
+    emitEvent(events, compactionStarted(sessionID))
+    await wait(() => data.session.message.get(sessionID, `message-${sessionID}`)?.type === "compaction")
+    emitEvent(events, { id: "evt_evict_1", created: 2, type: "session.compaction.delta", data: { sessionID, characters: 6 } })
+    await wait(() => data.session.compactionCharacters(sessionID) === 6)
+    data.session.evict(sessionID)
+    expect(data.session.compactionCharacters(sessionID)).toBe(0)
+  })
+})
+
 test("a compaction delta without a count changes nothing (an older server)", async () => {
   await withCompactionData(async ({ data, events }) => {
     const sessionID = "session-old-server"

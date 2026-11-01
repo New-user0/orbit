@@ -16,6 +16,8 @@ async function drawCompaction(input: {
   /** The deltas the server sends once the row is drawn. */
   readonly deltas: readonly Record<string, unknown>[]
   readonly status?: "running" | "completed"
+  /** A summary the row already holds while it runs, such as a stored one read back. */
+  readonly summary?: string
 }) {
   await using state = await tmpdir()
   const setup = await createTestRenderer({ width: input.width, height: 30, useThread: false, kittyKeyboard: true })
@@ -47,7 +49,7 @@ async function drawCompaction(input: {
             type: "compaction",
             status: "running",
             reason: "manual",
-            summary: "",
+            summary: input.summary ?? "",
             recent: "",
             time: { created },
           },
@@ -140,6 +142,11 @@ test("a running compaction shows its elapsed time and estimated tokens after 30 
   expect(old).toContain("Compaction")
   expect(old).not.toContain("HOSTILE-REPLY")
   expect(old).not.toContain("tokens")
+
+  // (f) a summary the row already holds is not drawn while the compaction runs.
+  const held = await drawCompaction({ width: 120, age: running, deltas: [], summary: "HELD-SUMMARY" })
+  expect(held).toContain("Compaction")
+  expect(held).not.toContain("HELD-SUMMARY")
 
   // Trusted control: the completed row draws the stored summary.
   const done = await drawCompaction({ width: 120, age: running, deltas: [{ characters: 4800 }], status: "completed" })

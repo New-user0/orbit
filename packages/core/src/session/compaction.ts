@@ -646,7 +646,6 @@ export const layer = Layer.effect(
       let observed = false
       let reported = false
       let streamedLength = 0
-      // Characters of reply text in this request only; the clients show a figure and never the text.
       let characters = 0
 
       return llm.stream(request, options).pipe(
