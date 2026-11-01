@@ -181,7 +181,10 @@ for (const row of reviewRows)
       item.files
         .flatMap((file) => [file.place, file.from])
         .filter((file): file is string => file !== undefined)
-        .map((file) => fs.realpath(file).catch(() => file)),
+        // A file the move has not made yet is named by its folder's real path.
+        .map((file) =>
+          fs.realpath(file).catch(async () => path.join(await fs.realpath(path.dirname(file)), path.basename(file))),
+        ),
     )
     for (const file of reads) {
       expect(allowed).toContain(file)

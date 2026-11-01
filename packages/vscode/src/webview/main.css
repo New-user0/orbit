@@ -475,6 +475,18 @@ body.sidebar .starter {
   cursor: pointer;
 }
 
+/* A prompt's own links: its changes, and putting its files back. */
+.user-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.permission > .muted {
+  margin: 4px 10px 0;
+  font-size: 12px;
+}
+
 /* Trust: shown above the conversation while the folder is untrusted and holds something back. */
 .trust {
   display: flex;

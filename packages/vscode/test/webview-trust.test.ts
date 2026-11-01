@@ -22,7 +22,11 @@ class Node {
     this.children = nodes
   }
   remove() {}
-  addEventListener() {}
+  replaceWith() {}
+  handlers = new Map<string, () => void>()
+  addEventListener(type: string, handler: () => void) {
+    this.handlers.set(type, handler)
+  }
   setAttribute() {}
   contains() {
     return false
@@ -33,13 +37,14 @@ class Node {
 }
 
 const listeners: ((event: { data: unknown }) => void)[] = []
+const posted: unknown[] = []
 const body = new Node("body")
 const saved = { setInterval: globalThis.setInterval }
 const timers: ReturnType<typeof setInterval>[] = []
 
 beforeAll(async () => {
   Object.assign(globalThis, {
-    acquireVsCodeApi: () => ({ postMessage() {} }),
+    acquireVsCodeApi: () => ({ postMessage: (message: unknown) => void posted.push(message) }),
     document: {
       body,
       getElementById: () => null,
@@ -89,4 +94,46 @@ test("the webview's banner goes once the folder is trusted", () => {
   send(undefined)
   expect(banner().hidden).toBe(true)
   expect(banner().children).toEqual([])
+})
+
+const all = (node: Node): Node[] => [node, ...node.children.flatMap(all)]
+const item = (value: unknown) => {
+  for (const listener of listeners) listener({ data: { type: "item", item: value } })
+}
+
+test("a prompt with a message ID offers its changes and a restore, and one without offers neither", () => {
+  item({ type: "user", id: "user:sent", text: "make it so", messageID: "msg_sent" })
+  item({ type: "user", id: "user:waiting", text: "not admitted yet" })
+  const [sent, waiting] = all(body)
+    .filter((node) => node.className === "user")
+    .slice(-2)
+  const links = all(sent!).filter((node) => node.className === "link")
+  expect(links.map((node) => node.textContent)).toEqual(["View changes", "Restore files"])
+  posted.length = 0
+  links.forEach((node) => node.handlers.get("click")?.())
+  expect(posted).toEqual([
+    { type: "changes", messageID: "msg_sent" },
+    { type: "restore", messageID: "msg_sent" },
+  ])
+  expect(all(waiting!).filter((node) => node.className === "user-actions")).toEqual([])
+})
+
+test("a card under review says how to answer in the editor, and an answered one says whose version was allowed", () => {
+  const card = {
+    type: "permission",
+    sessionID: "ses_view",
+    action: "Edit",
+    resources: ["a.txt"],
+    canSave: true,
+    view: { places: ["/p/a.txt"] },
+    files: [{ file: "a.txt", place: "/p/a.txt", patch: "@@ -1 +1 @@\n-a\n+b\n" }],
+    revisable: true,
+  }
+  item({ ...card, id: "per_reviewing", status: "pending", reviewing: true })
+  item({ ...card, id: "per_revised", status: "once", revised: true })
+  item({ ...card, id: "per_plain", status: "once" })
+  const text = all(body).map((node) => node.own ?? "")
+  expect(text).toContain("Opened in the editor: save to accept your version, close to accept as proposed, or Reject.")
+  expect(text.filter((line) => line.startsWith("Allowed with your changes · "))).toHaveLength(1)
+  expect(text.filter((line) => line.startsWith("Allowed · "))).toHaveLength(1)
 })

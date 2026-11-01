@@ -323,7 +323,7 @@ test("a file really inside the session's folder and the window is read and shown
 })
 
 describe("a path that is not really inside the session's folder is shown as text and never read", () => {
-  const rows: Array<{ name: string; file: Record<string, unknown>; platform?: NodeJS.Platform }> = [
+  const rows: Array<{ name: string; file: Record<string, unknown>; platform?: NodeJS.Platform; spelling?: boolean }> = [
     { name: "outside", file: { file: "marker.txt", place: marker, patch } },
     { name: "dot-dot", file: { file: "marker.txt", place: [project, "..", "outside", "marker.txt"].join(path.sep), patch } },
     { name: "link-out", file: { file: "link/marker.txt", place: path.join(project, "link", "marker.txt"), patch } },
@@ -339,10 +339,11 @@ describe("a path that is not really inside the session's folder is shown as text
       name: "git-bash",
       file: { file: "a.txt", place: `/${inside[0]?.toLowerCase()}${inside.slice(2).replaceAll("\\", "/")}`, patch },
       platform: "win32",
+      spelling: true,
     },
-    { name: "root-relative", file: { file: "a.txt", place: inside.slice(2), patch }, platform: "win32" },
-    { name: "relative", file: { file: "a.txt", place: "a.txt", patch } },
-    { name: "relative, no place", file: { file: "a.txt", patch } },
+    { name: "root-relative", file: { file: "a.txt", place: inside.slice(2), patch }, platform: "win32", spelling: true },
+    { name: "relative", file: { file: "a.txt", place: "a.txt", patch }, spelling: true },
+    { name: "relative, no place", file: { file: "a.txt", patch }, spelling: true },
     { name: "move-from-outside", file: { file: "moved.txt", place: path.join(project, "moved.txt"), from: marker, patch } },
   ]
   for (const row of rows)
@@ -355,6 +356,9 @@ describe("a path that is not really inside the session's folder is shown as text
 
       expect(shown.tabs).toEqual([])
       expect(seen.reads()).toEqual([])
+      // A path that is not a local absolute one is refused by its spelling, before the disk is asked anything: Windows
+      // would read a root-relative or Git Bash path from the current drive.
+      if (row.spelling) expect(seen.log).toEqual([])
       // One muted note names the file, written out; the secret of the marker is nowhere.
       expect(shown.notes).toHaveLength(1)
       expect(shown.notes[0]?.tone).toBe("muted")
@@ -596,7 +600,11 @@ describe("answers from a review tab", () => {
     const tab = shown.tabs[0]!
     expect([left(review, tab), right(review, tab)]).toEqual(["one\n", "two\n"])
 
-    await review.provider.writeFile(tab.right.path, new TextEncoder().encode("mine\n"))
+    // The person saves, and the tab's close arrives while the answer is on its way: the first answer is the only one.
+    await Promise.all([
+      review.provider.writeFile(tab.right.path, new TextEncoder().encode("mine\n")),
+      review.closed(tab.title),
+    ])
     await run.idle()
 
     expect(await Bun.file(run.file).text()).toBe("mine\n")
@@ -604,7 +612,8 @@ describe("answers from a review tab", () => {
     const answered = run.items.get(run.question.id)
     expect(answered).toMatchObject({ status: "once", revised: true })
     expect(answered?.type === "permission" && answeredLabel(answered)).toBe("Allowed with your changes")
-    expect(shown.closed).toEqual([tab.title])
+    // The person closed the tab themselves, so the review has nothing left to close.
+    expect(shown.closed).toEqual([])
     // The tab is gone: a later save or close of it answers nothing.
     await review.provider.writeFile(tab.right.path, new TextEncoder().encode("again\n"))
     await review.closed(tab.title)
@@ -674,6 +683,9 @@ describe("answers from a review tab", () => {
     await second.closed(shown.tabs[1]!.title)
     await second.provider.writeFile(shown.tabs[1]!.right.path, new TextEncoder().encode("x\n"))
     await second.reject(shown.tabs[1]!.right.path)
+    // Nor does a disposed review open anything again.
+    expect(await second.open(run.question, true)).toBe(false)
+    expect(shown.tabs).toHaveLength(2)
     expect(replies(log.sent)).toEqual([])
     expect(shown.closed).toEqual([shown.tabs[0]!.title, shown.tabs[1]!.title])
     // The question is still pending on the server; it is answered on the card.
@@ -755,7 +767,17 @@ test("a reply that loses to another answer is dropped quietly and its tab closes
 
 describe("a request without revisable opens a read-only preview and closing it answers nothing", () => {
   const rows = [
-    { name: "no revisable", request: item([{ file: "a.txt", place: inside, patch }], { revisable: false }) },
+    {
+      // A server older than the edited reply sends no `revisable` at all.
+      name: "no revisable",
+      request: permissionItem({
+        id: "per_old",
+        sessionID: "ses_review",
+        action: "Edit",
+        resources: ["a.txt"],
+        metadata: { files: [{ file: "a.txt", place: inside, patch }] },
+      }),
+    },
     {
       name: "Patch",
       request: item(

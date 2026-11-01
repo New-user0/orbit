@@ -20,20 +20,70 @@ import { askForm } from "./forms.js"
 import { headers, start, version } from "./endpoint.js"
 import { startBridge, type Bridge } from "./ide-bridge.js"
 import { createNoticeTracker, notice } from "./notify.js"
-import { proposed } from "./patch.js"
 import { configured, find, missing } from "./program.js"
 import type { Check, FromView, Item, Mode, Model, ToView, TrustView, Workspace } from "./protocol.js"
+import { restoreQuestion, Review, type Side } from "./review.js"
 import { RunsView } from "./runs-view.js"
 import { prompt, tooltip, trusted } from "./trust.js"
 
-const scheme = "orbit-proposed"
+// The review that is open in this window, so that `deactivate` disposes it before VS Code closes its tabs.
+let active: Review | undefined
 
 export function activate(context: vscode.ExtensionContext) {
   const editor = new EditorState()
   const chat = new Chat(context, editor)
+  active = chat.diffs
   new RunsView(executable, () => directory(editor), chat.log).register(context)
   ideBridge(context, editor, chat.log)
-  const proposals = new Map<string, string>()
+  const review = chat.diffs
+  // The editable side of a review. Saving it hands the text to the review, which answers the question through the
+  // server; nothing is written to disk here.
+  const changed = new vscode.EventEmitter<vscode.FileChangeEvent[]>()
+  const reviewFiles: vscode.FileSystemProvider = {
+    onDidChangeFile: changed.event,
+    watch: () => new vscode.Disposable(() => {}),
+    stat: (uri) => {
+      const text = review.provider.readFile(uri.path)
+      if (!text) throw vscode.FileSystemError.FileNotFound(uri)
+      return { type: vscode.FileType.File, ctime: 0, mtime: 0, size: text.length }
+    },
+    readFile: (uri) => {
+      const text = review.provider.readFile(uri.path)
+      if (!text) throw vscode.FileSystemError.FileNotFound(uri)
+      return text
+    },
+    writeFile: (uri, content) => review.provider.writeFile(uri.path, content),
+    readDirectory: () => [],
+    createDirectory: (uri) => {
+      throw vscode.FileSystemError.NoPermissions(uri)
+    },
+    delete: (uri) => {
+      throw vscode.FileSystemError.NoPermissions(uri)
+    },
+    rename: (uri) => {
+      throw vscode.FileSystemError.NoPermissions(uri)
+    },
+  }
+  context.subscriptions.push(
+    { dispose: () => review.dispose() },
+    changed,
+    vscode.workspace.registerFileSystemProvider(REVIEW, reviewFiles, { isCaseSensitive: true }),
+    vscode.workspace.registerTextDocumentContentProvider(PROPOSED, {
+      provideTextDocumentContent: (uri) => review.text(uri.path) ?? "",
+    }),
+    // Only a tab the person closes answers; the review forgets a tab before it closes one itself.
+    vscode.window.tabGroups.onDidChangeTabs((event) => event.closed.forEach((tab) => void review.closed(tab.label))),
+    vscode.commands.registerCommand("orbit.review.accept", async (uri?: vscode.Uri) => {
+      if (uri?.scheme !== REVIEW) return
+      const document = vscode.workspace.textDocuments.find((item) => item.uri.toString() === uri.toString())
+      // A save answers with the person's version; with nothing to save it is the proposal as it stands.
+      if (document?.isDirty) return void (await document.save())
+      await review.accept(uri.path)
+    }),
+    vscode.commands.registerCommand("orbit.review.reject", async (uri?: vscode.Uri) => {
+      if (uri?.scheme === REVIEW) await review.reject(uri.path)
+    }),
+  )
   context.subscriptions.push(
     editor,
     vscode.window.registerWebviewViewProvider("orbit.chat", chat, {
@@ -54,9 +104,6 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.window.registerWebviewPanelSerializer("orbit.chat", {
       deserializeWebviewPanel: async (panel) => chat.adopt(panel),
-    }),
-    vscode.workspace.registerTextDocumentContentProvider(scheme, {
-      provideTextDocumentContent: (uri) => proposals.get(uri.toString()) ?? "",
     }),
     vscode.commands.registerCommand("orbit.open", () => chat.reveal()),
     vscode.commands.registerCommand("orbit.newSession", () => chat.reset()),
@@ -99,39 +146,32 @@ export function activate(context: vscode.ExtensionContext) {
         .show()
     }),
   )
-  chat.onDiff = async (item) => {
-    const root = directory(editor)
-    for (const change of item.files) {
-      // The place is the one the server resolved, else the name it gave the file. A moved file is read from where it came
-      // from, as its destination does not exist yet, and proposed at the destination.
-      const named = change.place ?? change.file
-      const file = path.isAbsolute(named) ? named : path.join(root, named)
-      const source = change.from ?? named
-      const original = vscode.Uri.file(path.isAbsolute(source) ? source : path.join(root, source))
-      const before = await vscode.workspace.fs.readFile(original).then(
-        (bytes) => new TextDecoder().decode(bytes),
-        () => "",
-      )
-      const after = proposed(before, change.patch)
-      if (after === undefined) {
-        void vscode.window.showWarningMessage(`Orbit: ${change.file} changed since the agent read it`)
-        continue
-      }
-      const target = vscode.Uri.from({ scheme, path: file, query: item.id })
-      proposals.set(target.toString(), after)
-      // Next to the chat, so the conversation and the proposal are side by side.
-      await vscode.commands.executeCommand(
-        "vscode.diff",
-        change.status === "added" ? vscode.Uri.from({ scheme, path: `${file}.empty` }) : original,
-        target,
-        `${path.basename(file)} ↔ Orbit proposal`,
-        { viewColumn: vscode.ViewColumn.Beside, preview: true },
-      )
-    }
-  }
 }
 
-export function deactivate() {}
+export function deactivate() {
+  active?.dispose()
+}
+
+const REVIEW = "orbit-review"
+const PROPOSED = "orbit-proposed"
+
+function uri(side: Side) {
+  return vscode.Uri.from({ scheme: side.scheme, path: side.path })
+}
+
+// Closes the review's tabs by their titles. A review side with unsaved edits is saved first, which only hands its text
+// to a review that has already forgotten it, so VS Code does not ask whether to save.
+async function closeTabs(titles: ReadonlyArray<string>) {
+  const wanted = new Set(titles)
+  const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs).filter((tab) => wanted.has(tab.label))
+  for (const tab of tabs) {
+    const input = tab.input
+    if (!(input instanceof vscode.TabInputTextDiff) || input.modified.scheme !== REVIEW) continue
+    const document = vscode.workspace.textDocuments.find((item) => item.uri.toString() === input.modified.toString())
+    if (document?.isDirty) await document.save()
+  }
+  if (tabs.length > 0) await vscode.window.tabGroups.close(tabs, true)
+}
 
 /**
  * Orbit's bridge to the terminal UI that runs in this window (ide-bridge.ts), kept on while the person's own setting says
@@ -353,7 +393,30 @@ function code(value: vscode.Diagnostic["code"]) {
  * default (`orbit.placement`), or lives in the Orbit side bar.
  */
 class Chat implements vscode.WebviewViewProvider {
-  onDiff: (item: Extract<Item, { type: "permission" }>) => Promise<void> = async () => {}
+  /** The diffs this chat opens in the editor; every answer from them goes through the controller to the server. */
+  readonly diffs = new Review({
+    reply: async (id, decision, content) => (await this.controller)?.reply(id, decision, content) ?? "gone",
+    folders: async (sessionID) => (await this.controller)?.folders(sessionID) ?? { refused: "unavailable" },
+    workspace: () =>
+      (vscode.workspace.workspaceFolders ?? [])
+        .filter((folder) => folder.uri.scheme === "file")
+        .map((folder) => folder.uri.fsPath),
+    // Next to the chat, so the conversation and the proposal are side by side.
+    show: (tab) =>
+      vscode.commands.executeCommand("vscode.diff", uri(tab.left), uri(tab.right), tab.title, {
+        viewColumn: vscode.ViewColumn.Beside,
+        preview: false,
+      }),
+    changes: (view) =>
+      vscode.commands.executeCommand(
+        "vscode.changes",
+        view.title,
+        view.entries.map((entry) => [uri(entry.label), uri(entry.left), uri(entry.right)]),
+      ),
+    close: closeTabs,
+    note: (text, tone) => void this.controller?.then((controller) => controller?.note(text, tone)),
+    warn: (text) => void vscode.window.showWarningMessage(text),
+  })
   private view: vscode.WebviewView | undefined
   private panel: vscode.WebviewPanel | undefined
   private controller: Promise<Controller> | undefined
@@ -431,6 +494,8 @@ class Chat implements vscode.WebviewViewProvider {
   }
 
   async send(text: string, context?: string, shown?: string) {
+    // A new prompt closes every Orbit tab; questions still pending stay on their cards.
+    this.diffs.closeAll()
     await this.reveal()
     const controller = await this.connect()
     if (controller) await controller.send(text, context, shown)
@@ -529,10 +594,29 @@ class Chat implements vscode.WebviewViewProvider {
       case "permission":
         return (await this.controller)?.reply(message.id, message.decision)
       case "diff": {
-        const item = (await this.controller)?.permission(message.id)
-        if (item) await this.onDiff(item)
+        const controller = await this.controller
+        const item = controller?.permission(message.id)
+        if (item && (await this.diffs.open(item, true))) controller?.reviewing(item.id)
         return
       }
+      case "changes": {
+        const files = await (await this.controller)?.changes(message.messageID)
+        if (!files) return
+        if (files.length === 0)
+          return void vscode.window.showInformationMessage("Orbit: this prompt changed no files with the file tools.")
+        return this.diffs.changes(files)
+      }
+      case "restore":
+        return (await this.controller)?.restore(message.messageID, async (dry) => {
+          const question = restoreQuestion(dry, this.editor.root ?? directory(this.editor))
+          const restore: vscode.MessageItem = { title: "Restore" }
+          const choice = await vscode.window.showWarningMessage(
+            question.message,
+            { modal: true, detail: question.detail },
+            restore,
+          )
+          return choice === restore
+        })
       case "model": {
         const model = this.models.find((item) => `${item.providerID}/${item.id}` === message.model)
         if (!model) return
@@ -632,44 +716,13 @@ class Chat implements vscode.WebviewViewProvider {
       this.check({ ok: true, text: `Background service · ${new URL(endpoint.url).host}` })
       const client = Orbit.make({ baseUrl: endpoint.url, headers: headers(endpoint) })
       this.post({ type: "status", text: "" })
-      const apply = (update: Update) => {
-        if (update.type === "log") return this.log.appendLine(update.text)
-        if (update.type === "trust") return this.trusting(update)
-        if (update.type === "busy") {
-          const done = this.notices.busy(update.busy)
-          if (done) this.notice(done)
-          this.busy = update.busy
-          this.paint()
-          return this.post(update)
-        }
-        if (update.type === "title") {
-          this.title = update.title
-          this.retitle()
-          return this.post(update)
-        }
-        if (update.type === "plan") {
-          this.plan = update
-          return this.post(update)
-        }
-        if (update.type === "form") {
-          const form = update.form
-          void Promise.all([this.controller, askForm(form)]).then(([controller, answer]) =>
-            controller?.answer(form, answer),
-          )
-          return
-        }
-        if (update.item.type === "permission") {
-          const asked = this.notices.permission(update.item)
-          if (asked) this.notice(asked)
-        }
-        const index = this.items.findIndex((item) => item.id === update.item.id)
-        if (index === -1) this.items.push(update.item)
-        else this.items[index] = update.item
-        this.paint()
-        this.post(update)
-      }
       this.editor.root = directory(this.editor)
-      return new Controller(client, this.editor.root, apply, (trust) => this.askTrust(trust))
+      return new Controller(
+        client,
+        this.editor.root,
+        (update) => this.apply(update),
+        (trust) => this.askTrust(trust),
+      )
     })()
     return this.controller.catch((error: unknown) => {
       this.controller = undefined
@@ -679,6 +732,53 @@ class Chat implements vscode.WebviewViewProvider {
       this.post({ type: "status", text: `Could not start orb: ${text}. Check the orbit.executable setting.` })
       return undefined
     })
+  }
+
+  // What the controller tells the window.
+  private apply(update: Update) {
+    if (update.type === "log") return this.log.appendLine(update.text)
+    if (update.type === "trust") return this.trusting(update)
+    if (update.type === "busy") {
+      const done = this.notices.busy(update.busy)
+      if (done) this.notice(done)
+      this.busy = update.busy
+      this.paint()
+      return this.post(update)
+    }
+    if (update.type === "title") {
+      this.title = update.title
+      this.retitle()
+      return this.post(update)
+    }
+    if (update.type === "plan") {
+      this.plan = update
+      return this.post(update)
+    }
+    if (update.type === "form") {
+      const form = update.form
+      void Promise.all([this.controller, askForm(form)]).then(([controller, answer]) =>
+        controller?.answer(form, answer),
+      )
+      return
+    }
+    const item = update.item
+    if (item.type === "permission") {
+      const asked = this.notices.permission(item)
+      if (asked) this.notice(asked)
+    }
+    const index = this.items.findIndex((entry) => entry.id === item.id)
+    if (index === -1) this.items.push(item)
+    else this.items[index] = item
+    this.paint()
+    this.post(update)
+    if (item.type !== "permission") return
+    // Answered, here or anywhere else: its tabs close without answering again.
+    if (item.status !== "pending") return this.diffs.settled(item.id)
+    // A new Edit or Write question opens for review on its own.
+    if (index === -1)
+      void this.diffs.open(item, false).then(async (opened) => {
+        if (opened) (await this.controller)?.reviewing(item.id)
+      })
   }
 
   private notice(event: "permission" | "done") {
