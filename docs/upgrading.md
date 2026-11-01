@@ -2089,7 +2089,9 @@ approves your version once; closing the tab approves the proposal as it stands; 
 card keeps its buttons, and the first answer from anywhere wins; the tab then closes. Tabs that Orbit closes itself
 answer nothing: when the question is answered elsewhere, when you send a new prompt (every Orbit tab closes then), and
 when the window closes. Moving the tab to another editor group or window answers nothing either. Before, "Open diff"
-showed a read-only diff and only the card could answer.
+showed a read-only diff and only the card could answer. When the question is answered elsewhere while the tab holds
+unsaved edits, the tab closes without asking whether to save them, and those edits are not sent. The tab's title names
+the file; the documents in it are called `proposal` with the file's extension.
 
 Only a save you make answers. With `files.autoSave` on, VS Code's own save after a delay or when the editor loses focus
 keeps your edits in the tab and sends nothing: save with Ctrl+S or press Accept to approve them. Closing the tab still

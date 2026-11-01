@@ -1449,7 +1449,10 @@ every other extension):
   through the server's reply route (`content` with a `once` reply). Only the person's own answers count: a tab the
   extension closes itself, a tab moved to another group or window (VS Code reports its close in the old group), and an
   auto save (`onWillSaveTextDocument` with a reason other than `Manual`) answer nothing; the extension writes no file
-  (classes 8 and 12). Proof: `test/diff-review.test.ts` (the containment table with a
+  (classes 8 and 12). A tab the extension closes keeps its sides readable until VS Code reports it closed, so the save
+  VS Code makes on the way succeeds without asking the person again. Each virtual document is named by a fixed word and
+  the file's extension when that is plain, never by the file's own name, because VS Code names it in its own
+  save-failure notification, which draws links (class 9). Proof: `test/diff-review.test.ts` (the containment table with a
   marker outside and a control inside, the share and device spellings with an empty disk recorder, the linked
   worktree, the answers on a real `orb serve`), `test/approval-matrix.test.ts` (every matrix row reads only its place
   and from), `test/extension-review.test.ts` (the glue, with a stand-in `vscode`) and `test/manifest.test.ts` ("the
@@ -1461,7 +1464,7 @@ every other extension):
   out in a modal, and sends the restore only when the person confirms; the server resolves and checks every path.
   Proof: `test/diff-review.test.ts` ("the changes view reads no file, whatever the names", "a restore calls the dry run,
   shows its totals, and changes files only after confirm", "a restore the server refuses says why and changes
-  nothing", "no review, changes view or restore while the folder is not trusted").
+  nothing", "a restore the server refuses after the person confirms says why and changes nothing", "no review, changes view or restore while the folder is not trusted").
 
 - Whether the folder is trusted, and the question before work starts: `Controller` asks the server for the folder's
   trust, with a two-second limit, when it starts, on every trust, config and connection event, and in `send`, which every
