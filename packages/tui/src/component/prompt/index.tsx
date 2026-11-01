@@ -1251,6 +1251,8 @@ export function Prompt(props: PromptProps) {
     }
   })
 
+  // Each layer on the text area adds a `destroyed` listener to it, and past ten the runtime prints a leak warning on
+  // every prompt, so layers that share a condition share one layer.
   Keymap.createLayer(() => {
     return {
       context: "prompt",
@@ -1284,20 +1286,6 @@ export function Prompt(props: PromptProps) {
             input.cursorOffset = 0
           },
         },
-      ],
-    }
-  })
-
-  Keymap.createLayer(() => {
-    return {
-      context: "prompt",
-      priority: 1,
-      target: inputTarget,
-      enabled: (() => {
-        cursorVersion()
-        return inputTarget() !== undefined && !disabled() && !auto()?.visible && input !== undefined
-      })(),
-      commands: [
         {
           id: "prompt.history.next",
           title: "Next prompt history",

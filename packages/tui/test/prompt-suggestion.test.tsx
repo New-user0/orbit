@@ -387,6 +387,13 @@ test.each(spellings)("a suggestion is drawn escaped: $name", async ({ text }) =>
   expect(app.textarea().plainText).toBe("")
 })
 
+test("the suggestion's keys leave the text area under the runtime's listener limit, so no leak warning is printed", async () => {
+  await using app = await mount({ suggestions: true })
+  await ghost(app)
+  // Every key layer on the text area listens for its end; past the limit the runtime prints a warning over the screen.
+  expect(app.textarea().listenerCount("destroyed")).toBeLessThanOrEqual(app.textarea().getMaxListeners())
+})
+
 const keys = [
   { key: "Tab", press: (app: App) => app.press("TAB") },
   { key: "Right", press: (app: App) => app.press("ARROW_RIGHT") },
