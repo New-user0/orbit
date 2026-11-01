@@ -1164,6 +1164,10 @@ test("sides rebuilds both texts from a whole-file patch and refuses a partial on
   // Two hunks with a gap between them, and one that does not start at line 1.
   expect(sides(formatPatch(structuredPatch("f", "f", many, changed, "", "", { context: 2 })))).toBeUndefined()
   expect(sides(formatPatch(structuredPatch("f", "f", many, many.replace("row 30", "ROW 30"), "", "", { context: 2 })))).toBeUndefined()
+  // One hunk whose old side alone, or new side alone, starts below line 1: that side is missing the file's top.
+  expect(sides("@@ -2,2 +1,2 @@\n a\n-b\n+c\n")).toBeUndefined()
+  expect(sides("@@ -1,2 +2,2 @@\n a\n-b\n+c\n")).toBeUndefined()
+  expect(sides("@@ -1,2 +1,2 @@\n a\n-b\n+c\n")).toEqual({ before: "a\nb\n", after: "a\nc\n" })
   expect(sides("Binary files a/x and b/x differ\n")).toBeUndefined()
   expect(sides("")).toBeUndefined()
 })
@@ -1302,8 +1306,9 @@ test("Stop interrupts the chat's session, and a dismissed form is cancelled on t
   expect(log.sent.filter((request) => request.method === "DELETE" && request.path.endsWith("/form/frm_none"))).toHaveLength(1)
 })
 
-test("only a pending question is marked as open for review in the editor", async () => {
-  const run = await chat(work)
+test("only a pending question is marked as open for review in the editor, and only one is answered", async () => {
+  const log = recording()
+  const run = await chat(work, { fetcher: log.fetcher })
   await run.controller.send(calls([write("marked.txt", "marked\n")]))
   const pending = await run.question()
   if (!pending) throw new Error("no question was asked")
@@ -1318,6 +1323,9 @@ test("only a pending question is marked as open for review in the editor", async
   run.controller.reviewing(pending.id)
   run.controller.reviewing("per_unknown")
   expect(run.updates.length).toBe(count)
+  // A question the chat already shows as answered is not sent again: a late save or close of its tab asks nothing.
+  expect(await run.controller.reply(pending.id, "once", "late\n")).toBe("gone")
+  expect(log.sent.filter((call) => call.method === "POST" && call.path.endsWith("/reply"))).toHaveLength(1)
   await run.idle()
 })
 
