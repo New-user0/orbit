@@ -943,6 +943,57 @@ test("completes exploration when a queued prompt is promoted", async () => {
   }
 })
 
+test("a compaction with instructions shows them on its pending row and posts them trimmed or not at all", async () => {
+  const events = createEventStream()
+  const sessionID = "session-compact-text"
+  const posted: unknown[] = []
+  const release = Promise.withResolvers<void>()
+  const calls = createFetch(async (url, init) => {
+    if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+    if (url.pathname === `/api/session/${sessionID}/compact`) {
+      posted.push(await init?.json())
+      await release.promise
+      return json({ data: {} })
+    }
+  }, events)
+  let data!: ReturnType<typeof useData>
+  let client!: ReturnType<typeof useClient>
+
+  function Probe() {
+    client = useClient()
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => client.connection.status() === "connected")
+    const request = data.session.compact({ sessionID, instructions: "  keep the tests  " })
+    await wait(() => data.session.pending.list(sessionID).length === 1)
+    expect(data.session.pending.list(sessionID)[0]).toMatchObject({
+      type: "compaction",
+      payload: { instructions: "keep the tests" },
+    })
+    await wait(() => posted.length === 1)
+    expect(posted[0]).toMatchObject({ instructions: "  keep the tests  " })
+    release.resolve()
+    await request.catch(() => undefined)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("updates and removes queued inputs from durable lifecycle events", async () => {
   const events = createEventStream()
   const sessionID = "session-queue-management"

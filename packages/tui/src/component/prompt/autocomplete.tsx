@@ -730,7 +730,7 @@ export function Autocomplete(props: {
             return
           }
 
-          if (selected?.onComplete && store.visible !== "directory") {
+          if (selected?.onComplete) {
             hide(true)
             selected.onComplete()
             return
