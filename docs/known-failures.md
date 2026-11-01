@@ -114,6 +114,9 @@ Each passes when re-run alone, unless its row says otherwise.
 | cli | `auth negotiation is explicit and safe` (`packages/cli/test/acp/initialize-auth.subprocess.test.ts`) | Same subprocess start-up timeout; passes when its file is re-run alone (compaction-instructions run, 2026-11-01). | intermittent |
 | core | the rows of `packages/core/test/snapshot-restore-links.test.ts` that restore through a link | Timeout only: repository and link set-up exceed the 5 second limit under load; passes when its file is re-run alone (compaction-instructions run, 2026-11-01). | intermittent |
 | server | `session-context-usage` (`packages/server/test/session-context-usage.test.ts`), Windows | A 5 second timeout under load; passes when its file is re-run alone (CI run 41285100189). | intermittent |
+| core | `the language-server reminder > reports a late problem...` (`packages/core/test/lsp-reminder.test.ts`) | Times out in a loaded full run (seen once in CI run 41293539859); the file passes alone (30 pass). | intermittent |
+| cli | `replacing a managed service registration stops its owner` (`packages/cli/test/service.test.ts`) | Times out in a loaded full run (CI run 41293539859); the file passes alone (21 pass). | intermittent |
+| vscode | the two `bare execFile runs the workspace's orb` rows (`packages/vscode/test/program.test.ts`) | Time out in a loaded full run (CI run 41293539859); the file passes alone (9 pass, 1 skip). | intermittent |
 
 A timeout-only failure under load is a load flake: it passes when its file is re-run alone, and it needs no new row. The timeout may be the test's own (5 seconds in core, 30 seconds in cli and tui), the runner's, or a harness wait such as a spawned process that does not answer. The PR names the test and the file it re-ran alone. A gate (see Gates) must still pass when re-run alone. Any other failure is fixed, or added here with its reason.
 
