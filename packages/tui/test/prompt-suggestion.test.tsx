@@ -39,6 +39,8 @@ async function mount(
   const requests: Request[] = []
   const prompts: Array<{ text: string; files?: unknown[] }> = []
   const shells: string[] = []
+  // The bodies of the session updates the client sends, such as a title to set or regenerate.
+  const updates: unknown[] = []
   const trustReads: string[] = []
   // The sessions the server reports running when the client reconnects.
   const running = new Set<string>()
@@ -78,6 +80,10 @@ async function mount(
           ...(trusted ? { source: "saved" } : {}),
           withheld: [],
         })
+      }
+      if (request.method === "PATCH" && url.pathname === `/api/session/${sessionID}`) {
+        updates.push(await request.json())
+        return json({ data: session })
       }
       if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
       if (input.parentID && url.pathname === `/api/session/${input.parentID}`)
@@ -147,6 +153,7 @@ async function mount(
     requests,
     prompts,
     shells,
+    updates,
     textarea,
     frame: () => setup.captureCharFrame(),
     /** Reconnects with the session reported running, which sets its status without a started event. */
@@ -245,6 +252,17 @@ async function quiet(app: App, ms = 300) {
   await app.setup.renderOnce()
 }
 
+/**
+ * Waits for a turn's end to be judged and returns how many asks reached the server: the quiet time, which a row that
+ * expects none relies on, and for a row that expects some, until they arrive, which takes longer on a loaded machine.
+ */
+async function asked(app: App, count: number, ms = 400) {
+  await quiet(app, ms)
+  const deadline = Date.now() + 3000
+  while (app.requests.length < count && Date.now() < deadline) await quiet(app, 10)
+  return app.requests.length
+}
+
 // Every spelling a model could be steered into writing, each with what `plain` makes of it, and the plain control.
 const spellings = [
   { name: "plain text", text: "run the tests" },
@@ -265,8 +283,7 @@ test.each([
 ])("prompt.suggestions $value asks $count times at a turn's end", async ({ value, count }) => {
   await using app = await mount({ suggestions: value })
   app.execution("session.execution.succeeded")
-  await quiet(app, 400)
-  expect(app.requests).toHaveLength(count)
+  expect(await asked(app, count)).toBe(count)
   if (count) expect(new URL(app.requests[0]!.url).pathname).toBe(`/api/session/${sessionID}/assist/suggestion`)
 })
 
@@ -293,8 +310,7 @@ test("a session whose folder is not trusted is never asked", async () => {
   for (const row of rows) {
     await using app = await mount({ suggestions: true, trusted: row.trusted, sessionDirectory: row.sessionDirectory })
     app.execution("session.execution.succeeded")
-    await quiet(app, 400)
-    expect({ name: row.name, count: app.requests.length }).toEqual({ name: row.name, count: row.count })
+    expect({ name: row.name, count: await asked(app, row.count) }).toEqual({ name: row.name, count: row.count })
   }
 })
 
@@ -316,8 +332,7 @@ test("only a succeeded turn of the session in view asks", async () => {
   for (const row of rows) {
     await using app = await mount({ suggestions: true, parentID: row.parentID })
     app.execution(row.type, row.id)
-    await quiet(app, 400)
-    expect({ name: row.name, count: app.requests.length }).toEqual({ name: row.name, count: row.count })
+    expect({ name: row.name, count: await asked(app, row.count) }).toEqual({ name: row.name, count: row.count })
   }
 })
 
@@ -456,6 +471,28 @@ test("Enter on a suggestion that is a slash command runs the command, as typing 
     expect(app.prompts.map((prompt) => prompt.text)).toEqual(["/help me"])
     expect(app.frame()).not.toContain("available actions and commands")
   }
+  // A command named by one of its aliases runs as well: /config opens the settings, as /settings does.
+  {
+    await using app = await mount({ suggestions: true, answer: () => json({ data: { suggestion: "/config" } }) })
+    await ghost(app, "/config")
+    app.setup.mockInput.pressEnter()
+    expect(await app.shows("Settings")).toBe(true)
+    await quiet(app)
+    expect(app.prompts).toEqual([])
+    expect(app.textarea().plainText).toBe("")
+  }
+  // A command that takes an argument, named alone, runs with an empty one, as Enter on it typed with its trailing space
+  // does: /rename then generates a title rather than opening the rename dialog.
+  {
+    await using app = await mount({ suggestions: true, answer: () => json({ data: { suggestion: "/rename" } }) })
+    await ghost(app, "/rename")
+    app.setup.mockInput.pressEnter()
+    await quiet(app)
+    expect(app.updates).toEqual([{ title: "" }])
+    expect(app.frame()).not.toContain("Rename session")
+    expect(app.prompts).toEqual([])
+    expect(app.textarea().plainText).toBe("")
+  }
   // Control: a suggestion that is not a command is sent to the model.
   {
     await using app = await mount({ suggestions: true })
@@ -544,8 +581,7 @@ test("typing, a turn start and a submit end a suggestion as the reference does",
       },
     })
     app.execution("session.execution.succeeded")
-    await quiet(app, 200)
-    expect(app.requests).toHaveLength(1)
+    expect(await asked(app, 1, 200)).toBe(1)
     await app.type("x")
     expect(app.requests[0]!.signal.aborted).toBe(true)
     gate.resolve()
@@ -585,8 +621,9 @@ test("typing, a turn start and a submit end a suggestion as the reference does",
     await using app = await mount({ suggestions: true })
     await app.type("draft")
     app.execution("session.execution.succeeded")
-    await quiet(app, 300)
-    expect(app.requests).toHaveLength(1)
+    expect(await asked(app, 1, 300)).toBe(1)
+    // The answer comes after the ask: it is given time to arrive while the input still holds text.
+    await quiet(app)
     for (const _ of "draft") await app.press("BACKSPACE")
     await quiet(app)
     expect(app.textarea().plainText).toBe("")
@@ -659,8 +696,10 @@ test("each failed answer draws nothing and leaves the prompt usable", async () =
   for (const row of rows) {
     await using app = await mount({ suggestions: true, answer: row.answer })
     app.execution("session.execution.succeeded")
-    await quiet(app, 400)
-    expect({ name: row.name, asked: app.requests.length }).toEqual({ name: row.name, asked: 1 })
+    expect({ name: row.name, asked: await asked(app, 1) }).toEqual({ name: row.name, asked: 1 })
+    // The answer comes after the ask: the control's is drawn once it does, and the others get time to draw nothing.
+    if (row.drawn) await app.shows(suggestion)
+    else await quiet(app)
     const frame = app.frame()
     expect({ name: row.name, drawn: frame.includes(suggestion) }).toEqual({ name: row.name, drawn: row.drawn })
     for (const word of ["42", "busy", "not trusted", "internal failure", "not json"])
