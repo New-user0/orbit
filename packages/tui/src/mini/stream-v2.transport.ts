@@ -1124,9 +1124,8 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       write([compactionCommit(messageID)], { phase: "running", status: "compacting session" })
       return
     }
-    // The delta carries a character count and no text. Mini's scrollback cannot update a line in place, so the
-    // stored summary is written whole when the compaction ends.
-    if (event.type === "session.compaction.delta") return
+    // A session.compaction.delta event carries a character count and no text, and Mini's scrollback cannot update a
+    // line in place, so it has no branch here: the stored summary is written whole when the compaction ends.
     if (event.type === "session.compaction.ended") {
       if (!state.activeCompaction) return
       const messageID = state.activeCompaction

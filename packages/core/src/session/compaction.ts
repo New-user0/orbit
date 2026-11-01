@@ -246,8 +246,7 @@ export const layer = Layer.effect(
       const compaction =
         trigger.retain === undefined &&
         context.model.compaction?.type === "native" &&
-        // Only a summary can follow the person's instructions.
-        !(trigger.reason === "manual" && trigger.instructions?.trim())
+        !(trigger.reason === "manual" && trigger.instructions?.trim()) // only a summary can follow instructions
           ? compactNatively(trigger, budget, settings.keep)
           : summarize(trigger, budget, compactable(kept?.summarized ?? context.messages), true)
       // A result that keeps messages must leave room below the automatic threshold. On the automatic paths one that does

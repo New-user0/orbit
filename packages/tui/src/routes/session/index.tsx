@@ -39,6 +39,7 @@ import type {
 import { useLocal } from "../../context/local"
 import { AssistantFooter } from "./assistant-footer"
 import { Locale } from "../../util/locale"
+import { createCompactionProgress } from "./compaction-progress"
 import { bodyText, outputText } from "../../util/renderer"
 import { FilePath } from "../../ui/file-path"
 import { PlanDock } from "./plan-dock"
@@ -1082,10 +1083,7 @@ export function Session(props: {
       title: "Compact session",
       id: "session.compact",
       group: "Session",
-      slash: {
-        name: "compact",
-        arguments: true as const,
-      },
+      slash: { name: "compact", arguments: true as const },
       run: (input?: string) => {
         const selection = local.model.current()
         void data.session
@@ -2194,29 +2192,11 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
   const content = createMemo(() => bodyText(text()).trim())
   const color = () => (status() === "failed" && !cancelled() ? theme.text.feedback.error.base : theme.text.muted)
   // Usage of the compaction request itself; the resulting context size only shows on the next assistant step.
-  // A running compaction never draws its reply. After 30 seconds it shows how long it has run and an estimate of the
-  // reply's tokens (characters / 4), the way a status line would.
-  const route = useRouteData("session")
-  const data = useData()
-  const [now, setNow] = createSignal(Date.now())
-  createEffect(() => {
-    if (status() !== "running") return
-    setNow(Date.now())
-    const timer = setInterval(() => setNow(Date.now()), 1000)
-    onCleanup(() => clearInterval(timer))
+  const progress = createCompactionProgress({
+    running: () => status() === "running",
+    created: () => props.message.time.created,
+    width: () => ctx.width,
   })
-  const progress = () => {
-    if (props.message.status !== "running") return
-    const elapsed = now() - props.message.time.created
-    if (elapsed < 30_000) return
-    const time = Locale.duration(Math.floor(elapsed / 1000) * 1000)
-    const estimate = Math.round(data.session.compactionCharacters(route.sessionID) / 4)
-    // The header, its spinner and gaps, and one cell of rule on each side must fit; the figure goes first.
-    const fits = (header: string) => stringWidth(header) + 2 + 2 + 2 <= ctx.width
-    const full = estimate > 0 ? `· ${time} · ↓ ${Locale.number(estimate)} tokens` : undefined
-    if (full && fits(`Compaction ${full}`)) return full
-    return fits(`Compaction · ${time}`) ? `· ${time}` : undefined
-  }
   const usage = () => {
     if (props.message.status === "running" || !props.message.tokens) return
     const tokens = props.message.tokens

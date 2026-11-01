@@ -18,6 +18,8 @@ async function drawCompaction(input: {
   readonly status?: "running" | "completed"
   /** A summary the row already holds while it runs, such as a stored one read back. */
   readonly summary?: string
+  /** Extra time to let the clock run before the screen is read. */
+  readonly wait?: number
 }) {
   await using state = await tmpdir()
   const setup = await createTestRenderer({ width: input.width, height: 30, useThread: false, kittyKeyboard: true })
@@ -99,7 +101,7 @@ async function drawCompaction(input: {
         location: { directory },
       } as never)
     // The deltas have no mark of their own on screen when they change nothing, so give them time to be handled.
-    await Bun.sleep(200)
+    await Bun.sleep(200 + (input.wait ?? 0))
     await setup.renderOnce()
     return setup.captureCharFrame()
   } finally {
@@ -148,8 +150,15 @@ test("a running compaction shows its elapsed time and estimated tokens after 30 
   expect(held).toContain("Compaction")
   expect(held).not.toContain("HELD-SUMMARY")
 
+  // (g) the clock keeps running: a row 1.5 s short of 30 seconds shows its time once it passes them.
+  const early = await drawCompaction({ width: 120, age: 28_500, deltas: [{ characters: 4800 }] })
+  expect(early).not.toMatch(/Compaction ·/)
+  const ticked = await drawCompaction({ width: 120, age: 28_500, deltas: [{ characters: 4800 }], wait: 2_500 })
+  expect(ticked).toMatch(/Compaction · 3\d(\.\d)?s · ↓ 1\.2K tokens/)
+
   // Trusted control: the completed row draws the stored summary.
   const done = await drawCompaction({ width: 120, age: running, deltas: [{ characters: 4800 }], status: "completed" })
   expect(done).toContain("Plain summary")
   expect(done).not.toContain("tokens")
+  expect(done).not.toMatch(/Compaction ·/)
 }, 60_000)

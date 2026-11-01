@@ -58,6 +58,12 @@ const encodeMove = Schema.encodeSync(MovePayload)
 const decodeMessage = Schema.decodeUnknownSync(SessionMessage.Info)
 const inboxLocks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
 type PendingRef = { readonly id: SessionMessage.ID; readonly sessionID: SessionSchema.ID }
+type CompactionAdmission = {
+  readonly id: SessionMessage.ID
+  readonly sessionID: SessionSchema.ID
+  readonly delivery: Delivery
+  readonly instructions?: string
+}
 
 export const serialized = <A, E, R>(sessionID: SessionSchema.ID, effect: Effect.Effect<A, E, R>) =>
   inboxLocks.withLock(sessionID)(effect)
@@ -193,13 +199,13 @@ export const make = Effect.fn("SessionInbox.make")(function* () {
     return admitted
   })
 
-  const admitCompaction = Effect.fn("SessionInbox.admitCompaction")(function* (input: {
-    readonly id: SessionMessage.ID
-    readonly sessionID: SessionSchema.ID
-    readonly delivery: Delivery
-    /** Already trimmed by the caller; undefined means none. */
-    readonly instructions?: string
-  }) {
+  /**
+   * Both ID checks run first, so a conflicting ID leaves the pending item as it was. A request with other instructions
+   * replaces the pending item (the later compaction shapes the summary); a bare or equal one joins it. The replacement
+   * publishes the cancellation directly because the whole admission is already inside the session's lock. The
+   * instructions arrive trimmed; undefined means none.
+   */
+  const admitCompaction = Effect.fn("SessionInbox.admitCompaction")(function* (input: CompactionAdmission) {
     return yield* serialized(
       input.sessionID,
       Effect.gen(function* () {
@@ -211,11 +217,8 @@ export const make = Effect.fn("SessionInbox.make")(function* () {
         if (yield* promotedFromMessage(db, input.sessionID, input.id, input.delivery))
           return yield* new LifecycleConflict({ id: input.id })
         const pending = (yield* list(db, input.sessionID)).find((item) => item.type === "compaction")
-        // Both ID checks above run first, so a conflicting ID leaves the pending item as it was. A request with other
-        // instructions replaces the pending item (the later compaction shapes the summary); a bare or equal one joins it.
         if (pending && (input.instructions === undefined || pending.payload.instructions === input.instructions))
           return pending
-        // Already inside the session's lock, so this publishes directly instead of through `cancel`.
         if (pending) yield* bus.publish(SessionEvent.InboxCancelled, { sessionID: input.sessionID, inboxID: pending.id })
         return yield* admit({
           id: input.id,
@@ -307,8 +310,7 @@ export const projectAdmitted = Effect.fn("SessionInbox.projectAdmitted")(functio
             ? encodeSynthetic(request.item.payload)
             : request.item.type === "compaction"
               ? encodeCompaction(request.item.payload)
-              : // The column stores the encoded form (plain strings for the branded paths).
-                (encodeMove(request.item.payload) as MovePayload),
+              : (encodeMove(request.item.payload) as MovePayload),
       delivery: request.item.delivery,
       enqueued_seq: request.enqueuedSeq,
       time_created: request.timeCreated,
