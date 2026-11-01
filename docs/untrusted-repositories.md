@@ -1100,6 +1100,22 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   export and import rows, one span for every reader, the chain walk and the reminder placement), `test/session-runner-message.test.ts`,
   `test/session-projector.test.ts`; the import doors with a control: `packages/cli/test/import-export.test.ts` and
   `packages/server/test/session-import.test.ts`.
+- Session cost (`SessionCost.summary`, `packages/core/src/session/cost.ts`, served at `GET /api/session/:sessionID/cost`
+  and called by `/cost` in the terminal UI, by `orb run "/cost"` and `orb -p "/cost"`, and by SDK callers as
+  `client.session.cost`): it adds up database rows (the session's and its subagents' messages, usage records and totals)
+  and adds no reader and no door. The route has no Location, so it opens no folder, runs no hook and starts no work, and
+  a session in a folder that is not trusted is answered like any other without a file being opened (class 12; proof:
+  "the cost route answers for a session in an untrusted folder and reads no file" in
+  `packages/server/test/session-cost.test.ts`). A model ID or provider ID in a record is only grouped and returned, never
+  parsed or joined into a key (class 5; proof: "a fork leaves out the messages it copied" in
+  `packages/core/test/session-cost.test.ts`), and the clients write it through `plain` or `jsonLine` (class 9; proof:
+  "money follows the reference's decimals, unknown prices read unknown, and names are escaped" in
+  `packages/tui/test/component/dialog-cost.test.tsx`). The line counter reads `metadata.files[]` of a finished result and
+  lets a malformed entry cost only itself (class 7; proof: "Edit, Write and Patch lines are summed per edit, NotebookEdit
+  is not, and a malformed entry costs only itself"). An unknown session and a server older than the client each end in
+  one line or one typed error, and a row of the answer that does not decode is left out and costs only itself (classes 7
+  and 13; proof: "an old server and an unknown session each draw one line", "a row that does not decode costs only
+  itself", "an unknown session and an old server exit 1 with the message").
 - Context usage (`SessionContextUsage.analyze`, `packages/core/src/session/context-usage.ts`, served at
   `GET /api/session/:sessionID/context/usage` and called by `/context` in the terminal UI, by `orb run "/context"` and
   `orb -p "/context"`, and by SDK callers as `client.session.contextUsage`): it counts what the next request would carry,

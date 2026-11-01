@@ -2068,6 +2068,36 @@ and SDK callers.
 
 **What to do:** Nothing, unless a script relied on `/context` reaching the model; send other text for that.
 
+### `/cost` covers the whole session and its subagents, and `orb run "/cost"` prints it
+
+The terminal UI's `/cost` (and `/usage`) used to total the responses its client had loaded, and said that the breakdown
+covered only the newest ones when older history was not loaded. It now asks the server, which sums the session and every
+subagent from stored rows, so the figures no longer depend on how much history was loaded. The dialog shows the total
+cost (cents above $0.50, four places below it, and "unknown" when no price is known), the subagents' share, the time the
+providers spent answering, the wall time, the lines the edit tools changed, then one row per provider and model with
+input, output, cache read and cache write tokens (and reasoning when there are any) and its cost. Spend that no row
+explains (responses a rewind removed, and usage records written before this version) shows as Other, so the total stays
+exact. Titles, side requests and discarded attempts now record the model they used and appear under it.
+
+Lines changed are counted from this version on, from the per-file counts of every finished Edit, Write and Patch
+(NotebookEdit does not count). A session from before this version shows no code changes line; a new session and a fork
+start at zero, and a session that was never counted stays uncounted.
+
+`orb run "/cost"` and `orb -p "/cost"` (and `/usage`) used to send the text to the model. They now print the same block
+of lines and send nothing to the model. `--format result` and `orb -p --output-format json` print one result line whose
+`result` is the block; `orb run --format json` prints one `{"type":"cost","sessionID","cost"}` line. `--file` with
+`/cost` is refused. An unknown session or a server older than this client ends the run with exit code 1 and its message.
+
+The server answers at `GET /api/session/:sessionID/cost` (`client.session.cost`), reading stored rows only: it needs no
+trusted folder and answers an unknown session with `SessionNotFoundError` (404). `session.usage.recorded` and
+`session.side_query.recorded` events gain an optional `model`, and the database gains the columns behind it (a
+migration runs on first start).
+
+**Affects:** terminal UI users, scripts that ran `orb run "/cost"` or `orb -p "/cost"` and read the model's answer, SDK
+callers, and anyone who reads the usage events.
+
+**What to do:** Nothing, unless a script relied on `/cost` or `/usage` reaching the model; send other text for that.
+
 ### The context figure counts what the prompt held, without the response's output
 
 The context figure in the terminal UI's footer, the sidebar, the prompt, Mini's footer and the payload the terminal UI
