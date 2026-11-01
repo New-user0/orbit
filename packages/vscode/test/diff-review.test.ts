@@ -1034,6 +1034,8 @@ test("no review, changes view or restore while the folder is not trusted", async
   const session = await server.client.session.create({ location: { directory: real } })
   const log = recording()
   const run = await chat(real, { fetcher: log.fetcher })
+  // The chat continues that session, so its changes and restore have a session to ask about.
+  await run.controller.open(session.id)
   await server.client.location.trust.update({ location: { directory: real }, trust: false, persist: false })
   await Bun.sleep(300)
   log.sent.length = 0
@@ -1052,7 +1054,7 @@ test("no review, changes view or restore while the folder is not trusted", async
   expect(seen.log).toEqual([])
   expect(log.sent.filter((call) => !(call.method === "GET" && call.path === "/api/location/trust"))).toEqual([])
   expect(shown.notes).toHaveLength(1)
-  expect(run.notes().length).toBeGreaterThanOrEqual(2)
+  expect(run.notes().filter((note) => note.text.includes("is not trusted"))).toHaveLength(2)
 })
 
 test("file names in titles, notes and the restore list are written out", async () => {
