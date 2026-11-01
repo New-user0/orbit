@@ -29,6 +29,8 @@ const tabs: Tab[] = []
 const moved: Tab[] = []
 const documents: Array<{ uri: Uri; isDirty: boolean; save(): Promise<boolean> }> = []
 const saved: string[] = []
+// Tabs VS Code would not close without asking the person whether to save them first.
+const prompts: string[] = []
 const listeners: Array<(event: { opened: unknown[]; changed: unknown[]; closed: Tab[] }) => void> = []
 const saving: Array<(event: { document: { uri: Uri }; reason: number }) => void> = []
 const reasons = { Manual: 1, AfterDelay: 2, FocusOut: 3 }
@@ -65,6 +67,7 @@ const vscode = stub({
   Uri: stub({ from: uri }),
   TabInputTextDiff,
   TextDocumentSaveReason: reasons,
+  FileType: { File: 1, Directory: 2 },
   window: stub({
     activeTextEditor: undefined,
     createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
@@ -83,9 +86,21 @@ const vscode = stub({
       get all() {
         return [{ tabs }, { tabs: moved }]
       },
+      // As VS Code does, a tab with unsaved edits is not closed but asked about, and the tabs that close are reported.
       close: async (closed: Tab[]) => {
+        const dirty = closed.filter((tab) =>
+          documents.some(
+            (document) =>
+              document.isDirty &&
+              tab.input instanceof TabInputTextDiff &&
+              document.uri.toString() === tab.input.modified.toString(),
+          ),
+        )
+        prompts.push(...dirty.map((tab) => tab.label))
+        if (dirty.length > 0) return false
         closing.push(...closed)
         for (const tab of closed) tabs.splice(tabs.indexOf(tab), 1)
+        for (const listener of listeners) listener({ opened: [], changed: [], closed })
         return true
       },
       onDidChangeTabs: (listener: (typeof listeners)[number]) => {
@@ -189,7 +204,36 @@ beforeAll(async () => {
 beforeEach(() => {
   replies.length = 0
   documents.length = 0
+  prompts.length = 0
 })
+
+// A review side with unsaved edits, saved as VS Code saves a document: the save is announced as the person's, the side is
+// looked up (and when it is not there, the folders above it are made), written, and looked up again. Any step that throws
+// fails the save, and the document stays unsaved.
+function editing(target: Uri, text: string) {
+  const attempt = (run: () => unknown) => Promise.resolve().then(run).then(() => true, () => false)
+  const document = {
+    uri: target,
+    isDirty: true,
+    save: async () => {
+      saved.push(target.path)
+      for (const listener of saving) listener({ document: { uri: target }, reason: reasons.Manual })
+      if (!(await attempt(() => system().stat(target)))) {
+        const parent = uri({ scheme: target.scheme, path: path.posix.dirname(target.path) })
+        if (!(await attempt(() => system().stat(parent))) && !(await attempt(() => system().createDirectory(parent))))
+          return false
+      }
+      const written = await attempt(() =>
+        system().writeFile(target, new TextEncoder().encode(text), { create: true, overwrite: true }),
+      )
+      if (!written || !(await attempt(() => system().stat(target)))) return false
+      document.isDirty = false
+      return true
+    },
+  }
+  documents.push(document)
+  return document
+}
 
 afterAll(() => fs.rm(folder, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
 
@@ -409,23 +453,45 @@ test("an auto save of a review answers nothing, and a save by the person replies
   expect(replies.at(-1)).toEqual(["per_autoaccept", "once", "accepted\n"])
 })
 
+test("a save that answers succeeds and its tab closes without a prompt", async () => {
+  const [, , right, title] = await open("per_save_closes")
+  const document = editing(right, "mine\n")
+  expect(await document.save()).toBe(true)
+  await Bun.sleep(50)
+  expect(replies).toEqual([["per_save_closes", "once", "mine\n"]])
+  expect(document.isDirty).toBe(false)
+  expect(prompts).toEqual([])
+  expect(closing.map((tab) => tab.label)).toContain(title)
+  expect(tabs.some((tab) => tab.label === title)).toBe(false)
+  // Once VS Code reported the tab closed, its sides are gone, and so are the folders above them.
+  expect(() => system().stat(right)).toThrow()
+  expect(() => system().stat(uri({ scheme: "orbit-review", path: path.posix.dirname(right.path) }))).toThrow()
+})
+
+test("a question answered elsewhere while its tab has unsaved edits closes the tab without a prompt", async () => {
+  const [, , right, title] = await open("per_edited_elsewhere")
+  const document = editing(right, "edited\n")
+  // While the tab is open, the folders above its side are folders.
+  expect(system().stat(uri({ scheme: "orbit-review", path: path.posix.dirname(right.path) }))).toMatchObject({ type: 2 })
+  chat().apply({ type: "item", item: { ...question, status: "once" } })
+  await Bun.sleep(50)
+  expect(document.isDirty).toBe(false)
+  expect(prompts).toEqual([])
+  expect(closing.map((tab) => tab.label)).toContain(title)
+  expect(replies).toEqual([])
+})
+
+// Last of the review rows: the review is disposed from here on.
 test("a tab closed while the extension closes it, or after deactivate, replies nothing", async () => {
   const [, , right, settled] = await open("per_settled")
   // Unsaved edits are handed to the review before the tab closes, so VS Code does not ask; the review answers nothing.
-  documents.push({
-    uri: right,
-    isDirty: true,
-    save: async () => {
-      saved.push(right.path)
-      await system().writeFile(right, new TextEncoder().encode("edited\n"), { create: false, overwrite: true })
-      return true
-    },
-  })
+  editing(right, "edited\n")
   // The question is answered elsewhere: the extension closes its tab, and that close answers nothing.
   chat().apply({ type: "item", item: { ...question, status: "once" } })
   await Bun.sleep(50)
   expect(closing.map((tab) => tab.label)).toContain(settled)
   expect(saved).toContain(right.path)
+  expect(prompts).toEqual([])
   await fire(settled)
 
   const [, , , last] = await open("per_deactivated")

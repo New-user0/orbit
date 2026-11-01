@@ -83,6 +83,12 @@ type Entry = {
   /** The text VS Code last saved on its own, which Accept sends; a close still sends the proposal unchanged. */
   draft?: string
   answering: boolean
+  /**
+   * The extension is closing the tab: it answers nothing more, and its sides stay readable until VS Code reports it
+   * closed. VS Code reads a side again after a save returns and before it closes a tab with unsaved edits, and a side
+   * gone by then fails that save, so VS Code would ask the person whether to save.
+   */
+  closing?: boolean
 }
 
 export class Review {
@@ -120,6 +126,8 @@ export class Review {
       const outcome = await this.answer(entry, "once", text)
       if (typeof outcome === "object") throw new Error(outcome.refused)
     },
+    /** Whether `file` is a folder above a side, so that VS Code never tries to make one before a save. */
+    folder: (file: string) => file === "/" || [...this.texts.keys()].some((known) => known.startsWith(`${file}/`)),
   }
 
   /**
@@ -166,7 +174,8 @@ export class Review {
     const entry = this.entries.get(title)
     if (!entry) return
     this.forget(entry)
-    if (entry.mode !== "review" || entry.answering) return
+    // A tab the extension closed answers nothing; its sides were kept until now.
+    if (entry.closing || entry.mode !== "review" || entry.answering) return
     await this.answer(entry, "once")
   }
 
@@ -184,12 +193,12 @@ export class Review {
 
   /** The question was answered elsewhere (the card, the terminal, another client): its tabs close and answer nothing. */
   settled(requestID: string) {
-    this.close([...this.entries.values()].filter((entry) => entry.request === requestID))
+    this.close([...this.entries.values()].filter((entry) => entry.request === requestID && !entry.closing))
   }
 
   /** A new prompt: every Orbit tab closes, and none of those closes answers. */
   closeAll() {
-    this.close([...this.entries.values()])
+    this.close([...this.entries.values()].filter((entry) => !entry.closing))
   }
 
   /** The window closes or the extension stops: no close or save from now on answers. */
@@ -205,7 +214,7 @@ export class Review {
     const title = `Orbit: changes in this prompt (${files.length} ${files.length === 1 ? "file" : "files"}) (${key})`
     const entries = changesView(files).map((entry, index) => {
       const at = `/${key}/${index}`
-      const name = entry.label.split(/[\\/]/).at(-1) ?? entry.label
+      const name = sideName(entry.label)
       this.texts.set(`${at}/before/${name}`, "before" in entry ? entry.before : "")
       this.texts.set(`${at}/after/${name}`, "before" in entry ? entry.after : entry.text)
       return {
@@ -251,7 +260,7 @@ export class Review {
     }
     const title = tabTitle(change.place ?? change.file)
     const key = `/${item.id}/${title.slice(-7, -1)}`
-    const name = path.basename(place)
+    const name = sideName(place)
     const left = side("orbit-proposed", `${key}/before/${name}`)
     const right = side(mode === "review" ? "orbit-review" : "orbit-proposed", `${key}/${mode === "review" ? "" : "after/"}${name}`)
     this.texts.set(left.path, before)
@@ -269,7 +278,7 @@ export class Review {
   }
 
   private editable(file: string) {
-    return [...this.entries.values()].find((entry) => entry.editable === file && !entry.answering)
+    return [...this.entries.values()].find((entry) => entry.editable === file && !entry.answering && !entry.closing)
   }
 
   // One answer per question: while it is on its way no other tab of the review answers, and once the server took it, or
@@ -285,7 +294,9 @@ export class Review {
 
   private close(entries: ReadonlyArray<Entry>) {
     if (entries.length === 0) return
-    entries.forEach((entry) => this.forget(entry))
+    entries.forEach((entry) => {
+      entry.closing = true
+    })
     void this.host.close(entries.map((entry) => entry.title)).then(undefined, () => undefined)
   }
 
@@ -439,6 +450,14 @@ export function restoreQuestion(dry: SessionRewindFiles, directory: string) {
 
 function side(scheme: Side["scheme"], file: string): Side {
   return { scheme, path: file }
+}
+
+// The last segment of a side's path. VS Code names a side by it when a save fails, in a notification that draws links,
+// so it never holds the file's own name: only a fixed word and the file's extension when that is a plain one, which
+// keeps the editor's language for the file (class 9).
+function sideName(file: string) {
+  const extension = path.extname(file)
+  return /^\.[A-Za-z0-9]{1,10}$/.test(extension) ? `proposal${extension}` : "proposal"
 }
 
 function nonce() {

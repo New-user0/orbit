@@ -963,6 +963,57 @@ test("an auto save keeps the draft and answers nothing; Accept sends the draft, 
   expect(shown.replies).toHaveLength(4)
 })
 
+test("a side the extension closes stays readable until VS Code reports its tab closed", async () => {
+  // VS Code reads a side again after a save returns and before it closes a tab with unsaved edits; a side gone by then
+  // fails the save, and VS Code asks the person whether to save.
+  const shown = editor({ folders: [project], window: [project] })
+  const review = new Review(shown.host)
+  const encode = (value: string) => new TextEncoder().encode(value)
+  const opened = async () => {
+    const question = item([{ file: "a.txt", place: inside, patch }])
+    await review.open(question, false)
+    return { id: question.id, tab: shown.tabs.at(-1)! }
+  }
+  // A save that answers: the tab closes, and its sides stay until the close is reported.
+  const saved = await opened()
+  await review.provider.writeFile(saved.tab.right.path, encode("mine\n"))
+  expect(shown.replies).toEqual([[saved.id, "once", "mine\n"]])
+  expect(shown.closed).toEqual([saved.tab.title])
+  expect(decode(review.provider.readFile(saved.tab.right.path))).toBe(proposal)
+  expect(review.text(saved.tab.left.path)).toBe(text)
+  // The folders above a side are folders, so VS Code never tries to make one.
+  expect(review.provider.folder(path.posix.dirname(saved.tab.right.path))).toBe(true)
+  expect(review.provider.folder("/")).toBe(true)
+  expect(review.provider.folder(saved.tab.right.path)).toBe(false)
+  expect(review.provider.folder("/nothing")).toBe(false)
+  // The save VS Code makes before it closes the tab succeeds and answers nothing, and the tab is closed only once.
+  await review.provider.writeFile(saved.tab.right.path, encode("again\n"))
+  await review.accept(saved.tab.right.path)
+  await review.reject(saved.tab.right.path)
+  review.settled(saved.id)
+  review.closeAll()
+  expect(shown.closed).toEqual([saved.tab.title])
+  expect(shown.replies).toHaveLength(1)
+  await review.closed(saved.tab.title)
+  expect(review.provider.readFile(saved.tab.right.path)).toBeUndefined()
+  expect(review.text(saved.tab.left.path)).toBeUndefined()
+  expect(review.provider.folder(path.posix.dirname(saved.tab.right.path))).toBe(false)
+
+  // Answered elsewhere: the same.
+  const elsewhere = await opened()
+  review.settled(elsewhere.id)
+  expect(decode(review.provider.readFile(elsewhere.tab.right.path))).toBe(proposal)
+  await review.provider.writeFile(elsewhere.tab.right.path, encode("edited\n"))
+  await review.closed(elsewhere.tab.title)
+  expect(review.provider.readFile(elsewhere.tab.right.path)).toBeUndefined()
+  expect(shown.replies).toEqual([[saved.id, "once", "mine\n"]])
+
+  // A tab the person closes is gone at once: its close is the report.
+  const closed = await opened()
+  await review.closed(closed.tab.title)
+  expect(review.provider.readFile(closed.tab.right.path)).toBeUndefined()
+})
+
 test("two changes views of as many files keep their own texts when one of them closes", async () => {
   const shown = editor({ folders: [project], window: [root] })
   const review = new Review(shown.host)
@@ -1257,11 +1308,13 @@ describe("restore files", () => {
   async function prompted(options: { fetcher?: typeof fetch } = {}) {
     await Promise.all([Bun.write(path.join(work, "r1.txt"), "keep\n"), fs.rm(path.join(work, "r2.txt"), { force: true })])
     git(work, "add", ".")
-    const run = await chat(work, { ...options, auto: true })
+    // A row may stop allowing questions as they come, to leave one waiting.
+    const settings = { ...options, auto: true }
+    const run = await chat(work, settings)
     await run.controller.send(calls([read("r1.txt")], [write("r1.txt", "changed\n"), write("r2.txt", "new\n")]))
     await run.idle()
     const user = [...run.items.values()].find((entry) => entry.type === "user")
-    return { ...run, messageID: user?.type === "user" ? user.messageID! : "" }
+    return { ...run, settings, messageID: user?.type === "user" ? user.messageID! : "" }
   }
   const state = async () => ({
     r1: await Bun.file(path.join(work, "r1.txt")).text(),
@@ -1331,6 +1384,62 @@ describe("restore files", () => {
     expect(await Bun.file(path.join(work, "busy.txt")).text()).toBe("one\n")
     expect(await state()).toEqual({ r1: "changed\n", r2: true })
   })
+
+  // The modal waits on the person, and the server's state can change meanwhile: the restore itself is refused then, and
+  // the chat says why in one note (class 13).
+  type Run = Awaited<ReturnType<typeof prompted>>
+  const refusals = [
+    {
+      name: "UntrustedFolderError",
+      // Trust is taken back while the question is open.
+      change: async () => {
+        await server.client.location.trust.update({ location: { directory: work }, trust: false, persist: false })
+      },
+      undo: async () => {
+        await server.client.location.trust.update({ location: { directory: work }, trust: true, persist: false })
+      },
+      reason: /not trusted/i,
+    },
+    {
+      name: "SessionBusyError",
+      // A new prompt of the session waits on a question while the restore question is open.
+      change: async (run: Run) => {
+        run.settings.auto = false
+        await Bun.write(path.join(work, "busy2.txt"), "one\n")
+        await run.controller.send(calls([read("busy2.txt")], [write("busy2.txt", "two\n")]))
+        await run.question()
+      },
+      undo: async (run: Run) => {
+        const question = await run.question()
+        await server.client.permission.reply({ sessionID: question!.sessionID, requestID: question!.id, decision: "reject" })
+        await run.idle(2)
+      },
+      reason: /busy|running|active/i,
+    },
+  ]
+  for (const row of refusals)
+    test(`a restore the server refuses after the person confirms says why and changes nothing (${row.name})`, async () => {
+      const log = recording()
+      const run = await prompted({ fetcher: log.fetcher })
+      const before = run.notes().length
+      try {
+        await run.controller.restore(run.messageID, async () => {
+          await row.change(run)
+          return true
+        })
+        expect(reverts(log.sent)).toEqual([{ messageID: run.messageID, dryRun: true }, { messageID: run.messageID }])
+        const said = run.notes().slice(before)
+        expect(said).toHaveLength(1)
+        expect(said[0]?.tone).toBe("error")
+        expect(said[0]?.text).toMatch(/^Files not restored: /)
+        expect(said[0]?.text).toMatch(row.reason)
+        expect(said[0]?.text).not.toMatch(/[\u001b\n]/)
+        expect(said.some((note) => note.text.startsWith("Restored"))).toBe(false)
+        expect(await state()).toEqual({ r1: "changed\n", r2: true })
+      } finally {
+        await row.undo(run)
+      }
+    })
 })
 
 test("no review, changes view or restore while the folder is not trusted", async () => {
@@ -1395,6 +1504,40 @@ test("file names in titles, notes and the restore list are written out", async (
   expect(restoreQuestion({ canRewind: true, filesChanged: [inside], insertions: 0, deletions: 2 }, project).message).toContain(
     "Restore 1 file to",
   )
+})
+
+test("the sides of a review, a preview and a changes view are named without the file's own name", async () => {
+  // VS Code names a side by its URI's last segment when a save of it fails, in a notification that draws links. Windows
+  // allows no colon, escape or line break in a file name, so there the name keeps the rest.
+  const crafted =
+    process.platform === "win32"
+      ? "sa‮fe[Open](command;quit).txt"
+      : "sa‮fe\u001b[2K\n[Open](command:workbench.action.quit).txt"
+  const file = path.join(project, crafted)
+  await Bun.write(file, text)
+  try {
+    const shown = editor({ folders: [project], window: [project] })
+    const review = new Review(shown.host)
+    expect(await review.open(item([{ file: crafted, place: file, patch }]), false)).toBe(true)
+    await review.open(item([{ file: crafted, place: file, patch }], { revisable: false }), true)
+    await review.changes([
+      { file: crafted, status: "modified", patch: whole(crafted, "one\n", "two\n") },
+      { file: "odd.t(x)", status: "modified", patch: whole("odd.t(x)", "one\n", "two\n") },
+    ])
+    const sides = [
+      ...shown.tabs.flatMap((tab) => [tab.left, tab.right]),
+      ...shown.views.flatMap((view) => view.entries.flatMap((entry) => [entry.left, entry.right])),
+    ]
+    expect(sides).toHaveLength(8)
+    for (const side of sides) expect(side.path).not.toMatch(/[[\]():\u001b‮\n]/)
+    // The extension stays when it is a plain one, so the editor keeps the file's language.
+    expect(sides.slice(0, 6).map((side) => path.posix.basename(side.path))).toEqual(Array(6).fill("proposal.txt"))
+    expect(sides.slice(6).map((side) => path.posix.basename(side.path))).toEqual(["proposal", "proposal"])
+    // The texts are still the file's.
+    expect([left(review, shown.tabs[0]!), right(review, shown.tabs[0]!)]).toEqual([text, proposal])
+  } finally {
+    await fs.rm(file, { force: true })
+  }
 })
 
 test("the changed-since-read notice names no file", async () => {

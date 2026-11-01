@@ -44,8 +44,9 @@ export function activate(context: vscode.ExtensionContext) {
     watch: () => new vscode.Disposable(() => {}),
     stat: (uri) => {
       const text = review.provider.readFile(uri.path)
-      if (!text) throw vscode.FileSystemError.FileNotFound(uri)
-      return { type: vscode.FileType.File, ctime: 0, mtime: 0, size: text.length }
+      if (text) return { type: vscode.FileType.File, ctime: 0, mtime: 0, size: text.length }
+      if (review.provider.folder(uri.path)) return { type: vscode.FileType.Directory, ctime: 0, mtime: 0, size: 0 }
+      throw vscode.FileSystemError.FileNotFound(uri)
     },
     readFile: (uri) => {
       const text = review.provider.readFile(uri.path)
@@ -176,8 +177,8 @@ async function closedByPerson(review: Review, label: string) {
   await review.closed(label)
 }
 
-// Closes the review's tabs by their titles. A review side with unsaved edits is saved first, which only hands its text
-// to a review that has already forgotten it, so VS Code does not ask whether to save.
+// Closes the review's tabs by their titles. A review side with unsaved edits is saved first, so VS Code does not ask
+// whether to save: the review keeps the side readable until the close is reported, and the save answers nothing.
 async function closeTabs(titles: ReadonlyArray<string>) {
   const wanted = new Set(titles)
   const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs).filter((tab) => wanted.has(tab.label))
