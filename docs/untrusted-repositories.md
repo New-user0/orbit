@@ -1346,14 +1346,15 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 - The trust dialog, bound to the folder in view when it opened: `TrustProvider` and `useTrustPrompt` in
   `src/context/trust.tsx`. Proof: `test/cli/tui/dialog-trust.test.tsx`.
 - The next-prompt suggestion's ask (`session.assist.suggestion`, which sends the session's history to its model):
-  the terminal UI asks only for the session in view, a main session whose own folder is the folder in view and whose
-  trust status says trusted (`PromptSuggestionProvider` in `src/context/prompt-suggestion.tsx`), and only with
-  `prompt.suggestions` on in the person's own `cli.json` (class 8). Mini asks for its own session, which `orb mini`
-  checked before it started, never for a subagent's (`createRuntimeLifecycle`). The server's `UntrustedFolderError`
-  stays the authority, and a refusal, a failure or an answer of another shape draws nothing (`createPromptSuggestions`
-  in `src/prompt-suggestion.ts`, class 7). Proof: `test/prompt-suggestion.test.tsx` ("a session whose folder is not
-  trusted is never asked", with the start folder trusted and the session's own folder not, and a trusted control;
-  "each failed answer draws nothing and leaves the prompt usable"), `test/mini/runtime.suggestion.test.ts`, and
+  the terminal UI asks only for the session in view, only when it is a main session, and only while the trust status of
+  the folder in view, which the session route sets to that session's own, says trusted (`PromptSuggestionProvider` in
+  `src/context/prompt-suggestion.tsx`), and only with `prompt.suggestions` on in the person's own `cli.json` (class 8).
+  Mini asks for its own session, which `orb mini` checked before it started, never for a subagent's
+  (`createRuntimeLifecycle`). The server's `UntrustedFolderError` stays the authority, and a refusal, a failure or an
+  answer of another shape draws nothing and writes one log line (`createPromptSuggestions` in `src/prompt-suggestion.ts`,
+  class 7). Proof: `test/prompt-suggestion.test.tsx` ("a session whose folder is not trusted is never asked", with the
+  start folder trusted and the session's own folder not, and a trusted control; "each failed answer draws nothing and
+  leaves the prompt usable"), `test/prompt-suggestion-state.test.ts`, `test/mini/runtime.suggestion.test.ts`, and
   `packages/cli/test/config.test.ts` (the key is read from no project folder).
 - The suggestion's text, which a model writes and a planted file can steer, drawn as dimmed text in the prompt line of
   the terminal UI and Mini and taken by Tab, Right or Enter as the person's own prompt: it is drawn, put in the input
