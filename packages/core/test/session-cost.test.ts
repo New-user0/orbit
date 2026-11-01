@@ -311,6 +311,48 @@ describe("SessionCost", () => {
     }),
   )
 
+  // Which records suppress a compaction message: only this session's compaction calls that name a model. Mutations: let a
+  // title record suppress it (drop the source test), let another session's record suppress it (drop the session test),
+  // count a compaction that did not complete.
+  it.effect("only the session's own compaction records that name a model stand in for its compaction message", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      const alpha = { provider: "prov", id: "alpha" }
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 0.3 })).run().pipe(Effect.orDie)
+      yield* db.insert(SessionTable).values(sessionRow(child, { parent_id: root, cost: 0.3 })).run().pipe(Effect.orDie)
+      yield* db
+        .insert(SessionMessageTable)
+        .values([
+          message(root, "compaction", { input: 10, cost: 0.2 }),
+          message(root, "compaction", { input: 10, cost: 0.7, extra: { status: "failed" } }),
+          message(child, "compaction", { input: 10, cost: 0.3 }),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionUsageTable)
+        .values([usage(root, "usage", "title", 0.1, alpha), usage(child, "usage", "compaction", 0.3, alpha)])
+        .run()
+        .pipe(Effect.orDie)
+
+      const summary = yield* SessionCost.summary(root)
+      // 0.2 from the root's message, 0.1 from its title, 0.3 from the child's record (its message is left out).
+      expect(summary.rows[0]?.cost).toBeCloseTo(0.6)
+      expect(summary.rows[0]?.responses).toBe(3)
+    }),
+  )
+
+  // Float noise in the sessions' totals is not spend the rows failed to explain. Mutation: show any difference.
+  it.effect("a rounding difference below the threshold is not other", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 0.1 + 0.2 })).run().pipe(Effect.orDie)
+      yield* db.insert(SessionMessageTable).values(message(root, "assistant", { input: 10, cost: 0.3 })).run().pipe(Effect.orDie)
+
+      expect((yield* SessionCost.summary(root)).other).toBeUndefined()
+    }),
+  )
+
   // A clock that stepped back must not give a negative duration.
   it.effect("a response stamped before its start or before its session adds no negative time", () =>
     Effect.gen(function* () {
@@ -415,6 +457,9 @@ describe("SessionCost", () => {
         },
         { id: "c8", name: "Edit", metadata: { files: "not a list" } },
         { id: "c9", name: "Edit" },
+        // Two calls still running: the result belongs to the one it names, not to the last call in the message.
+        { id: "r1", name: "Edit", running: true },
+        { id: "r2", name: "Bash", running: true },
       ]
       yield* seedStep(bus, root, { id: "msg_cost_edit", calls })
       yield* seedStep(bus, child, {
@@ -432,10 +477,19 @@ describe("SessionCost", () => {
         executed: false,
       })
 
+      yield* bus.publish(SessionEvent.Tool.Success, {
+        sessionID: root,
+        assistantMessageID: SessionMessage.ID.make("msg_cost_edit"),
+        id: "r1",
+        content: [{ type: "text", text: "done" }],
+        metadata: { files: [{ additions: 6, deletions: 3 }] },
+        executed: false,
+      })
+
       const own = yield* db.select().from(SessionTable).all().pipe(Effect.orDie)
-      expect(own.find((row) => row.id === root)).toMatchObject({ lines_added: 3 + 2 + 5 + 1 + 10 + 4, lines_removed: 1 + 0 + 0 + 1 + 10 + 2 })
+      expect(own.find((row) => row.id === root)).toMatchObject({ lines_added: 3 + 2 + 5 + 1 + 10 + 4 + 6, lines_removed: 1 + 0 + 0 + 1 + 10 + 2 + 3 })
       const summary = yield* SessionCost.summary(root)
-      expect(summary.lines).toEqual({ added: 25 + 7, removed: 14 + 2 })
+      expect(summary.lines).toEqual({ added: 31 + 7, removed: 17 + 2 })
     }),
   )
 

@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector.js"
 
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import path from "path"
 import { Database } from "../database/database.js"
@@ -898,7 +898,8 @@ const layer = Layer.effectDiscard(
         const lines = yield* changedLines(db, event.data)
         yield* run(db, event)
         if (lines.added === 0 && lines.removed === 0) return
-        // A session from before the counter keeps null columns: they stay null instead of starting from a partial count.
+        // A session from before the counter keeps null columns, and null plus a count stays null, so it never starts
+        // from a partial count.
         yield* db
           .update(SessionTable)
           .set({
@@ -906,7 +907,7 @@ const layer = Layer.effectDiscard(
             lines_removed: sql`${SessionTable.lines_removed} + ${lines.removed}`,
             time_updated: sql`${SessionTable.time_updated}`,
           })
-          .where(and(eq(SessionTable.id, event.data.sessionID), isNotNull(SessionTable.lines_added)))
+          .where(eq(SessionTable.id, event.data.sessionID))
           .run()
           .pipe(Effect.orDie)
       }),
