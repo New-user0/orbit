@@ -268,7 +268,27 @@ test("an old server and an unknown session each draw one line", async () => {
     await using _ = setup
     expect(flat(frame), item.name).toContain(item.line)
     expect(frame, item.name).not.toContain("Total cost")
+    // A failure replaces the waiting line.
+    expect(frame, item.name).not.toContain("Reading the cost")
   }
+})
+
+// A reasoning count is drawn only for a model that used reasoning.
+test("reasoning tokens are named only when a model used them", async () => {
+  const used = await open({
+    answer: () =>
+      json({
+        data: info({
+          cost: 1,
+          own: 1,
+          rows: [row("thinker", { cost: 0.5, tokens: { input: 1, output: 1, reasoning: 2_000, cache: { read: 0, write: 0 } } }), row("plain", { cost: 0.5 })],
+        }),
+      }),
+    models: [priced("thinker"), priced("plain")],
+  })
+  await using _used = used.setup
+  expect(flat(used.frame)).toContain("2.0K reasoning")
+  expect(flat(used.frame).match(/reasoning/g)).toHaveLength(1)
 })
 
 // Class 7: an entry of the rows the client cannot read costs only itself.

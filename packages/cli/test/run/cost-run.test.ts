@@ -39,6 +39,7 @@ const answers: Record<string, () => Response> = {
     }),
   ses_nocatalog: () => Response.json({ data: { ...bare, rows: [{ ...row, providerID: "ollama", modelID: "llama3", responses: 3, cost: 0, zero: 3 }] } }),
   ses_old: () => new Response(null, { status: 404 }),
+  ses_broken: () => new Response(null, { status: 500 }),
   ses_garbled: () => Response.json({ data: { cost: "lots" } }),
   ses_gone: () =>
     Response.json({ _tag: "SessionNotFoundError", sessionID: "ses_gone", message: "Session not found: ses_gone" }, { status: 404 }),
@@ -155,6 +156,18 @@ test("an old server ends the run with one message", async () => {
   const gone = await capture({ format: "default", session: "ses_gone" })
   expect(gone.exitCode).toBe(1)
   expect(gone.stderr.toLowerCase()).toContain("not found")
+})
+
+test("a server error is not taken for an old server", async () => {
+  const run = await capture({ format: "default", session: "ses_broken" })
+  expect(run.exitCode).toBe(1)
+  expect(run.stderr).not.toContain("older than this client")
+  expect(run.stderr.trim()).not.toBe("")
+})
+
+test("only the client's own unsupported-content-type error reads as an old server", async () => {
+  const client = { session: { cost: () => Promise.reject(new Error("UnsupportedContentType")) } } as unknown as Parameters<typeof readSessionCost>[0]
+  expect(await readSessionCost(client, "ses_x", 1_000)).toEqual({ error: "UnsupportedContentType" })
 })
 
 test("a server that does not answer in time ends the read with one message", async () => {

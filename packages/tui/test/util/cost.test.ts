@@ -67,3 +67,9 @@ test("money and price round as the reference prints", () => {
   expect(price(undefined)).toBe("unknown")
   expect(price(1, true)).toBe("$1.00 + unpriced")
 })
+
+test("subagent spend is shown only above the rounding threshold", () => {
+  expect(costSummary(info({ cost: 1, subagents: 0 }), undefined).subagents).toBeUndefined()
+  expect(costSummary(info({ cost: 1, subagents: 0.00005 }), undefined).subagents).toBeUndefined()
+  expect(Number(costSummary(info({ cost: 1, subagents: 0.0001 }), undefined).subagents)).toBe(0.0001)
+})

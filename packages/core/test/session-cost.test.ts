@@ -182,6 +182,20 @@ describe("SessionCost", () => {
     }),
   )
 
+  // Mutations: let the subagent share go negative; give a session with no response a wall time.
+  it.effect("a session with no response has no wall time, and the subagent share is never negative", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 1 })).run().pipe(Effect.orDie)
+      const idle = yield* SessionCost.summary(root)
+      expect(idle.wall).toBeUndefined()
+      expect(idle.api).toBeUndefined()
+      // A child whose stored total is below zero cannot make the family cost less than the session itself.
+      yield* db.insert(SessionTable).values(sessionRow(child, { parent_id: root, cost: -0.4 })).run().pipe(Effect.orDie)
+      expect(Number((yield* SessionCost.summary(root)).subagents)).toBe(0)
+    }),
+  )
+
   // PC2: what no row explains is one `other`, and the total stays the sum of the sessions' own totals.
   it.effect("a rewind's removed responses and records without a model fall into other, and the total stays exact", () =>
     Effect.gen(function* () {
@@ -581,6 +595,53 @@ describe("SessionCost", () => {
         executed: false,
       })
       expect((yield* SessionCost.summary(root)).lines).toEqual({ added: 0, removed: 0 })
+    }),
+  )
+
+  // Mutations: drop the session check of the message lookup; read the parts front to back.
+  it.effect("a result is counted for the message of its own session, and for the latest call of a repeated ID", () =>
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      yield* seedProject
+      yield* Effect.forEach([root, child], (sessionID) =>
+        bus.publish(SessionEvent.Created, {
+          sessionID,
+          projectID: Project.ID.global,
+          location: { directory: AbsolutePath.make("/project") },
+          slug: String(sessionID),
+          version: "test",
+        }),
+      )
+      yield* seedStep(bus, root, {
+        id: "msg_cost_repeat",
+        calls: [
+          { id: "d1", name: "Edit", metadata: { files: [{ additions: 3, deletions: 1 }] as never } },
+          { id: "d1", name: "Edit", running: true },
+        ],
+      })
+      expect((yield* SessionCost.summary(root)).lines).toEqual({ added: 3, removed: 1 })
+
+      // The other session names root's message: nothing is counted for either.
+      yield* bus.publish(SessionEvent.Tool.Success, {
+        sessionID: child,
+        assistantMessageID: SessionMessage.ID.make("msg_cost_repeat"),
+        id: "d1",
+        content: [{ type: "text", text: "done" }],
+        metadata: { files: [{ additions: 20, deletions: 20 }] },
+        executed: false,
+      })
+      expect((yield* SessionCost.summary(child)).lines).toEqual({ added: 0, removed: 0 })
+
+      // The same ID again on the root's own message belongs to the call that is still running, the later part.
+      yield* bus.publish(SessionEvent.Tool.Success, {
+        sessionID: root,
+        assistantMessageID: SessionMessage.ID.make("msg_cost_repeat"),
+        id: "d1",
+        content: [{ type: "text", text: "done" }],
+        metadata: { files: [{ additions: 5, deletions: 2 }] },
+        executed: false,
+      })
+      expect((yield* SessionCost.summary(root)).lines).toEqual({ added: 8, removed: 3 })
     }),
   )
 

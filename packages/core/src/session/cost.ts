@@ -161,7 +161,7 @@ export const summary = Effect.fn("SessionCost.summary")(function* (sessionID: Se
   ;[...messages, ...records].forEach((found) => {
     const key = JSON.stringify([found.providerID, found.modelID])
     const held = merged.get(key)
-    if (!held) return merged.set(key, { ...found })
+    if (!held) return merged.set(key, found)
     Object.assign(held, {
       responses: held.responses + found.responses,
       input: held.input + found.input,
