@@ -699,6 +699,19 @@ test("no server folders means text only", async () => {
   const trustFailing = ownTrust(fail)
   const trustHanging = ownTrust(hang)
   const trustGarbled = ownTrust(() => Promise.resolve(Response.json({ trusted: "yes" })))
+  // The fresh trust read of the chat's own folder fails, takes longer than a read may, answers something unreadable, or
+  // finds a server too old to have one, while the session's folder answers trusted: the chat's folder is not known to
+  // be trusted, so nothing more is asked and no folder is named (classes 1 and 7).
+  const chatTrust = (answer: (init: RequestInit | undefined) => Promise<Response>) =>
+    recording((url, init) =>
+      url.pathname === "/api/location/trust" && !decodeURIComponent(url.search).includes("own-trust")
+        ? answer(init)
+        : undefined,
+    )
+  const chatFailing = chatTrust(fail)
+  const chatHanging = chatTrust(hang)
+  const chatGarbled = chatTrust(() => Promise.resolve(Response.json({ trusted: "yes" })))
+  const chatOld = chatTrust(() => Promise.resolve(Response.json({ message: "no" }, { status: 404 })))
   // The controls: the session's own folder is named when its trust read answers, and the filter above matches only it.
   const named = async (fetcher: typeof fetch | undefined, sessionID: string) => {
     const folders = await (await chat(project, { fetcher })).controller.folders(sessionID)
@@ -714,6 +727,10 @@ test("no server folders means text only", async () => {
     [trustFailing.fetcher, elsewhere.id],
     [trustHanging.fetcher, elsewhere.id],
     [trustGarbled.fetcher, elsewhere.id],
+    [chatFailing.fetcher, elsewhere.id],
+    [chatHanging.fetcher, elsewhere.id],
+    [chatGarbled.fetcher, elsewhere.id],
+    [chatOld.fetcher, elsewhere.id],
   ] as const) {
     const { controller } = await chat(project, { fetcher, wait: { read: 3_000, grant: 20_000 } })
     expect(await controller.folders(sessionID)).toEqual({ refused: "unavailable" })
