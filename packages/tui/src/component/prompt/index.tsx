@@ -2438,6 +2438,8 @@ export function Prompt(props: PromptProps) {
         ref={(r) => {
           setAuto(() => r)
         }}
+        // A command run from the list is a submit, so it ends the suggestion as sending a prompt does.
+        onCommand={() => suggestion()?.submitted()}
         anchor={() => anchor}
         input={() => input}
         setPrompt={(cb) => {

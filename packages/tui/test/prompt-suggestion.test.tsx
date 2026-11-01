@@ -372,9 +372,11 @@ test("the root's turn ending while its subagent's session is in view asks, and t
     expect({ name: row.name, count: await asked(app, row.count) }).toEqual({ name: row.name, count: row.count })
     if (!row.count) continue
     expect(app.frame()).not.toContain(suggestion)
-    await app.press("x", { ctrl: true })
+    // Esc closes the subagent's panel, and Up goes to the root.
+    await app.press("ESCAPE")
     await app.press("ARROW_UP")
     expect(await app.shows(suggestion)).toBe(true)
+    expect(app.frame()).not.toContain("Suggest child")
   }
 })
 

@@ -2086,13 +2086,15 @@ than before after a long answer.
 `cli.json` takes `prompt.suggestions`, off unless set to `true`, and the settings dialog has a "Prompt suggestions" row
 under Input that writes it. With it on, the terminal UI and Mini ask the server what you might type next whenever a
 turn of the session in view ends well (not after a failed or stopped turn, and not after a subagent's), and draw the
-answer dimmed in the empty prompt, cut to the row. Tab or the Right arrow puts it in the input; a suggestion that starts
+answer dimmed in the empty prompt, cut to the row. In the terminal UI, a turn of the main session that ends while one
+of its subagents' sessions is in view is asked about too, and its answer is drawn when you go back to the main session. Tab or the Right arrow puts it in the input; a suggestion that starts
 with `!` puts the prompt in shell mode with the command after it. Enter sends it as a prompt, unless it was cut, in
 which case Enter puts it in the input first; a suggestion that is a slash command on its own, such as `/help`, runs
 that command as typing it would. In the terminal UI it is not drawn, and no key takes it, while another pane has the
 keys; it is drawn again when the prompt has them back. Model text is drawn and sent with its control and format characters
 written out, so what you see is what is sent. Typing hides it and cancels an ask still out; erasing the input shows it
-again; sending a prompt or a turn starting in the session ends it. An answer that comes while you are typing or while a
+again; sending a prompt, running a slash command from the list, a turn starting in the session or, in the terminal UI,
+rewinding its conversation ends it. An answer that comes while you are typing or while a
 turn runs is dropped. Nothing is asked while the session's folder is not trusted, and a refusal, a failure or an older
 server draws nothing. A project's `cli.json` cannot set the key.
 
