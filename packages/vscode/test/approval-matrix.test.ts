@@ -3,9 +3,10 @@
 // requests of the tools whose rows core pins in their own tests. Each becomes the chat item the extension builds and the
 // card the webview draws. The card shows the request's places, files, method, URL and arguments, and nothing from the
 // calling tool's input, which the item does not even carry (class 8, class 14).
+import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { expect, test } from "bun:test"
+import { afterAll, expect, test } from "bun:test"
 import { permissionItem } from "../src/controller"
 import { approvalCard } from "../src/webview/approval"
 import { excerpt } from "../src/webview/present"
@@ -121,4 +122,81 @@ test("the matrix reaches every request kind the card draws", () => {
   expect(rows.some((row) => row.truth.url)).toBe(true)
   expect(rows.some((row) => row.truth.arguments)).toBe(true)
   expect(rows.some((row) => (row.request.metadata?.files as unknown[] | undefined)?.length)).toBe(true)
+})
+
+// The VS Code diff of each request: the review reads only the request's own `place` and `from`, never a path the tool's
+// input names, and only when its real path is inside the session's folder and the window's; a place outside is shown on
+// the card only (classes 4 and 8). The review module is imported when these rows run, so the rows above keep passing on
+// a base without it.
+type ReviewDisk = {
+  realpath(file: string): Promise<string>
+  lstat(file: string): Promise<unknown>
+  readFile(file: string): Promise<Uint8Array>
+}
+const reviewRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-matrix-review-")))
+const reviewWorld = {
+  project: path.join(reviewRoot, "matrix-project").replaceAll("\\", "/"),
+  outside: path.join(reviewRoot, "matrix-outside").replaceAll("\\", "/"),
+}
+for (const folder of [reviewWorld.project, reviewWorld.outside])
+  for (const name of ["file.txt", "file.ipynb", "src/file.txt", "src/file.ipynb"])
+    await Bun.write(path.join(folder, name), "alpha\n")
+afterAll(() => fs.rm(reviewRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+const reviewRows = rows.map(
+  (row): Row =>
+    JSON.parse(
+      JSON.stringify(row).replaceAll(world.project, reviewWorld.project).replaceAll(world.outside, reviewWorld.outside),
+    ),
+)
+
+for (const row of reviewRows)
+  test(`the VS Code diff for ${row.id} reads only the request's place and from, and an outside place is shown as text`, async () => {
+    const module = await import(`../src/${"review"}.ts`)
+    const disk: ReviewDisk = module.disk
+    const touched: string[] = []
+    const reads: string[] = []
+    const recorder: ReviewDisk = {
+      realpath: (file) => (touched.push(file), disk.realpath(file)),
+      lstat: (file) => (touched.push(file), disk.lstat(file)),
+      readFile: (file) => (reads.push(file), disk.readFile(file)),
+    }
+    const tabs: Array<{ title: string }> = []
+    const host = {
+      reply: async () => "sent" as const,
+      folders: async () => ({ folders: [reviewWorld.project] }),
+      workspace: () => [reviewRoot],
+      show: async (tab: { title: string }) => void tabs.push(tab),
+      changes: async () => {},
+      close: async () => {},
+      note: () => {},
+      warn: () => {},
+    }
+    const item = permissionItem({ id: "per_matrix", sessionID: "ses_matrix", ...row.request })
+    await new module.Review(host, recorder).open(item, true)
+
+    expect([...touched, ...reads].filter((file) => file.includes("DECOY"))).toEqual([])
+    // What is read is the request's own place, or where its move came from, and only inside the project.
+    const project = await fs.realpath(reviewWorld.project)
+    const allowed = await Promise.all(
+      item.files
+        .flatMap((file) => [file.place, file.from])
+        .filter((file): file is string => file !== undefined)
+        .map((file) => fs.realpath(file).catch(() => file)),
+    )
+    for (const file of reads) {
+      expect(allowed).toContain(file)
+      expect(path.relative(project, file).startsWith("..")).toBe(false)
+    }
+    // Every file outside the project is shown on the card only, and a request with no files touches nothing.
+    const outside = item.files.filter((file) =>
+      [file.place, file.from].some((place) => place?.startsWith(reviewWorld.outside)),
+    )
+    if (outside.length === item.files.length) expect(tabs).toEqual([])
+    if (item.files.length === 0) expect([touched, reads, tabs]).toEqual([[], [], []])
+  })
+
+test("the VS Code diff rows reach files inside and outside the project", () => {
+  const files = reviewRows.flatMap((row) => (row.request.metadata?.files ?? []) as Array<{ place?: string }>)
+  expect(files.some((file) => file.place?.startsWith(`${reviewWorld.project}/src`))).toBe(true)
+  expect(files.some((file) => file.place?.startsWith(reviewWorld.outside))).toBe(true)
 })
