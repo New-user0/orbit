@@ -21238,19 +21238,8 @@
         "type": "object",
         "properties": {
           "instructions": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "allOf": [
-              {
-                "description": "Text from the person, added to this compaction's summary prompt."
-              }
-            ]
+            "type": "string",
+            "description": "Text from the person, added to this compaction's summary prompt."
           }
         },
         "additionalProperties": false

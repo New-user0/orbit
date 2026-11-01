@@ -290,7 +290,7 @@ export type SessionActive = { type: "running" }
 
 export type SessionInboxSyntheticPayload = { text: string; description?: string; metadata?: { [x: string]: JsonValue } }
 
-export type SessionInboxCompactionPayload = { instructions?: string | null }
+export type SessionInboxCompactionPayload = { instructions?: string }
 
 export type SessionRewindFiles = {
   canRewind: boolean
@@ -368,8 +368,6 @@ export type SessionAssistSuggestionSkip =
 export type LocationRef = { directory: string; workspaceID?: string }
 
 export type SessionInboxSyntheticPayload1 = { text: string; description?: string; metadata?: { [x: string]: any } }
-
-export type SessionInboxCompactionPayload1 = { instructions?: string | undefined }
 
 export type ShellInfo = {
   id: string
@@ -2820,7 +2818,7 @@ export type SessionInboxUser = {
 export type SessionInboxItem =
   | { type: "user"; payload: SessionInboxUserPayload1; delivery: SessionInboxDelivery }
   | { type: "synthetic"; payload: SessionInboxSyntheticPayload1; delivery: SessionInboxDelivery }
-  | { type: "compaction"; payload: SessionInboxCompactionPayload1; delivery: SessionInboxDelivery }
+  | { type: "compaction"; payload: SessionInboxCompactionPayload; delivery: SessionInboxDelivery }
   | { type: "move"; payload: SessionInboxMovePayload1; delivery: SessionInboxDelivery }
 
 export type SessionMessageAssistantTool = {
