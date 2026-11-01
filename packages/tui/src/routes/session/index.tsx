@@ -1083,7 +1083,7 @@ export function Session(props: {
       title: "Compact session",
       id: "session.compact",
       group: "Session",
-      slash: { name: "compact", arguments: true as const },
+      slash: { name: "compact", arguments: "optional" as const },
       run: (input?: string) => {
         const selection = local.model.current()
         void data.session

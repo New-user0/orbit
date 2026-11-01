@@ -69,13 +69,11 @@ test.each([70, 120])(
       await ready.promise
       await setup.waitForFrame((frame) => frame.includes("Demo Model"))
       await setup.mockInput.typeText("/compact")
-      setup.mockInput.pressEscape()
       setup.mockInput.pressEnter()
       const frame = await setup.waitForFrame((frame) => frame.includes("Compaction queued"))
       expect(frame).not.toContain("/compact")
       await setup.mockInput.typeText("/compact")
       await setup.waitForFrame((frame) => frame.includes("/compact"))
-      setup.mockInput.pressEscape()
       setup.mockInput.pressEnter()
       // The line is cleared just before the command runs, so the repeat has been handled once it is gone.
       await setup.waitForFrame((frame) => !frame.includes("/compact"))
@@ -214,7 +212,6 @@ test.each(["first", "second"])(
       const submitted = mutations.length
       if (initial !== "first") await selectModel("first")
       await setup.mockInput.typeText("/compact")
-      setup.mockInput.pressEscape()
       setup.mockInput.pressEnter()
       await setup.waitForFrame((frame) => frame.includes("Compaction queued"))
       await selectModel("second")
@@ -240,7 +237,7 @@ test.each(["first", "second"])(
 )
 
 // context-memory-2 part 2 (class 12): `/compact <text>` is a compaction with instructions, not a prompt.
-async function compactApp(width: number) {
+async function compactApp(width: number, serverCommands: Array<{ name: string; description: string }> = []) {
   const state = await tmpdir()
   const setup = await createTestRenderer({ width, height: 30, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
@@ -250,6 +247,7 @@ async function compactApp(width: number) {
   const location = { directory, project: { id: "project", directory, canonical: directory } }
   const compacts: Array<Record<string, unknown>> = []
   const prompts: unknown[] = []
+  const commandCalls: unknown[] = []
   const hold = { first: undefined as PromiseWithResolvers<void> | undefined }
   const calls = createFetch(async (url, request) => {
     if (url.pathname === `/api/session/${sessionID}`)
@@ -274,7 +272,12 @@ async function compactApp(width: number) {
     if (url.pathname === "/api/provider") return json({ location, data: [{ id: "demo", name: "Demo" }] })
     if (url.pathname === "/api/model")
       return json({ location, data: [{ id: "model", providerID: "demo", name: "Demo Model", variants: [] }] })
+    if (url.pathname === "/api/command") return json({ location, data: serverCommands })
     if (url.pathname === `/api/session/${sessionID}/model`) return new Response(null, { status: 204 })
+    if (url.pathname === `/api/session/${sessionID}/command`) {
+      commandCalls.push(await request.json())
+      return new Response(null, { status: 204 })
+    }
     if (url.pathname === `/api/session/${sessionID}/prompt`) {
       prompts.push(await request.json())
       return json({ data: {} })
@@ -315,12 +318,11 @@ async function compactApp(width: number) {
     setup,
     compacts,
     prompts,
+    commandCalls,
     hold,
     async submit(text: string) {
       await setup.mockInput.typeText(text)
       await setup.waitForFrame((frame) => frame.includes(text))
-      // Escape closes the command list, so Enter sends the line instead of completing it.
-      setup.mockInput.pressEscape()
       setup.mockInput.pressEnter()
       // The line is cleared just before the command runs, so the command has been handled once it is gone.
       await setup.waitForFrame((frame) => !frame.includes(text))
@@ -370,6 +372,36 @@ test("a /compact with instructions is sent while a bare one is in flight", async
     expect(app.compacts[0]).not.toHaveProperty("instructions")
     expect(app.compacts[1]).toMatchObject({ instructions: "keep the db notes" })
     expect(app.prompts).toEqual([])
+  } finally {
+    await app.close()
+  }
+})
+
+test("Tab at the command list fills in /compact for text, and the text then goes as instructions", async () => {
+  const app = await compactApp(100)
+  try {
+    await app.setup.mockInput.typeText("/compact")
+    await app.setup.waitForFrame((frame) => frame.includes("Compact session"))
+    app.setup.mockInput.pressTab()
+    // Nothing ran: Tab only filled in the name.
+    await app.setup.waitForFrame((frame) => frame.includes("/compact "))
+    expect(app.compacts).toEqual([])
+    await app.submit("keep the schema notes")
+    await waitUntil(() => app.compacts.length === 1)
+    expect(app.compacts[0]).toMatchObject({ instructions: "keep the schema notes" })
+    expect(app.prompts).toEqual([])
+  } finally {
+    await app.close()
+  }
+})
+
+test("a location command named compact keeps its place when typed with text", async () => {
+  const app = await compactApp(100, [{ name: "compact", description: "Project compact command" }])
+  try {
+    await app.submit("/compact focus on tests")
+    await waitUntil(() => app.commandCalls.length === 1)
+    expect(app.commandCalls[0]).toMatchObject({ name: "compact" })
+    expect(app.compacts).toEqual([])
   } finally {
     await app.close()
   }

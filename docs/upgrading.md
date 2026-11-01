@@ -4957,12 +4957,13 @@ messages, where it used to shrink the request in steps.
 
 ## `/compact` takes instructions, and a running compaction streams a count, not its reply
 
-- **Instructions.** `/compact focus on tests` in the terminal UI, Mini and ACP adds the text after the command, trimmed
-  and with its line breaks kept, to the summary prompt. The `session.compact` request, the generated clients and the
-  plugin host take the same text as `instructions`; blank text counts as none, and a bare `/compact` is unchanged. In the
-  terminal UI `/compact` now takes arguments like `/rename`: pick it from the command list, or press Escape and then Enter, and
-  the list's Enter fills in `/compact ` first. Automatic compaction never carries instructions
-  (`session-compact.test.ts`, `compact-admission.test.tsx`, `prompt.shared.test.ts`, `acp/compaction.test.ts`).
+- **Instructions.** `/compact focus on tests` in the terminal UI, Mini and ACP adds the text after the command to the
+  summary prompt, trimmed. The `session.compact` request, the generated clients and the plugin host take the same text as
+  `instructions`; blank text counts as none, and a bare `/compact` is unchanged. A line break inside the text is kept
+  on the server route and in ACP (`session-compact.test.ts` in the server, `acp/compaction.test.ts`). In the terminal UI
+  Enter at the command list still runs a bare `/compact`; Tab fills in `/compact ` so you can type the text, and a
+  project command that is also named `compact` still takes `/compact <text>` (`compact-admission.test.tsx`). Mini
+  parses the same spellings (`prompt.shared.test.ts`, `runtime.queue.test.ts`).
 - **One pending compaction.** A `/compact` with instructions while another compaction is waiting replaces it (the
   waiting one is cancelled); one without instructions, or with the same instructions, joins it and keeps its
   instructions. A compaction that is already running is not waiting, so a new request runs after it
@@ -4979,11 +4980,10 @@ messages, where it used to shrink the request in steps.
   token figure goes first, then the time (`compaction-progress.test.tsx`). Mini no longer writes the summary as it
   streams: it writes the stored summary whole when the compaction ends (`stream-v2.transport.test.ts`).
 
-**Affects:** plugins and SDK callers that read `session.compaction.delta` text, people who typed `/compact` in the terminal
-UI and pressed Enter at the command list, and Mini users who watched the summary stream.
+**Affects:** plugins and SDK callers that read `session.compaction.delta` text, and Mini users who watched the summary
+stream.
 
-**What to do:** Read the summary from `session.compaction.ended`. In the terminal UI, press Enter twice (or Escape, then Enter)
-to run a bare `/compact`.
+**What to do:** Read the summary from `session.compaction.ended`.
 
 ## The terminal UI warns when the context is almost full
 
