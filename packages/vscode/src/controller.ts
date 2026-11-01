@@ -8,6 +8,7 @@ import {
 } from "@orbit/client"
 import { plain } from "@orbit/flow/plain"
 import { PermissionView } from "@orbit/schema/permission-view"
+import path from "node:path"
 import type { FileChange, FormRequest, Item, Mode, Model, Todo, TrustView, WorkflowAgent } from "./protocol.js"
 import type { Folders, Outcome } from "./review.js"
 import { asksTrust, readStatus, trusted, view, type TrustGrant } from "./trust.js"
@@ -275,22 +276,23 @@ export class Controller {
   /**
    * The folders a session's file tools work in, as the server names them: its Location's folder and its project's
    * folder, read from the server for each action after a fresh trust read. Nothing else is asked of a folder that is not
-   * trusted, and a failure or a late answer names no folder (classes 1, 3 and 7).
+   * trusted, and a failure or a late answer names no folder (classes 1, 3 and 7). The session may work in another folder
+   * than the chat's, and its files are read from there, so that folder must be trusted too: the stricter answer wins.
    */
   async folders(sessionID: string): Promise<Folders> {
     const status = await this.read(true)
     if (status?.trusted !== true) return { refused: status ? "untrusted" : "unavailable" }
-    const location = await this.client.session
-      .get({ sessionID }, { signal: AbortSignal.timeout(this.wait.read) })
-      .then((session) =>
-        this.client.location.get(
-          { location: { directory: session.location.directory } },
-          { signal: AbortSignal.timeout(this.wait.read) },
-        ),
-      )
-      .catch(() => undefined)
-    if (!location) return { refused: "unavailable" }
-    return { folders: [location.directory, location.project.directory] }
+    const limit = () => ({ signal: AbortSignal.timeout(this.wait.read) })
+    const session = await this.client.session.get({ sessionID }, limit()).catch(() => undefined)
+    if (!session) return { refused: "unavailable" }
+    const location = { directory: session.location.directory }
+    const own = await this.client.location.trust.get({ location }, limit()).then(readStatus, () => undefined)
+    if (own?.trusted !== true) return { refused: own ? "untrusted" : "unavailable" }
+    const found = await this.client.location.get({ location }, limit()).catch(() => undefined)
+    if (!found) return { refused: "unavailable" }
+    // The file tools leave out a project folder that is a filesystem root (`FileAccess`), and so does the review.
+    const project = found.project.directory
+    return { folders: project === path.parse(project).root ? [found.directory] : [found.directory, project] }
   }
 
   /** The files a prompt of this chat's session changed with the file tools, as whole-file patches. */
@@ -802,11 +804,12 @@ function message(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
-// Why an answer was not taken: the server's sentence, written out, or a fixed one when it did not answer in time.
+// Why an answer was not taken: the server's sentence, written out, or a fixed one when it did not answer in time. A late
+// answer may still be taken, since giving up on it here does not stop the server, so that sentence points to the card.
 function refusal(error: unknown) {
   const cause = error instanceof ClientError ? error.cause : undefined
   if (typeof cause === "object" && cause !== null && "name" in cause && cause.name === "TimeoutError")
-    return "The Orbit service did not answer in time, so nothing was decided. Try again."
+    return "The Orbit service did not answer in time. The card shows the question's state; answer again if it is still waiting."
   return plain(message(error))
 }
 

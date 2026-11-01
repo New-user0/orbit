@@ -80,6 +80,8 @@ type Entry = {
   readonly paths: ReadonlyArray<string>
   /** The right side of a review, which the person may edit and save. */
   readonly editable?: string
+  /** The text VS Code last saved on its own, which Accept sends; a close still sends the proposal unchanged. */
+  draft?: string
   answering: boolean
 }
 
@@ -87,6 +89,8 @@ export class Review {
   // Open tabs by title, and the text of every side they show by path.
   private readonly entries = new Map<string, Entry>()
   private readonly texts = new Map<string, string>()
+  // Review sides whose next write is an auto save that VS Code announced.
+  private readonly automatic = new Set<string>()
   private disposed = false
 
   constructor(
@@ -101,13 +105,31 @@ export class Review {
       return text === undefined ? undefined : new TextEncoder().encode(text)
     },
     writeFile: async (file: string, content: Uint8Array) => {
+      const automatic = this.automatic.delete(file)
       const entry = this.editable(file)
       // A tab the review no longer knows was answered or closed by the extension: its save answers nothing.
       if (!entry) return
       // The text is what the person saw and saved; the server drops a byte order mark itself.
-      const outcome = await this.answer(entry, "once", new TextDecoder().decode(content))
+      const text = new TextDecoder().decode(content)
+      // An auto save is not the person's answer: the tab keeps the text as its draft, and nothing is sent (class 8).
+      if (automatic) {
+        entry.draft = text
+        this.texts.set(file, text)
+        return
+      }
+      const outcome = await this.answer(entry, "once", text)
       if (typeof outcome === "object") throw new Error(outcome.refused)
     },
+  }
+
+  /**
+   * VS Code is about to save a review side: by the person (`manual`), or on its own after a delay or a change of focus.
+   * Only a save by the person answers. A write VS Code did not announce answers too: a save that skips the save
+   * participants, such as Save without Formatting, is the person's.
+   */
+  willSave(file: string, manual: boolean) {
+    if (manual) this.automatic.delete(file)
+    else this.automatic.add(file)
   }
 
   /** The text of a read-only side (`orbit-proposed:`). */
@@ -148,10 +170,10 @@ export class Review {
     await this.answer(entry, "once")
   }
 
-  /** The Accept title action on a tab with no unsaved edits: the proposal as it stands. */
+  /** The Accept title action on a tab with no unsaved edits: the text it holds, which is the proposal unless auto saved. */
   async accept(file: string) {
     const entry = this.editable(file)
-    if (entry) await this.answer(entry, "once")
+    if (entry) await this.answer(entry, "once", entry.draft)
   }
 
   /** The Reject title action. */
@@ -179,7 +201,8 @@ export class Review {
   /** Opens one multi-file diff of a prompt's changes, rebuilt from the server's patches alone: no file is read. */
   async changes(files: ReadonlyArray<unknown>) {
     const key = nonce()
-    const title = `Orbit: changes in this prompt (${files.length} ${files.length === 1 ? "file" : "files"})`
+    // The key makes the title unique, so closing one view never forgets another's texts.
+    const title = `Orbit: changes in this prompt (${files.length} ${files.length === 1 ? "file" : "files"}) (${key})`
     const entries = changesView(files).map((entry, index) => {
       const at = `/${key}/${index}`
       const name = entry.label.split(/[\\/]/).at(-1) ?? entry.label

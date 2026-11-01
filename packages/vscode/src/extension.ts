@@ -72,12 +72,20 @@ export function activate(context: vscode.ExtensionContext) {
       provideTextDocumentContent: (uri) => review.text(uri.path) ?? "",
     }),
     // Only a tab the person closes answers; the review forgets a tab before it closes one itself.
-    vscode.window.tabGroups.onDidChangeTabs((event) => event.closed.forEach((tab) => void review.closed(tab.label))),
+    vscode.window.tabGroups.onDidChangeTabs((event) => event.closed.forEach((tab) => void closedByPerson(review, tab.label))),
+    // Only a save by the person answers: VS Code's auto save, after a delay or on a change of focus, does not.
+    vscode.workspace.onWillSaveTextDocument((event) => {
+      if (event.document.uri.scheme === REVIEW)
+        review.willSave(event.document.uri.path, event.reason === vscode.TextDocumentSaveReason.Manual)
+    }),
     vscode.commands.registerCommand("orbit.review.accept", async (uri?: vscode.Uri) => {
       if (uri?.scheme !== REVIEW) return
       const document = vscode.workspace.textDocuments.find((item) => item.uri.toString() === uri.toString())
-      // A save answers with the person's version; with nothing to save it is the proposal as it stands.
-      if (document?.isDirty) return void (await document.save())
+      // A save answers with the person's version; with nothing to save it is the text the tab holds.
+      if (document?.isDirty) {
+        review.willSave(uri.path, true)
+        return void (await document.save())
+      }
       await review.accept(uri.path)
     }),
     vscode.commands.registerCommand("orbit.review.reject", async (uri?: vscode.Uri) => {
@@ -157,6 +165,15 @@ const PROPOSED = "orbit-proposed"
 
 function uri(side: Side) {
   return vscode.Uri.from({ scheme: side.scheme, path: side.path })
+}
+
+// VS Code moves a tab to another group or window by opening it there and then closing it here, and reports that close
+// like any other. A close is the person's only when no tab with that title is open, now or once the current task ends.
+async function closedByPerson(review: Review, label: string) {
+  const open = () => vscode.window.tabGroups.all.some((group) => group.tabs.some((tab) => tab.label === label))
+  if (open()) return
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  if (!open()) await review.closed(label)
 }
 
 // Closes the review's tabs by their titles. A review side with unsaved edits is saved first, which only hands its text
