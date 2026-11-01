@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { permissionItem } from "../src/controller"
-import type { FromView, Item } from "../src/protocol"
+import type { FormRequest, FromView, Item } from "../src/protocol"
 
 // The glue between the review (`src/review.ts`) and VS Code, which cannot run under Bun. As in `extension-trust.test.ts`
 // the extension gets a stand-in `vscode` in which every call answers with another stand-in, except the calls the review
@@ -31,6 +31,8 @@ const listeners: Array<(event: { opened: unknown[]; changed: unknown[]; closed: 
 const providers = new Map<string, unknown>()
 // What the next modal question is answered with: the button the person picks, by its title.
 const answer: { title?: string } = {}
+const picks: unknown[][] = []
+const program: { path?: string } = {}
 
 const stub = (overrides: Record<string, unknown> = {}): unknown =>
   new Proxy(function () {}, {
@@ -66,6 +68,8 @@ const vscode = stub({
       return args.slice(1).find((item) => (item as { title?: string })?.title === answer.title)
     },
     showInformationMessage: async (...args: unknown[]) => void informations.push(args),
+    // A form's yes-or-no field is answered Yes.
+    showQuickPick: async (...args: unknown[]) => (picks.push(args), "Yes"),
     tabGroups: stub({
       get all() {
         return [{ tabs }]
@@ -103,8 +107,12 @@ const vscode = stub({
       contents.set(scheme, provider)
       return stub()
     },
+    // The person's own `orbit.executable`, once a test sets one; every other setting is off.
     getConfiguration: () =>
-      stub({ inspect: () => ({ globalValue: false }), get: (_: string, fallback: unknown) => fallback }),
+      stub({
+        inspect: (key: string) => ({ globalValue: key === "executable" ? program.path : false }),
+        get: (_: string, fallback: unknown) => fallback,
+      }),
   }),
 })
 
@@ -112,8 +120,9 @@ const vscode = stub({
 type Chat = {
   controller: Promise<unknown> | undefined
   panel: unknown
+  items: Item[]
   receive(message: FromView): Promise<unknown>
-  apply(update: { type: "item"; item: Item }): void
+  apply(update: { type: "item"; item: Item } | { type: "form"; form: FormRequest }): void
   send(text: string): Promise<void>
 }
 type Extension = typeof import("../src/extension")
@@ -122,6 +131,7 @@ const replies: unknown[][] = []
 const sent: string[] = []
 const marked: string[] = []
 const restored: Array<{ messageID: string; confirmed: boolean }> = []
+const answered: unknown[][] = []
 const listed: { files: unknown[] | undefined } = { files: [] }
 let question = item("per_glue", patch)
 
@@ -153,6 +163,7 @@ beforeAll(async () => {
     reviewing: (id: string) => void marked.push(id),
     note: () => {},
     send: async (text: string) => void sent.push(text),
+    answer: async (...args: unknown[]) => void answered.push(args),
     changes: async () => listed.files,
     restore: async (messageID: string, confirm: (dry: unknown) => Promise<boolean>) =>
       void restored.push({
@@ -292,6 +303,19 @@ test("View changes opens one multi-file diff, and Restore files asks before it r
   expect(modal[1]).toEqual({ modal: true, detail: "glue.txt" })
 })
 
+test("a form the controller passes on is asked with VS Code's pickers, and the answer goes back through the controller", async () => {
+  const form: FormRequest = {
+    id: "frm_glue",
+    sessionID: "ses_glue",
+    title: "Go on?",
+    fields: [{ key: "go", type: "boolean", title: "Go on?" }],
+  }
+  chat().apply({ type: "form", form })
+  await Bun.sleep(50)
+  expect(picks.at(-1)?.[0]).toEqual(["Yes", "No"])
+  expect(answered).toEqual([[form, { go: true }]])
+})
+
 test("a tab closed while the extension closes it, or after deactivate, replies nothing", async () => {
   const [, , right, settled] = await open("per_settled")
   // Unsaved edits are handed to the review before the tab closes, so VS Code does not ask; the review answers nothing.
@@ -316,3 +340,42 @@ test("a tab closed while the extension closes it, or after deactivate, replies n
   await fire(last)
   expect(replies).toEqual([])
 })
+
+test("the chat starts the orb the person configured, connects to the endpoint it prints, and draws what its controller says", async () => {
+  // A stand-in service that knows no route, so the controller cannot read the folder's trust and sends nothing.
+  const requests: Array<{ path: string; authorization: string | null }> = []
+  const service = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: (request) => {
+      requests.push({ path: new URL(request.url).pathname, authorization: request.headers.get("authorization") })
+      return new Response("Not Found", { status: 404 })
+    },
+  })
+  const endpoint = { url: `http://127.0.0.1:${service.port}`, auth: { type: "basic", username: "orbit", password: "glue" } }
+  // A compiled `orb`, so Windows can start it too: it prints a version, and the endpoint as `orb service start --json` does.
+  const bin = path.join(folder, "bin")
+  await fs.mkdir(bin, { recursive: true })
+  program.path = path.join(bin, process.platform === "win32" ? "orb.exe" : "orb")
+  const built = await Bun.build({
+    entrypoints: ["/orb.ts"],
+    files: {
+      "/orb.ts": `console.log(process.argv.includes("--version") ? "orb v0.0.0-glue" : ${JSON.stringify(JSON.stringify(endpoint))})`,
+    },
+    compile: { outfile: program.path, autoloadBunfig: false, autoloadDotenv: false },
+  })
+  expect(built.success).toBe(true)
+  chat().controller = undefined
+  try {
+    await chat().send("hello")
+    expect(await chat().controller).toBeDefined()
+    expect(requests.length).toBeGreaterThan(0)
+    expect(requests.every((request) => request.authorization === `Basic ${btoa("orbit:glue")}`)).toBe(true)
+    // The controller's note reached the chat's own list, which is what the panel draws.
+    expect(chat().items.some((entry) => entry.type === "note" && entry.text.includes("hello"))).toBe(true)
+  } finally {
+    const controller = (await chat().controller) as { dispose(): void } | undefined
+    controller?.dispose()
+    await service.stop(true)
+  }
+}, 60_000)

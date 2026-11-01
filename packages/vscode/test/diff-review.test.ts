@@ -945,6 +945,55 @@ test("a server that cannot diff a prompt gets a note", async () => {
   expect(run.notes().at(-1)?.text).toContain("orb service restart")
 })
 
+test("a prompt the server does not admit gets no message ID, says why, and leaves the chat idle", async () => {
+  const refused = recording((url, init) =>
+    url.pathname.endsWith("/prompt") && init?.method === "POST"
+      ? Promise.resolve(Response.json({ _tag: "InvalidRequestError", message: "Prompt refused here" }, { status: 400 }))
+      : undefined,
+  )
+  const run = await chat(work, { fetcher: refused.fetcher })
+  await run.controller.send("not admitted")
+  const user = [...run.items.values()].find((entry) => entry.type === "user")
+  expect(user).toMatchObject({ type: "user", text: "not admitted" })
+  // Without a message ID the card offers neither the prompt's changes nor a restore.
+  expect(user?.type === "user" ? user.messageID : "none").toBeUndefined()
+  expect(run.notes().at(-1)?.tone).toBe("error")
+  expect(refused.sent.filter((request) => request.path.endsWith("/prompt"))).toHaveLength(1)
+  expect(run.updates.findLast((update) => update.type === "busy")).toEqual({ type: "busy", busy: false })
+})
+
+// The neighbours of the new controller methods. Bun's line coverage counts the lines before a function as part of it, so
+// these keep the last line of `send` and of `trustedNow` counted, and pin what Stop and a dismissed form send.
+test("Stop interrupts the chat's session, and a dismissed form is cancelled on the server", async () => {
+  const log = recording()
+  const run = await chat(work, { fetcher: log.fetcher })
+  await run.controller.send(calls())
+  await run.idle()
+  await run.controller.stop()
+  await run.controller.answer({ id: "frm_none", sessionID: "ses_none", title: "Dismissed", fields: [] }, undefined)
+  expect(log.sent.filter((request) => request.method === "POST" && request.path.endsWith("/interrupt"))).toHaveLength(1)
+  expect(log.sent.filter((request) => request.method === "DELETE" && request.path.endsWith("/form/frm_none"))).toHaveLength(1)
+})
+
+test("only a pending question is marked as open for review in the editor", async () => {
+  const run = await chat(work)
+  await run.controller.send(calls([write("marked.txt", "marked\n")]))
+  const pending = await run.question()
+  if (!pending) throw new Error("no question was asked")
+  run.controller.reviewing(pending.id)
+  expect(run.items.get(pending.id)).toMatchObject({ status: "pending", reviewing: true })
+  expect(await run.controller.reply(pending.id, "reject")).toBe("sent")
+  await until(() => {
+    const answered = run.items.get(pending.id)
+    return answered?.type === "permission" && answered.status === "reject" ? true : undefined
+  })
+  const count = run.updates.length
+  run.controller.reviewing(pending.id)
+  run.controller.reviewing("per_unknown")
+  expect(run.updates.length).toBe(count)
+  await run.idle()
+})
+
 describe("restore files", () => {
   async function prompted(options: { fetcher?: typeof fetch } = {}) {
     await Promise.all([Bun.write(path.join(work, "r1.txt"), "keep\n"), fs.rm(path.join(work, "r2.txt"), { force: true })])
