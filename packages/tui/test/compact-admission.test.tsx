@@ -69,12 +69,16 @@ test.each([70, 120])(
       await ready.promise
       await setup.waitForFrame((frame) => frame.includes("Demo Model"))
       await setup.mockInput.typeText("/compact")
+      setup.mockInput.pressEscape()
       setup.mockInput.pressEnter()
       const frame = await setup.waitForFrame((frame) => frame.includes("Compaction queued"))
       expect(frame).not.toContain("/compact")
       await setup.mockInput.typeText("/compact")
+      await setup.waitForFrame((frame) => frame.includes("/compact"))
+      setup.mockInput.pressEscape()
       setup.mockInput.pressEnter()
-      await setup.renderOnce()
+      // The line is cleared just before the command runs, so the repeat has been handled once it is gone.
+      await setup.waitForFrame((frame) => !frame.includes("/compact"))
       expect(setup.captureCharFrame().match(/Compaction queued/g)).toHaveLength(1)
       await modelRequested.promise
       expect(mutations).toEqual(["model"])
@@ -210,6 +214,7 @@ test.each(["first", "second"])(
       const submitted = mutations.length
       if (initial !== "first") await selectModel("first")
       await setup.mockInput.typeText("/compact")
+      setup.mockInput.pressEscape()
       setup.mockInput.pressEnter()
       await setup.waitForFrame((frame) => frame.includes("Compaction queued"))
       await selectModel("second")
@@ -233,3 +238,144 @@ test.each(["first", "second"])(
     }
   },
 )
+
+// context-memory-2 part 2 (class 12): `/compact <text>` is a compaction with instructions, not a prompt.
+async function compactApp(width: number) {
+  const state = await tmpdir()
+  const setup = await createTestRenderer({ width, height: 30, useThread: false, kittyKeyboard: true })
+  setup.renderer.start()
+  const ready = Promise.withResolvers<void>()
+  const events = createEventStream()
+  const sessionID = "ses_compact_text"
+  const location = { directory, project: { id: "project", directory, canonical: directory } }
+  const compacts: Array<Record<string, unknown>> = []
+  const prompts: unknown[] = []
+  const hold = { first: undefined as PromiseWithResolvers<void> | undefined }
+  const calls = createFetch(async (url, request) => {
+    if (url.pathname === `/api/session/${sessionID}`)
+      return json({
+        data: {
+          id: sessionID,
+          projectID: "project",
+          title: "Compact text fixture",
+          agent: "build",
+          model: { providerID: "demo", id: "model" },
+          location: { directory },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 0, updated: 0 },
+        },
+      })
+    if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+    if (url.pathname === `/api/session/${sessionID}/inbox` || url.pathname === `/api/session/${sessionID}/permission`)
+      return json({ data: [] })
+    if (url.pathname === "/api/agent")
+      return json({ location, data: [{ id: "build", mode: "primary", hidden: false, permissions: [] }] })
+    if (url.pathname === "/api/provider") return json({ location, data: [{ id: "demo", name: "Demo" }] })
+    if (url.pathname === "/api/model")
+      return json({ location, data: [{ id: "model", providerID: "demo", name: "Demo Model", variants: [] }] })
+    if (url.pathname === `/api/session/${sessionID}/model`) return new Response(null, { status: 204 })
+    if (url.pathname === `/api/session/${sessionID}/prompt`) {
+      prompts.push(await request.json())
+      return json({ data: {} })
+    }
+    if (url.pathname === `/api/session/${sessionID}/compact`) {
+      const body = (await request.json()) as Record<string, unknown>
+      compacts.push(body)
+      if (compacts.length === 1 && hold.first) await hold.first.promise
+      return json({
+        data: {
+          id: body.id,
+          sessionID,
+          type: "compaction",
+          time: { created: 10 },
+          payload: typeof body.instructions === "string" ? { instructions: body.instructions } : {},
+          delivery: "steer",
+        },
+      })
+    }
+    return undefined
+  }, events)
+  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  const { run } = await import("../src/app")
+  const task = Effect.runPromise(
+    run({
+      app: { name: "test", version: "test", channel: "test" },
+      server: { endpoint: { url: server.url.toString() } },
+      config: { get: async () => ({ animations: false }), update: async () => ({}) },
+      packages: { prepare: async () => ({ directory: "" }) },
+      terminalHandoff: async () => ({ renderer: setup.renderer, mode: "dark", complete: ready.resolve }),
+      args: { sessionID },
+      log: () => {},
+    }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
+  )
+  await ready.promise
+  await setup.waitForFrame((frame) => frame.includes("Demo Model"))
+  return {
+    setup,
+    compacts,
+    prompts,
+    hold,
+    async submit(text: string) {
+      await setup.mockInput.typeText(text)
+      // Escape closes the command list, so Enter sends the line instead of completing it.
+      setup.mockInput.pressEscape()
+      setup.mockInput.pressEnter()
+    },
+    async close() {
+      hold.first?.resolve()
+      setup.renderer.destroy()
+      await task
+      await server.stop()
+      await state[Symbol.asyncDispose]()
+    },
+  }
+}
+
+test.each([70, 120])("/compact with text sends its instructions and no prompt at %i columns", async (width) => {
+  const app = await compactApp(width)
+  try {
+    await app.submit("/compact focus on tests")
+    await Bun.sleep(0)
+    await waitUntil(() => app.compacts.length === 1)
+    expect(app.compacts[0]).toMatchObject({ instructions: "focus on tests" })
+    expect(app.prompts).toEqual([])
+    const frame = await app.setup.waitForFrame((frame) => frame.includes("Compaction queued"))
+    // The text is not left in the prompt, and the command is not sent as a message.
+    expect(frame).not.toContain("focus on tests")
+
+    // The bare control carries no instructions key.
+    await app.submit("/compact")
+    await waitUntil(() => app.compacts.length === 2)
+    expect(app.compacts[1]).not.toHaveProperty("instructions")
+    expect(app.prompts).toEqual([])
+  } finally {
+    await app.close()
+  }
+})
+
+test("a /compact with instructions is sent while a bare one is in flight", async () => {
+  const app = await compactApp(100)
+  try {
+    app.hold.first = Promise.withResolvers<void>()
+    await app.submit("/compact")
+    await waitUntil(() => app.compacts.length === 1)
+    await app.submit("/compact keep the db notes")
+    // It is sent after the first request on the admission chain, never dropped onto it.
+    app.hold.first.resolve()
+    await waitUntil(() => app.compacts.length === 2)
+    expect(app.compacts[0]).not.toHaveProperty("instructions")
+    expect(app.compacts[1]).toMatchObject({ instructions: "keep the db notes" })
+    expect(app.prompts).toEqual([])
+  } finally {
+    await app.close()
+  }
+})
+
+async function waitUntil(done: () => boolean) {
+  const deadline = Date.now() + 5_000
+  while (!done()) {
+    if (Date.now() > deadline) throw new Error("Timed out waiting for the compaction request")
+    await Bun.sleep(20)
+  }
+}

@@ -128,6 +128,32 @@ describe("run runtime queue", () => {
     expect(ui.commits).toEqual([])
   })
 
+  test("/compact with text passes its instructions to the compaction", async () => {
+    const ui = createFooterApiFixture()
+    const seen: string[] = []
+    const compacted: Array<string | undefined> = []
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      onCompact: async (instructions) => {
+        compacted.push(instructions)
+      },
+      run: async (input) => {
+        seen.push(input.text)
+        ui.api.close()
+      },
+    })
+
+    ui.submit("/compact focus on tests")
+    ui.submit("/compact")
+    ui.submit("hello")
+    await task
+
+    // No prompt carries the command text, and the bare command passes nothing.
+    expect(compacted).toEqual(["focus on tests", undefined])
+    expect(seen).toEqual(["hello"])
+  })
+
   test("keeps prompts submitted after an in-flight /compact behind the compaction barrier", async () => {
     const ui = createFooterApiFixture()
     const active = Promise.withResolvers<void>()

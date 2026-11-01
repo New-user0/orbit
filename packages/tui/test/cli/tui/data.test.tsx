@@ -732,12 +732,14 @@ test("restores running manual compaction before applying live deltas", async () 
       id: "evt_compaction_delta",
       created: 2,
       type: "session.compaction.delta",
-      data: { sessionID: "session-compaction", text: "summary" },
+      data: { sessionID: "session-compaction", characters: 7 },
     })
 
-    await wait(() => {
-      const message = data.session.message.get("session-compaction", "message-compaction")
-      return message?.type === "compaction" && message.status === "running" && message.summary === "Existing summary"
+    // The delta carries a count, not text: the restored summary stays as it was.
+    await wait(() => data.session.compactionCharacters("session-compaction") === 7)
+    expect(data.session.message.get("session-compaction", "message-compaction")).toMatchObject({
+      status: "running",
+      summary: "Existing ",
     })
   } finally {
     app.renderer.destroy()
@@ -1601,11 +1603,12 @@ test("tracks session status from active sessions and execution events", async ()
       id: "evt_manual_compaction_delta",
       created: 2,
       type: "session.compaction.delta",
-      data: { sessionID: "session-manual", text: "Streamed summary" },
+      data: { sessionID: "session-manual", characters: 16 },
     })
-    await wait(() => {
-      const message = data.session.message.get("session-manual", "message-compaction")
-      return message?.type === "compaction" && message.status === "running" && message.summary === "Streamed summary"
+    await wait(() => data.session.compactionCharacters("session-manual") === 16)
+    expect(data.session.message.get("session-manual", "message-compaction")).toMatchObject({
+      status: "running",
+      summary: "",
     })
     expect(data.session.pending.list("session-manual")).toEqual([])
     const compactionRow = manualRows.find((row) => row.type === "message" && row.messageID === "message-compaction")
@@ -1638,17 +1641,18 @@ test("tracks session status from active sessions and execution events", async ()
       id: "evt_compaction_delta_1",
       created: 0,
       type: "session.compaction.delta",
-      data: { sessionID: "session-live", text: "Live " },
+      data: { sessionID: "session-live", characters: 5 },
     })
     emitEvent(events, {
       id: "evt_compaction_delta_2",
       created: 0,
       type: "session.compaction.delta",
-      data: { sessionID: "session-live", text: "summary" },
+      data: { sessionID: "session-live", characters: 12 },
     })
-    await wait(() => {
-      const message = data.session.message.get("session-live", "msg_compaction_started")
-      return message?.type === "compaction" && message.status === "running" && message.summary === "Live summary"
+    await wait(() => data.session.compactionCharacters("session-live") === 12)
+    expect(data.session.message.get("session-live", "msg_compaction_started")).toMatchObject({
+      status: "running",
+      summary: "",
     })
     const autoCompactionRow = rows.find((row) => row.type === "message" && row.messageID === "msg_compaction_started")
 
@@ -4033,5 +4037,112 @@ describe("context report", () => {
     expect(frame).not.toContain("Context almost full")
     setDetails(true)
     await setup.app.waitForFrame((frame) => frame.includes("Context almost full (3% left)"))
+  })
+})
+
+// context-memory-2 part 2 (class 9): a running compaction keeps a character count and never the reply.
+async function withCompactionData(run: (input: { data: ReturnType<typeof useData>; events: ReturnType<typeof createEventStream> }) => Promise<void>) {
+  const events = createEventStream()
+  const calls = createFetch((url) => {
+    if (url.pathname.endsWith("/message")) return json({ data: [], cursor: {} })
+    return undefined
+  }, events)
+  let data!: ReturnType<typeof useData>
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+  try {
+    await run({ data, events })
+  } finally {
+    app.renderer.destroy()
+  }
+}
+
+const compactionStarted = (sessionID: string) => ({
+  id: `evt_${sessionID}_started`,
+  created: 1,
+  type: "session.compaction.started" as const,
+  durable: durable(sessionID, 2),
+  data: { sessionID, reason: "manual" as const, recent: "", inputID: `message-${sessionID}` },
+})
+
+test("a running compaction keeps a character count and no reply text", async () => {
+  await withCompactionData(async ({ data, events }) => {
+    const sessionID = "session-count"
+    emitEvent(events, compactionStarted(sessionID))
+    await wait(() => data.session.message.get(sessionID, `message-${sessionID}`)?.type === "compaction")
+    emitEvent(events, { id: "evt_count_1", created: 2, type: "session.compaction.delta", data: { sessionID, characters: 3 } })
+    emitEvent(events, { id: "evt_count_2", created: 3, type: "session.compaction.delta", data: { sessionID, characters: 5 } })
+    await wait(() => data.session.compactionCharacters(sessionID) === 5)
+    expect(data.session.message.get(sessionID, `message-${sessionID}`)).toMatchObject({ status: "running", summary: "" })
+
+    // The stored summary arrives with the end, and the count goes.
+    emitEvent(events, {
+      id: "evt_count_end",
+      created: 4,
+      type: "session.compaction.ended",
+      durable: durable(sessionID, 3),
+      data: { sessionID, reason: "manual", text: "Stored summary", recent: "" },
+    })
+    await wait(() => data.session.compactionCharacters(sessionID) === 0)
+    expect(data.session.message.get(sessionID, `message-${sessionID}`)).toMatchObject({
+      status: "completed",
+      summary: "Stored summary",
+    })
+
+    // A failed compaction clears the count too.
+    const failing = "session-count-failed"
+    emitEvent(events, compactionStarted(failing))
+    await wait(() => data.session.message.get(failing, `message-${failing}`)?.type === "compaction")
+    emitEvent(events, { id: "evt_failed_1", created: 5, type: "session.compaction.delta", data: { sessionID: failing, characters: 9 } })
+    await wait(() => data.session.compactionCharacters(failing) === 9)
+    emitEvent(events, {
+      id: "evt_failed_end",
+      created: 6,
+      type: "session.compaction.failed",
+      durable: durable(failing, 3),
+      data: { sessionID: failing, reason: "manual", error: { type: "compaction.failed", message: "No" } },
+    })
+    await wait(() => data.session.compactionCharacters(failing) === 0)
+
+    // A new compaction starts again from zero.
+    emitEvent(events, { id: "evt_count_3", created: 7, type: "session.compaction.delta", data: { sessionID: "session-fresh", characters: 4 } })
+    expect(data.session.compactionCharacters("session-fresh")).toBe(0)
+  })
+})
+
+test("a compaction delta without a count changes nothing (an older server)", async () => {
+  await withCompactionData(async ({ data, events }) => {
+    const sessionID = "session-old-server"
+    emitEvent(events, compactionStarted(sessionID))
+    await wait(() => data.session.message.get(sessionID, `message-${sessionID}`)?.type === "compaction")
+    // An older server sends the reply text and no count.
+    emitEvent(events, {
+      id: "evt_old_text",
+      created: 2,
+      type: "session.compaction.delta",
+      data: { sessionID, text: "HOSTILE" },
+    } as never)
+    // A delta for a session with no running compaction is dropped, and a count that is not a whole number too.
+    emitEvent(events, { id: "evt_idle", created: 3, type: "session.compaction.delta", data: { sessionID: "session-idle", characters: 9 } })
+    emitEvent(events, { id: "evt_bad", created: 4, type: "session.compaction.delta", data: { sessionID, characters: -1 } })
+    emitEvent(events, { id: "evt_fraction", created: 5, type: "session.compaction.delta", data: { sessionID, characters: 1.5 } })
+    // The marker below arrives after the others, so they have all been handled.
+    emitEvent(events, { id: "evt_marker", created: 6, type: "session.compaction.delta", data: { sessionID, characters: 2 } })
+    await wait(() => data.session.compactionCharacters(sessionID) === 2)
+    expect(data.session.message.get(sessionID, `message-${sessionID}`)).toMatchObject({ status: "running", summary: "" })
+    expect(data.session.compactionCharacters("session-idle")).toBe(0)
   })
 })

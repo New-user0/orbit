@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  compactInstructions,
   createPromptHistory,
   isCompactCommand,
   isExitCommand,
@@ -105,6 +106,22 @@ describe("run prompt shared", () => {
     expect(isCompactCommand("/compact")).toBe(true)
     expect(isCompactCommand(" /COMPACT ")).toBe(true)
     expect(isCompactCommand("/summarize")).toBe(false)
+  })
+
+  // context-memory-2 part 2: the text after the command is the instructions.
+  test("/compact with text is a compaction with instructions", () => {
+    const rows = [
+      ["/compact focus on tests", true, "focus on tests"],
+      ["/compact", true, undefined],
+      ["/compact   ", true, undefined],
+      ["/COMPACT x", true, "x"],
+      ["/compact one\ntwo ", true, "one\ntwo"],
+      ["/compactor", false, undefined],
+    ] as const
+    for (const [input, command, instructions] of rows) {
+      expect({ input, command: isCompactCommand(input) }).toEqual({ input, command })
+      if (command) expect({ input, instructions: compactInstructions(input) }).toEqual({ input, instructions })
+    }
   })
 })
 
