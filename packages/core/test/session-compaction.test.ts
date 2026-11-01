@@ -754,6 +754,7 @@ for (const [name, stream, records] of [
       expect(rows.length > 0).toBe(records)
       for (const row of rows) {
         expect(row.source).toBe("compaction")
+        expect(row).toMatchObject({ provider_id: "test", model_id: "summary-model" })
         expect(row.tokens_input).toBeGreaterThan(0)
         expect(row.tokens_output).toBeGreaterThan(0)
         expect(row.cost).toBeGreaterThan(0)

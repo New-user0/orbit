@@ -85,7 +85,7 @@ class RunTargetError extends Error {
 }
 
 const ATTACH_FILE_MAX_BYTES = 10 * 1024 * 1024
-const CONTEXT_TIMEOUT = 60_000
+const REPORT_TIMEOUT = 60_000
 
 export function runNonInteractive(input: RunCommandInput) {
   return runNonInteractiveWithOptions(input, {})
@@ -108,6 +108,8 @@ async function run(input: RunCommandInput, options: ExecutionOptions) {
   if (!input.stream && !message?.trim()) fail("You must provide a message")
   if (!input.stream && contextCommand(message) && input.file.length > 0)
     fail("/context takes no --file: it reports the session's context and sends nothing")
+  if (!input.stream && costCommand(message) && input.file.length > 0)
+    fail("/cost takes no --file: it reports the session's cost and sends nothing")
   const files = await Promise.all(input.file.map((file) => prepareFile(file, root, options)))
   const prepared = { directory, message: message ?? "", files }
   return execute(input, prepared, input.server.endpoint, options, root)
@@ -189,6 +191,7 @@ async function execute(
   if (!target) return
   // `/context` reports the session the run resolved and sends nothing to the model. Stream input reads its own lines.
   if (!input.stream && contextCommand(prepared.message)) return printContext(input, client, target.session.id)
+  if (!input.stream && costCommand(prepared.message)) return printCost(input, client, target.session.id)
   const model = target.model ? { providerID: target.model.providerID, modelID: target.model.id } : undefined
   const variant = target.model?.variant
   if (!target.resume && input.title !== undefined) {
@@ -281,16 +284,39 @@ function contextCommand(message: string | undefined) {
  */
 async function printContext(input: RunCommandInput, client: OrbitClient, sessionID: string) {
   const { contextMarkdown, contextUsageLine, readContextUsage } = await import("./context-report")
-  const answer = await readContextUsage(client, sessionID, CONTEXT_TIMEOUT)
+  const answer = await readContextUsage(client, sessionID, REPORT_TIMEOUT)
   if ("error" in answer) return reportRunError(input, answer.error, sessionID)
   // The places are the payload's own field names and indexes, so the line is safe to print as it is.
   if (answer.dropped.length > 0)
     UI.println(`Left out context usage entries this client could not read: ${answer.dropped.join(", ")}`)
+  printLocalCommand(input, sessionID, contextMarkdown(answer.info), contextUsageLine(sessionID, answer.info))
+}
+
+/** Whether the message is `/cost` or its alias `/usage`; anything after the command is ignored. */
+function costCommand(message: string | undefined) {
+  const word = message?.trim().split(/\s+/)[0]
+  return word === "/cost" || word === "/usage"
+}
+
+/** Prints the whole session's cost: the text block, the text as the result of one result line, or one `cost` line. */
+async function printCost(input: RunCommandInput, client: OrbitClient, sessionID: string) {
+  const { costLine, costText, readSessionCost } = await import("./cost-report")
+  const answer = await readSessionCost(client, sessionID, REPORT_TIMEOUT)
+  if ("error" in answer) return reportRunError(input, answer.error, sessionID)
+  if (answer.dropped.length > 0)
+    UI.println(`Left out cost rows this client could not read: ${answer.dropped.join(", ")}`)
+  printLocalCommand(input, sessionID, costText(answer.info), costLine(sessionID, answer.info))
+}
+
+/**
+ * Writes what a command answered locally, with nothing sent to the model: the text, the text as the result of one result
+ * line (the stream-json envelope's too), or the structured line that `--format json` prints.
+ */
+function printLocalCommand(input: RunCommandInput, sessionID: string, text: string, structured: string) {
   if (input.format === "json" || (input.format === "stream-json" && !input.envelope)) {
-    process.stdout.write(contextUsageLine(sessionID, answer.info) + EOL)
+    process.stdout.write(structured + EOL)
     return
   }
-  const text = contextMarkdown(answer.info)
   if (input.format !== "result" && !(input.envelope && input.format === "stream-json")) {
     process.stdout.write(text + EOL)
     return

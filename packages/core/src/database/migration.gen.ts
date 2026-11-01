@@ -50,6 +50,7 @@ import m47 from "./migration/20260923013825_project_time_active.js"
 import m48 from "./migration/20261009073747_session_usage.js"
 import m49 from "./migration/20261024013745_session_retention.js"
 import m50 from "./migration/20261024071601_session_removed.js"
+import m51 from "./migration/20261101042827_session_cost.js"
 
 export const migrations = [
   m00,
@@ -103,4 +104,5 @@ export const migrations = [
   m48,
   m49,
   m50,
+  m51,
 ] satisfies DatabaseMigration.Migration[]

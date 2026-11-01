@@ -124,14 +124,19 @@ export const layer = Layer.effect(
       const timeout = input.timeout ?? DEFAULT_TIMEOUT
       // Set once the request is about to leave, so a deadline that fires before that records nothing, and cleared once
       // the provider's own figures are recorded.
-      let sent: SessionUsage.Recorded | undefined
+      let sent: { readonly usage: SessionUsage.Recorded; readonly model: Model.Ref } | undefined
       // A call cut off by the deadline or by the caller was probably billed, and its usage never arrives. Recorded once,
       // whichever of the two ends it.
       const recordSent = Effect.suspend(() => {
         const estimate = sent
         sent = undefined
         return estimate
-          ? bus.publish(SessionEvent.SideQueryRecorded, { sessionID: session.id, purpose: input.purpose, ...estimate })
+          ? bus.publish(SessionEvent.SideQueryRecorded, {
+              sessionID: session.id,
+              purpose: input.purpose,
+              model: estimate.model,
+              ...estimate.usage,
+            })
           : Effect.void
       }).pipe(Effect.uninterruptible)
       return yield* Effect.gen(function* () {
@@ -177,16 +182,24 @@ export const layer = Layer.effect(
         })
         // The estimate for a call that is cut off: the whole prompt and, with no reply to measure, the largest reply
         // the request allows.
-        sent = SessionUsage.estimate(model.cost, {
-          input: SessionCompaction.estimateRequest(request),
-          output: request.generation?.maxTokens ?? model.limit.output,
-        })
+        sent = {
+          model: model.ref,
+          usage: SessionUsage.estimate(model.cost, {
+            input: SessionCompaction.estimateRequest(request),
+            output: request.generation?.maxTokens ?? model.limit.output,
+          }),
+        }
         const response = yield* llm.generate(request, prepared.options)
         // Recorded before the output is decoded: the provider billed the call whether or not it is usable.
         const usage = SessionUsage.record(response.usage, model.cost)
         sent = undefined
         yield* bus
-          .publish(SessionEvent.SideQueryRecorded, { sessionID: session.id, purpose: input.purpose, ...usage })
+          .publish(SessionEvent.SideQueryRecorded, {
+            sessionID: session.id,
+            purpose: input.purpose,
+            model: model.ref,
+            ...usage,
+          })
           .pipe(Effect.uninterruptible)
         return { response, model: model.ref }
       }).pipe(

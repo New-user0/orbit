@@ -12,6 +12,7 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { SessionCost } from "@orbit/core/session/cost"
 import { SessionEvent } from "@orbit/core/session/event"
+import { SessionMessage } from "@orbit/core/session/message"
 import { SessionExecution } from "@orbit/core/session/execution"
 import { SessionInbox } from "@orbit/core/session/inbox"
 import { SessionProjector } from "@orbit/core/session/projector"
@@ -175,10 +176,39 @@ describe("SessionCost", () => {
       yield* db.insert(SessionUsageTable).values(usage(root, "usage", "title", 0.1)).run().pipe(Effect.orDie)
 
       const summary = yield* SessionCost.summary(root)
-      expect(summary.cost).toBe(1)
+      expect(summary.cost).toBeCloseTo(1)
       expect(totalOf(summary.rows)).toBeCloseTo(0.6)
       expect(summary.other).toBeCloseTo(0.4)
       expect(totalOf(summary.rows) + (summary.other ?? 0)).toBeCloseTo(summary.cost)
+    }),
+  )
+
+  // PC2 (continued): which responses are unknown spend. A response that used tokens and recorded no cost, and one that
+  // failed with neither, are `unrecorded`; one that recorded exactly 0 is `zero`; one that used no tokens is neither.
+  it.effect("responses with no recorded cost or a recorded zero are counted apart, so a client can call them unknown", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 0.5 })).run().pipe(Effect.orDie)
+      yield* db
+        .insert(SessionMessageTable)
+        .values([
+          message(root, "assistant", { input: 10, cost: 0.5 }),
+          message(root, "assistant", { input: 10 }),
+          message(root, "assistant", { input: 10, cost: 0 }),
+          message(root, "assistant", { extra: { finish: "error" } }),
+          message(root, "assistant", { extra: { finish: "stop" } }),
+          // No tokens used: neither unknown nor free.
+          message(root, "assistant", { extra: { tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } }),
+          message(root, "assistant", { extra: { tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0 } }),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+
+      const summary = yield* SessionCost.summary(root)
+      // The failed response with no tokens counts; the stopped one with no tokens is not a response that used any.
+      expect(summary.rows).toHaveLength(1)
+      expect(summary.rows[0]).toMatchObject({ responses: 6, unrecorded: 2, zero: 1 })
+      expect(summary.rows[0]?.cost).toBeCloseTo(0.5)
     }),
   )
 
@@ -311,6 +341,16 @@ describe("SessionCost", () => {
         calls: [{ id: "c1", name: "Write", metadata: files({ additions: 7, deletions: 2 }) }],
       })
 
+      // A result for a call that already finished changes nothing, so a repeat does not count twice.
+      yield* bus.publish(SessionEvent.Tool.Success, {
+        sessionID: root,
+        assistantMessageID: SessionMessage.ID.make("msg_cost_edit"),
+        id: "c2",
+        content: [{ type: "text", text: "again" }],
+        metadata: { files: [{ additions: 50, deletions: 50 }] },
+        executed: false,
+      })
+
       const own = yield* db.select().from(SessionTable).all().pipe(Effect.orDie)
       expect(own.find((row) => row.id === root)).toMatchObject({ lines_added: 3 + 2 + 5 + 1 + 10 + 4, lines_removed: 1 + 0 + 0 + 1 + 10 + 2 })
       const summary = yield* SessionCost.summary(root)
@@ -326,6 +366,12 @@ describe("SessionCost", () => {
       const bus = yield* Bus.Service
       const sessions = yield* Session.Service
       yield* db.insert(SessionTable).values(sessionRow(child)).run().pipe(Effect.orDie)
+      expect((yield* SessionCost.summary(child)).lines).toBeUndefined()
+      // An edit in such a session does not start a partial count.
+      yield* seedStep(bus, child, {
+        id: "msg_cost_old_edit",
+        calls: [{ id: "c1", name: "Edit", metadata: { files: [{ additions: 9, deletions: 9 }] } }],
+      })
       expect((yield* SessionCost.summary(child)).lines).toBeUndefined()
 
       yield* bus.publish(SessionEvent.Created, {

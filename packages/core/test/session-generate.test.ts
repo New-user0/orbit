@@ -395,6 +395,7 @@ it.effect(
       expect(spent.map((row) => [row.kind, row.source, row.tokens_input, row.tokens_output])).toEqual([
         ["side_query", "session.generate", 0, 10],
       ])
+      expect(spent[0]).toMatchObject({ provider_id: "test", model_id: "generate-model" })
       expect(
         (yield* SessionTurn.usage(db, sessionID, { seq: -1, time: DateTime.makeUnsafe(0) })).tokens,
       ).toBe(10)

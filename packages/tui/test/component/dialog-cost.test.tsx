@@ -15,17 +15,20 @@ type Row = Info["rows"][number]
 const ID = "ses_cost"
 const route = `/api/session/${ID}/cost`
 
-const row = (modelID: string, overrides: Partial<Row> = {}): Row => ({
-  providerID: "provider",
-  modelID,
-  responses: 1,
-  tokens: { input: 1_000, output: 500, reasoning: 0, cache: { read: 200, write: 100 } },
-  cost: 0,
-  unrecorded: 0,
-  zero: 0,
-  ...overrides,
-})
-const info = (overrides: Partial<Info> = {}): Info => ({ cost: 0, own: 0, subagents: 0, rows: [], ...overrides })
+// The branded money type is the schema's; a fixture states plain numbers.
+const row = (modelID: string, overrides: Record<string, unknown> = {}) =>
+  ({
+    providerID: "provider",
+    modelID,
+    responses: 1,
+    tokens: { input: 1_000, output: 500, reasoning: 0, cache: { read: 200, write: 100 } },
+    cost: 0,
+    unrecorded: 0,
+    zero: 0,
+    ...overrides,
+  }) as unknown as Row
+const info = (overrides: Record<string, unknown> = {}) =>
+  ({ cost: 0, own: 0, subagents: 0, rows: [], ...overrides }) as unknown as Info
 
 const priced = (id: string): ModelInfo => ({
   ...model(id),
@@ -222,10 +225,10 @@ test("an old server and an unknown session each draw one line", async () => {
     const { setup, frame } = await open({
       answer: item.answer,
       timeout: item.timeout,
-      done: (text) => text.includes(item.line),
+      done: (text) => flat(text).includes(item.line),
     })
     await using _ = setup
-    expect(frame, item.name).toContain(item.line)
+    expect(flat(frame), item.name).toContain(item.line)
     expect(frame, item.name).not.toContain("Total cost")
   }
 })

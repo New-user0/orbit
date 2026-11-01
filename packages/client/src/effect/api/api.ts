@@ -619,6 +619,32 @@ export type SessionContextUsageOperation<E = never> = (
   input: SessionContextUsageInput,
 ) => Effect.Effect<SessionContextUsageOutput, E>
 
+export type SessionCostInput = { readonly sessionID: Session.ID }
+export type SessionCostOutput = {
+  readonly cost: number & Brand.Brand<"Money.USD">
+  readonly own: number & Brand.Brand<"Money.USD">
+  readonly subagents: number & Brand.Brand<"Money.USD">
+  readonly other?: (number & Brand.Brand<"Money.USD">) | undefined
+  readonly api?: number | undefined
+  readonly wall?: number | undefined
+  readonly lines?: { readonly added: number; readonly removed: number } | undefined
+  readonly rows: ReadonlyArray<{
+    readonly providerID: string
+    readonly modelID: string
+    readonly responses: number
+    readonly tokens: {
+      readonly input: number
+      readonly output: number
+      readonly reasoning: number
+      readonly cache: { readonly read: number; readonly write: number }
+    }
+    readonly cost: number & Brand.Brand<"Money.USD">
+    readonly unrecorded: number
+    readonly zero: number
+  }>
+}
+export type SessionCostOperation<E = never> = (input: SessionCostInput) => Effect.Effect<SessionCostOutput, E>
+
 export type SessionDiffInput = {
   readonly sessionID: Session.ID
   readonly from?: SessionMessage.ID | undefined
@@ -1714,6 +1740,7 @@ export type SessionLogOutput =
           readonly data: {
             readonly sessionID: Session.ID
             readonly source: "title" | "compaction"
+            readonly model?: Model.Ref | undefined
             readonly cost: number & Brand.Brand<"Money.USD">
             readonly tokens: {
               readonly input: number
@@ -1738,6 +1765,7 @@ export type SessionLogOutput =
           readonly data: {
             readonly sessionID: Session.ID
             readonly purpose: string
+            readonly model?: Model.Ref | undefined
             readonly cost: number & Brand.Brand<"Money.USD">
             readonly tokens: {
               readonly input: number
@@ -1890,6 +1918,7 @@ export interface SessionApi<E = never> {
   }
   readonly context: SessionContextOperation<E>
   readonly contextUsage: SessionContextUsageOperation<E>
+  readonly cost: SessionCostOperation<E>
   readonly diff: SessionDiffOperation<E>
   readonly inbox: {
     readonly list: SessionInboxListOperation<E>

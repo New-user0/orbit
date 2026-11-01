@@ -88,6 +88,8 @@ import type {
   SessionContextOutput,
   SessionContextUsageInput,
   SessionContextUsageOutput,
+  SessionCostInput,
+  SessionCostOutput,
   SessionDiffInput,
   SessionDiffOutput,
   SessionInboxListInput,
@@ -721,6 +723,14 @@ const EndpointSessionContextUsage = (raw: RawClient["server.session"]) => (input
     ),
   )
 
+const EndpointSessionCost = (raw: RawClient["server.session"]) => (input: SessionCostInput) =>
+  preserveEffect<SessionCostOutput>()(
+    raw["session.cost"]({ params: { sessionID: input["sessionID"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
 const EndpointSessionDiff = (raw: RawClient["server.session"]) => (input: SessionDiffInput) =>
   preserveEffect<SessionDiffOutput>()(
     raw["session.diff"]({
@@ -942,6 +952,7 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
   },
   context: EndpointSessionContext(raw),
   contextUsage: EndpointSessionContextUsage(raw),
+  cost: EndpointSessionCost(raw),
   diff: EndpointSessionDiff(raw),
   inbox: {
     list: EndpointSessionInboxList(raw),

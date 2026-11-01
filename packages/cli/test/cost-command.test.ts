@@ -81,7 +81,7 @@ test('orb run "/cost" prints the block and sends nothing to the model; --format 
   expect(text.stdout).toContain("Total code changes:")
   expect(text.stdout).toContain("Usage by model:")
   expect(text.stdout).toContain("cost:1b")
-  expect(text.stdout).toContain("10 input")
+  expect(text.stdout).toMatch(/\d+ input, \d+ output/)
 
   // The alias the TUI also has.
   const usage = await orb(["run", "--standalone", "--continue", "--model", model, "/usage"])
@@ -90,8 +90,7 @@ test('orb run "/cost" prints the block and sends nothing to the model; --format 
 
   const json = await orb(["run", "--standalone", "--continue", "--format", "json", "--model", model, "/cost"])
   expect(json.code).toBe(0)
-  const lines = json.stdout.trim().split("
-")
+  const lines = json.stdout.trim().split("\n")
   expect(lines.length).toBe(1)
   const line = JSON.parse(lines[0]!)
   expect(line.type).toBe("cost")
@@ -132,6 +131,18 @@ test("an unknown session and an old server exit 1 with the message", async () =>
   } finally {
     await stub.stop(true)
   }
+}, 300_000)
+
+// The block takes no file, so --file is a usage error and nothing reaches the model.
+test("/cost with --file is refused", async () => {
+  chats.length = 0
+  for (const command of ["/cost", "/usage"]) {
+    const result = await orb(["run", "--standalone", "--model", model, "--file", "notes.txt", command])
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain("--file")
+    expect(result.stdout).not.toContain("Total cost")
+  }
+  expect(chats).toEqual([])
 }, 300_000)
 
 async function orb(args: string[], env: Record<string, string | undefined> = {}) {

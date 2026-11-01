@@ -45,6 +45,8 @@ const session = (
   share_url: null,
   summary_additions: null,
   summary_deletions: null,
+  lines_added: null,
+  lines_removed: null,
   summary_files: null,
   summary_diffs: null,
   metadata: null,
