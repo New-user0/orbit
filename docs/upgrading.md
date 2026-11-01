@@ -4081,6 +4081,20 @@ plain name gets no folder. The config watch of a project's `.orbit` no longer re
 `.orbit/agent-memory-local/` to your ignore file if you keep local scopes. To keep an agent from writing its memory
 without a question, write a deny rule for its folder.
 
+### A project can seed a user-scope agent's memory
+
+A trusted project may now ship `.orbit/agent-memory-snapshots/<agent id>/`, holding a `snapshot.json` with a non-empty
+`updatedAt` and the files an agent should start with. While memory is on, an agent with `memory: user` that your own,
+the project's, the local or the managed config defines, and whose folder `<data>/memory/agents/<agent id>/` holds no
+Markdown file yet, gets those files copied into it, with `.snapshot-synced.json` naming the snapshot. The copied
+`MEMORY.md` then reaches that agent in every project, since the user scope is shared. A folder that already holds a
+Markdown file is left as it is, whatever the snapshot's time, and nothing is asked. The copy happens the first time a
+session or `/memory` needs memory in the folder, and again after the agents change. Before, the folder was ignored.
+
+**Affects:** people whose projects ship agent memory snapshots, and anyone with user-scope agents.
+
+**What to do:** Nothing. To keep a snapshot out of an agent's memory, put any Markdown file in its folder first.
+
 ## Files and web tools
 
 Changes to the file tools and the web tools.

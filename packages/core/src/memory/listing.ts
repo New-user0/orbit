@@ -14,6 +14,7 @@ import { InstructionNotes } from "../instruction-notes.js"
 import { Location } from "../location.js"
 import { Plugin } from "../plugin.js"
 import { MemoryAgent } from "./agent.js"
+import { MemoryAgentSnapshot } from "./agent-snapshot.js"
 import { MemoryStore } from "./store.js"
 import { MemoryTeam } from "./team.js"
 
@@ -61,6 +62,7 @@ const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
     const memoryAgent = yield* MemoryAgent.Service
+    const snapshots = yield* MemoryAgentSnapshot.Service
     const notes = yield* InstructionNotes.Service
     const plugins = yield* Plugin.Service
     const store = yield* MemoryStore.Service
@@ -139,6 +141,8 @@ const layer = Layer.effect(
         ),
       ]
       const enabled = yield* store.enabled()
+      // `/memory` can come before any session: the snapshots are copied first, so the rows show what an agent finds.
+      yield* snapshots.sync()
       const rows = enabled ? yield* folders() : []
       return new Instruction.MemoryListing({
         files,
@@ -165,6 +169,8 @@ const layer = Layer.effect(
 
     const ensure = Effect.fn("MemoryListing.ensure")(function* (target: Instruction.MemoryTarget) {
       yield* plugins.awaitActivation
+      // Making an agent's folder first would leave no place for its snapshot to be copied into.
+      yield* snapshots.sync()
       if (target.type === "file") return yield* listedFile(target.path)
       if (target.type === "scope") return yield* scopeFile(target.scope)
       return yield* make(yield* checked(target))
@@ -252,6 +258,7 @@ export const node = makeLocationNode({
     FSUtil.node,
     Location.node,
     MemoryAgent.node,
+    MemoryAgentSnapshot.node,
     MemoryStore.node,
     MemoryTeam.node,
     Plugin.node,
