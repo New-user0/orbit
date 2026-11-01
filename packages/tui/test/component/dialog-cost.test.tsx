@@ -207,6 +207,34 @@ test("code changes show only when counted", async () => {
 })
 
 // PT4, classes 7 and 13: each failure is one line, and none crashes the dialog.
+// Two providers of one model keep two rows, so the provider is drawn beside the name; a session with no response yet
+// draws a line of zeros, as the reference does.
+test("each row names its provider, and an empty session draws a line of zeros", async () => {
+  const two = await open({
+    answer: () =>
+      json({
+        data: info({
+          cost: 1,
+          own: 1,
+          rows: [
+            row("shared", { providerID: "first", cost: 0.6 }),
+            row("shared", { providerID: "second\u001b[31m", cost: 0.4 }),
+          ],
+        }),
+      }),
+    models: [priced("shared")],
+  })
+  await using _two = two.setup
+  expect(flat(two.frame)).toContain("· first")
+  expect(flat(two.frame)).toContain("· second")
+  expect(two.frame).not.toContain("\u001b")
+
+  const empty = await open({ answer: () => json({ data: info() }) })
+  await using _empty = empty.setup
+  expect(flat(empty.frame)).toContain("Usage: 0 input, 0 output, 0 cache read, 0 cache write")
+  expect(empty.frame).not.toContain("No model response")
+})
+
 test("an old server and an unknown session each draw one line", async () => {
   const cases: ReadonlyArray<{
     readonly name: string

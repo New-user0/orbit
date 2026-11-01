@@ -2077,7 +2077,9 @@ cost (cents above $0.50, four places below it, and "unknown" when no price is kn
 providers spent answering, the wall time, the lines the edit tools changed, then one row per provider and model with
 input, output, cache read and cache write tokens (and reasoning when there are any) and its cost. Spend that no row
 explains (responses a rewind removed, and usage records written before this version) shows as Other, so the total stays
-exact. Titles, side requests and discarded attempts now record the model they used and appear under it.
+exact. Titles, side requests, discarded attempts and every compaction call (including one that failed or was cancelled) now
+record the model they used and appear under it; a compaction from before this version is counted from its message. A
+session with no model response yet shows a line of zero usage. Each row names its provider beside the model.
 
 Lines changed are counted from this version on, from the per-file counts of every finished Edit, Write and Patch
 (NotebookEdit does not count). A session from before this version shows no code changes line; a new session and a fork
@@ -2086,7 +2088,8 @@ start at zero, and a session that was never counted stays uncounted.
 `orb run "/cost"` and `orb -p "/cost"` (and `/usage`) used to send the text to the model. They now print the same block
 of lines and send nothing to the model. `--format result` and `orb -p --output-format json` print one result line whose
 `result` is the block; `orb run --format json` prints one `{"type":"cost","sessionID","cost"}` line. `--file` with
-`/cost` is refused. An unknown session or a server older than this client ends the run with exit code 1 and its message.
+`/cost` is refused. The block reads the session's model catalog, so a model listed without a price reads "unknown" there
+as in the dialog (if the catalog cannot be read, one line says so and a recorded $0 stays $0). An unknown session or a server older than this client ends the run with exit code 1 and its message.
 
 The server answers at `GET /api/session/:sessionID/cost` (`client.session.cost`), reading stored rows only: it needs no
 trusted folder and answers an unknown session with `SessionNotFoundError` (404). `session.usage.recorded` and

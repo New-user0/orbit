@@ -33,11 +33,17 @@ const SESSION = "ses_cost_run"
 const answers: Record<string, () => Response> = {
   [SESSION]: () => Response.json({ data: full }),
   ses_dropped: () => Response.json({ data: { ...full, rows: [row, { modelID: 7 }] } }),
+  ses_unpriced: () =>
+    Response.json({
+      data: { ...bare, rows: [{ ...row, providerID: "ollama", modelID: "llama3", responses: 3, cost: 0, zero: 3 }] },
+    }),
+  ses_nocatalog: () => Response.json({ data: { ...bare, rows: [{ ...row, providerID: "ollama", modelID: "llama3", responses: 3, cost: 0, zero: 3 }] } }),
   ses_old: () => new Response(null, { status: 404 }),
   ses_gone: () =>
     Response.json({ _tag: "SessionNotFoundError", sessionID: "ses_gone", message: "Session not found: ses_gone" }, { status: 404 }),
 }
 const unexpected: string[] = []
+let catalogDown = false
 const stub = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
@@ -47,8 +53,14 @@ const stub = Bun.serve({
     if (cost) return answers[cost[1]!]?.() ?? new Response(null, { status: 404 })
     const session = pathname.match(/^\/api\/session\/([^/]+)$/)
     if (session && request.method === "GET")
-      return Response.json({ data: { id: session[1], agent: "build", location: { directory: "/repo" } } })
+      return Response.json({
+        data: { id: session[1], agent: "build", location: { directory: "/repo" } },
+      })
     if (pathname === "/api/location") return Response.json({ directory: "/repo" })
+    if (pathname === "/api/model")
+      return catalogDown
+        ? new Response(null, { status: 500 })
+        : Response.json({ data: [{ providerID: "ollama", id: "llama3", name: "Llama 3", cost: [] }] })
     unexpected.push(`${request.method} ${pathname}`)
     return new Response(null, { status: 500 })
   },
@@ -75,7 +87,7 @@ test("costText prints every part of a full summary, and drops the parts a bare o
   expect(empty).not.toContain("Subagents:")
   expect(empty).not.toContain("Other:")
   expect(empty).not.toContain("Total code changes:")
-  expect(empty).toContain("No model response yet in this session.")
+  expect(empty).toContain("Usage: 0 input, 0 output, 0 cache read, 0 cache write")
   expect(JSON.parse(costLine("ses_x", bare as never))).toEqual({ type: "cost", sessionID: "ses_x", cost: bare })
 })
 
@@ -95,6 +107,29 @@ test("the JSON format prints one cost line", async () => {
   const json = await capture({ format: "json" })
   expect(json.stdout.trimEnd().split("\n")).toHaveLength(1)
   expect(JSON.parse(json.stdout)).toMatchObject({ type: "cost", sessionID: SESSION, cost: { cost: 0.75 } })
+})
+
+// A model the catalog lists without a price reads unknown, as in the dialog. Mutation: pass `undefined` for the catalog.
+test("a model listed without a price whose responses recorded $0 reads unknown, and the JSON line keeps the row", async () => {
+  const run = await capture({ format: "default", session: "ses_unpriced" })
+  expect(run.exitCode).toBe(0)
+  expect(run.stdout).toContain("Total cost:            unknown")
+  expect(run.stdout).toContain("ollama/llama3:")
+  expect(run.stdout).toContain("(unknown)")
+  expect(run.stdout).not.toContain("$0.0000")
+
+  const json = await capture({ format: "json", session: "ses_unpriced" })
+  expect(JSON.parse(json.stdout).cost.rows[0]).toMatchObject({ modelID: "llama3", cost: 0, zero: 3 })
+})
+
+test("a catalog that cannot be read costs one line, and a recorded $0 stays $0", async () => {
+  catalogDown = true
+  const run = await capture({ format: "default", session: "ses_nocatalog" })
+  catalogDown = false
+  expect(run.exitCode).toBe(0)
+  expect(run.stdout).toContain("$0.0000")
+  expect(run.stderr.trimEnd().split("\n")).toHaveLength(1)
+  expect(run.stderr).toContain("Could not read the model catalog")
 })
 
 test("an old server ends the run with one message", async () => {

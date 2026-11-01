@@ -212,8 +212,9 @@ describe("SessionCost", () => {
     }),
   )
 
-  // PC3: a record with a model is itemized under it; a compaction is in its message and in a usage record, and counts once.
-  // Mutation: also count the `session_usage` compaction rows.
+  // PC3: a record with a model is itemized under it. A compaction's calls are recorded when they happen, so a failed or
+  // cancelled one is itemized too; its completed message is left out when the session has such records, so it counts once.
+  // Mutation: count the compaction messages as well.
   it.effect("side queries, titles and discarded attempts with a model are itemized under that model, and a compaction is counted once", () =>
     Effect.gen(function* () {
       const db = yield* seedProject
@@ -223,8 +224,8 @@ describe("SessionCost", () => {
         .insert(SessionMessageTable)
         .values([
           message(root, "assistant", { input: 10, cost: 0.4 }),
+          // The records below hold this compaction's spend.
           message(root, "compaction", { input: 10, cost: 0.2 }),
-          // A compaction that did not complete is not a response; its spend has no row.
           message(root, "compaction", { input: 10, cost: 0.3, extra: { status: "failed" } }),
         ])
         .run()
@@ -234,8 +235,9 @@ describe("SessionCost", () => {
         .values([
           usage(root, "usage", "title", 0.1, alpha),
           usage(root, "side_query", "step.retry", 0.15, alpha),
-          // The compaction message above already holds this call's spend.
           usage(root, "usage", "compaction", 0.2, alpha),
+          // A compaction that failed or was cancelled still spent this.
+          usage(root, "usage", "compaction", 0.3, alpha),
           // A side query on another model.
           usage(root, "side_query", "webfetch.summarize", 0.05, { provider: "prov", id: "beta" }),
         ])
@@ -244,11 +246,31 @@ describe("SessionCost", () => {
 
       const summary = yield* SessionCost.summary(root)
       const alphaRow = summary.rows.find((row) => row.modelID === "alpha")
-      expect(alphaRow?.responses).toBe(4)
-      expect(alphaRow?.cost).toBeCloseTo(0.85)
+      expect(alphaRow?.responses).toBe(5)
+      expect(alphaRow?.cost).toBeCloseTo(1.15)
       expect(summary.rows.find((row) => row.modelID === "beta")).toMatchObject({ responses: 1 })
-      expect(totalOf(summary.rows)).toBeCloseTo(0.9)
-      expect(summary.other).toBeCloseTo(0.3)
+      expect(totalOf(summary.rows)).toBeCloseTo(1.2)
+      expect(summary.other).toBeUndefined()
+    }),
+  )
+
+  // A session from before usage records named a model: its compaction is counted from the message, once, and the
+  // record without a model stays out of the rows.
+  it.effect("a compaction from before records named a model is counted from its message", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 0.2 })).run().pipe(Effect.orDie)
+      yield* db
+        .insert(SessionMessageTable)
+        .values([message(root, "compaction", { input: 10, cost: 0.2 })])
+        .run()
+        .pipe(Effect.orDie)
+      yield* db.insert(SessionUsageTable).values([usage(root, "usage", "compaction", 0.2)]).run().pipe(Effect.orDie)
+
+      const summary = yield* SessionCost.summary(root)
+      expect(summary.rows).toHaveLength(1)
+      expect(summary.rows[0]?.cost).toBeCloseTo(0.2)
+      expect(summary.other).toBeUndefined()
     }),
   )
 

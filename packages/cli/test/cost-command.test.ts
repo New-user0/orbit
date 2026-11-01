@@ -133,6 +133,23 @@ test("an unknown session and an old server exit 1 with the message", async () =>
   }
 }, 300_000)
 
+// The print mode answers `/cost` too: the same block as text, and one result line whose result is the block with --output-format json.
+test('orb -p "/cost" prints the block, and --output-format json one result line', async () => {
+  chats.length = 0
+  const text = await orb(["-p", "--standalone", "--continue", "--model", model, "/cost"])
+  expect({ code: text.code, stderr: text.stderr }).toEqual({ code: 0, stderr: "" })
+  expect(text.stdout).toContain("Total cost:")
+
+  const json = await orb(["-p", "--standalone", "--continue", "--output-format", "json", "--model", model, "/cost"])
+  expect(json.code).toBe(0)
+  const lines = json.stdout.trim().split("\n")
+  expect(lines.length).toBe(1)
+  const result = JSON.parse(lines[0]!)
+  expect(result).toMatchObject({ type: "result", is_error: false })
+  expect(result.result).toContain("Total cost:")
+  expect(chats).toEqual([])
+}, 300_000)
+
 // The block takes no file, so --file is a usage error and nothing reaches the model.
 test("/cost with --file is refused", async () => {
   chats.length = 0

@@ -11,6 +11,9 @@ export const money = (value: number) => `$${value > 0.5 ? value.toFixed(2) : val
 export const price = (value: number | undefined, partial = false) =>
   value === undefined ? "unknown" : `${money(value)}${partial ? " + unpriced" : ""}`
 
+/** What /cost shows under the usage heading when no model has answered yet: a line of zeros, as the reference prints. */
+export const NO_USAGE = "0 input, 0 output, 0 cache read, 0 cache write"
+
 /** A model the catalog has no price for is `undefined`, never zero: the server records $0 for it, which is not a free model. */
 export type ModelCost = {
   providerID: string

@@ -6,7 +6,7 @@ import { useClient } from "../context/client"
 import { useData } from "../context/data"
 import { useLog } from "../context/log"
 import { useTheme } from "../context/theme"
-import { costSummary, price, type CostSummary } from "../util/cost"
+import { costSummary, NO_USAGE, price, type CostSummary } from "../util/cost"
 import { errorMessage } from "../util/error"
 import { Locale } from "../util/locale"
 
@@ -110,7 +110,8 @@ export function CostView(props: { readonly summary?: CostSummary; readonly error
               when={value().models.length > 0}
               fallback={
                 <box>
-                  <text fg={theme.text.muted}>No model response yet in this session.</text>
+                  <text fg={theme.text.base}>By model</text>
+                  <text fg={theme.text.muted}>{`  Usage: ${NO_USAGE}`}</text>
                   <Other value={value().other} />
                 </box>
               }
@@ -123,6 +124,8 @@ export function CostView(props: { readonly summary?: CostSummary; readonly error
                       <box flexDirection="row" gap={1}>
                         {/* Names and IDs come from the server, its records and its providers. */}
                         <text fg={theme.text.base}>{plain(row.name)}</text>
+                        {/* One model at two providers keeps two rows, so the provider tells them apart. */}
+                        <text fg={theme.text.muted}>{`· ${plain(row.providerID)}`}</text>
                         <text fg={theme.text.muted}>{price(row.cost, row.unpriced > 0)}</text>
                       </box>
                       <text fg={theme.text.muted}>{`  ${tokens(row.tokens)}`}</text>

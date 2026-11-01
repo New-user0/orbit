@@ -31,9 +31,9 @@ type Counts = {
  * it a client has loaded. It reads no folder and starts no work, so it needs no trust (class 12). Model IDs are only
  * grouped and returned, never parsed (class 5).
  *
- * A row is a model's assistant responses and completed compactions (the compaction's message holds the spend of its
- * calls, so its `session_usage` records are left out), plus the side requests, titles and discarded attempts that name
- * the model. Whatever no row explains (responses a rewind removed, records from before they named a model) is `other`,
+ * A row is a model's assistant responses plus every usage record that names the model: side requests, titles, discarded
+ * attempts and compaction calls, whether the compaction completed, failed or was cancelled. A completed compaction's
+ * message stands in only where its session has no compaction record naming a model (it predates them). Whatever no row explains (responses a rewind removed, records from before they named a model) is `other`,
  * so that the total stays the sessions' own totals.
  */
 export const summary = Effect.fn("SessionCost.summary")(function* (sessionID: SessionSchema.ID) {
@@ -109,9 +109,16 @@ export const summary = Effect.fn("SessionCost.summary")(function* (sessionID: Se
             AND (json_type(message.data, '$.tokens') = 'object'
               -- A response that failed mid-stream carries neither tokens nor cost: its spend is unknown.
               OR (json_extract(message.data, '$.finish') = 'error' AND json_extract(message.data, '$.cost') IS NULL)))
+          -- Once a session's compaction calls name their model, those records hold every call, including the ones of a
+          -- compaction that failed or was cancelled. The message counts only for a compaction from before that.
           OR (message.type = 'compaction'
             AND json_extract(message.data, '$.status') = 'completed'
-            AND json_type(message.data, '$.tokens') = 'object')
+            AND json_type(message.data, '$.tokens') = 'object'
+            AND NOT EXISTS (
+              SELECT 1 FROM ${SessionUsageTable} AS call
+              WHERE call.session_id = message.session_id
+                AND call.kind = 'usage' AND call.source = 'compaction' AND call.model_id IS NOT NULL
+            ))
         )
       GROUP BY providerID, modelID
     `,
@@ -142,7 +149,6 @@ export const summary = Effect.fn("SessionCost.summary")(function* (sessionID: Se
       WHERE usage.session_id IN (SELECT id FROM family)
         AND usage.provider_id IS NOT NULL
         AND usage.model_id IS NOT NULL
-        AND NOT (usage.kind = 'usage' AND usage.source = 'compaction')
       GROUP BY usage.provider_id, usage.model_id
     `,
     )

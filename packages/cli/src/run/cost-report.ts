@@ -1,9 +1,11 @@
+import type { ModelInfo } from "@orbit/client"
 import type { OrbitClient } from "@orbit/client/promise"
 import { SessionCost } from "@orbit/schema/session-cost"
 import { jsonLine, plain } from "@orbit/flow/plain"
-import { costSummary, money, price } from "@orbit/tui/util/cost"
+import { costSummary, money, NO_USAGE, price } from "@orbit/tui/util/cost"
 import { Locale } from "@orbit/tui/util/locale"
 import { errorMessage } from "../util/error"
+import { UI } from "./ui"
 
 // `orb run "/cost"` and `orb -p "/cost"`: the whole session's cost, as the reference prints it in its print mode, a block
 // of dimmed lines. The server sums the session and its subagents from stored rows, so the figures do not depend on how
@@ -12,9 +14,12 @@ import { errorMessage } from "../util/error"
 const count = new Intl.NumberFormat("en-US")
 const lines = (value: number) => `${count.format(value)} ${value === 1 ? "line" : "lines"}`
 
-/** The block `orb run "/cost"` prints. There is no catalog here, so a response is unpriced only when no cost was recorded. */
-export function costText(info: SessionCost.Info) {
-  const summary = costSummary(info, undefined)
+/**
+ * The block `orb run "/cost"` prints. With the session's catalog, a response that recorded $0 for a model the catalog
+ * lists without a price reads as unknown, as in the dialog; without one, only a response with no recorded cost does.
+ */
+export function costText(info: SessionCost.Info, models?: ReadonlyArray<ModelInfo>) {
+  const summary = costSummary(info, models)
   const span = (value: number | undefined) => (value === undefined ? "-" : Locale.duration(value))
   const usage = summary.models.map((row) => {
     const name = `${plain(row.providerID)}/${plain(row.modelID)}`
@@ -40,7 +45,7 @@ export function costText(info: SessionCost.Info) {
       ? []
       : [row("Other:", `${money(summary.other)} (titles, undone responses and other usage)`)]),
     "Usage by model:",
-    ...(usage.length > 0 ? usage : ["  No model response yet in this session."]),
+    ...(usage.length > 0 ? usage : [`  Usage: ${NO_USAGE}`]),
   ].join("\n")
 }
 
@@ -68,6 +73,24 @@ export async function readSessionCost(
   return Promise.race([client.session.cost({ sessionID }, { signal }), expired]).then(
     (value) => SessionCost.decode(value) ?? { error: "The server's answer about session cost could not be read" },
     (error: unknown) => ({ error: failure(error) }),
+  )
+}
+
+/**
+ * The session's model catalog, which tells a model without a price from a free one. It is optional: when the catalog
+ * cannot be read in time, one line says so and the figures read as they would without it (class 7).
+ */
+export async function readCatalog(
+  client: OrbitClient,
+  location: { readonly directory: string },
+  timeout: number,
+): Promise<ReadonlyArray<ModelInfo> | undefined> {
+  return client.model.list({ location }, { signal: AbortSignal.timeout(timeout) }).then(
+    (answer) => answer.data,
+    (error: unknown) => {
+      UI.println(`Could not read the model catalog, so unpriced models may show $0: ${plain(errorMessage(error))}`)
+      return undefined
+    },
   )
 }
 

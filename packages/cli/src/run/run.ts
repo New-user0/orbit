@@ -191,7 +191,7 @@ async function execute(
   if (!target) return
   // `/context` reports the session the run resolved and sends nothing to the model. Stream input reads its own lines.
   if (!input.stream && contextCommand(prepared.message)) return printContext(input, client, target.session.id)
-  if (!input.stream && costCommand(prepared.message)) return printCost(input, client, target.session.id)
+  if (!input.stream && costCommand(prepared.message)) return printCost(input, client, { id: target.session.id, location: target.location })
   const model = target.model ? { providerID: target.model.providerID, modelID: target.model.id } : undefined
   const variant = target.model?.variant
   if (!target.resume && input.title !== undefined) {
@@ -299,13 +299,19 @@ function costCommand(message: string | undefined) {
 }
 
 /** Prints the whole session's cost: the text block, the text as the result of one result line, or one `cost` line. */
-async function printCost(input: RunCommandInput, client: OrbitClient, sessionID: string) {
-  const { costLine, costText, readSessionCost } = await import("./cost-report")
+async function printCost(
+  input: RunCommandInput,
+  client: OrbitClient,
+  session: { readonly id: string; readonly location: { readonly directory: string } },
+) {
+  const { costLine, costText, readCatalog, readSessionCost } = await import("./cost-report")
+  const sessionID = session.id
   const answer = await readSessionCost(client, sessionID, REPORT_TIMEOUT)
   if ("error" in answer) return reportRunError(input, answer.error, sessionID)
   if (answer.dropped.length > 0)
     UI.println(`Left out cost rows this client could not read: ${answer.dropped.join(", ")}`)
-  printLocalCommand(input, sessionID, costText(answer.info), costLine(sessionID, answer.info))
+  const models = await readCatalog(client, session.location, REPORT_TIMEOUT)
+  printLocalCommand(input, sessionID, costText(answer.info, models), costLine(sessionID, answer.info))
 }
 
 /**
