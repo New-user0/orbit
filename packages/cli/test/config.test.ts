@@ -98,6 +98,33 @@ test("session.recap.after_minutes is read from the person's cli.json and from no
   }
 })
 
+// clients-ux-37 part 2, class 8: asking the model for a next-prompt suggestion spends tokens, so the switch comes from the
+// person's own cli.json and never from the folder Orbit starts in.
+test("prompt.suggestions is read from the person's cli.json and from no project folder", async () => {
+  await using config = await tmpdir()
+  await using empty = await tmpdir()
+  await using project = await tmpdir()
+  await Bun.write(path.join(config.path, "cli.json"), JSON.stringify({ prompt: { suggestions: true } }))
+  await Bun.write(path.join(project.path, "cli.json"), JSON.stringify({ prompt: { suggestions: true } }))
+  await Bun.write(path.join(project.path, ".orbit", "cli.json"), JSON.stringify({ prompt: { suggestions: true } }))
+  const cwd = process.cwd()
+  process.chdir(project.path)
+  try {
+    const read = (directory: string) =>
+      run(
+        directory,
+        Effect.gen(function* () {
+          const service = yield* Config.Service
+          return yield* service.get()
+        }),
+      )
+    expect((await read(config.path)).prompt?.suggestions).toBe(true)
+    expect((await read(empty.path)).prompt?.suggestions).toBeUndefined()
+  } finally {
+    process.chdir(cwd)
+  }
+})
+
 test("merges inline CLI config content over the global config", async () => {
   await using directory = await tmpdir()
   const file = path.join(directory.path, "cli.json")
