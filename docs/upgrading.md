@@ -4977,7 +4977,8 @@ messages, where it used to shrink the request in steps.
   on the server route and in ACP (`session-compact.test.ts` in the server, `acp/compaction.test.ts`). In the terminal UI
   Enter at the command list still runs a bare `/compact`; Tab fills in `/compact ` so you can type the text, and a
   project command that is also named `compact` still takes `/compact <text>` (`compact-admission.test.tsx`). Mini
-  parses the same spellings (`prompt.shared.test.ts`, `runtime.queue.test.ts`).
+  parses the same spellings and also leaves `/compact <text>` to a project command named `compact` (a bare `/compact`
+  stays the built-in) (`prompt.shared.test.ts`, `runtime.queue.test.ts`, `footer.view.test.tsx`).
 - **One pending compaction.** A `/compact` with instructions while another compaction is waiting replaces it (the
   waiting one is cancelled); one without instructions, or with the same instructions, joins it and keeps its
   instructions. A compaction that is already running is not waiting, so a new request runs after it

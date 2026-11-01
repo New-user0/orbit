@@ -154,6 +154,36 @@ describe("run runtime queue", () => {
     expect(seen).toEqual(["hello"])
   })
 
+  test("/compact with text keeps a project command named compact; a bare one stays the built-in", async () => {
+    const ui = createFooterApiFixture()
+    const seen: Array<string | undefined> = []
+    const compacted: Array<string | undefined> = []
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      onCompact: async (instructions) => {
+        compacted.push(instructions)
+      },
+      run: async (input) => {
+        seen.push(input.command?.arguments ?? input.text)
+        if (seen.length === 2) ui.api.close()
+      },
+    })
+
+    ui.submit({
+      text: "/compact keep the db notes",
+      parts: [],
+      command: { name: "compact", arguments: "keep the db notes" },
+    })
+    ui.submit({ text: "/compact", parts: [], command: { name: "compact", arguments: "" } })
+    ui.submit("hello")
+    await task
+
+    // The project command with text runs; the bare command and the plain-text control are the built-in.
+    expect(seen).toEqual(["keep the db notes", "hello"])
+    expect(compacted).toEqual([undefined])
+  })
+
   test("keeps prompts submitted after an in-flight /compact behind the compaction barrier", async () => {
     const ui = createFooterApiFixture()
     const active = Promise.withResolvers<void>()

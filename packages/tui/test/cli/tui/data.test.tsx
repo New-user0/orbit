@@ -943,7 +943,7 @@ test("completes exploration when a queued prompt is promoted", async () => {
   }
 })
 
-test("a compaction with instructions shows them on its pending row and posts them trimmed or not at all", async () => {
+test("a compaction with instructions shows them trimmed on its pending row and posts them as given", async () => {
   const events = createEventStream()
   const sessionID = "session-compact-text"
   const posted: unknown[] = []
@@ -4092,7 +4092,9 @@ describe("context report", () => {
 })
 
 // context-memory-2 part 2 (class 9): a running compaction keeps a character count and never the reply.
-async function withCompactionData(run: (input: { data: ReturnType<typeof useData>; events: ReturnType<typeof createEventStream> }) => Promise<void>) {
+async function withCompactionData(
+  run: (input: { data: ReturnType<typeof useData>; events: ReturnType<typeof createEventStream> }) => Promise<void>,
+) {
   const events = createEventStream()
   const calls = createFetch((url) => {
     if (url.pathname.endsWith("/message")) return json({ data: [], cursor: {} })
@@ -4134,10 +4136,23 @@ test("a running compaction keeps a character count and no reply text", async () 
     const sessionID = "session-count"
     emitEvent(events, compactionStarted(sessionID))
     await wait(() => data.session.message.get(sessionID, `message-${sessionID}`)?.type === "compaction")
-    emitEvent(events, { id: "evt_count_1", created: 2, type: "session.compaction.delta", data: { sessionID, characters: 3 } })
-    emitEvent(events, { id: "evt_count_2", created: 3, type: "session.compaction.delta", data: { sessionID, characters: 5 } })
+    emitEvent(events, {
+      id: "evt_count_1",
+      created: 2,
+      type: "session.compaction.delta",
+      data: { sessionID, characters: 3 },
+    })
+    emitEvent(events, {
+      id: "evt_count_2",
+      created: 3,
+      type: "session.compaction.delta",
+      data: { sessionID, characters: 5 },
+    })
     await wait(() => data.session.compactionCharacters(sessionID) === 5)
-    expect(data.session.message.get(sessionID, `message-${sessionID}`)).toMatchObject({ status: "running", summary: "" })
+    expect(data.session.message.get(sessionID, `message-${sessionID}`)).toMatchObject({
+      status: "running",
+      summary: "",
+    })
 
     // The stored summary arrives with the end, and the count goes.
     emitEvent(events, {
@@ -4157,7 +4172,12 @@ test("a running compaction keeps a character count and no reply text", async () 
     const failing = "session-count-failed"
     emitEvent(events, compactionStarted(failing))
     await wait(() => data.session.message.get(failing, `message-${failing}`)?.type === "compaction")
-    emitEvent(events, { id: "evt_failed_1", created: 5, type: "session.compaction.delta", data: { sessionID: failing, characters: 9 } })
+    emitEvent(events, {
+      id: "evt_failed_1",
+      created: 5,
+      type: "session.compaction.delta",
+      data: { sessionID: failing, characters: 9 },
+    })
     await wait(() => data.session.compactionCharacters(failing) === 9)
     emitEvent(events, {
       id: "evt_failed_end",
@@ -4169,7 +4189,12 @@ test("a running compaction keeps a character count and no reply text", async () 
     await wait(() => data.session.compactionCharacters(failing) === 0)
 
     // A new compaction starts again from zero.
-    emitEvent(events, { id: "evt_count_3", created: 7, type: "session.compaction.delta", data: { sessionID: "session-fresh", characters: 4 } })
+    emitEvent(events, {
+      id: "evt_count_3",
+      created: 7,
+      type: "session.compaction.delta",
+      data: { sessionID: "session-fresh", characters: 4 },
+    })
     expect(data.session.compactionCharacters("session-fresh")).toBe(0)
   })
 })
@@ -4179,7 +4204,12 @@ test("evicting a session drops its compaction character count", async () => {
     const sessionID = "session-evicted"
     emitEvent(events, compactionStarted(sessionID))
     await wait(() => data.session.message.get(sessionID, `message-${sessionID}`)?.type === "compaction")
-    emitEvent(events, { id: "evt_evict_1", created: 2, type: "session.compaction.delta", data: { sessionID, characters: 6 } })
+    emitEvent(events, {
+      id: "evt_evict_1",
+      created: 2,
+      type: "session.compaction.delta",
+      data: { sessionID, characters: 6 },
+    })
     await wait(() => data.session.compactionCharacters(sessionID) === 6)
     data.session.evict(sessionID)
     expect(data.session.compactionCharacters(sessionID)).toBe(0)
@@ -4193,7 +4223,12 @@ test("a compaction delta without a count changes nothing (an older server)", asy
     emitEvent(events, compactionStarted(sessionID))
     emitEvent(events, compactionStarted(other))
     await wait(() => data.session.message.get(other, `message-${other}`)?.type === "compaction")
-    emitEvent(events, { id: "evt_good", created: 2, type: "session.compaction.delta", data: { sessionID, characters: 2 } })
+    emitEvent(events, {
+      id: "evt_good",
+      created: 2,
+      type: "session.compaction.delta",
+      data: { sessionID, characters: 2 },
+    })
     await wait(() => data.session.compactionCharacters(sessionID) === 2)
 
     // An older server sends the reply text and no count; a count that is not a whole number is not one either; and
@@ -4204,14 +4239,37 @@ test("a compaction delta without a count changes nothing (an older server)", asy
       type: "session.compaction.delta",
       data: { sessionID, text: "HOSTILE" },
     } as never)
-    emitEvent(events, { id: "evt_bad", created: 4, type: "session.compaction.delta", data: { sessionID, characters: -1 } })
-    emitEvent(events, { id: "evt_fraction", created: 5, type: "session.compaction.delta", data: { sessionID, characters: 1.5 } })
-    emitEvent(events, { id: "evt_idle", created: 6, type: "session.compaction.delta", data: { sessionID: "session-idle", characters: 9 } })
+    emitEvent(events, {
+      id: "evt_bad",
+      created: 4,
+      type: "session.compaction.delta",
+      data: { sessionID, characters: -1 },
+    })
+    emitEvent(events, {
+      id: "evt_fraction",
+      created: 5,
+      type: "session.compaction.delta",
+      data: { sessionID, characters: 1.5 },
+    })
+    emitEvent(events, {
+      id: "evt_idle",
+      created: 6,
+      type: "session.compaction.delta",
+      data: { sessionID: "session-idle", characters: 9 },
+    })
     // Events are handled in order, so once this one shows, the ones before it have been handled.
-    emitEvent(events, { id: "evt_sentinel", created: 7, type: "session.compaction.delta", data: { sessionID: other, characters: 7 } })
+    emitEvent(events, {
+      id: "evt_sentinel",
+      created: 7,
+      type: "session.compaction.delta",
+      data: { sessionID: other, characters: 7 },
+    })
     await wait(() => data.session.compactionCharacters(other) === 7)
     expect(data.session.compactionCharacters(sessionID)).toBe(2)
-    expect(data.session.message.get(sessionID, `message-${sessionID}`)).toMatchObject({ status: "running", summary: "" })
+    expect(data.session.message.get(sessionID, `message-${sessionID}`)).toMatchObject({
+      status: "running",
+      summary: "",
+    })
     expect(data.session.compactionCharacters("session-idle")).toBe(0)
 
     // A compaction that starts again begins from zero, even when the earlier one never reported its end.

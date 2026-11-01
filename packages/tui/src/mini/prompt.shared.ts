@@ -80,8 +80,13 @@ export function isNewCommand(input: string): boolean {
   return input.trim().toLowerCase() === "/new"
 }
 
-export function isCompactCommand(input: string): boolean {
-  return /^\/compact(\s|$)/i.test(input.trim())
+/**
+ * A bare `/compact` is always the built-in. `/compact <text>` is the built-in only when no project command named
+ * `compact` was resolved for the prompt, as in the terminal UI, where that command keeps typed text.
+ */
+export function isCompactCommand(input: string, command?: unknown): boolean {
+  const text = input.trim()
+  return /^\/compact$/i.test(text) || (!command && /^\/compact\s/i.test(text))
 }
 
 /** The text after `/compact`, trimmed, or undefined when there is none. */

@@ -125,7 +125,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
             continue
           }
 
-          if (prompt.mode !== "shell" && isCompactCommand(prompt.text)) {
+          if (prompt.mode !== "shell" && isCompactCommand(prompt.text, prompt.command)) {
             emit(
               {
                 type: "stream.patch",
@@ -260,8 +260,10 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       prompt.mode !== "shell" &&
       prompt.command?.source !== "skill" &&
       !isNewCommand(prompt.text) &&
-      !isCompactCommand(prompt.text) &&
-      !state.queue.some((item) => item.mode !== "shell" && (isNewCommand(item.text) || isCompactCommand(item.text)))
+      !isCompactCommand(prompt.text, prompt.command) &&
+      !state.queue.some(
+        (item) => item.mode !== "shell" && (isNewCommand(item.text) || isCompactCommand(item.text, item.command)),
+      )
     ) {
       const sent = { ...prompt, messageID: SessionMessage.ID.create() }
       const admission = state.admission
@@ -276,7 +278,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
     }
 
     state.queue.push(prompt)
-    if (prompt.mode !== "shell" && (isNewCommand(prompt.text) || isCompactCommand(prompt.text))) {
+    if (prompt.mode !== "shell" && (isNewCommand(prompt.text) || isCompactCommand(prompt.text, prompt.command))) {
       drain()
       return
     }

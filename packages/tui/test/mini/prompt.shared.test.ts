@@ -108,6 +108,13 @@ describe("run prompt shared", () => {
     expect(isCompactCommand("/summarize")).toBe(false)
   })
 
+  test("a resolved project command keeps /compact with text, not a bare one", () => {
+    const resolved = { name: "compact", arguments: "x" }
+    expect(isCompactCommand("/compact x", resolved)).toBe(false)
+    expect(isCompactCommand("/compact", resolved)).toBe(true)
+    expect(isCompactCommand("/compact x", undefined)).toBe(true)
+  })
+
   // context-memory-2 part 2: the text after the command is the instructions.
   test("/compact with text is a compaction with instructions", () => {
     const rows = [
