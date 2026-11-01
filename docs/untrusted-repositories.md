@@ -1361,6 +1361,18 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   (the escaping), `test/cli/tui/form.test.tsx`, `test/mini/entry.body.test.ts` and
   `test/util/permission-body.test.ts`. Sinks that are routed through `bodyText` but have no frame test, and the
   places that are still open, are listed in Known gaps.
+- The reply of a running compaction: the streamed `session.compaction.delta` event carries `characters`, a count of the text
+  characters received in the current summary request, and never the text, so no client has reply text to draw while the
+  compaction runs. The summary reaches clients only on `session.compaction.ended`, where the session screen draws it
+  through `bodyText` as before. The terminal UI draws the count as an elapsed time and an estimated token figure; Mini
+  and ACP draw nothing from it; a delta from an older server that still carries `text` changes nothing (class 7). The
+  instructions of `/compact <text>` are the person's own text: they travel in the `session.compact` payload (behind the
+  same trust gate as before, class 12) into the summary prompt, are joined into no path, ref or title, and no client
+  draws them. Proof: `test/session-compaction.test.ts` ("the streamed compaction event carries a character count, never
+  text", "each summary request counts its characters from zero") in `packages/core`; in `packages/tui`,
+  `test/compaction-progress.test.tsx` (a drawn frame with an old-server row and a trusted completed control),
+  `test/cli/tui/data.test.tsx` and `test/mini/stream-v2.transport.test.ts`; in `packages/cli`,
+  `test/acp/compaction.test.ts`; and the "compact with instructions" row of `packages/server/test/trust-first.test.ts`.
 - Session titles in the session list (`dialog-session-list.tsx`) and the open dialog (`dialog-open.tsx`): both pass the
   title through `plain`. Proof: the hostile-title tests in `test/cli/tui/dialog-session-list.test.tsx` and
   `test/cli/tui/dialog-open.test.tsx`. The tab rail (`session-tabs.tsx`: both rails, the tooltip and the closed-tab menu),
