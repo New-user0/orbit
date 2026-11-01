@@ -2088,7 +2088,9 @@ under Input that writes it. With it on, the terminal UI and Mini ask the server 
 turn of the session in view ends well (not after a failed or stopped turn, and not after a subagent's), and draw the
 answer dimmed in the empty prompt, cut to the row. Tab or the Right arrow puts it in the input; a suggestion that starts
 with `!` puts the prompt in shell mode with the command after it. Enter sends it as a prompt, unless it was cut, in
-which case Enter puts it in the input first. Model text is drawn and sent with its control and format characters
+which case Enter puts it in the input first; a suggestion that is a slash command on its own, such as `/help`, runs
+that command as typing it would. In the terminal UI it is not drawn, and no key takes it, while another pane has the
+keys; it is drawn again when the prompt has them back. Model text is drawn and sent with its control and format characters
 written out, so what you see is what is sent. Typing hides it and cancels an ask still out; erasing the input shows it
 again; sending a prompt or a turn starting in the session ends it. An answer that comes while you are typing or while a
 turn runs is dropped. Nothing is asked while the session's folder is not trusted, and a refusal, a failure or an older

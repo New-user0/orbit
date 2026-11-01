@@ -1390,11 +1390,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `packages/cli/test/config.test.ts` (the key is read from no project folder).
 - The suggestion's text, which a model writes and a planted file can steer, drawn as dimmed text in the prompt line of
   the terminal UI and Mini and taken by Tab, Right or Enter as the person's own prompt: it is drawn, put in the input
-  and sent as `plain(text)`, cut where the input's text area ends, and a key takes it only while it is drawn; Enter on
-  a cut one fills the input instead of sending (class 9, and class 8's "what is shown is what runs"). Proof:
+  and sent as `plain(text)`, cut where the input's text area ends, and a key takes it only while it is drawn, which in the
+  terminal UI also needs the prompt to have the keys; Enter on a cut one fills the input instead of sending, and Enter
+  on a slash command on its own runs it as typed (class 9, and class 8's "what is shown is what runs"). Proof:
   `test/prompt-suggestion.test.tsx` and `test/mini/prompt-suggestion.test.tsx` (each spelling drawn and taken by each
-  key, the cut row, a suggestion that just fills the row against one a cell wider, and the hidden cases), each with a
-  plain control row.
+  key, the cut row, a suggestion that just fills the row against one a cell wider, the hidden cases, a side pane holding
+  the keys, and `/help` against `/help me`), each with a plain control row.
 - Run store text in the `/runs` dialog: `DialogFlowRuns` passes every string through `plain`. Proof:
   `test/component/dialog-flow-runs.test.tsx`.
 - Agent, skill and command names and descriptions that a folder supplies: the TUI agent and skill dialogs, the `@` and `/` autocomplete and every Mini menu (`RunFooterMenu` in `src/mini/footer.menu.tsx`, the single render site for the Mini `/` and `@` composer) draw them through `plain`. Proof: `test/component/dialog-listings.test.tsx`, `test/prompt/autocomplete-hostile.test.tsx`, `test/mini/footer.view.test.tsx` (hostile row beside a trusted one).
