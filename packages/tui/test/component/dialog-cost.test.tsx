@@ -109,6 +109,8 @@ test("the dialog shows the whole session's rows, not the loaded page", async () 
   expect(frame).not.toContain("loaded-only")
   expect(frame).not.toContain("$99")
   expect(flat(frame)).not.toContain("newest loaded")
+  // No subagent spend, no Subagents line.
+  expect(frame).not.toContain("Subagents")
 })
 
 // PT2: the reference prints cents above $0.50 and four decimals below; a price that is not known reads unknown, never

@@ -218,12 +218,14 @@ describe("SessionCost", () => {
     Effect.gen(function* () {
       const db = yield* seedProject
       const alpha = { provider: "prov", id: "alpha" }
-      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 0.9 })).run().pipe(Effect.orDie)
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 1.2 })).run().pipe(Effect.orDie)
       yield* db
         .insert(SessionMessageTable)
         .values([
           message(root, "assistant", { input: 10, cost: 0.4 }),
           message(root, "compaction", { input: 10, cost: 0.2 }),
+          // A compaction that did not complete is not a response; its spend has no row.
+          message(root, "compaction", { input: 10, cost: 0.3, extra: { status: "failed" } }),
         ])
         .run()
         .pipe(Effect.orDie)
@@ -246,7 +248,7 @@ describe("SessionCost", () => {
       expect(alphaRow?.cost).toBeCloseTo(0.85)
       expect(summary.rows.find((row) => row.modelID === "beta")).toMatchObject({ responses: 1 })
       expect(totalOf(summary.rows)).toBeCloseTo(0.9)
-      expect(summary.other).toBeUndefined()
+      expect(summary.other).toBeCloseTo(0.3)
     }),
   )
 
