@@ -10,7 +10,7 @@
 // Resolves when the footer closes and all in-flight work finishes.
 import { SessionMessage } from "@orbit/schema/session-message"
 import { Locale } from "../util/locale"
-import { isCompactCommand, isExitCommand, isNewCommand } from "./prompt.shared"
+import { compactInstructions, isCompactCommand, isExitCommand, isNewCommand } from "./prompt.shared"
 import type { FooterApi, FooterEvent, RunDelivery, RunPrompt } from "./types"
 
 type Trace = {
@@ -24,7 +24,7 @@ export type QueueInput = {
   onSend?: (prompt: RunPrompt, emittedUser: boolean) => void
   onAdmissionError?: (prompt: RunPrompt, error: unknown) => void | Promise<void>
   onNewSession?: () => void | Promise<void>
-  onCompact?: () => void | Promise<void>
+  onCompact?: (instructions?: string) => void | Promise<void>
   admit: (prompt: RunPrompt, delivery: RunDelivery, signal: AbortSignal) => Promise<void>
   settle: () => Promise<void>
   run: (prompt: RunPrompt, signal: AbortSignal, admitted: () => void) => Promise<void>
@@ -139,7 +139,7 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
                 status: "compacting session",
               },
             )
-            await input.onCompact?.()
+            await input.onCompact?.(compactInstructions(prompt.text))
             continue
           }
 

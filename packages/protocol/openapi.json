@@ -3591,7 +3591,7 @@
             }
           }
         },
-        "description": "Durably admit a session compaction request. Steers by default: it runs at the next step boundary instead of waiting behind queued prompts.",
+        "description": "Durably admit a session compaction request. Steers by default: it runs at the next step boundary instead of waiting behind queued prompts. Optional instructions are added to the summary prompt; a request with instructions replaces a pending compaction, and one without joins it.",
         "summary": "Compact session",
         "requestBody": {
           "content": {
@@ -3617,6 +3617,21 @@
                       },
                       {
                         "type": "null"
+                      }
+                    ]
+                  },
+                  "instructions": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "allOf": [
+                      {
+                        "description": "Text added to this compaction's summary prompt. Blank counts as none. A request with instructions replaces a pending compaction; one without joins it."
                       }
                     ]
                   }
@@ -21220,14 +21235,25 @@
         "additionalProperties": false
       },
       "Session.Inbox.CompactionPayload": {
-        "anyOf": [
-          {
-            "type": "object"
-          },
-          {
-            "type": "array"
+        "type": "object",
+        "properties": {
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "allOf": [
+              {
+                "description": "Text from the person, added to this compaction's summary prompt."
+              }
+            ]
           }
-        ]
+        },
+        "additionalProperties": false
       },
       "Session.Inbox.Delivery": {
         "type": "string",

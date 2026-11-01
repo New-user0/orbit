@@ -81,7 +81,12 @@ export function isNewCommand(input: string): boolean {
 }
 
 export function isCompactCommand(input: string): boolean {
-  return input.trim().toLowerCase() === "/compact"
+  return /^\/compact(\s|$)/i.test(input.trim())
+}
+
+/** The text after `/compact`, trimmed, or undefined when there is none. */
+export function compactInstructions(input: string): string | undefined {
+  return input.trim().slice("/compact".length).trim() || undefined
 }
 
 export function createPromptHistory(items?: RunPrompt[]): PromptHistoryState {
