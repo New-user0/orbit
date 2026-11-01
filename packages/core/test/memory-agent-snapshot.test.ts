@@ -6,6 +6,7 @@
 // project, so nothing of it is read before the project is trusted (class 1), the root and each agent folder follow
 // `MemoryAgent`'s rules (links, shares, real paths: classes 4 and 6), names are plain (class 5), and one bad entry costs
 // only itself (class 7). Every row that expects nothing has a control in the same test that copies (class 14).
+import { NodeFileSystem } from "@effect/platform-node"
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
@@ -97,6 +98,26 @@ const provide = (
       ],
     ),
   )
+
+// The real file system, except that a listing reports each link as a plain file: what a listing taken just before a
+// file was swapped for a link says.
+const linksListedAsFiles = Layer.effect(
+  FSUtil.Service,
+  Effect.gen(function* () {
+    const real = yield* FSUtil.Service
+    return FSUtil.Service.of({
+      ...real,
+      readDirectoryEntries: (folder) =>
+        real
+          .readDirectoryEntries(folder)
+          .pipe(
+            Effect.map((entries) =>
+              entries.map((entry) => (entry.type === "symlink" ? { ...entry, type: "file" as const } : entry)),
+            ),
+          ),
+    })
+  }),
+).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
 
 const logged = (logs: string[]) =>
   Logger.layer([
@@ -531,6 +552,27 @@ describe("agent memory snapshots", () => {
       expect(logs.filter((line) => line.includes("link.md") || line.includes("dir-link") || line.includes("sub"))).toEqual([])
     }),
   )
+
+  // Class 4, T4: a source is read only at its real path inside the snapshot folder, even when the listing called it a
+  // plain file. A file swapped for a link between the listing and the read (here, a listing that reports each link as
+  // a file) is not followed out of the folder: it costs only itself, with one line, and the rest copies.
+  if (canLinkFile)
+    it.live("reads no source that became a link after the snapshot folder was listed", () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const folder = path.join(l.snapshots, "reviewer")
+        yield* snapshotAt(folder, { "MEMORY.md": "- INDEX\n" })
+        yield* write(path.join(l.outside, "secret.md"), "OUTSIDE-SECRET\n")
+        yield* Effect.promise(() => fs.symlink(path.join(l.outside, "secret.md"), path.join(folder, "swapped.md")))
+        const logs: string[] = []
+        yield* Effect.gen(function* () {
+          yield* define(reviewer)
+          yield* sync
+        }).pipe(provide(l, { files: linksListedAsFiles }), Effect.provide(logged(logs)))
+        expect(yield* listed(path.join(l.user, "reviewer"))).toEqual([".snapshot-synced.json", "MEMORY.md"])
+        expect(logs.filter((line) => line.includes("swapped.md"))).toHaveLength(1)
+      }),
+    )
 
   // Classes 4 and 7, T4/T5: a name in the user-scope folder that is a link (`MEMORY.md` and the marker to files
   // outside, `notes.txt` to nothing) is never written through: the files outside keep their text and nothing is made
