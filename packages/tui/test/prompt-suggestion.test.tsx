@@ -30,6 +30,8 @@ async function mount(
     sessionDirectory?: string
     /** Makes the session in view a subagent's session under this parent. */
     parentID?: string
+    /** Opens a subagent's session of the root, on this folder, rather than the root itself. */
+    child?: { directory: string }
     width?: number
     /** cli.json's plugins. */
     plugins?: string[]
@@ -57,6 +59,9 @@ async function mount(
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 0, updated: 0 },
   }
+  const child = input.child
+    ? { ...session, id: childID, title: "Suggest child", parentID: sessionID, location: input.child }
+    : undefined
   const setup = await createAppFixture({
     state: state.path,
     width: input.width ?? 100,
@@ -66,7 +71,7 @@ async function mount(
       ...(input.suggestions === undefined ? {} : { prompt: { suggestions: input.suggestions } }),
       ...(input.plugins ? { plugins: input.plugins } : {}),
     },
-    args: { sessionID },
+    args: { sessionID: child ? childID : sessionID },
     fetch: async (url, request) => {
       if (url.pathname === "/api/location/trust" && request.method === "GET") {
         const folder = url.searchParams.get("location[directory]")
@@ -86,6 +91,7 @@ async function mount(
         return json({ data: session })
       }
       if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
+      if (child && url.pathname === `/api/session/${childID}`) return json({ data: child })
       if (input.parentID && url.pathname === `/api/session/${input.parentID}`)
         return json({ data: { ...session, id: input.parentID, parentID: undefined } })
       if (url.pathname === "/api/session/active")
@@ -131,8 +137,8 @@ async function mount(
     },
   })
   await setup.ready
-  // The session's own folder has been asked about, so a turn's end is judged on its answer.
-  await until(() => trustReads.includes(sessionDirectory))
+  // The folders of the session in view and of its root have been asked about, so a turn's end is judged on the answers.
+  await until(() => trustReads.includes(sessionDirectory) && (!child || trustReads.includes(child.location.directory)))
   await Bun.sleep(150)
   await setup.renderOnce()
   let seq = 100
@@ -190,8 +196,19 @@ async function mount(
         location: { directory: sessionDirectory },
       } as OrbitEvent)
     },
+    /** Sends an event of the root session that carries `data`. */
+    emit(type: string, data: Record<string, unknown>) {
+      seq++
+      setup.events.emit({
+        id: `evt_session_${seq}`,
+        created: Date.now(),
+        type,
+        durable: { aggregateID: sessionID, seq, version: 1 },
+        data: { sessionID, ...data },
+      } as never)
+    },
     async press(
-      key: "TAB" | "ARROW_RIGHT" | "ARROW_LEFT" | "BACKSPACE" | "F6" | "x",
+      key: "TAB" | "ARROW_RIGHT" | "ARROW_LEFT" | "ARROW_UP" | "BACKSPACE" | "ESCAPE" | "F6" | "x",
       modifiers?: { ctrl?: boolean; shift?: boolean },
     ) {
       setup.mockInput.pressKey(key, modifiers)
@@ -333,6 +350,31 @@ test("only a succeeded turn of the session in view asks", async () => {
     await using app = await mount({ suggestions: true, parentID: row.parentID })
     app.execution(row.type, row.id)
     expect({ name: row.name, count: await asked(app, row.count) }).toEqual({ name: row.name, count: row.count })
+  }
+})
+
+test("the root's turn ending while its subagent's session is in view asks, and the root shows the answer", async () => {
+  const elsewhere = "/tmp/elsewhere"
+  // The root's own folder decides, not the folder of the subagent's session in view (class 3).
+  const rows = [
+    { name: "the root's folder is not trusted", trusted: (folder: string | null) => folder !== elsewhere, count: 0 },
+    { name: "control: the root's folder is trusted", trusted: () => true, count: 1 },
+  ]
+  for (const row of rows) {
+    await using app = await mount({
+      suggestions: true,
+      trusted: row.trusted,
+      sessionDirectory: elsewhere,
+      child: { directory },
+    })
+    expect(app.frame()).toContain("Suggest child")
+    app.execution("session.execution.succeeded")
+    expect({ name: row.name, count: await asked(app, row.count) }).toEqual({ name: row.name, count: row.count })
+    if (!row.count) continue
+    expect(app.frame()).not.toContain(suggestion)
+    await app.press("x", { ctrl: true })
+    await app.press("ARROW_UP")
+    expect(await app.shows(suggestion)).toBe(true)
   }
 })
 
@@ -615,6 +657,35 @@ test("typing, a turn start and a submit end a suggestion as the reference does",
     await quiet(app)
     expect(app.textarea().plainText).toBe("")
     expect(app.frame()).not.toContain(suggestion)
+  }
+  // A slash command typed and run from the list that opens on it is a submit as well.
+  {
+    await using app = await mount({ suggestions: true })
+    await ghost(app)
+    await app.type("/help")
+    app.setup.mockInput.pressEnter()
+    expect(await app.shows("available actions and commands")).toBe(true)
+    await app.press("ESCAPE")
+    await quiet(app)
+    expect(app.frame()).not.toContain("available actions and commands")
+    expect(app.textarea().plainText).toBe("")
+    expect(app.prompts).toEqual([])
+    expect(app.frame()).not.toContain(suggestion)
+  }
+  // Rewinding the conversation ends it: it was written for the turns the rewind takes away.
+  {
+    await using app = await mount({ suggestions: true })
+    await ghost(app)
+    // The rewind puts the rewound prompt back in the input, which the person then erases.
+    await app.type("Rename the helper")
+    app.emit("session.revert.staged", { revert: { messageID: "msg_0003", files: [] } })
+    await quiet(app, 100)
+    for (const _ of "Rename the helper") await app.press("BACKSPACE")
+    await quiet(app)
+    expect(app.textarea().plainText).toBe("")
+    expect(app.frame()).not.toContain(suggestion)
+    await app.enter()
+    expect(app.prompts).toEqual([])
   }
   // An answer that comes while the input holds text is dropped, as the reference drops one it cannot show.
   {
