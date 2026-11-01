@@ -4126,23 +4126,33 @@ test("a running compaction keeps a character count and no reply text", async () 
 test("a compaction delta without a count changes nothing (an older server)", async () => {
   await withCompactionData(async ({ data, events }) => {
     const sessionID = "session-old-server"
+    const other = "session-sentinel"
     emitEvent(events, compactionStarted(sessionID))
-    await wait(() => data.session.message.get(sessionID, `message-${sessionID}`)?.type === "compaction")
-    // An older server sends the reply text and no count.
+    emitEvent(events, compactionStarted(other))
+    await wait(() => data.session.message.get(other, `message-${other}`)?.type === "compaction")
+    emitEvent(events, { id: "evt_good", created: 2, type: "session.compaction.delta", data: { sessionID, characters: 2 } })
+    await wait(() => data.session.compactionCharacters(sessionID) === 2)
+
+    // An older server sends the reply text and no count; a count that is not a whole number is not one either; and
+    // a delta for a session with no running compaction has nothing to update.
     emitEvent(events, {
       id: "evt_old_text",
-      created: 2,
+      created: 3,
       type: "session.compaction.delta",
       data: { sessionID, text: "HOSTILE" },
     } as never)
-    // A delta for a session with no running compaction is dropped, and a count that is not a whole number too.
-    emitEvent(events, { id: "evt_idle", created: 3, type: "session.compaction.delta", data: { sessionID: "session-idle", characters: 9 } })
     emitEvent(events, { id: "evt_bad", created: 4, type: "session.compaction.delta", data: { sessionID, characters: -1 } })
     emitEvent(events, { id: "evt_fraction", created: 5, type: "session.compaction.delta", data: { sessionID, characters: 1.5 } })
-    // The marker below arrives after the others, so they have all been handled.
-    emitEvent(events, { id: "evt_marker", created: 6, type: "session.compaction.delta", data: { sessionID, characters: 2 } })
-    await wait(() => data.session.compactionCharacters(sessionID) === 2)
+    emitEvent(events, { id: "evt_idle", created: 6, type: "session.compaction.delta", data: { sessionID: "session-idle", characters: 9 } })
+    // Events are handled in order, so once this one shows, the ones before it have been handled.
+    emitEvent(events, { id: "evt_sentinel", created: 7, type: "session.compaction.delta", data: { sessionID: other, characters: 7 } })
+    await wait(() => data.session.compactionCharacters(other) === 7)
+    expect(data.session.compactionCharacters(sessionID)).toBe(2)
     expect(data.session.message.get(sessionID, `message-${sessionID}`)).toMatchObject({ status: "running", summary: "" })
     expect(data.session.compactionCharacters("session-idle")).toBe(0)
+
+    // A compaction that starts again begins from zero, even when the earlier one never reported its end.
+    emitEvent(events, { ...compactionStarted(sessionID), id: "evt_restarted", durable: durable(sessionID, 5) })
+    await wait(() => data.session.compactionCharacters(sessionID) === 0)
   })
 })
