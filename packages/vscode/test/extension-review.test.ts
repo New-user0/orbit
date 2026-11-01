@@ -25,9 +25,13 @@ const warnings: unknown[][] = []
 const informations: unknown[][] = []
 const closing: Tab[] = []
 const tabs: Tab[] = []
+// A second editor group, where a tab the person moves goes.
+const moved: Tab[] = []
 const documents: Array<{ uri: Uri; isDirty: boolean; save(): Promise<boolean> }> = []
 const saved: string[] = []
 const listeners: Array<(event: { opened: unknown[]; changed: unknown[]; closed: Tab[] }) => void> = []
+const saving: Array<(event: { document: { uri: Uri }; reason: number }) => void> = []
+const reasons = { Manual: 1, AfterDelay: 2, FocusOut: 3 }
 const providers = new Map<string, unknown>()
 // What the next modal question is answered with: the button the person picks, by its title.
 const answer: { title?: string } = {}
@@ -60,6 +64,7 @@ class TabInputTextDiff {
 const vscode = stub({
   Uri: stub({ from: uri }),
   TabInputTextDiff,
+  TextDocumentSaveReason: reasons,
   window: stub({
     activeTextEditor: undefined,
     createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
@@ -76,7 +81,7 @@ const vscode = stub({
     showQuickPick: async (...args: unknown[]) => (picks.push(args), "Yes"),
     tabGroups: stub({
       get all() {
-        return [{ tabs }]
+        return [{ tabs }, { tabs: moved }]
       },
       close: async (closed: Tab[]) => {
         closing.push(...closed)
@@ -103,6 +108,10 @@ const vscode = stub({
   workspace: stub({
     textDocuments: documents,
     workspaceFolders,
+    onWillSaveTextDocument: (listener: (typeof saving)[number]) => {
+      saving.push(listener)
+      return stub()
+    },
     registerFileSystemProvider: (scheme: string, provider: Record<string, (...args: unknown[]) => unknown>) => {
       filesystems.set(scheme, provider)
       return stub()
@@ -185,7 +194,9 @@ beforeEach(() => {
 afterAll(() => fs.rm(folder, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
 
 const chat = () => providers.get("orbit.chat") as Chat
+// The person closes a tab: it leaves its group, and VS Code reports it closed.
 const fire = async (label: string) => {
+  for (const group of [tabs, moved]) group.splice(0, group.length, ...group.filter((tab) => tab.label !== label))
   for (const listener of listeners) listener({ opened: [], changed: [], closed: [{ label }] })
   await Bun.sleep(50)
 }
@@ -312,7 +323,7 @@ test("View changes opens one multi-file diff, and Restore files asks before it r
   await chat().receive({ type: "changes", messageID: "msg_1" })
   const view = executed.at(-1)!
   expect(view[0]).toBe("vscode.changes")
-  expect(view[1]).toBe("Orbit: changes in this prompt (1 file)")
+  expect(view[1]).toMatch(/^Orbit: changes in this prompt \(1 file\) \([a-z0-9]{6}\)$/)
   expect((view[2] as Uri[][])[0]?.map((side) => side.scheme)).toEqual(["orbit-proposed", "orbit-proposed", "orbit-proposed"])
 
   answer.title = undefined
@@ -339,6 +350,63 @@ test("a form the controller passes on is asked with VS Code's pickers, and the a
   await Bun.sleep(50)
   expect(picks.at(-1)?.[0]).toEqual(["Yes", "No"])
   expect(answered).toEqual([[form, { go: true }]])
+})
+
+test("a review tab moved to another group or window answers nothing, and closing it there replies once", async () => {
+  const [, , , title] = await open("per_moved")
+  const tab = tabs.find((entry) => entry.label === title)!
+  // VS Code moves a tab by opening it in the other group and then closing it in this one.
+  const there = { ...tab }
+  moved.push(there)
+  for (const listener of listeners) listener({ opened: [there], changed: [], closed: [] })
+  tabs.splice(tabs.indexOf(tab), 1)
+  for (const listener of listeners) listener({ opened: [], changed: [], closed: [tab] })
+  await Bun.sleep(50)
+  // Should the close be reported before the tab shows in its new group, it still answers nothing.
+  moved.splice(moved.indexOf(there), 1)
+  for (const listener of listeners) listener({ opened: [], changed: [], closed: [there] })
+  moved.push(there)
+  for (const listener of listeners) listener({ opened: [there], changed: [], closed: [] })
+  await Bun.sleep(50)
+  expect(replies).toEqual([])
+  // The person closes it in its new group: that answers, once.
+  await fire(title)
+  await fire(title)
+  expect(replies).toEqual([["per_moved", "once", undefined]])
+})
+
+test("an auto save of a review answers nothing, and a save by the person replies once with its text", async () => {
+  const [, , right] = await open("per_autosave")
+  const willSave = (target: Uri, reason: number) => saving.forEach((listener) => listener({ document: { uri: target }, reason }))
+  // VS Code's own auto save, after a delay or when the editor loses focus, hands the review a draft.
+  for (const reason of [reasons.AfterDelay, reasons.FocusOut]) {
+    willSave(right, reason)
+    await system().writeFile(right, new TextEncoder().encode("half\n"), { create: false, overwrite: true })
+  }
+  expect(replies).toEqual([])
+  expect(new TextDecoder().decode(system().readFile(right) as Uint8Array)).toBe("half\n")
+  // A manual save of another document, even one at the same path, says nothing about the review's.
+  willSave(right, reasons.AfterDelay)
+  willSave(uri({ scheme: "file", path: right.path }), reasons.Manual)
+  await system().writeFile(right, new TextEncoder().encode("still\n"), { create: false, overwrite: true })
+  expect(replies).toEqual([])
+  willSave(right, reasons.Manual)
+  await system().writeFile(right, new TextEncoder().encode("mine\n"), { create: false, overwrite: true })
+  expect(replies).toEqual([["per_autosave", "once", "mine\n"]])
+
+  // Accept saves unsaved edits as the person's own save, whatever VS Code last said about the document.
+  const [, , accepted] = await open("per_autoaccept")
+  willSave(accepted, reasons.AfterDelay)
+  documents.push({
+    uri: accepted,
+    isDirty: true,
+    save: async () => {
+      await system().writeFile(accepted, new TextEncoder().encode("accepted\n"), { create: false, overwrite: true })
+      return true
+    },
+  })
+  await commands.get("orbit.review.accept")!(accepted)
+  expect(replies.at(-1)).toEqual(["per_autoaccept", "once", "accepted\n"])
 })
 
 test("a tab closed while the extension closes it, or after deactivate, replies nothing", async () => {

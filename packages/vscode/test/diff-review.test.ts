@@ -532,9 +532,11 @@ describe("the session's folders as the server names them", () => {
     await review.open(item([{ file: "marker.txt", place: path.join(other, "marker.txt"), patch }], { sessionID: session.id }), true)
     expect(shown.tabs).toEqual([])
     expect(seen.reads()).toEqual([])
+    // The chat's folder's trust, the session, the trust of the session's own folder, and its Location.
     expect(log.sent.map((call) => `${call.method} ${call.path}`)).toEqual([
       "GET /api/location/trust",
       `GET /api/session/${session.id}`,
+      "GET /api/location/trust",
       "GET /api/location",
     ])
     await review.open(item([{ file: "a.txt", place: inside, patch }], { sessionID: session.id }), true)
@@ -618,6 +620,56 @@ describe("the session's folders as the server names them", () => {
     await review.open(item([{ file: "m.txt", place: path.join(main, "m.txt"), patch }], { sessionID: session.id }), true)
     expect(shown.tabs).toHaveLength(1)
     expect(seen.reads()).toEqual([await fs.realpath(path.join(tree, "m.txt"))])
+  })
+
+  test("a session whose own folder is not trusted names no folders, though the chat's folder is trusted", async () => {
+    // A session the chat continues from another folder, whose trust is taken back while the chat is open.
+    const folder = path.join(root, "elsewhere")
+    await fs.mkdir(folder, { recursive: true })
+    await Bun.write(path.join(folder, "a.txt"), text)
+    git(folder, "init", "--quiet")
+    await server.client.location.trust.update({ location: { directory: folder }, trust: true, persist: false })
+    const session = await server.client.session.create({ location: { directory: folder } })
+    const { controller } = await chat(project)
+    const shown = editor({ controller, window: [root] })
+    const seen = recorded()
+    const review = new Review(shown.host, seen.recorder)
+    const change = () => item([{ file: "a.txt", place: path.join(folder, "a.txt"), patch }], { sessionID: session.id })
+    // The control: while the session's folder is trusted, its file opens.
+    await review.open(change(), true)
+    expect(shown.tabs).toHaveLength(1)
+    await server.client.location.trust.update({ location: { directory: folder }, trust: false, persist: false })
+    seen.log.length = 0
+    expect(await controller.folders(session.id)).toEqual({ refused: "untrusted" })
+    await review.open(change(), true)
+    expect(shown.tabs).toHaveLength(1)
+    expect(seen.log).toEqual([])
+    expect(shown.notes.at(-1)?.text).toContain("the folder is not trusted")
+  })
+
+  test("a project folder that is a filesystem root is not one the session works in", async () => {
+    const session = await server.client.session.create({ location: { directory: project } })
+    // The server names the root as the project's folder, as it would for a repository at the root of a drive. The file
+    // tools leave such a folder out, and so does the review.
+    const rooted = recording((url, init) =>
+      url.pathname === "/api/location"
+        ? fetch(url, init).then(async (response) => {
+            const body = await response.json()
+            return Response.json({ ...body, project: { ...body.project, directory: path.parse(project).root } })
+          })
+        : undefined,
+    )
+    const { controller } = await chat(project, { fetcher: rooted.fetcher })
+    const folders = await controller.folders(session.id)
+    expect("folders" in folders && folders.folders.map((folder) => path.relative(project, folder))).toEqual([""])
+    const shown = editor({ controller, window: [root] })
+    const seen = recorded()
+    await new Review(shown.host, seen.recorder).open(
+      item([{ file: "marker.txt", place: marker, patch }], { sessionID: session.id }),
+      true,
+    )
+    expect(shown.tabs).toEqual([])
+    expect(seen.reads()).toEqual([])
   })
 })
 
@@ -801,7 +853,10 @@ describe("answers from a review tab", () => {
       () => undefined,
       (error: Error) => error.message,
     )
-    expect(failure).toBe("The Orbit service did not answer in time, so nothing was decided. Try again.")
+    // The server may still take an answer that came late, so the sentence does not say that nothing was decided.
+    expect(failure).toBe(
+      "The Orbit service did not answer in time. The card shows the question's state; answer again if it is still waiting.",
+    )
     expect(shown.closed).toEqual([])
     expect(late.notes().at(-1)).toMatchObject({ tone: "error", text: failure })
     expect((await server.client.permission.list({ sessionID: late.question.sessionID })).map((request) => request.id)).toEqual([
@@ -838,6 +893,61 @@ test("a reply that loses to another answer is dropped quietly and its tab closes
   await review.provider.writeFile(tab.right.path, new TextEncoder().encode("mine\n"))
   expect(shown.closed).toEqual([tab.title])
   expect([...notes(), ...shown.notes]).toEqual([])
+})
+
+test("an auto save keeps the draft and answers nothing; Accept sends the draft, and a close the proposal unchanged", async () => {
+  const shown = editor({ folders: [project], window: [project] })
+  const review = new Review(shown.host)
+  const encode = (value: string) => new TextEncoder().encode(value)
+  const opened = async () => {
+    const question = item([{ file: "a.txt", place: inside, patch }])
+    await review.open(question, false)
+    return { id: question.id, tab: shown.tabs.at(-1)! }
+  }
+  // VS Code saved the draft on its own: the review keeps it as the tab's text and sends nothing.
+  const accepted = await opened()
+  review.willSave(accepted.tab.right.path, false)
+  await review.provider.writeFile(accepted.tab.right.path, encode("draft\n"))
+  expect(shown.replies).toEqual([])
+  expect(decode(review.provider.readFile(accepted.tab.right.path))).toBe("draft\n")
+  // Accept answers with the text the tab holds.
+  await review.accept(accepted.tab.right.path)
+  expect(shown.replies).toEqual([[accepted.id, "once", "draft\n"]])
+
+  // Closing the tab is the proposal as it stands, whatever was saved on its own.
+  const closed = await opened()
+  review.willSave(closed.tab.right.path, false)
+  await review.provider.writeFile(closed.tab.right.path, encode("draft\n"))
+  await review.closed(closed.tab.title)
+  expect(shown.replies.at(-1)).toEqual([closed.id, "once"])
+
+  // A save the person makes after VS Code announced an auto save answers with its text.
+  const manual = await opened()
+  review.willSave(manual.tab.right.path, false)
+  review.willSave(manual.tab.right.path, true)
+  await review.provider.writeFile(manual.tab.right.path, encode("mine\n"))
+  expect(shown.replies.at(-1)).toEqual([manual.id, "once", "mine\n"])
+
+  // Each auto save covers one write: the save after it, which VS Code did not announce, answers.
+  const later = await opened()
+  review.willSave(later.tab.right.path, false)
+  await review.provider.writeFile(later.tab.right.path, encode("draft\n"))
+  await review.provider.writeFile(later.tab.right.path, encode("mine\n"))
+  expect(shown.replies.at(-1)).toEqual([later.id, "once", "mine\n"])
+  expect(shown.replies).toHaveLength(4)
+})
+
+test("two changes views of as many files keep their own texts when one of them closes", async () => {
+  const shown = editor({ folders: [project], window: [root] })
+  const review = new Review(shown.host)
+  await review.changes([{ file: "a.txt", status: "modified", patch: whole("a.txt", "one\n", "two\n") }])
+  await review.changes([{ file: "b.txt", status: "modified", patch: whole("b.txt", "three\n", "four\n") }])
+  const [first, second] = shown.views
+  expect(first!.title).not.toBe(second!.title)
+  await review.closed(first!.title)
+  const entry = second!.entries[0]!
+  expect([review.text(entry.left.path), review.text(entry.right.path)]).toEqual(["three\n", "four\n"])
+  expect(review.text(first!.entries[0]!.left.path)).toBeUndefined()
 })
 
 describe("a request without revisable opens a read-only preview and closing it answers nothing", () => {
@@ -994,7 +1104,7 @@ test("the changes view reads no file, whatever the names", async () => {
   await review.changes(names.map((file) => ({ file, status: "modified", patch: whole(file, "one\n", "two\n") })))
   expect(seen.log).toEqual([])
   expect(shown.views).toHaveLength(1)
-  expect(shown.views[0]?.title).toBe("Orbit: changes in this prompt (4 files)")
+  expect(shown.views[0]?.title).toMatch(/^Orbit: changes in this prompt \(4 files\) \([a-z0-9]{6}\)$/)
   expect(JSON.stringify(shown.views)).not.toContain(SECRET)
   // Each entry's sides hold the texts rebuilt from its patch.
   const first = shown.views[0]!.entries[0]!
