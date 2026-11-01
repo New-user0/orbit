@@ -422,10 +422,10 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
         event.data.sessionID === (input.getSessionID?.() ?? input.sessionID)
       )
         setRunning(event.type === "session.execution.started")
-      // A suggestion follows Mini's own session too: a turn starting there ends it, and one that ends well asks for the
-      // next while prompt.suggestions is on (class 8). A subagent's turn asks nothing.
-      if (event.type === "session.execution.started" && event.data.sessionID === ownSession())
-        suggestions?.started(event.data.sessionID)
+      // A suggestion follows Mini's own session too: a turn starting in a session ends that session's suggestion, and
+      // one of Mini's own that ends well asks for the next while prompt.suggestions is on (class 8). A subagent's turn
+      // asks nothing, so only Mini's own session ever holds one.
+      if (event.type === "session.execution.started") suggestions?.started(event.data.sessionID)
       if (
         event.type === "session.execution.succeeded" &&
         event.data.sessionID === ownSession() &&

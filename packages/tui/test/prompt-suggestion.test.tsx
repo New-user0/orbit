@@ -24,8 +24,8 @@ async function mount(
     suggestions?: boolean
     /** What the suggestion route answers; the default is the plain control text. */
     answer?: Answer
-    /** Whether the trust route calls a folder trusted; the default trusts every folder. */
-    trusted?: (directory: string | null) => boolean
+    /** Whether the trust route calls a folder trusted, or fails to answer; the default trusts every folder. */
+    trusted?: (directory: string | null) => boolean | "fails"
     /** The folder of the session in view; the default is the folder the terminal UI started in. */
     sessionDirectory?: string
     /** Makes the session in view a subagent's session under this parent. */
@@ -67,6 +67,7 @@ async function mount(
         const folder = url.searchParams.get("location[directory]")
         if (folder) trustReads.push(folder)
         const trusted = input.trusted?.(folder) ?? true
+        if (trusted === "fails") return new Response("unavailable", { status: 500 })
         return json({
           directory: folder ?? directory,
           trusted,
@@ -188,9 +189,16 @@ async function mount(
       await settle()
     },
     async enter() {
+      const sent = prompts.length + shells.length
+      const before = textarea().plainText
       setup.mockInput.pressEnter()
-      // Enter submits after two deferred turns of the event loop.
+      // Enter submits after two deferred turns of the event loop, which take longer on a loaded machine: wait for the
+      // prompt to reach the server or the input to be filled, and for a second when Enter is meant to do neither.
       await Bun.sleep(80)
+      await until(() => {
+        const text = textarea().plainText
+        return prompts.length + shells.length > sent || (text !== before && text !== "")
+      }, 1000)
       await settle()
     },
     async shows(text: string) {
@@ -264,6 +272,13 @@ test("a session whose folder is not trusted is never asked", async () => {
     {
       name: "the start folder is trusted and the session's own folder is not",
       trusted: (folder: string | null) => folder !== elsewhere,
+      sessionDirectory: elsewhere,
+      count: 0,
+    },
+    // A trust read that fails says nothing about the folder, so it is not taken as trusted (class 7).
+    {
+      name: "the session's own folder could not be read",
+      trusted: (folder: string | null) => (folder === elsewhere ? ("fails" as const) : true),
       sessionDirectory: elsewhere,
       count: 0,
     },
@@ -341,6 +356,50 @@ test("a ghost cut to the row is filled by Enter, not sent", async () => {
   await app.enter()
   expect(app.prompts.map((prompt) => prompt.text)).toEqual([long])
 })
+
+// The prompt's right padding is narrower below 44 columns, so both sides of that line are drawn.
+test.each([{ terminal: 40 }, { terminal: 100 }])(
+  "Enter sends a suggestion only when the whole of it fits the input row ($terminal columns)",
+  async ({ terminal }) => {
+    // The row's width as drawn: the longest start of a long suggestion that the frame shows.
+    const digits = "0123456789".repeat(20)
+    const width = await (async () => {
+      await using app = await mount({
+        suggestions: true,
+        width: terminal,
+        answer: () => json({ data: { suggestion: digits } }),
+      })
+      await ghost(app, "0123456789")
+      const frame = app.frame()
+      const shown = [...digits]
+        .map((_, index) => digits.length - index)
+        .find((length) => frame.includes(digits.slice(0, length)))
+      // The ghost is cut where the input's own text area ends, not before it.
+      expect(shown).toBe(app.textarea().width)
+      return shown!
+    })()
+    expect(width).toBeLessThan(terminal)
+    // A suggestion that fills the row is sent; one a cell wider is put in the input to be read first.
+    for (const row of [
+      { length: width, sent: true },
+      { length: width + 1, sent: false },
+    ]) {
+      const text = digits.slice(0, row.length)
+      await using app = await mount({
+        suggestions: true,
+        width: terminal,
+        answer: () => json({ data: { suggestion: text } }),
+      })
+      await ghost(app, digits.slice(0, width))
+      await app.enter()
+      expect({ length: row.length, sent: app.prompts.map((prompt) => prompt.text) }).toEqual({
+        length: row.length,
+        sent: row.sent ? [text] : [],
+      })
+      if (!row.sent) expect(app.textarea().plainText).toBe(text)
+    }
+  },
+)
 
 test.each([
   { name: "a space in the input, then Enter", case: "space" as const },
@@ -512,6 +571,8 @@ test("each failed answer draws nothing and leaves the prompt usable", async () =
     },
     { name: "a number for the text", answer: () => json({ data: { suggestion: 42 } }), drawn: false },
     { name: "null with a reason", answer: () => json({ data: { suggestion: null, reason: "busy" } }), drawn: false },
+    // Escaped, blank text is nothing to draw, so the prompt keeps its own placeholder.
+    { name: "blank text", answer: () => json({ data: { suggestion: " \n\t " } }), drawn: false },
     { name: "control: a suggestion", answer: () => json({ data: { suggestion } }), drawn: true },
   ]
   for (const row of rows) {

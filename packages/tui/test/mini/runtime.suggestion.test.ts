@@ -126,6 +126,16 @@ test("a turn starting in Mini's own session ends its suggestion, and a subagent'
   expect(await mini.frame()).not.toContain(suggestion)
 })
 
+test("closing Mini cancels a suggestion request that is still out", async () => {
+  using mini = await start({ suggestions: true, answer: () => new Promise(() => {}) })
+  mini.ended()
+  await Bun.sleep(50)
+  expect(mini.asked).toHaveLength(1)
+  expect(mini.asked[0]!.aborted).toBe(false)
+  await mini.lifecycle.close({ showExit: false })
+  expect(mini.asked[0]!.aborted).toBe(true)
+})
+
 test("a refused or failed request draws nothing", async () => {
   const rows = [
     { name: "403 UntrustedFolderError", answer: () => Promise.reject(new Error("UntrustedFolderError")), drawn: false },

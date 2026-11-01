@@ -181,6 +181,39 @@ test("a ghost cut to the row is filled by Enter, not sent", async () => {
   expect(footer.submitted.map((prompt) => prompt.text)).toEqual([long])
 })
 
+test("Enter sends a suggestion only when the whole of it fits the input row", async () => {
+  // The row's width as drawn: the longest start of a long suggestion that the frame shows.
+  const digits = "0123456789".repeat(9)
+  const width = await (async () => {
+    await using footer = await render(digits, 40)
+    const frame = footer.app.captureCharFrame()
+    const shown = [...digits]
+      .map((_, index) => digits.length - index)
+      .find((length) => frame.includes(digits.slice(0, length)))
+    // The ghost is cut where the input's own text area ends, not before it.
+    expect(shown).toBe(footer.app.renderer.currentFocusedEditor?.width)
+    return shown!
+  })()
+  expect(width).toBeGreaterThan(10)
+  expect(width).toBeLessThan(40)
+  // A suggestion that fills the row is sent; one a cell wider is put in the input to be read first.
+  for (const row of [
+    { length: width, sent: true },
+    { length: width + 1, sent: false },
+  ]) {
+    const text = digits.slice(0, row.length)
+    await using footer = await render(text, 40)
+    expect(footer.app.captureCharFrame()).toContain(digits.slice(0, width))
+    footer.app.mockInput.pressEnter()
+    await footer.settle()
+    expect({ length: row.length, sent: footer.submitted.map((prompt) => prompt.text) }).toEqual({
+      length: row.length,
+      sent: row.sent ? [text] : [],
+    })
+    if (!row.sent) expect(footer.text()).toBe(text)
+  }
+})
+
 test("shell mode draws no ghost and Enter sends no suggestion", async () => {
   await using footer = await render(suggestion)
   // Control: the ghost is drawn in normal mode.
