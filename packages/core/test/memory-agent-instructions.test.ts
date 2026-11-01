@@ -652,6 +652,75 @@ describe("one folder for the block, the disk and the carve-out", () => {
     timeout,
   )
 
+  // Part 2, class 3: a project's snapshot of a user-scope agent's memory is copied into the one folder `MemoryAgent`
+  // resolved for that agent, before its first block is built: the block names that folder and carries the snapshot's
+  // index read from its real place, and the carve-out lets a write there through under the person's ask rules. The
+  // Location is reached through a linked spelling, so the snapshot root has two spellings too. A project file asks.
+  it.live(
+    "gives a user-scope agent the snapshot's index in its first block, from the one folder MemoryAgent resolved",
+    () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const linked = path.join(l.root, "linked-project")
+        yield* Effect.promise(() => fs.symlink(l.project, linked, linkType))
+        const snapshot = path.join(l.project, ".orbit", "agent-memory-snapshots", "keeper")
+        yield* write(path.join(snapshot, "snapshot.json"), JSON.stringify({ updatedAt: "2026-10-01" }))
+        yield* write(path.join(snapshot, "MEMORY.md"), "- [Habits](habits.md) SNAPSHOT-INDEX-LINE\n")
+        yield* write(path.join(snapshot, "habits.md"), "HABITS\n")
+        const probe = Agent.ID.make("keeper")
+        const out = yield* Effect.gen(function* () {
+          const agents = yield* Agent.Service
+          yield* agents.transform((editor) =>
+            editor.update(probe, (agent) => {
+              agent.memory = "user"
+              agent.source = { scope: "user", path: AbsolutePath.make(path.resolve("/config/user/agents/keeper.md")) }
+              agent.permissions = agent.permissions.filter(
+                (rule) => !(rule.action === "*" && rule.resource === "*" && rule.effect === "allow"),
+              )
+              agent.permissions.push(
+                { action: "Edit", resource: "*", effect: "ask" },
+                { action: "Read", resource: "*", effect: "ask" },
+              )
+            }),
+          )
+          yield* insertSession({ id: first, directory: linked, agent: probe })
+          const block = yield* readInitial(yield* load(first, { id: probe, memory: "user" }))
+          const memoryAgent = yield* MemoryAgent.Service
+          const resolved = yield* memoryAgent.folder(probe, "user")
+          const permission = yield* Permission.Service
+          const access = yield* FileAccess.Service
+          const decide = (file: string) =>
+            Effect.gen(function* () {
+              const target = yield* access.resolve({ path: file, kind: "file" })
+              return (yield* permission.ask({
+                id: Permission.ID.create(),
+                action: "Edit",
+                resources: [target.resource],
+                save: ["*"],
+                ...FileAccess.leadsOf([target]),
+                metadata: { paths: [target.place] },
+                sessionID: first,
+                agent: probe,
+              })).effect
+            })
+          return {
+            resolved: resolved!,
+            block,
+            memory: yield* decide(path.join(resolved!.folder, "habits.md")),
+            project: yield* decide(path.join(linked, "a.md")),
+          }
+        }).pipe(provideWithPermission(l, linked))
+        expect(out.resolved.folder).toBe(path.join(l.data, "memory", "agents", "keeper"))
+        expect(out.block.text).toContain(out.resolved.folder)
+        expect(out.block.text).toContain("SNAPSHOT-INDEX-LINE")
+        expect(yield* Effect.promise(() => fs.readFile(path.join(out.resolved.real, "habits.md"), "utf8"))).toBe(
+          "HABITS\n",
+        )
+        expect({ memory: out.memory, project: out.project }).toEqual({ memory: "allow", project: "ask" })
+      }),
+    timeout,
+  )
+
   // Class 3: the folder that is made is the real place `MemoryAgent` checked, never the spelling through the linked
   // session folder, so nothing that changes under that spelling after the check decides where the folder goes. The
   // recorded file system is the oracle; the block naming the spelled folder is the control.
