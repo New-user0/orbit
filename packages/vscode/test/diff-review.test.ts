@@ -1034,14 +1034,22 @@ test("a server that cannot diff a prompt gets a note", async () => {
   expect(run.notes().at(-1)?.text).toContain("orb service restart")
 })
 
-test("a prompt's changes are its own, not those of the prompts after it", async () => {
+test("a prompt's changes are its own, not those of a prompt steered into the same turn", async () => {
   await Promise.all([Bun.write(path.join(work, "p1.txt"), "first\n"), Bun.write(path.join(work, "p2.txt"), "second\n")])
   git(work, "add", ".")
-  const run = await chat(work, { auto: true })
-  await run.controller.send(calls([read("p1.txt")], [write("p1.txt", "FIRST\n")]))
+  const run = await chat(work)
+  await run.controller.send(calls([read("p1.txt"), write("p1.txt", "FIRST\n")]))
+  const first = await run.question()
+  if (!first) throw new Error("no question was asked")
+  // The second prompt arrives while the first one waits on its question, so both belong to one turn.
+  await run.controller.send(calls([read("p2.txt"), write("p2.txt", "SECOND\n")]))
+  expect(await run.controller.reply(first.id, "once")).toBe("sent")
+  const second = await until(() =>
+    [...run.items.values()].find((entry) => entry.type === "permission" && entry.status === "pending" && entry.id !== first.id),
+  )
+  if (!second) throw new Error("no second question was asked")
+  expect(await run.controller.reply(second.id, "once")).toBe("sent")
   await run.idle()
-  await run.controller.send(calls([read("p2.txt")], [write("p2.txt", "SECOND\n")]))
-  await run.idle(2)
   const prompts = [...run.items.values()].flatMap((entry) => (entry.type === "user" && entry.messageID ? [entry.messageID] : []))
   expect(prompts).toHaveLength(2)
   expect(changesView((await run.controller.changes(prompts[0]!)) ?? []).map((entry) => entry.label)).toEqual(["p1.txt"])
