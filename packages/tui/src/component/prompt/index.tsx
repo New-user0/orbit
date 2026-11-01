@@ -1911,11 +1911,10 @@ export function Prompt(props: PromptProps) {
     if (watch) onCleanup(watch(drawable))
   })
   // The suggestion is model text, so it is drawn, taken and sent in its escaped form: what is drawn is what runs
-  // (class 9). It is cut to the input row. A prompt that takes no keys, or that draws no placeholder, draws none either;
-  // a held suggestion waits for it.
+  // (class 9). It is cut to the input row. A prompt that takes no keys draws none either; a held suggestion waits for it.
   const ghost = createMemo(() => {
     const text = suggestion()?.text()
-    if (text === undefined || !drawable() || disabled() || props.showPlaceholder === false) return undefined
+    if (text === undefined || !drawable() || disabled()) return undefined
     const value = plain(text)
     const drawn = Locale.takeWidth(value, inputWidth())
     if (!drawn) return undefined
