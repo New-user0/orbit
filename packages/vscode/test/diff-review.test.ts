@@ -410,6 +410,52 @@ describe("a share or device spelling is refused before the disk is touched", () 
   })
 })
 
+test("a session or window folder spelled as a share or a relative path is dropped before the disk is touched", async () => {
+  const relative = "orbit-relative-folder"
+  const share = `//${host}/share`
+  const seen = recorded()
+  const shown = editor({ folders: [share, relative, project], window: [`\\\\${host}\\share`, relative, root] })
+  await new Review(shown.host, seen.recorder).open(item([{ file: "a.txt", place: inside, patch }]), true)
+  // The folders spelled well still count, and the others are never asked about.
+  expect(shown.tabs).toHaveLength(1)
+  expect(seen.log.filter((call) => call.includes(relative) || call.includes(host))).toEqual([])
+})
+
+// A disk that answers as one where nothing is there, or where a path cannot be resolved for another reason.
+function refusing(code: string, at: (file: string) => boolean) {
+  const calls: string[] = []
+  const fail = (file: string) => {
+    calls.push(file)
+    // A walk up that never ends is stopped here, so the test fails instead of hanging.
+    if (calls.length > 200) return Promise.reject(new Error("the walk up did not end"))
+    return Promise.reject(Object.assign(new Error(code), { code }))
+  }
+  const reader: Disk = {
+    realpath: (file) => (at(file) ? fail(file) : disk.realpath(file)),
+    lstat: (file) => (at(file) ? fail(file) : disk.lstat(file)),
+    readFile: (file) => disk.readFile(file),
+  }
+  return { reader, calls }
+}
+
+test("a path whose drive or root is not there is refused, and the walk up ends at the root", async () => {
+  const nowhere = refusing("ENOENT", () => true)
+  const file = path.join(path.parse(project).root, "orbit-nowhere", "a.txt")
+  expect(await contained(file, { session: [project], window: [root] }, nowhere.reader)).toBeUndefined()
+  expect(nowhere.calls.length).toBeLessThan(10)
+})
+
+test("a path the disk cannot resolve for another reason than its absence is refused, not taken for a file to add", async () => {
+  const locked = path.join(project, "locked.txt")
+  const denied = refusing("EACCES", (file) => file === locked)
+  expect(await contained(locked, { session: [project], window: [root] }, denied.reader)).toBeUndefined()
+  // The control: the same path when it is only missing is a file still to be added.
+  const missing = refusing("ENOENT", (file) => file === locked)
+  expect(await contained(locked, { session: [project], window: [root] }, missing.reader)).toBe(
+    path.join(await fs.realpath(project), "locked.txt"),
+  )
+})
+
 test.skipIf(process.platform !== "win32")("a case variant or short name of an inside file is inside", async () => {
   const variant = inside.replace(/project/i, "PROJECT")
   const result = Bun.spawnSync([process.env.ComSpec ?? "cmd.exe", "/d", "/s", "/c", `"for %I in ("${inside}") do @echo %~sI"`], {
@@ -495,6 +541,31 @@ describe("the session's folders as the server names them", () => {
     expect(shown.tabs).toHaveLength(1)
   })
 
+  test("the folders are the session's own, not the folder the chat was opened in", async () => {
+    const session = await server.client.session.create({ location: { directory: project } })
+    // The chat's folder is another trusted project: its files are not the session's.
+    const { controller } = await chat(main)
+    const shown = editor({ controller, window: [root] })
+    const seen = recorded()
+    const review = new Review(shown.host, seen.recorder)
+    await review.open(item([{ file: "m.txt", place: path.join(main, "m.txt"), patch }], { sessionID: session.id }), true)
+    expect(shown.tabs).toEqual([])
+    expect(seen.reads()).toEqual([])
+    await review.open(item([{ file: "a.txt", place: inside, patch }], { sessionID: session.id }), true)
+    expect(shown.tabs).toHaveLength(1)
+  })
+
+  test("a session in a subfolder works in its whole project", async () => {
+    const session = await server.client.session.create({ location: { directory: path.join(project, "sub") } })
+    const { controller } = await chat(project)
+    const folders = await controller.folders(session.id)
+    expect("folders" in folders && folders.folders.map((folder) => path.relative(project, folder))).toEqual(["sub", ""])
+    const shown = editor({ controller, window: [root] })
+    // A file of the project outside the session's own subfolder is still one its file tools work on.
+    await new Review(shown.host).open(item([{ file: "a.txt", place: inside, patch }], { sessionID: session.id }), true)
+    expect(shown.tabs).toHaveLength(1)
+  })
+
   test("...and the session's folder may be any workspace folder", async () => {
     const session = await server.client.session.create({ location: { directory: project } })
     const { controller } = await chat(project)
@@ -574,6 +645,7 @@ test("no server folders means text only", async () => {
     expect(shown.tabs).toEqual([])
     expect(seen.log).toEqual([])
     expect(shown.notes).toHaveLength(1)
+    expect(shown.notes[0]?.text).toContain("did not name the session's folder")
   }
 })
 
@@ -600,9 +672,12 @@ describe("answers from a review tab", () => {
     const tab = shown.tabs[0]!
     expect([left(review, tab), right(review, tab)]).toEqual(["one\n", "two\n"])
 
-    // The person saves, and the tab's close arrives while the answer is on its way: the first answer is the only one.
+    // The person saves, and Reject, Accept and the tab's close arrive while the answer is on its way: the first answer is
+    // the only one.
     await Promise.all([
       review.provider.writeFile(tab.right.path, new TextEncoder().encode("mine\n")),
+      review.reject(tab.right.path),
+      review.accept(tab.right.path),
       review.closed(tab.title),
     ])
     await run.idle()
@@ -792,6 +867,17 @@ describe("a request without revisable opens a read-only preview and closing it a
       name: "ipynb",
       request: item([{ file: "n.ipynb", place: path.join(project, "N.IPYNB"), patch: added, status: "added" }]),
     },
+    {
+      // Only a question about one file is reviewed: one save answers it.
+      name: "two files, revisable",
+      request: item(
+        [
+          { file: "a.txt", place: inside, patch },
+          { file: "sub/b.txt", place: path.join(project, "sub", "b.txt"), patch },
+        ],
+        { revisable: true },
+      ),
+    },
   ]
   for (const row of rows)
     test(row.name, async () => {
@@ -910,6 +996,9 @@ test("the changes view reads no file, whatever the names", async () => {
   expect(shown.views).toHaveLength(1)
   expect(shown.views[0]?.title).toBe("Orbit: changes in this prompt (4 files)")
   expect(JSON.stringify(shown.views)).not.toContain(SECRET)
+  // Each entry's sides hold the texts rebuilt from its patch.
+  const first = shown.views[0]!.entries[0]!
+  expect([review.text(first.left.path), review.text(first.right.path)]).toEqual(["one\n", "two\n"])
 
   // On a real server: two Writes in one prompt give two entries whose sides are the files before and after.
   await Promise.all([Bun.write(path.join(work, "c1.txt"), "first\n"), Bun.write(path.join(work, "c2.txt"), "second\n")])
@@ -943,6 +1032,32 @@ test("a server that cannot diff a prompt gets a note", async () => {
   expect(await run.controller.changes(user?.type === "user" ? user.messageID! : "msg_x")).toBeUndefined()
   expect(run.notes().at(-1)).toMatchObject({ tone: "error" })
   expect(run.notes().at(-1)?.text).toContain("orb service restart")
+})
+
+test("a prompt's changes are its own, not those of the prompts after it", async () => {
+  await Promise.all([Bun.write(path.join(work, "p1.txt"), "first\n"), Bun.write(path.join(work, "p2.txt"), "second\n")])
+  git(work, "add", ".")
+  const run = await chat(work, { auto: true })
+  await run.controller.send(calls([read("p1.txt")], [write("p1.txt", "FIRST\n")]))
+  await run.idle()
+  await run.controller.send(calls([read("p2.txt")], [write("p2.txt", "SECOND\n")]))
+  await run.idle(2)
+  const prompts = [...run.items.values()].flatMap((entry) => (entry.type === "user" && entry.messageID ? [entry.messageID] : []))
+  expect(prompts).toHaveLength(2)
+  expect(changesView((await run.controller.changes(prompts[0]!)) ?? []).map((entry) => entry.label)).toEqual(["p1.txt"])
+  expect(changesView((await run.controller.changes(prompts[1]!)) ?? []).map((entry) => entry.label)).toEqual(["p2.txt"])
+})
+
+test("a chat with no session yet asks the server nothing about changes or a restore", async () => {
+  const log = recording()
+  const run = await chat(work, { fetcher: log.fetcher })
+  log.sent.length = 0
+  expect(await run.controller.changes("msg_none")).toBeUndefined()
+  let asked = 0
+  await run.controller.restore("msg_none", async () => (asked++, true))
+  expect(asked).toBe(0)
+  expect(log.sent.filter((call) => !(call.method === "GET" && call.path === "/api/location/trust"))).toEqual([])
+  expect(run.notes().filter((note) => note.text.includes("Send a message first"))).toHaveLength(2)
 })
 
 test("a prompt the server does not admit gets no message ID, says why, and leaves the chat idle", async () => {
@@ -1103,6 +1218,7 @@ test("no review, changes view or restore while the folder is not trusted", async
   expect(seen.log).toEqual([])
   expect(log.sent.filter((call) => !(call.method === "GET" && call.path === "/api/location/trust"))).toEqual([])
   expect(shown.notes).toHaveLength(1)
+  expect(shown.notes[0]?.text).toContain("the folder is not trusted, so nothing in it is read")
   expect(run.notes().filter((note) => note.text.includes("is not trusted"))).toHaveLength(2)
 })
 

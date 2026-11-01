@@ -33,6 +33,10 @@ const providers = new Map<string, unknown>()
 const answer: { title?: string } = {}
 const picks: unknown[][] = []
 const program: { path?: string } = {}
+const workspaceFolders = [
+  { uri: { scheme: "file", fsPath: folder } },
+  { uri: { scheme: "vscode-remote", fsPath: "/x" } },
+]
 
 const stub = (overrides: Record<string, unknown> = {}): unknown =>
   new Proxy(function () {}, {
@@ -98,7 +102,7 @@ const vscode = stub({
   }),
   workspace: stub({
     textDocuments: documents,
-    workspaceFolders: [{ uri: { scheme: "file", fsPath: folder } }, { uri: { scheme: "vscode-remote", fsPath: "/x" } }],
+    workspaceFolders,
     registerFileSystemProvider: (scheme: string, provider: Record<string, (...args: unknown[]) => unknown>) => {
       filesystems.set(scheme, provider)
       return stub()
@@ -243,6 +247,27 @@ test("the Accept and Reject title actions answer through the controller, and Acc
   await commands.get("orbit.review.accept")!(uri({ scheme: "file", path: file }))
   await commands.get("orbit.review.reject")!(uri({ scheme: "file", path: file }))
   expect(replies).toHaveLength(2)
+})
+
+test("a folder the window opens over another file system is not one the review reads from", async () => {
+  // The only folder that holds the file is a remote one whose path on this machine happens to match.
+  workspaceFolders.splice(0, workspaceFolders.length, { uri: { scheme: "vscode-remote", fsPath: folder } })
+  try {
+    const before = executed.length
+    question = item("per_remote", patch)
+    await chat().receive({ type: "diff", id: question.id })
+    expect(executed.slice(before).filter((call) => call[0] === "vscode.diff")).toEqual([])
+  } finally {
+    workspaceFolders.splice(
+      0,
+      workspaceFolders.length,
+      { uri: { scheme: "file", fsPath: folder } },
+      { uri: { scheme: "vscode-remote", fsPath: "/x" } },
+    )
+  }
+  // The control: the same question opens once the folder is a local one.
+  await open("per_local")
+  expect(marked).toContain("per_local")
 })
 
 test("the changed-since-read warning is shown without the file name", async () => {
