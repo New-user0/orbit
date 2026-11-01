@@ -2081,6 +2081,30 @@ than before after a long answer.
 
 **What to do:** Nothing.
 
+### VS Code reviews Edit and Write approvals in the editor, and each prompt can show and restore its changes
+
+When the Orbit chat in VS Code gets an Edit or Write approval, the diff now opens beside the chat on its own, with the
+file as it is on the left and the proposal on the right, which you can edit. Saving (or the tab's Accept button)
+approves your version once; closing the tab approves the proposal as it stands; the tab's Reject button declines. The
+card keeps its buttons, and the first answer from anywhere wins; the tab then closes. Tabs that Orbit closes itself
+answer nothing: when the question is answered elsewhere, when you send a new prompt (every Orbit tab closes then), and
+when the window closes. Before, "Open diff" showed a read-only diff and only the card could answer.
+
+Other questions with files (Patch, a move, several files, a notebook) open as a read-only preview from the card's "Open
+diff", as before, and so does every question from an Orbit service older than the edited reply. A file is opened only
+when it is really inside the session's folder and inside one of the window's folders: a file elsewhere, behind a link
+that leads out, or on a share is shown on the card only, with a note. When the file changed since the agent read it,
+nothing opens and the warning no longer names the file.
+
+Each message you send gets two links once the service has taken it: "View changes" opens one multi-file diff of what
+that prompt changed with the file tools, and "Restore files" asks for confirmation, with the number of files and lines,
+before it puts them back as they were before the prompt. Neither works in a folder that is not trusted.
+
+**Affects:** VS Code users of the Orbit chat.
+
+**What to do:** Nothing. To keep using only the card, close the review tab with the card's buttons instead: closing the
+tab itself approves the proposal.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
