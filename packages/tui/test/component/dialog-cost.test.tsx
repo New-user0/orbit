@@ -182,6 +182,12 @@ test("money follows the reference's decimals, unknown prices read unknown, and n
   await using _other = other.setup
   expect(flat(other.frame)).toMatch(/Other \$0\.4000/)
 
+  // No row at all: the usage line and Other still show.
+  const bare = await open({ answer: () => json({ data: info({ cost: 0.3, own: 0.3, other: 0.3, rows: [] }) }) })
+  await using _bare = bare.setup
+  expect(flat(bare.frame)).toMatch(/Usage: 0 input, 0 output/)
+  expect(flat(bare.frame)).toMatch(/Other \$0\.3000 \u00b7 undone responses, older usage/)
+
   // Hostile names: a model ID in a record, and a name in the catalog.
   const hostile = "evil\u001b]0;pwned\u0007\u009b2K‮name"
   const named = await open({

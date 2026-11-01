@@ -86,7 +86,16 @@ test("costText prints every part of a full summary, and drops the parts a bare o
   expect(text).toContain("1 line added, 2 lines removed")
   expect(text).toContain("Other:")
   expect(text).toContain("40 reasoning")
+  expect(text).toContain("(undone responses, older usage)")
   expect(text).not.toContain("\u001b")
+  // The row that is unpriced in part says so; the fully priced one does not.
+  expect(text.split("\n").find((line) => line.includes("provider/free"))).toContain("+ unpriced")
+  expect(text.split("\n").find((line) => line.includes("provider/big"))).not.toContain("unpriced")
+
+  // The provider ID comes from a record or a config, so it is escaped like the model ID (class 9).
+  const hostile = costText({ ...full, rows: [{ ...row, providerID: "evil\u001b]0;x\u0007\u009b2K‮name" }] } as never)
+  expect(hostile).toContain("evil")
+  expect(hostile.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
 
   const empty = costText(bare as never)
   expect(empty).not.toContain("Subagents:")

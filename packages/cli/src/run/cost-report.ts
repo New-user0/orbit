@@ -43,7 +43,7 @@ export function costText(info: SessionCost.Info, models?: ReadonlyArray<ModelInf
       : [row("Total code changes:", `${lines(summary.lines.added)} added, ${lines(summary.lines.removed)} removed`)]),
     ...(summary.other === undefined
       ? []
-      : [row("Other:", `${money(summary.other)} (titles, undone responses and other usage)`)]),
+      : [row("Other:", `${money(summary.other)} (undone responses, older usage)`)]),
     "Usage by model:",
     ...(usage.length > 0 ? usage : [`  Usage: ${NO_USAGE}`]),
   ].join("\n")

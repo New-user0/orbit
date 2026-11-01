@@ -159,7 +159,7 @@ function Other(props: { readonly value: number | undefined }) {
       {(value) => (
         <box flexDirection="row" gap={1}>
           <text fg={theme.text.base}>Other</text>
-          <text fg={theme.text.muted}>{`${price(value())} · titles, undone responses and other usage`}</text>
+          <text fg={theme.text.muted}>{`${price(value())} · undone responses, older usage`}</text>
         </box>
       )}
     </Show>

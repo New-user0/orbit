@@ -34,7 +34,7 @@ const it = testEffect(
 
 const root = Session.ID.make("ses_cost_root")
 const child = Session.ID.make("ses_cost_child")
-const tokens = (input: number) => ({ input, output: 1, reasoning: 0, cache: { read: 2, write: 3 } })
+const tokens = (input: number) => ({ input, output: 1, reasoning: 5, cache: { read: 2, write: 3 } })
 
 const seedProject = Effect.gen(function* () {
   const db = (yield* Database.Service).db
@@ -103,6 +103,13 @@ const usage = (
   source: string,
   cost: number,
   model?: { readonly provider: string; readonly id: string },
+  counts: { readonly input: number; readonly output: number; readonly reasoning: number; readonly read: number; readonly write: number } = {
+    input: 10,
+    output: 1,
+    reasoning: 0,
+    read: 0,
+    write: 0,
+  },
 ) => {
   usageSeq += 1
   return {
@@ -112,15 +119,18 @@ const usage = (
     kind,
     source,
     cost,
-    tokens_input: 10,
-    tokens_output: 1,
-    tokens_reasoning: 0,
-    tokens_cache_read: 0,
-    tokens_cache_write: 0,
+    tokens_input: counts.input,
+    tokens_output: counts.output,
+    tokens_reasoning: counts.reasoning,
+    tokens_cache_read: counts.read,
+    tokens_cache_write: counts.write,
     provider_id: model?.provider ?? null,
     model_id: model?.id ?? null,
   } satisfies typeof SessionUsageTable.$inferInsert
 }
+
+/** A usage record's five token kinds, each a distinct multiple of `n`, so a row that mixes them up or drops one differs. */
+const scaled = (n: number) => ({ input: n, output: 2 * n, reasoning: 3 * n, read: 4 * n, write: 5 * n })
 
 const totalOf = (rows: ReadonlyArray<{ readonly cost: number }>) => rows.reduce((sum, row) => sum + row.cost, 0)
 
@@ -153,7 +163,10 @@ describe("SessionCost", () => {
         ["alpha", 200],
         ["beta", 150],
       ])
-      expect(summary.rows.reduce((sum, row) => sum + row.tokens.input, 0)).toBe(3_500)
+      expect(summary.rows.map((row) => row.tokens)).toEqual([
+        { input: 2_000, output: 200, reasoning: 1_000, cache: { read: 400, write: 600 } },
+        { input: 1_500, output: 150, reasoning: 750, cache: { read: 300, write: 450 } },
+      ])
       expect(summary.cost).toBeCloseTo(3.5)
       expect(summary.own).toBeCloseTo(3)
       expect(summary.subagents).toBeCloseTo(0.5)
@@ -224,11 +237,12 @@ describe("SessionCost", () => {
     Effect.gen(function* () {
       const db = yield* seedProject
       const alpha = { provider: "prov", id: "alpha" }
-      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 1.2 })).run().pipe(Effect.orDie)
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 1.3 })).run().pipe(Effect.orDie)
       yield* db
         .insert(SessionMessageTable)
         .values([
           message(root, "assistant", { input: 10, cost: 0.4 }),
+          message(root, "assistant", { model: "mixed", input: 10, cost: 0.1 }),
           // The records below hold this compaction's spend.
           message(root, "compaction", { input: 10, cost: 0.2 }),
           message(root, "compaction", { input: 10, cost: 0.3, extra: { status: "failed" } }),
@@ -238,11 +252,13 @@ describe("SessionCost", () => {
       yield* db
         .insert(SessionUsageTable)
         .values([
-          usage(root, "usage", "title", 0.1, alpha),
-          usage(root, "side_query", "step.retry", 0.15, alpha),
-          usage(root, "usage", "compaction", 0.2, alpha),
+          usage(root, "usage", "title", 0.1, alpha, scaled(100)),
+          usage(root, "side_query", "step.retry", 0.15, alpha, scaled(1_000)),
+          usage(root, "usage", "compaction", 0.2, alpha, scaled(10_000)),
           // A compaction that failed or was cancelled still spent this.
-          usage(root, "usage", "compaction", 0.3, alpha),
+          usage(root, "usage", "compaction", 0.3, alpha, scaled(100_000)),
+          // A call on a model that also has a priced response: its zero is still counted in the merged row.
+          usage(root, "side_query", "webfetch.summarize", 0, { provider: "prov", id: "mixed" }),
           // A side query on another model.
           usage(root, "side_query", "webfetch.summarize", 0.05, { provider: "prov", id: "beta" }),
           // A call that spent tokens and recorded exactly 0 is counted as free or unpriced.
@@ -255,9 +271,17 @@ describe("SessionCost", () => {
       const alphaRow = summary.rows.find((row) => row.modelID === "alpha")
       expect(alphaRow?.responses).toBe(5)
       expect(alphaRow?.cost).toBeCloseTo(1.15)
+      // The response (10, 1, 5, 2, 3) plus the four records.
+      expect(alphaRow?.tokens).toEqual({ input: 111_110, output: 222_201, reasoning: 333_305, cache: { read: 444_402, write: 555_503 } })
+      expect(summary.rows.find((row) => row.modelID === "mixed")).toMatchObject({
+        responses: 2,
+        unrecorded: 0,
+        zero: 1,
+        tokens: { input: 20, output: 2, reasoning: 5, cache: { read: 2, write: 3 } },
+      })
       expect(summary.rows.find((row) => row.modelID === "beta")).toMatchObject({ responses: 1, zero: 0 })
       expect(summary.rows.find((row) => row.modelID === "free")).toMatchObject({ responses: 1, zero: 1 })
-      expect(totalOf(summary.rows)).toBeCloseTo(1.2)
+      expect(totalOf(summary.rows)).toBeCloseTo(1.3)
       expect(summary.other).toBeUndefined()
     }),
   )
