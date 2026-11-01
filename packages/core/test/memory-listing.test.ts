@@ -158,6 +158,7 @@ const isDirectory = (folder: string) =>
   Effect.promise(() => fs.stat(folder).then((info) => info.isDirectory(), () => false))
 const entries = (folder: string) => Effect.promise(() => fs.readdir(folder).catch(() => [] as string[]))
 const realOf = (file: string) => Effect.promise(() => fs.realpath(file))
+const realOrSpelled = (file: string) => Effect.promise(() => fs.realpath(file).catch(() => file))
 // Two real paths name the same place, as the platform compares them.
 const same = (a: string, b: string) => FSUtil.contains(a, b) && FSUtil.contains(b, a)
 
@@ -336,6 +337,53 @@ describe("MemoryListing.list", () => {
       yield* Effect.promise(() => fs.mkdir(path.join(l.local, "local1"), { recursive: true }))
       const made = yield* run([])
       expect(made.folders.find((item) => item.type === "agent" && item.agent === "local1")?.exists).toBe(true)
+    }),
+  )
+})
+
+describe("MemoryListing and agent memory snapshots", () => {
+  // context-memory-10 part 2, class 12: `/memory` may be the first thing a Location does, before any session runs. The
+  // reference copies a project's snapshot when it loads the agents, so the listing, and making an agent's folder from
+  // it, first copy the snapshot of a user-scope agent a config file defines: the row's folder is there and holds the
+  // snapshot's index, and making it makes nothing new.
+  it.live("lists an agent's snapshot files before any session of the Location has run", () =>
+    Effect.gen(function* () {
+      const index = "- [Habits](habits.md) SNAPSHOT-INDEX\n"
+      const out = yield* Effect.forEach(["list", "ensure"] as const, (first) =>
+        Effect.gen(function* () {
+          const l = yield* layout
+          const snapshot = path.join(l.orbit, "agent-memory-snapshots", "review")
+          yield* write(path.join(snapshot, "snapshot.json"), JSON.stringify({ updatedAt: "2026-10-01" }))
+          yield* write(path.join(snapshot, "MEMORY.md"), index)
+          const result = yield* Effect.gen(function* () {
+            const memory = yield* start
+            const agents = yield* Agent.Service
+            yield* agents.transform((editor) =>
+              editor.update(Agent.ID.make("review"), (agent) => {
+                agent.memory = "user"
+                agent.source = { scope: "user", path: AbsolutePath.make(path.resolve("/config/user/agents/review.md")) }
+              }),
+            )
+            if (first === "list") {
+              const row = (yield* memory.list()).folders.find((item) => item.type === "agent" && item.agent === "review")
+              return { path: row?.path, there: row?.exists }
+            }
+            const made = yield* memory.ensure({ type: "agent", agent: "review" })
+            return { path: made.path, there: !made.created }
+          }).pipe(provide(l))
+          const folder = path.join(l.data, "memory", "agents", "review")
+          return {
+            first,
+            there: result.there,
+            same: result.path !== undefined && same(yield* realOrSpelled(result.path), yield* realOrSpelled(folder)),
+            index: yield* Effect.promise(() => fs.readFile(path.join(folder, "MEMORY.md"), "utf8").catch(() => "")),
+          }
+        }),
+      )
+      expect(out).toEqual([
+        { first: "list", there: true, same: true, index },
+        { first: "ensure", there: true, same: true, index },
+      ])
     }),
   )
 })
