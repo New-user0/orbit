@@ -675,19 +675,45 @@ describe("the session's folders as the server names them", () => {
 
 test("no server folders means text only", async () => {
   const session = await server.client.session.create({ location: { directory: project } })
+  // A trusted session folder other than the chat's, so the trust read of the session's own folder is told apart by name.
+  const own = path.join(root, "own-trust")
+  await fs.mkdir(own, { recursive: true })
+  git(own, "init", "--quiet")
+  await server.client.location.trust.update({ location: { directory: own }, trust: true, persist: false })
+  const elsewhere = await server.client.session.create({ location: { directory: own } })
+  const hang = (init: RequestInit | undefined) =>
+    new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)))
+  const fail = () => Promise.resolve(Response.json({ message: "no" }, { status: 500 }))
   // The server cannot name the location, takes longer than a read may, or does not know the session.
-  const failing = recording((url) =>
-    url.pathname === "/api/location" ? Promise.resolve(Response.json({ message: "no" }, { status: 500 })) : undefined,
-  )
-  const hanging = recording((url, init) =>
-    url.pathname === "/api/location"
-      ? new Promise((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)))
-      : undefined,
-  )
+  const failing = recording((url) => (url.pathname === "/api/location" ? fail() : undefined))
+  const hanging = recording((url, init) => (url.pathname === "/api/location" ? hang(init) : undefined))
+  const slowSession = recording((url, init) => (url.pathname === `/api/session/${session.id}` ? hang(init) : undefined))
+  // The trust read of the session's own folder fails, takes longer than a read may, or answers something unreadable:
+  // that folder is not known to be trusted, and no folder is named (classes 3 and 7).
+  const ownTrust = (answer: (init: RequestInit | undefined) => Promise<Response>) =>
+    recording((url, init) =>
+      url.pathname === "/api/location/trust" && decodeURIComponent(url.search).includes("own-trust")
+        ? answer(init)
+        : undefined,
+    )
+  const trustFailing = ownTrust(fail)
+  const trustHanging = ownTrust(hang)
+  const trustGarbled = ownTrust(() => Promise.resolve(Response.json({ trusted: "yes" })))
+  // The controls: the session's own folder is named when its trust read answers, and the filter above matches only it.
+  const named = async (fetcher: typeof fetch | undefined, sessionID: string) => {
+    const folders = await (await chat(project, { fetcher })).controller.folders(sessionID)
+    return "folders" in folders ? folders.folders.map((folder) => path.relative(root, folder)) : folders
+  }
+  expect(await named(undefined, elsewhere.id)).toEqual(["own-trust", "own-trust"])
+  expect(await named(trustFailing.fetcher, session.id)).toEqual(["project", "project"])
   for (const [fetcher, sessionID] of [
     [failing.fetcher, session.id],
     [hanging.fetcher, session.id],
+    [slowSession.fetcher, session.id],
     [undefined, "ses_unknown"],
+    [trustFailing.fetcher, elsewhere.id],
+    [trustHanging.fetcher, elsewhere.id],
+    [trustGarbled.fetcher, elsewhere.id],
   ] as const) {
     const { controller } = await chat(project, { fetcher, wait: { read: 3_000, grant: 20_000 } })
     expect(await controller.folders(sessionID)).toEqual({ refused: "unavailable" })
