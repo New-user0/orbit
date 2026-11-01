@@ -1031,6 +1031,37 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   memory off), `test/session-context-memory.test.ts` (main thread, subagent, fork, own prompt, the person's system
   prompt, no instruction files, an agent switch), `test/config/agent-definition.test.ts` (the added tools) and
   `test/config/watch.test.ts`.
+- Agent memory snapshots (`MemoryAgentSnapshot`, `packages/core/src/memory/agent-snapshot.ts`, with `MemoryAgent.snapshot`):
+  a project may ship `.orbit/agent-memory-snapshots/<id>/` with a `snapshot.json` (`{ updatedAt }`), and a user-scope
+  agent that a config document of scope `user`, `project`, `local` or `managed` defines (no built-in, editor or plugin
+  agent, no `flag` or `remote` one; class 8) gets the snapshot's plain files copied into its own
+  `<data>/memory/agents/<id>/`, which every project shares, when that folder holds no plain `.md` file; a
+  `.snapshot-synced.json` names the snapshot. Nothing is asked and nothing is replaced when the snapshot is newer, as
+  the reference. `sync` reads nothing while memory is off or before `ProjectTrust.trusted()` (class 1), and runs once
+  per agent list: from the first `MemoryInstructions.load` (every entry point through `SessionContext`), the first
+  `/memory` listing or make, and again after `Agent.Event.Updated` (class 12). The snapshot root is the third
+  repository root of `MemoryAgent` under the same rules (share first, no link at `.orbit` or the root, real root
+  exactly `.orbit/agent-memory-snapshots` of the real Location folder, resolved once; classes 4, 6), an agent id is
+  joined only after `ConfigAgent.isName` and its folder must really be inside the real root (classes 4, 5), and the
+  carve-out never covers this root (`current` leaves it out). `snapshot.json` is read at its real path inside the
+  snapshot folder (`MemoryStore.locate`) and decoded with `Schema.decodeUnknownOption`; missing logs nothing, anything
+  else that fails logs one line and takes no snapshot (class 7). Only a listing entry of type `file` is copied, its name
+  must pass `ConfigAgent.isName` (class 5, one line), it is read at its real path inside the snapshot folder, and no
+  target name that is a link (one that leads nowhere included) is written through (class 4); the target is the one
+  `{ folder, real }` of `MemoryAgent.folder` that the block, the make and the carve-out use (class 3). A failing file or
+  agent costs only itself with one line (class 7); `updatedAt` reaches only the marker, as JSON, and no log message
+  (class 9). There is no size or count cap, as in the reference (a cap is a follow-up). Proof:
+  `test/memory-agent-snapshot.test.ts` (the copy and marker, an escape in `updatedAt`, the Markdown decision with links,
+  folders, `NOTES.MD` and a text file, the agents that qualify, memory off by config and switch, an untrusted project
+  and the grant with the recorded file system, malformed, linked, folder and missing `snapshot.json`, a file in the
+  place of the user folder, `.orbit` or the root linked out, onto the project, `.orbit`, `.git` or `src`, dangling or
+  in a loop, agent snapshot folders linked out or dangling, links, folders and names that are not plain in the source,
+  links at target names and a user folder linked out, a share with the recorded file system, a file that cannot be
+  written, a worktree's Location, once per agent list and again after a change), `test/memory-agent.test.ts` (the
+  snapshot folder after trust and for plain ids only), `test/memory-agent-instructions.test.ts` (the snapshot's index
+  in the first block from the one resolved folder, with the carve-out, through a linked Location),
+  `test/memory-listing.test.ts` (`/memory` listing and make before any session) and
+  `test/session-context-memory.test.ts` (main thread and subagent).
 - Saved tool results (`ToolOutput.settle`, `packages/core/src/tool-output.ts`, called by `SessionStep.attempt` for every
   client): a result above its threshold is written to `<data>/tool-output/<session ID>/<message ID>-<call ID>-<hash>.txt`
   (or `.json`). It reads nothing that a folder supplies. The session and message IDs come from a client or an import and

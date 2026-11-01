@@ -509,3 +509,37 @@ describe("the memory of an agent with a memory scope", () => {
       }),
   )
 })
+
+// context-memory-10 part 2, class 12: a project's snapshot of a user-scope agent's memory is copied before the first
+// agent block is built, through the real session context, so the agent finds the snapshot's index on the main thread
+// and as a subagent alike. The agent is one a config file defines, as only those take a snapshot.
+describe("agent memory snapshots in a session's baseline", () => {
+  withAgent.live("gives a user-scope agent and its subagent the snapshot's index", () =>
+    Effect.gen(function* () {
+      const located = yield* Location.Service
+      const snapshot = path.join(located.directory, ".orbit", "agent-memory-snapshots", "roamer")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(snapshot, { recursive: true })
+        await fs.writeFile(path.join(snapshot, "snapshot.json"), JSON.stringify({ updatedAt: "2026-10-01" }))
+        await fs.writeFile(path.join(snapshot, "MEMORY.md"), "- [Habits](habits.md) SNAPSHOT-SESSION-LINE\n")
+      })
+      const agents = yield* Agent.Service
+      yield* agents.transform((editor) => {
+        editor.update(Agent.ID.make("roamer"), (agent) => {
+          agent.mode = "all"
+          agent.memory = "user"
+          agent.source = { scope: "user", path: AbsolutePath.make(FSUtil.resolve("/config/agents/roamer.md")) }
+        })
+      })
+      const main = SessionSchema.ID.make("ses_agent_snap_main")
+      const sub = SessionSchema.ID.make("ses_agent_snap_sub")
+      yield* insertSession({ id: main, agent: "roamer", directory: located.directory })
+      yield* insertSession({ id: sub, parentID: main, agent: "roamer", directory: located.directory })
+      const context = yield* SessionContext.Service
+      for (const id of [main, sub]) {
+        const view = yield* readInitial((yield* context.select(id)).instructions)
+        expect({ id, index: view.text.includes("SNAPSHOT-SESSION-LINE") }).toEqual({ id, index: true })
+      }
+    }),
+  )
+})

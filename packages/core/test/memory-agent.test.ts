@@ -474,6 +474,43 @@ describe("agent memory roots in the repository", () => {
     }),
   )
 
+  // Part 2, classes 1 and 5: a project's agent memory snapshots sit in a third root of the repository,
+  // `.orbit/agent-memory-snapshots`, resolved by the same rules after the project is trusted. An id becomes a snapshot
+  // folder only when it is a plain name, with one line for each id that is not. The carve-out never covers this root,
+  // and nothing of `.orbit` is touched before the project is trusted. The trusted plain ids are the control.
+  it.live("maps an agent to its snapshot folder only after the project is trusted and only for a plain name", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const snapshots = path.join(l.orbit, "agent-memory-snapshots")
+      yield* Effect.promise(() => fs.mkdir(snapshots, { recursive: true }))
+      const ids = ["../x", "a/../b", "x:y", "con", ".x"]
+      const logs: string[] = []
+      const trusted = yield* Effect.gen(function* () {
+        const agents = yield* service
+        return {
+          plain: (yield* agents.snapshot("reviewer"))?.folder,
+          nested: (yield* agents.snapshot("review/deep"))?.folder,
+          refused: yield* Effect.forEach(ids, (id) => agents.snapshot(id).pipe(Effect.map((found) => found?.folder))),
+          current: folders(yield* agents.current()),
+        }
+      }).pipe(provide(l), Effect.provide(logged(logs)))
+      expect(trusted).toEqual({
+        plain: path.join(snapshots, "reviewer"),
+        nested: path.join(snapshots, "review", "deep"),
+        refused: ids.map(() => undefined),
+        current: [l.user, l.shared, l.local],
+      })
+      expect(logs.filter((line) => line.includes("not a plain name"))).toHaveLength(ids.length)
+      const recorded = recordedFileSystem()
+      const untrusted = yield* Effect.gen(function* () {
+        const agents = yield* service
+        return yield* agents.snapshot("reviewer")
+      }).pipe(provide(l, { untrusted: true, files: recorded.layer }))
+      expect(untrusted).toBeUndefined()
+      expect(recorded.calls.filter((call) => call.toLowerCase().includes(l.orbit.toLowerCase()))).toEqual([])
+    }),
+  )
+
   // Class 12 and decision 3: project and local memory follow the Location's own folder, as the reference follows the
   // working folder, so a worktree-isolated agent keeps its project memory in its worktree.
   it.live("resolves project and local memory from the Location's own folder, a worktree's included", () =>
