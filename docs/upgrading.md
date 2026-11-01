@@ -2078,7 +2078,7 @@ providers spent answering, the wall time, the lines the edit tools changed, then
 input, output, cache read and cache write tokens (and reasoning when there are any) and its cost. Spend that no row
 explains (responses a rewind removed, and usage records written before this version) shows as Other, so the total stays
 exact. Titles, side requests, discarded attempts and every compaction call (including one that failed or was cancelled) now
-record the model they used and appear under it; a compaction from before this version is counted from its message. A
+record the model they used and appear under it; a session whose compactions all predate this version counts them from their messages, and once it compacts again the earlier compactions' spend shows as Other. A
 session with no model response yet shows a line of zero usage. Each row names its provider beside the model.
 
 Lines changed are counted from this version on, from the per-file counts of every finished Edit, Write and Patch

@@ -282,6 +282,35 @@ describe("SessionCost", () => {
     }),
   )
 
+  // The session-wide rule: once a session compacts again after the upgrade, the earlier compaction's spend (a record with
+  // no model) shows as other, and the total stays exact.
+  it.effect("a session that compacts again after the upgrade shows its earlier compaction as other", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 0.5 })).run().pipe(Effect.orDie)
+      yield* db
+        .insert(SessionMessageTable)
+        .values([
+          message(root, "compaction", { input: 10, cost: 0.2 }),
+          message(root, "compaction", { input: 10, cost: 0.3 }),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionUsageTable)
+        .values([
+          usage(root, "usage", "compaction", 0.2),
+          usage(root, "usage", "compaction", 0.3, { provider: "prov", id: "alpha" }),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+
+      const summary = yield* SessionCost.summary(root)
+      expect(totalOf(summary.rows)).toBeCloseTo(0.3)
+      expect(summary.other).toBeCloseTo(0.2)
+    }),
+  )
+
   // A clock that stepped back must not give a negative duration.
   it.effect("a response stamped before its start or before its session adds no negative time", () =>
     Effect.gen(function* () {

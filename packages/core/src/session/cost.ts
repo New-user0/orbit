@@ -33,7 +33,9 @@ type Counts = {
  *
  * A row is a model's assistant responses plus every usage record that names the model: side requests, titles, discarded
  * attempts and compaction calls, whether the compaction completed, failed or was cancelled. A completed compaction's
- * message stands in only where its session has no compaction record naming a model (it predates them). Whatever no row explains (responses a rewind removed, records from before they named a model) is `other`,
+ * message stands in only where its session has no compaction record naming a model, so a session whose compactions all
+ * predate them counts them from their messages; once such a session compacts again, the earlier compactions' spend
+ * falls into `other`. Whatever no row explains (responses a rewind removed, records from before they named a model) is `other`,
  * so that the total stays the sessions' own totals.
  */
 export const summary = Effect.fn("SessionCost.summary")(function* (sessionID: SessionSchema.ID) {
@@ -110,7 +112,7 @@ export const summary = Effect.fn("SessionCost.summary")(function* (sessionID: Se
               -- A response that failed mid-stream carries neither tokens nor cost: its spend is unknown.
               OR (json_extract(message.data, '$.finish') = 'error' AND json_extract(message.data, '$.cost') IS NULL)))
           -- Once a session's compaction calls name their model, those records hold every call, including the ones of a
-          -- compaction that failed or was cancelled. The message counts only for a compaction from before that.
+          -- compaction that failed or was cancelled. The message counts only while the session has none of them.
           OR (message.type = 'compaction'
             AND json_extract(message.data, '$.status') = 'completed'
             AND json_type(message.data, '$.tokens') = 'object'
