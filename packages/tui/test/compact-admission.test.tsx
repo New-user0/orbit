@@ -318,9 +318,12 @@ async function compactApp(width: number) {
     hold,
     async submit(text: string) {
       await setup.mockInput.typeText(text)
+      await setup.waitForFrame((frame) => frame.includes(text))
       // Escape closes the command list, so Enter sends the line instead of completing it.
       setup.mockInput.pressEscape()
       setup.mockInput.pressEnter()
+      // The line is cleared just before the command runs, so the command has been handled once it is gone.
+      await setup.waitForFrame((frame) => !frame.includes(text))
     },
     async close() {
       hold.first?.resolve()
