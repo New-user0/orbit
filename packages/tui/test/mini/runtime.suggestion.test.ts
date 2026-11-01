@@ -116,6 +116,16 @@ test("a subagent's turn asks nothing", async () => {
   }
 })
 
+test("a turn starting in Mini's own session ends its suggestion, and a subagent's turn does not", async () => {
+  using mini = await start({ suggestions: true })
+  mini.ended()
+  expect(await mini.frame()).toContain(suggestion)
+  mini.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_child" } })
+  expect(await mini.frame()).toContain(suggestion)
+  mini.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+  expect(await mini.frame()).not.toContain(suggestion)
+})
+
 test("a refused or failed request draws nothing", async () => {
   const rows = [
     { name: "403 UntrustedFolderError", answer: () => Promise.reject(new Error("UntrustedFolderError")), drawn: false },

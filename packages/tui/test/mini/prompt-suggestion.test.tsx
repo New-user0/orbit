@@ -9,13 +9,13 @@ import { Keymap } from "../../src/context/keymap"
 import { resolve } from "../../src/config"
 import { RunFooterView } from "../../src/mini/footer.view"
 import { RUN_THEME_FALLBACK } from "../../src/mini/theme"
-import type { FooterState, FooterView, RunPrompt } from "../../src/mini/types"
+import type { FooterState, FooterSubagentState, FooterView, RunPrompt } from "../../src/mini/types"
 
 const suggestion = "run the tests"
 
-async function render(text: string, width = 100) {
+async function render(text: string, width = 100, options: { phase?: FooterState["phase"]; subagent?: boolean } = {}) {
   const [state] = createSignal<FooterState>({
-    phase: "idle",
+    phase: options.phase ?? "idle",
     status: "",
     notice: "",
     model: "gpt-5",
@@ -25,6 +25,14 @@ async function render(text: string, width = 100) {
     exit: 0,
   })
   const [view] = createSignal<FooterView>({ type: "prompt" })
+  const [subagents] = createSignal<FooterSubagentState>({
+    tabs: options.subagent
+      ? [{ sessionID: "subagent-1", label: "Explore", description: "Inspect the keymap", status: "running" }]
+      : [],
+    details: {},
+    permissions: [],
+    forms: [],
+  })
   const [held, setHeld] = createSignal<string | undefined>(text)
   const config = resolve({ keybinds: { "prompt.editor": "none" } }, { terminalSuspend: true })
   const submitted: RunPrompt[] = []
@@ -47,6 +55,7 @@ async function render(text: string, width = 100) {
           currentVariant={() => undefined}
           state={state}
           view={view}
+          subagent={subagents}
           theme={() => RUN_THEME_FALLBACK}
           tuiConfig={config}
           miniSettings={() => ({
@@ -183,4 +192,46 @@ test("shell mode draws no ghost and Enter sends no suggestion", async () => {
   await footer.settle()
   expect(footer.submitted).toEqual([])
   expect(footer.text()).toBe("")
+})
+
+test("typing hides the ghost and erasing shows it again, and nothing hidden is taken", async () => {
+  {
+    await using footer = await render(suggestion)
+    expect(footer.app.captureCharFrame()).toContain(suggestion)
+    footer.app.mockInput.pressKey("x")
+    await footer.settle()
+    expect(footer.events).toContain("changed")
+    expect(footer.app.captureCharFrame()).not.toContain(suggestion)
+    footer.app.mockInput.pressArrow("right")
+    await footer.settle()
+    expect(footer.text()).toBe("x")
+    footer.app.mockInput.pressBackspace()
+    await footer.settle()
+    expect(footer.app.captureCharFrame()).toContain(suggestion)
+  }
+  // While a turn runs nothing is drawn, and no key takes it.
+  for (const press of keys) {
+    await using footer = await render(suggestion, 100, { phase: "running" })
+    expect(footer.app.captureCharFrame()).not.toContain(suggestion)
+    press.press(footer)
+    await footer.settle()
+    expect({ key: press.key, text: footer.text() }).toEqual({ key: press.key, text: "" })
+    expect({ key: press.key, sent: footer.submitted }).toEqual({ key: press.key, sent: [] })
+  }
+})
+
+test("a menu over the prompt takes no suggestion", async () => {
+  await using footer = await render(suggestion, 100, { subagent: true })
+  expect(footer.app.captureCharFrame()).toContain(suggestion)
+  footer.app.mockInput.pressArrow("down")
+  await footer.settle()
+  expect(footer.app.captureCharFrame()).toContain("Select subagent")
+  footer.app.mockInput.pressTab()
+  await footer.settle()
+  footer.app.mockInput.pressEscape()
+  await footer.settle()
+  await Bun.sleep(50)
+  await footer.settle()
+  expect(footer.text()).toBe("")
+  expect(footer.app.captureCharFrame()).toContain(suggestion)
 })

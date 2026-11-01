@@ -76,7 +76,7 @@ export function createPromptSuggestions(input: {
     },
     session(sessionID: string) {
       return {
-        text: () => held()[sessionID],
+        text: (): string | undefined => held()[sessionID],
         changed: () => cancel(sessionID),
         submitted: () => clear(sessionID),
         watch(drawable: () => boolean) {

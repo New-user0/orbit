@@ -417,9 +417,10 @@ export function createPromptState(input: PromptInput): PromptState {
   const [at, setAt] = createSignal(0)
   const [query, setQuery] = createSignal("")
   const visible = createMemo(() => mode() !== false)
-  // Whether a next-prompt suggestion can be seen now: an empty input in prompt mode with no list open, while no turn
-  // runs. A key takes a suggestion only while it is drawn (class 8).
-  const drawable = () => input.prompt() && !shell() && !visible() && text() === "" && input.state().phase === "idle"
+  // Whether a next-prompt suggestion can be seen now: the composer in view with an exactly empty input in prompt mode,
+  // while no turn runs. A list opens only on typed text, so none is open then. A key takes a suggestion only while it
+  // is drawn (class 8).
+  const drawable = () => input.prompt() && !shell() && text() === "" && input.state().phase === "idle"
   createEffect(() => {
     const watch = input.suggestion?.watch
     if (watch) onCleanup(watch(drawable))
@@ -1519,7 +1520,7 @@ export function createPromptState(input: PromptInput): PromptState {
     // Enter on a drawn suggestion sends the text drawn, as if typed. One cut to the row is put in the input instead, so
     // nothing is sent that the person could not read first (class 8).
     const shown = ghost()
-    if (shown && delivery === "steer") {
+    if (shown) {
       fill(shown.value, !shown.whole)
       if (!shown.whole) return
     }

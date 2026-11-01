@@ -1386,7 +1386,7 @@ export function Prompt(props: PromptProps) {
     // Enter on a drawn suggestion sends the text drawn, as if typed. One cut to the row is put in the input instead, so
     // nothing is sent that the person could not read first (class 8).
     const shown = ghost()
-    if (shown && delivery === "steer") {
+    if (shown) {
       fillPrompt(shown.value, !shown.whole)
       if (!shown.whole) return false
     }
@@ -1882,15 +1882,9 @@ export function Prompt(props: PromptProps) {
   // The command is handed this folder as `cwd` and `project_dir`, and programs it starts there (git, bun) read what the
   // folder chose, so it is a folder the person has to trust as well. It is not always the one the terminal UI started in.
   const statusLineTrusted = trust.folder(() => statusLineLocation().directory)
-  // Whether a next-prompt suggestion can be seen now: an empty input in prompt mode with no list open, on an idle
-  // session whose prompt takes typing. A key takes a suggestion only while it is drawn (class 8).
-  const drawable = () =>
-    store.mode === "normal" &&
-    store.prompt.text === "" &&
-    !auto()?.visible &&
-    !disabled() &&
-    props.showPlaceholder !== false &&
-    status() === "idle"
+  // Whether a next-prompt suggestion can be seen now: an exactly empty input in prompt mode, on an idle session. A list
+  // opens only on typed text, so none is open then. A key takes a suggestion only while it is drawn (class 8).
+  const drawable = () => store.mode === "normal" && store.prompt.text === "" && status() === "idle"
   createEffect(() => {
     const watch = suggestion()?.watch
     if (watch) onCleanup(watch(drawable))

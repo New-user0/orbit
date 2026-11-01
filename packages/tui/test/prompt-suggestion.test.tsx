@@ -28,6 +28,8 @@ async function mount(
     trusted?: (directory: string | null) => boolean
     /** The folder of the session in view; the default is the folder the terminal UI started in. */
     sessionDirectory?: string
+    /** Makes the session in view a subagent's session under this parent. */
+    parentID?: string
     width?: number
   } = {},
 ) {
@@ -43,6 +45,7 @@ async function mount(
     id: sessionID,
     projectID: "project",
     title: "Suggest fixture",
+    ...(input.parentID ? { parentID: input.parentID } : {}),
     agent: "build",
     model: { providerID: "demo", id: "model" },
     location: { directory: sessionDirectory },
@@ -73,6 +76,8 @@ async function mount(
         })
       }
       if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
+      if (input.parentID && url.pathname === `/api/session/${input.parentID}`)
+        return json({ data: { ...session, id: input.parentID, parentID: undefined } })
       if (url.pathname === "/api/session/active")
         return json({ data: Object.fromEntries([...running].map((id) => [id, { type: "busy" }])) })
       if (/^\/api\/session\/[^/]+\/(message|inbox|permission)$/.test(url.pathname))
@@ -278,10 +283,17 @@ test("only a succeeded turn of the session in view asks", async () => {
     { name: "interrupted", type: "session.execution.interrupted" as const, id: sessionID, count: 0 },
     { name: "another session", type: "session.execution.succeeded" as const, id: "ses_other", count: 0 },
     { name: "a subagent's session", type: "session.execution.succeeded" as const, id: childID, count: 0 },
+    {
+      name: "a subagent's session in view",
+      type: "session.execution.succeeded" as const,
+      id: sessionID,
+      parentID: "ses_suggest_parent",
+      count: 0,
+    },
     { name: "the session in view", type: "session.execution.succeeded" as const, id: sessionID, count: 1 },
   ]
   for (const row of rows) {
-    await using app = await mount({ suggestions: true })
+    await using app = await mount({ suggestions: true, parentID: row.parentID })
     app.execution(row.type, row.id)
     await quiet(app, 400)
     expect({ name: row.name, count: app.requests.length }).toEqual({ name: row.name, count: row.count })
