@@ -168,12 +168,12 @@ function uri(side: Side) {
 }
 
 // VS Code moves a tab to another group or window by opening it there and then closing it here, and reports that close
-// like any other. A close is the person's only when no tab with that title is open, now or once the current task ends.
+// like any other, in either order. A close is the person's only when no tab with that title is open once the current task
+// ends.
 async function closedByPerson(review: Review, label: string) {
-  const open = () => vscode.window.tabGroups.all.some((group) => group.tabs.some((tab) => tab.label === label))
-  if (open()) return
   await new Promise((resolve) => setTimeout(resolve, 0))
-  if (!open()) await review.closed(label)
+  if (vscode.window.tabGroups.all.some((group) => group.tabs.some((tab) => tab.label === label))) return
+  await review.closed(label)
 }
 
 // Closes the review's tabs by their titles. A review side with unsaved edits is saved first, which only hands its text
