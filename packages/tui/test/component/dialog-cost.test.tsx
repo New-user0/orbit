@@ -1,248 +1,243 @@
 import { expect, test } from "bun:test"
-import type { ModelInfo, SessionMessageInfo } from "@orbit/client"
-import { CostView, DialogCost } from "../../src/component/dialog-cost"
-import { costSummary } from "../../src/util/cost"
+import type { ModelInfo } from "@orbit/client"
+import type { SessionCost } from "@orbit/schema/session-cost"
+import { DialogCost } from "../../src/component/dialog-cost"
 import { json } from "../fixture/tui-client"
 import { model, renderLocal, session as sessionFixture } from "../fixture/local"
 
-const usage = (input: number) => ({ input, output: input / 2, reasoning: 1, cache: { read: 10, write: 5 } })
+// clients-ux-23 part 2: `/cost` draws the server's summary of the whole session and its subagents, not the page of
+// messages the client has loaded (FU-M2-026). The real dialog, the real client and a fetch handler that answers the
+// route; what is asserted is the drawn frame. The catalog step stays in the client: it decides which rows are unpriced.
 
-// Only the fields /cost reads; the rest of a message is not its business.
-const assistant = (
-  id: string,
-  modelID: string,
-  input: number,
-  cost: number | undefined,
-  time: { created: number; streamed?: number; completed?: number } = { created: 0 },
-) =>
-  ({
-    id,
-    type: "assistant",
-    model: { providerID: "provider", id: modelID },
-    tokens: usage(input),
-    cost,
-    time,
-  }) as unknown as SessionMessageInfo
+type Info = SessionCost.Info
+type Row = Info["rows"][number]
 
-const compaction = (id: string, modelID: string, input: number, cost: number) =>
-  ({
-    id,
-    type: "compaction",
-    status: "completed",
-    model: { providerID: "provider", id: modelID },
-    tokens: usage(input),
-    cost,
-    time: { created: 0 },
-  }) as unknown as SessionMessageInfo
+const ID = "ses_cost"
+const route = `/api/session/${ID}/cost`
 
-// A catalog entry with a price, and one with zero-valued prices; `model()` has none at all (the server records $0 for it).
+const row = (modelID: string, overrides: Partial<Row> = {}): Row => ({
+  providerID: "provider",
+  modelID,
+  responses: 1,
+  tokens: { input: 1_000, output: 500, reasoning: 0, cache: { read: 200, write: 100 } },
+  cost: 0,
+  unrecorded: 0,
+  zero: 0,
+  ...overrides,
+})
+const info = (overrides: Partial<Info> = {}): Info => ({ cost: 0, own: 0, subagents: 0, rows: [], ...overrides })
+
 const priced = (id: string): ModelInfo => ({
   ...model(id),
   cost: [{ input: 1, output: 2, cache: { read: 0, write: 0 } }] as unknown as ModelInfo["cost"],
 })
-const zeroPriced = (id: string): ModelInfo => ({
-  ...model(id),
-  cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }] as unknown as ModelInfo["cost"],
-})
 
-type Info = Parameters<typeof costSummary>[0]
-const info = (cost: number, input: number) => ({ cost, tokens: usage(input), time: { created: 0 } }) as Info
-const session = info(0.75, 300)
-
-test("totals and per-model sums come from the assistant messages", () => {
-  const summary = costSummary(
-    session,
-    [
-      assistant("a", "big", 100, 0.5, { created: 1_000, streamed: 3_000, completed: 3_000 }),
-      assistant("b", "big", 100, 0.25, { created: 4_000, streamed: 5_000, completed: 5_000 }),
-      assistant("c", "small", 100, 0.0, { created: 6_000, streamed: 6_500, completed: 6_500 }),
-    ],
-    [priced("big"), zeroPriced("small")],
-  )
-  expect(summary.cost).toBe(0.75)
-  expect(summary.partial).toBe(false)
-  expect(summary.api).toBe(3_500)
-  // From the session's creation, not the first loaded message.
-  expect(summary.wall).toBe(6_500)
-  expect(summary.models.map((row) => [row.modelID, row.responses, row.cost, row.tokens.input])).toEqual([
-    ["big", 2, 0.75, 200],
-    ["small", 1, 0, 100],
-  ])
-})
-
-test("a session with no assistant messages has no models and no times", () => {
-  const summary = costSummary(info(0, 0), [], undefined)
-  expect(summary).toMatchObject({ cost: 0, wall: undefined, api: undefined, models: [] })
-})
-
-test("a model the catalog has no price for is unknown even though the server recorded $0", () => {
-  const summary = costSummary(info(0, 100), [assistant("a", "local", 100, 0)], [model("local")])
-  expect(summary.cost).toBeUndefined()
-  expect(summary.models[0]).toMatchObject({ cost: undefined, unpriced: 1 })
-  // Zero-valued catalog entries are priced: the figure stays $0.
-  const free = costSummary(info(0, 100), [assistant("a", "free", 100, 0)], [zeroPriced("free")])
-  expect(free.cost).toBe(0)
-  expect(free.models[0]).toMatchObject({ cost: 0, unpriced: 0 })
-})
-
-test("without a catalog a message without a cost is unknown, and a mix says some is missing", () => {
-  const summary = costSummary(info(0, 100), [assistant("a", "local", 100, undefined)], undefined)
-  expect(summary.cost).toBeUndefined()
-  const mixed = costSummary(
-    session,
-    [assistant("a", "big", 100, 0.5), assistant("b", "local", 100, undefined)],
-    undefined,
-  )
-  expect(mixed).toMatchObject({ cost: 0.75, partial: true })
-})
-
-test("API time ends at the provider response, not at tool settlement", () => {
-  const long = assistant("a", "big", 100, 0.5, { created: 0, streamed: 2_000, completed: 62_000 })
-  const summary = costSummary(session, [long], [priced("big")])
-  expect(summary.api).toBe(2_000)
-  expect(summary.wall).toBe(62_000)
-  // No `streamed` stamp: unknown, never `completed`.
-  const unstamped = assistant("a", "big", 100, 0.5, { created: 0, completed: 62_000 })
-  expect(costSummary(session, [unstamped], [priced("big")]).api).toBeUndefined()
-})
-
-test("completed compactions count under their model and the remainder shows as other", () => {
-  const summary = costSummary(
-    info(1, 300),
-    [assistant("a", "big", 100, 0.5), compaction("c", "big", 100, 0.25)],
-    [priced("big")],
-  )
-  expect(summary.models[0]).toMatchObject({ responses: 2, cost: 0.75 })
-  expect(summary.other).toBeCloseTo(0.25)
-  expect(costSummary(session, [assistant("a", "big", 100, 0.75)], [priced("big")]).other).toBeUndefined()
-})
-
-test("a windowed history reports how many responses it covers and never claims unknown or other", () => {
-  const summary = costSummary(info(5, 300), [assistant("a", "local", 100, 0)], [model("local")], true)
-  expect(summary).toMatchObject({ cost: 5, loaded: 1, other: undefined, partial: true })
-})
-
-test("the dialog shows the figures, unknown prices and escaped model names", async () => {
-  await using setup = await renderLocal()
-  const summary = costSummary(
-    info(0, 100),
-    [assistant("a", "evil\u001b]0;pwned\u0007name", 100, undefined, { created: 0, streamed: 1000 })],
-    undefined,
-  )
-  setup.dialog.replace(() => <CostView summary={summary} />)
-  const frame = await setup.waitForFrame((frame) => frame.includes("Session cost"))
-  expect(frame).toContain("unknown")
-  expect(frame).toContain("Input tokens")
-  expect(frame).toContain("API time")
-  expect(frame).not.toContain("$0")
-  expect(frame.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
-})
-
-test("an empty session shows zeros and a dash for missing times", async () => {
-  await using setup = await renderLocal()
-  setup.dialog.replace(() => <CostView summary={costSummary(info(0, 0), [], undefined)} />)
-  const frame = await setup.waitForFrame((frame) => frame.includes("Session cost"))
-  expect(frame).toContain("$0.00")
-  expect(frame).toMatch(/Wall-clock time\s+-/)
-  expect(frame).toContain("No model response yet")
-})
-
-test("the dialog says when older responses are not loaded", async () => {
-  await using setup = await renderLocal({
-    sessions: [sessionFixture("windowed")],
+/** Opens `/cost` with the route answered by `answer`, and returns what was asked and the frame once `done` holds. */
+async function open(input: {
+  readonly answer: (url: URL) => Response | Promise<Response>
+  readonly models?: ModelInfo[]
+  readonly timeout?: number
+  readonly done?: (frame: string) => boolean
+}) {
+  const asked: string[] = []
+  const setup = await renderLocal({
+    width: 100,
+    height: 40,
+    models: input.models,
+    sessions: [sessionFixture(ID)],
     fetch: async (url) => {
-      if (url.pathname !== "/api/session/windowed/message") return
-      const loaded = assistant("a", "first", 100, 0.5, { created: 0, streamed: 1000 })
-      return json({ data: [loaded], cursor: { next: "older" } })
+      if (url.pathname.endsWith("/cost")) {
+        asked.push(url.pathname)
+        return input.answer(url)
+      }
+      if (url.pathname === `/api/session/${ID}/message`) {
+        // The one page the client holds: a single response, with more older ones behind it.
+        return json({
+          data: [
+            {
+              id: "msg_loaded",
+              type: "assistant",
+              model: { providerID: "provider", id: "loaded-only" },
+              tokens: { input: 7, output: 7, reasoning: 0, cache: { read: 0, write: 0 } },
+              cost: 99,
+              time: { created: 0, streamed: 1_000 },
+            },
+          ],
+          cursor: { next: "older" },
+        })
+      }
     },
   })
-  await setup.data.session.sync("windowed")
-  await setup.data.session.message.sync("windowed")
-  expect(setup.data.session.message.more("windowed")).toBe(true)
-  setup.dialog.replace(() => <DialogCost sessionID="windowed" />)
-  const frame = await setup.waitForFrame((frame) => frame.includes("Session cost"))
-  expect(frame.replace(/\s+/g, " ")).toContain("cover only the newest loaded response.")
-})
+  setup.dialog.replace(() => <DialogCost sessionID={ID} timeout={input.timeout} />)
+  const done = input.done ?? ((frame: string) => frame.includes("Total cost"))
+  for (let attempt = 0; attempt < 200 && !done(setup.captureCharFrame()); attempt++) {
+    await Bun.sleep(25)
+    await setup.renderOnce()
+  }
+  await Bun.sleep(50)
+  await setup.renderOnce()
+  return { setup, asked, frame: setup.captureCharFrame() }
+}
 
-test("a fork leaves out the messages it copied from its parent", () => {
-  const fork = { ...info(0, 0), fork: { sessionID: "parent", boundary: {} }, time: { created: 10_000 } } as Info
-  const copied = assistant("a", "big", 100, 1.5, { created: 1_000, streamed: 2_000, completed: 3_000 })
-  expect(costSummary(fork, [copied], [priced("big")])).toMatchObject({
-    cost: 0,
-    models: [],
-    api: undefined,
-    wall: undefined,
+const flat = (frame: string) => frame.replace(/\s+/g, " ")
+
+// PT1, FU-M2-026: the rows are the server's, whatever the client has loaded.
+test("the dialog shows the whole session's rows, not the loaded page", async () => {
+  const answer = info({
+    cost: 4.5,
+    own: 4.5,
+    rows: [
+      row("long-run", {
+        responses: 300,
+        cost: 4.5,
+        tokens: { input: 123_456, output: 65_432, reasoning: 0, cache: { read: 2_000_000, write: 0 } },
+      }),
+    ],
   })
-  const own = assistant("b", "big", 100, 0.5, { created: 11_000, streamed: 12_000, completed: 13_000 })
-  const summary = costSummary({ ...fork, cost: 0.5 }, [copied, own], [priced("big")])
-  expect(summary.models.map((row) => [row.responses, row.cost])).toEqual([[1, 0.5]])
-  expect(summary).toMatchObject({ api: 1_000, wall: 3_000 })
+  const { setup, asked, frame } = await open({ answer: () => json({ data: answer }), models: [priced("long-run")] })
+  await using _ = setup
+  expect(asked).toEqual([route])
+  expect(flat(frame)).toContain("long-run")
+  expect(flat(frame)).toContain("123.5K input")
+  expect(flat(frame)).toContain("65.4K output")
+  expect(flat(frame)).toContain("2.0M cache read")
+  expect(flat(frame)).toContain("$4.50")
+  // Nothing of the loaded page, and no claim that the breakdown covers only part of the session.
+  expect(frame).not.toContain("loaded-only")
+  expect(frame).not.toContain("$99")
+  expect(flat(frame)).not.toContain("newest loaded")
 })
 
-test("a known amount is kept when no row is priced, and a recorded cost beats an empty catalog entry", () => {
-  const titles = costSummary(info(0.01, 100), [assistant("a", "local", 100, undefined)], undefined)
-  expect(titles).toMatchObject({ cost: 0.01, partial: true })
-  const removed = costSummary(info(0.4, 100), [assistant("a", "big", 100, 0.4)], [model("big")])
-  expect(removed.models[0]).toMatchObject({ cost: 0.4, unpriced: 0 })
+// PT2: the reference prints cents above $0.50 and four decimals below; a price that is not known reads unknown, never
+// $0 (FU-M2-027); the subagent split stays; names from the catalog and the records are escaped (class 9).
+test("money follows the reference's decimals, unknown prices read unknown, and names are escaped", async () => {
+  const money: ReadonlyArray<readonly [number, string]> = [
+    [0.4321, "$0.4321"],
+    [0.5, "$0.5000"],
+    [0.75, "$0.75"],
+    [12.3456, "$12.35"],
+  ]
+  for (const [cost, shown] of money) {
+    const { setup, frame } = await open({
+      answer: () => json({ data: info({ cost, own: cost, rows: [row("big", { cost })] }) }),
+      models: [priced("big")],
+    })
+    await using _ = setup
+    expect(flat(frame)).toMatch(new RegExp(`Total cost ${shown.replace("$", "\\$")}(?!\\d)`))
+  }
+
+  // Failed response with no recorded cost (FU-M2-027, claim 1): the spend is unknown, not $0.
+  const unknown = await open({
+    answer: () => json({ data: info({ rows: [row("local", { unrecorded: 1 })] }) }),
+    models: [model("local")],
+  })
+  await using _unknown = unknown.setup
+  expect(flat(unknown.frame)).toMatch(/Total cost unknown/)
+  expect(unknown.frame).not.toContain("$0")
+
+  // A model the catalog lists without a price: the server's recorded $0 is not a free model.
+  const free = await open({
+    answer: () => json({ data: info({ rows: [row("local", { zero: 1 })] }) }),
+    models: [model("local")],
+  })
+  await using _free = free.setup
+  expect(flat(free.frame)).toMatch(/Total cost unknown/)
+  // A model the catalog does not list at all keeps the recorded $0.
+  const unlisted = await open({ answer: () => json({ data: info({ rows: [row("elsewhere", { zero: 1 })] }) }), models: [] })
+  await using _unlisted = unlisted.setup
+  expect(flat(unlisted.frame)).toMatch(/Total cost \$0\.0000/)
+
+  // Some priced, some not: the figure is shown and flagged as incomplete.
+  const mixed = await open({
+    answer: () =>
+      json({
+        data: info({ cost: 0.5, own: 0.5, rows: [row("big", { cost: 0.5 }), row("other", { unrecorded: 1 })] }),
+      }),
+    models: [priced("big")],
+  })
+  await using _mixed = mixed.setup
+  expect(flat(mixed.frame)).toContain("+ unpriced")
+
+  // Subagent spend is split out (FU-M2-027, claim 2).
+  const family = await open({
+    answer: () => json({ data: info({ cost: 1.3, own: 0.5, subagents: 0.8, rows: [row("big", { cost: 1.3 })] }) }),
+    models: [priced("big")],
+  })
+  await using _family = family.setup
+  expect(flat(family.frame)).toMatch(/Total cost \$1\.30/)
+  expect(flat(family.frame)).toMatch(/Subagents \$0\.80/)
+
+  // Spend no row explains shows as Other.
+  const other = await open({
+    answer: () => json({ data: info({ cost: 1, own: 1, other: 0.4, rows: [row("big", { cost: 0.6 })] }) }),
+    models: [priced("big")],
+  })
+  await using _other = other.setup
+  expect(flat(other.frame)).toMatch(/Other \$0\.4000/)
+
+  // Hostile names: a model ID in a record, and a name in the catalog.
+  const hostile = "evil\u001b]0;pwned\u0007\u009b2K‮name"
+  const named = await open({
+    answer: () => json({ data: info({ rows: [row(hostile, { cost: 0.1 }), row("listed", { cost: 0.1 })] }) }),
+    models: [{ ...priced("listed"), name: hostile }],
+  })
+  await using _named = named.setup
+  expect(named.frame).toContain("evil")
+  expect(named.frame.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
 })
 
-test("a response that used no tokens is never counted as unpriced", () => {
-  const idle = { ...assistant("a", "local", 0, 0), tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }
-  const summary = costSummary(info(0, 0), [idle as SessionMessageInfo], [model("local")])
-  expect(summary.models[0]).toMatchObject({ responses: 1, unpriced: 0 })
+// PT3: the code changes line shows only when the server counted them; a session from before the counter has none.
+test("code changes show only when counted", async () => {
+  const counted = await open({ answer: () => json({ data: info({ lines: { added: 12, removed: 1 } }) }) })
+  await using _counted = counted.setup
+  expect(flat(counted.frame)).toMatch(/Code changes 12 lines added, 1 line removed/)
+
+  const zero = await open({ answer: () => json({ data: info({ lines: { added: 0, removed: 0 } }) }) })
+  await using _zero = zero.setup
+  expect(flat(zero.frame)).toMatch(/Code changes 0 lines added, 0 lines removed/)
+
+  const older = await open({ answer: () => json({ data: info() }) })
+  await using _older = older.setup
+  expect(older.frame).not.toContain("Code changes")
 })
 
-test("the dialog counts several loaded responses in the plural", async () => {
-  await using setup = await renderLocal()
-  const summary = { ...costSummary(info(0, 0), [], undefined), loaded: 2 }
-  setup.dialog.replace(() => <CostView summary={summary} />)
-  const frame = await setup.waitForFrame((frame) => frame.includes("Session cost"))
-  expect(frame.replace(/\s+/g, " ")).toContain("cover only the 2 newest loaded responses")
+// PT4, classes 7 and 13: each failure is one line, and none crashes the dialog.
+test("an old server and an unknown session each draw one line", async () => {
+  const cases: ReadonlyArray<{
+    readonly name: string
+    readonly answer: () => Response | Promise<Response>
+    readonly timeout?: number
+    readonly line: string
+  }> = [
+    { name: "old server", answer: () => new Response(null, { status: 404 }), line: "older than this client" },
+    {
+      name: "unknown session",
+      answer: () => json({ _tag: "SessionNotFoundError", sessionID: ID, message: `Session not found: ${ID}` }, { status: 404 }),
+      line: "Session not found",
+    },
+    { name: "bad body", answer: () => json({ data: { cost: "lots" } }), line: "could not be read" },
+    { name: "no answer", answer: () => new Promise<Response>(() => {}), timeout: 50, line: "did not answer in time" },
+  ]
+  for (const item of cases) {
+    const { setup, frame } = await open({
+      answer: item.answer,
+      timeout: item.timeout,
+      done: (text) => text.includes(item.line),
+    })
+    await using _ = setup
+    expect(frame, item.name).toContain(item.line)
+    expect(frame, item.name).not.toContain("Total cost")
+  }
 })
 
-test("the dialog shows the family total the footer uses, with a Subagents line", async () => {
-  const root = { ...sessionFixture("root"), cost: 0.4 }
-  const child = { ...sessionFixture("child"), parentID: "root", cost: 0.8 }
-  await using setup = await renderLocal({ sessions: [root, child] })
-  await setup.data.session.sync("root")
-  await setup.data.session.sync("child")
-  expect(setup.data.session.cost("root")).toBeCloseTo(1.2)
-  setup.dialog.replace(() => <DialogCost sessionID="root" />)
-  const frame = await setup.waitForFrame((frame) => frame.includes("Session cost"))
-  expect(frame).toMatch(/Session cost\s+\$1\.20/)
-  expect(frame).toMatch(/Subagents\s+\$0\.80/)
-  expect(frame.replace(/\s+/g, " ")).toContain("this session's own")
-})
-
-test("subagent spend is split from the session's own and keeps the rows against the own cost", () => {
-  const summary = costSummary(info(0.5, 100), [assistant("a", "big", 100, 0.5)], [priced("big")], false, 1.3)
-  expect(summary).toMatchObject({ cost: 1.3, other: undefined })
-  expect(summary.subagents).toBeCloseTo(0.8)
-  expect(costSummary(info(0.5, 100), [assistant("a", "big", 100, 0.5)], [priced("big")]).subagents).toBeUndefined()
-  // Own spend unknown, subagents known: the known part is shown and flagged as incomplete.
-  const unknown = costSummary(info(0, 100), [assistant("a", "local", 100, 0)], [model("local")], false, 0.8)
-  expect(unknown).toMatchObject({ cost: 0.8, partial: true })
-})
-
-test("a cost that no loaded response explains shows as not itemized, also with no responses left", async () => {
-  const undone = costSummary(info(0.4, 0), [], [priced("big")])
-  expect(undone.other).toBeCloseTo(0.4)
-  await using setup = await renderLocal()
-  setup.dialog.replace(() => <CostView summary={undone} />)
-  const frame = await setup.waitForFrame((frame) => frame.includes("Session cost"))
-  expect(frame).toContain("No model response yet")
-  expect(frame).toContain("undone responses")
-})
-
-test("a response that failed with no cost and no tokens is unknown spend", () => {
-  const failed = {
-    ...assistant("f", "big", 0, undefined),
-    tokens: undefined,
-    finish: "error",
-  } as unknown as SessionMessageInfo
-  const summary = costSummary(info(0.5, 100), [assistant("a", "big", 100, 0.5), failed], [priced("big")])
-  expect(summary.partial).toBe(true)
-  expect(summary.models[0]).toMatchObject({ responses: 2, unpriced: 1, cost: 0.5 })
-  const stopped = { ...failed, finish: "stop" } as unknown as SessionMessageInfo
-  expect(costSummary(info(0.5, 100), [assistant("a", "big", 100, 0.5), stopped], [priced("big")]).partial).toBe(false)
+// Class 7: an entry of the rows the client cannot read costs only itself.
+test("a row that does not decode costs only itself", async () => {
+  const { setup, frame } = await open({
+    answer: () =>
+      json({ data: { ...info({ cost: 0.6, own: 0.6 }), rows: [row("good", { cost: 0.6 }), { providerID: 1 }, null] } }),
+    models: [priced("good")],
+  })
+  await using _ = setup
+  expect(flat(frame)).toContain("good")
+  expect(flat(frame)).toMatch(/Total cost \$0\.60/)
 })
