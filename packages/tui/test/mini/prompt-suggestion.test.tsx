@@ -194,6 +194,24 @@ test("shell mode draws no ghost and Enter sends no suggestion", async () => {
   expect(footer.text()).toBe("")
 })
 
+test("a suggestion starting with ! is taken into shell mode by Tab and sent as text by Enter", async () => {
+  {
+    await using footer = await render("!git status")
+    footer.app.mockInput.pressTab()
+    await footer.settle()
+    expect(footer.text()).toBe("git status")
+    footer.app.mockInput.pressEnter()
+    await footer.settle()
+    expect(footer.submitted.map((prompt) => [prompt.text, prompt.mode])).toEqual([["git status", "shell"]])
+  }
+  {
+    await using footer = await render("!git status")
+    footer.app.mockInput.pressEnter()
+    await footer.settle()
+    expect(footer.submitted.map((prompt) => [prompt.text, prompt.mode])).toEqual([["!git status", undefined]])
+  }
+})
+
 test("typing hides the ghost and erasing shows it again, and nothing hidden is taken", async () => {
   {
     await using footer = await render(suggestion)

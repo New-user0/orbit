@@ -39,7 +39,6 @@ export function createPromptSuggestions(input: {
     inflight.delete(sessionID)
   }
   const clear = (sessionID: string) => {
-    if (held()[sessionID] === undefined) return
     setHeld((previous) => Object.fromEntries(Object.entries(previous).filter(([id]) => id !== sessionID)))
   }
   const settle = (sessionID: string, controller: AbortController, answer: unknown) => {
