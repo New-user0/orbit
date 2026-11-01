@@ -1434,9 +1434,11 @@ every other extension):
   `test/manifest.test.ts` (the setting's decision row, the command's gate row, the scan of the doors).
 - The diff review of an Edit or Write approval, and the read-only preview of any other question with files
   (`src/review.ts`, clients-ux-15 part 2). It reads the request's own `place`, or `from` for a move, and nothing the
-  tool's input names (class 8). Before each review it reads trust fresh, then the session (`session.get`) and its
-  Location (`location.get`), and takes the Location's folder and the project's folder from that answer; a folder that is
-  not trusted, a failure or a late answer names no folder, and only the trust read goes out (classes 1, 3 and 7). A path
+  tool's input names (class 8). Before each review it reads trust fresh for the chat's folder, then the session
+  (`session.get`), the trust of the session's own folder, which may be another one, and its Location (`location.get`);
+  both folders must be trusted (the stricter answer, class 3). It takes the Location's folder and the project's folder
+  from that answer, and leaves out a project folder that is a filesystem root, as `FileAccess` does. A folder that is not
+  trusted, a failure or a late answer names no folder, and only the trust read goes out (classes 1, 3 and 7). A path
   is refused by its spelling before the disk is touched (not absolute, on Windows not a drive path, or a share or
   device spelling, `LinkShare.isShare`), then when a link on the way leads to a share (`LinkShare.ofSync`, which reads
   links part by part and opens none); then its real path is taken (`realpath`, or for a file not there yet the real
@@ -1444,8 +1446,10 @@ every other extension):
   path must be inside a server folder and inside a `file:` window folder, both real, by `FSUtil.contains` (class 4), and
   that real path is the one read. The editor is shown the text read, as a virtual document, and never the file's own
   URI. A file outside is shown on the card only, with a note that names it written out. Save, close and Reject answer
-  through the server's reply route (`content` with a `once` reply), and a tab the extension closes itself answers
-  nothing; the extension writes no file (class 12). Proof: `test/diff-review.test.ts` (the containment table with a
+  through the server's reply route (`content` with a `once` reply). Only the person's own answers count: a tab the
+  extension closes itself, a tab moved to another group or window (VS Code reports its close in the old group), and an
+  auto save (`onWillSaveTextDocument` with a reason other than `Manual`) answer nothing; the extension writes no file
+  (classes 8 and 12). Proof: `test/diff-review.test.ts` (the containment table with a
   marker outside and a control inside, the share and device spellings with an empty disk recorder, the linked
   worktree, the answers on a real `orb serve`), `test/approval-matrix.test.ts` (every matrix row reads only its place
   and from), `test/extension-review.test.ts` (the glue, with a stand-in `vscode`) and `test/manifest.test.ts` ("the

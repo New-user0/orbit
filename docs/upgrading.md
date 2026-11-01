@@ -2088,7 +2088,13 @@ file as it is on the left and the proposal on the right, which you can edit. Sav
 approves your version once; closing the tab approves the proposal as it stands; the tab's Reject button declines. The
 card keeps its buttons, and the first answer from anywhere wins; the tab then closes. Tabs that Orbit closes itself
 answer nothing: when the question is answered elsewhere, when you send a new prompt (every Orbit tab closes then), and
-when the window closes. Before, "Open diff" showed a read-only diff and only the card could answer.
+when the window closes. Moving the tab to another editor group or window answers nothing either. Before, "Open diff"
+showed a read-only diff and only the card could answer.
+
+Only a save you make answers. With `files.autoSave` on, VS Code's own save after a delay or when the editor loses focus
+keeps your edits in the tab and sends nothing: save with Ctrl+S or press Accept to approve them. Closing the tab still
+approves the proposal as the agent wrote it, without your auto-saved edits. If the service does not answer a save in
+time, the note says so and points to the card, which shows whether the question is still waiting.
 
 Other questions with files (Patch, a move, several files, a notebook) open as a read-only preview from the card's "Open
 diff", as before, and so does every question from an Orbit service older than the edited reply. A file is opened only
