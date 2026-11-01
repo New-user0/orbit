@@ -18,6 +18,7 @@ import type { SessionSchema } from "../session/schema.js"
 import { MemoryStore } from "./store.js"
 import { MemoryTeam } from "./team.js"
 import { MemoryAgent } from "./agent.js"
+import { MemoryAgentSnapshot } from "./agent-snapshot.js"
 import { ConfigAgent } from "@orbit/schema/config/agent"
 
 /**
@@ -81,6 +82,7 @@ const layer = Layer.effect(
     const store = yield* MemoryStore.Service
     const teams = yield* MemoryTeam.Service
     const agents = yield* MemoryAgent.Service
+    const snapshots = yield* MemoryAgentSnapshot.Service
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
     const location = yield* Location.Service
@@ -157,6 +159,9 @@ const layer = Layer.effect(
       // the prompt has no place for it (an agent's own prompt, the person's system prompt), and the model must not then
       // be told that memory is off.
       const on = yield* store.enabled()
+      // A project's snapshots of agent memory are copied before any agent block reads its folder, as the reference
+      // copies them when it loads the agents. Nothing is read while memory is off.
+      yield* snapshots.sync()
       // Read once too, for the guide and the team index. It is undefined until the project is trusted (class 1).
       const team = yield* teams.current()
       const guide = Instructions.make({
@@ -488,6 +493,7 @@ export const node = makeLocationNode({
     MemoryStore.node,
     MemoryTeam.node,
     MemoryAgent.node,
+    MemoryAgentSnapshot.node,
     FSUtil.node,
     Global.node,
     Location.node,
