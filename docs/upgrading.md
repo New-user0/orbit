@@ -4969,6 +4969,37 @@ window less the summary's room instead of the whole window; lower it if compacti
 **What to do:** Nothing. A conversation that is too long to summarize in one request now asks you to go back a few
 messages, where it used to shrink the request in steps.
 
+## `/compact` takes instructions, and a running compaction streams a count, not its reply
+
+- **Instructions.** `/compact focus on tests` in the terminal UI, Mini and ACP adds the text after the command to the
+  summary prompt, trimmed. The `session.compact` request, the generated clients and the plugin host take the same text as
+  `instructions`; blank text counts as none, and a bare `/compact` is unchanged. A line break inside the text is kept
+  on the server route and in ACP (`session-compact.test.ts` in the server, `acp/compaction.test.ts`). In the terminal UI
+  Enter at the command list still runs a bare `/compact`; Tab fills in `/compact ` so you can type the text, and a
+  project command that is also named `compact` still takes `/compact <text>` (`compact-admission.test.tsx`). Mini
+  parses the same spellings and also leaves `/compact <text>` to a project command named `compact` (a bare `/compact`
+  stays the built-in) (`prompt.shared.test.ts`, `runtime.queue.test.ts`, `footer.view.test.tsx`).
+- **One pending compaction.** A `/compact` with instructions while another compaction is waiting replaces it (the
+  waiting one is cancelled); one without instructions, or with the same instructions, joins it and keeps its
+  instructions. A compaction that is already running is not waiting, so a new request runs after it
+  (`session-compact.test.ts`).
+- **A native-compaction model.** A manual compaction with instructions on a model that compacts natively is made as a
+  summary compaction, because only a summary can follow them. A bare `/compact` there stays native
+  (`session-native-compaction.test.ts`).
+- **The streamed event.** `session.compaction.delta` now carries `characters`, the count of reply text received in the
+  current summary request (it starts again at zero for each request), instead of the text. Plugins and SDK callers that
+  read the reply while it streamed must wait for `session.compaction.ended`
+  (`session-compaction.test.ts`).
+- **What you see.** After 30 seconds a running compaction in the terminal UI adds how long it has run and an estimate of
+  the reply's tokens (the character count divided by four) to its row, and never shows the reply; on a narrow row the
+  token figure goes first, then the time (`compaction-progress.test.tsx`). Mini no longer writes the summary as it
+  streams: it writes the stored summary whole when the compaction ends (`stream-v2.transport.test.ts`).
+
+**Affects:** plugins and SDK callers that read `session.compaction.delta` text, and Mini users who watched the summary
+stream.
+
+**What to do:** Read the summary from `session.compaction.ended`.
+
 ## The terminal UI warns when the context is almost full
 
 The full-screen terminal UI now draws the latest `session.context.updated` report of the session in view in the prompt's

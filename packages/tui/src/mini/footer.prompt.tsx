@@ -881,7 +881,9 @@ export function createPromptState(input: PromptInput): PromptState {
         const normalized = image ? content.data : stripAnsiSequences(content.data).replace(/\r\n?/g, "\n")
         const resolved = image
           ? {
-              files: [{ type: "file" as const, uri: `data:${content.mime};base64,${content.data}`, filename: "clipboard" }],
+              files: [
+                { type: "file" as const, uri: `data:${content.mime};base64,${content.data}`, filename: "clipboard" },
+              ],
               rest: "",
             }
           : shell()
@@ -1392,11 +1394,15 @@ export function createPromptState(input: PromptInput): PromptState {
     }
 
     const command = next.mode === "shell" ? undefined : selectedCommand(next.text, next.command)
+    const parsed =
+      command || next.parts.some((part) => part.type === "skill") || next.mode === "shell" || isNewCommand(next.text)
+        ? undefined
+        : parseSlashCommand(next.text, input.commands())
     if (
       delivery === "queue" &&
       (next.mode === "shell" ||
         isNewCommand(next.text) ||
-        isCompactCommand(next.text) ||
+        isCompactCommand(next.text, command ?? (parsed?.type === "command" ? parsed.command : undefined)) ||
         isExitCommand(next.text) ||
         next.text.trim().toLowerCase() === "/settings")
     ) {
@@ -1414,10 +1420,6 @@ export function createPromptState(input: PromptInput): PromptState {
       return
     }
 
-    const parsed =
-      command || next.parts.some((part) => part.type === "skill") || next.mode === "shell" || isNewCommand(next.text)
-        ? undefined
-        : parseSlashCommand(next.text, input.commands())
     if (parsed?.type === "pending") {
       input.onStatus("loading commands")
       return
