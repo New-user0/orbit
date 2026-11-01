@@ -66,7 +66,15 @@ const provide = (
 ) =>
   Effect.provide(
     AppNodeBuilder.build(
-      LayerNode.group([Database.node, Bus.node, Agent.node, MemoryAgent.node, MemoryAgentSnapshot.node]),
+      LayerNode.group([
+        Database.node,
+        Bus.node,
+        Config.node,
+        WorkspaceTrust.node,
+        Agent.node,
+        MemoryAgent.node,
+        MemoryAgentSnapshot.node,
+      ]),
       [
         Global.node.replace(Global.layerWith({ data: l.data, config: path.join(l.root, "config") })),
         Config.node.replace(Config.testLayer(options.entries ?? [])),
@@ -281,7 +289,7 @@ describe("agent memory snapshots", () => {
         yield* define(agents)
         yield* sync
       }).pipe(provide(l))
-      const out = yield* Effect.forEach(agents, (agent) =>
+      const out = yield* Effect.forEach([...agents], (agent) =>
         exists(path.join(l.user, agent.id, "MEMORY.md")).pipe(Effect.map((copy) => ({ id: agent.id, copy }))),
       )
       expect(out).toEqual(agents.map((agent) => ({ id: agent.id, copy: agent.copy })))
@@ -370,9 +378,13 @@ describe("agent memory snapshots", () => {
             fs.symlink(path.join(l.outside, "snapshot.json"), path.join(l.snapshots, "linked", "snapshot.json")),
           )
         }
+        // An agent whose own folder's place is taken by a file cannot be copied into: that costs only this agent.
+        yield* snapshotAt(path.join(l.snapshots, "blocked"), files)
+        yield* write(path.join(l.user, "blocked"), "A FILE\n")
         yield* snapshotAt(path.join(l.snapshots, "good"), files)
         const refused = [...bad.map((row) => row.id), "folder", ...linked]
-        const ids = [...refused, "missing", "good"]
+        // `absent` has no snapshot folder at all, the usual case, which logs nothing either.
+        const ids = [...refused, "missing", "absent", "blocked", "good"]
         const logs: string[] = []
         yield* Effect.gen(function* () {
           yield* define(ids.map((id) => ({ id, memory: "user", source: "user" }) as const))
@@ -385,7 +397,9 @@ describe("agent memory snapshots", () => {
         const lines = logs.filter((line) => line.includes("snapshot.json"))
         expect(lines).toHaveLength(refused.length)
         for (const id of refused) expect({ id, lines: lines.filter((line) => line.includes(` ${id} `)).length }).toEqual({ id, lines: 1 })
-        expect(logs.filter((line) => line.includes(" missing "))).toEqual([])
+        expect(logs.filter((line) => line.includes(" missing ") || line.includes(" absent "))).toEqual([])
+        expect(logs.filter((line) => line.includes(" blocked "))).toHaveLength(1)
+        expect(yield* text(path.join(l.user, "blocked"))).toBe("A FILE\n")
         expect(logs.filter((line) => line.includes("SECRET-TEXT"))).toEqual([])
       }),
   )

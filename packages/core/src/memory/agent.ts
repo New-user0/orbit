@@ -45,6 +45,11 @@ export interface Interface {
    * trusted yet, or a part of the id is a link that leads out of the root or nowhere. Nothing is made.
    */
   readonly folder: (agent: string, scope: Scope) => Effect.Effect<Folder | undefined>
+  /**
+   * The folder of the project's snapshot of `agent`'s memory (`<dir>/.orbit/agent-memory-snapshots/<id>`), under the
+   * rules of `folder`, or undefined. The carve-out never covers it: `current` leaves its root out.
+   */
+  readonly snapshot: (agent: string) => Effect.Effect<Folder | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/MemoryAgent") {}
@@ -83,6 +88,7 @@ const layer = Layer.effect(
       )
     const project = yield* repository("agent-memory")
     const local = yield* repository("agent-memory-local")
+    const snapshots = yield* repository("agent-memory-snapshots")
 
     // Trust first: nothing of the repository's roots is resolved before the project is trusted (class 1).
     const root = Effect.fnUntraced(function* (scope: Scope) {
@@ -97,17 +103,32 @@ const layer = Layer.effect(
     })
 
     const named = new Set<string>()
-    const folder = Effect.fn("MemoryAgent.folder")(function* (agent: string, scope: Scope) {
-      // The `Agent.ID` brand is not checked, so an id that a plugin gives an agent is checked here, before it becomes a
-      // path (class 5), with one line for each id however often it is asked (class 7).
-      if (!ConfigAgent.isName(agent)) {
+    // The `Agent.ID` brand is not checked, so an id that a plugin gives an agent is checked here, before it becomes a
+    // path (class 5), with one line for each id however often it is asked (class 7).
+    const plain = (agent: string) =>
+      Effect.gen(function* () {
+        if (ConfigAgent.isName(agent)) return true
         if (!named.has(agent)) {
           named.add(agent)
           yield* Effect.logWarning("agent memory not used: the agent's id is not a plain name", { agent })
         }
-        return undefined
-      }
-      const base = yield* root(scope)
+        return false
+      })
+
+    const folder = Effect.fn("MemoryAgent.folder")(function* (agent: string, scope: Scope) {
+      if (!(yield* plain(agent))) return undefined
+      return yield* below(yield* root(scope), agent)
+    })
+
+    const snapshot = Effect.fn("MemoryAgent.snapshot")(function* (agent: string) {
+      if (!(yield* plain(agent))) return undefined
+      // Trust first, as for the other two roots of the repository (class 1).
+      if (!(yield* trust.trusted())) return undefined
+      return yield* below(yield* snapshots, agent)
+    })
+
+    // The folder of a plain id below an accepted root.
+    const below = Effect.fnUntraced(function* (base: Folder | undefined, agent: string) {
       if (base === undefined) return undefined
       const segments = agent.split("/")
       const target = path.join(base.folder, ...segments)
@@ -121,7 +142,7 @@ const layer = Layer.effect(
       return { folder: target, real } satisfies Folder
     })
 
-    return Service.of({ current, folder })
+    return Service.of({ current, folder, snapshot })
   }),
 )
 
