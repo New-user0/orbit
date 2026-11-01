@@ -9,6 +9,9 @@ import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Project } from "@orbit/core/project"
 import { ProjectTable } from "@orbit/core/project/sql"
 import { AbsolutePath } from "@orbit/core/schema"
+import { Model } from "@orbit/core/model"
+import { Provider } from "@orbit/core/provider"
+import { Money } from "@orbit/schema/money"
 import { Session } from "@orbit/core/session"
 import { SessionCost } from "@orbit/core/session/cost"
 import { SessionEvent } from "@orbit/core/session/event"
@@ -195,8 +198,9 @@ describe("SessionCost", () => {
           message(root, "assistant", { input: 10, cost: 0.5 }),
           message(root, "assistant", { input: 10 }),
           message(root, "assistant", { input: 10, cost: 0 }),
-          message(root, "assistant", { extra: { finish: "error" } }),
-          message(root, "assistant", { extra: { finish: "stop" } }),
+          message(root, "assistant", { input: 10, cost: 0 }),
+          message(root, "assistant", { model: "gamma", extra: { finish: "error" } }),
+          message(root, "assistant", { model: "delta", extra: { finish: "stop" } }),
           // No tokens used: neither unknown nor free.
           message(root, "assistant", { extra: { tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } } }),
           message(root, "assistant", { extra: { tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0 } }),
@@ -206,9 +210,10 @@ describe("SessionCost", () => {
 
       const summary = yield* SessionCost.summary(root)
       // The failed response with no tokens counts; the stopped one with no tokens is not a response that used any.
-      expect(summary.rows).toHaveLength(1)
-      expect(summary.rows[0]).toMatchObject({ responses: 6, unrecorded: 2, zero: 1 })
+      expect(summary.rows.map((row) => row.modelID)).toEqual(["alpha", "gamma"])
+      expect(summary.rows[0]).toMatchObject({ responses: 6, unrecorded: 1, zero: 2 })
       expect(summary.rows[0]?.cost).toBeCloseTo(0.5)
+      expect(summary.rows[1]).toMatchObject({ responses: 1, unrecorded: 1, zero: 0 })
     }),
   )
 
@@ -240,6 +245,8 @@ describe("SessionCost", () => {
           usage(root, "usage", "compaction", 0.3, alpha),
           // A side query on another model.
           usage(root, "side_query", "webfetch.summarize", 0.05, { provider: "prov", id: "beta" }),
+          // A call that spent tokens and recorded exactly 0 is counted as free or unpriced.
+          usage(root, "side_query", "webfetch.summarize", 0, { provider: "prov", id: "free" }),
         ])
         .run()
         .pipe(Effect.orDie)
@@ -248,7 +255,8 @@ describe("SessionCost", () => {
       const alphaRow = summary.rows.find((row) => row.modelID === "alpha")
       expect(alphaRow?.responses).toBe(5)
       expect(alphaRow?.cost).toBeCloseTo(1.15)
-      expect(summary.rows.find((row) => row.modelID === "beta")).toMatchObject({ responses: 1 })
+      expect(summary.rows.find((row) => row.modelID === "beta")).toMatchObject({ responses: 1, zero: 0 })
+      expect(summary.rows.find((row) => row.modelID === "free")).toMatchObject({ responses: 1, zero: 1 })
       expect(totalOf(summary.rows)).toBeCloseTo(1.2)
       expect(summary.other).toBeUndefined()
     }),
@@ -271,6 +279,23 @@ describe("SessionCost", () => {
       expect(summary.rows).toHaveLength(1)
       expect(summary.rows[0]?.cost).toBeCloseTo(0.2)
       expect(summary.other).toBeUndefined()
+    }),
+  )
+
+  // A clock that stepped back must not give a negative duration.
+  it.effect("a response stamped before its start or before its session adds no negative time", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      yield* db.insert(SessionTable).values(sessionRow(root, { time_created: 50_000 })).run().pipe(Effect.orDie)
+      yield* db
+        .insert(SessionMessageTable)
+        .values([message(root, "assistant", { input: 10, cost: 0.1, created: 1_000, streamed: 900, completed: 2_000 })])
+        .run()
+        .pipe(Effect.orDie)
+
+      const summary = yield* SessionCost.summary(root)
+      expect(summary.api).toBe(0)
+      expect(summary.wall).toBe(0)
     }),
   )
 
@@ -299,6 +324,8 @@ describe("SessionCost", () => {
             completed: 13_000,
           }),
           message(child, "assistant", { provider: "a", model: "b/c#d", input: 10, cost: 0.25, created: 14_000 }),
+          // Written in the very millisecond the fork was created: its own, not copied.
+          message(child, "assistant", { provider: "e", model: "f", input: 10, cost: 0.1, created: 10_000, streamed: 10_500 }),
         ])
         .run()
         .pipe(Effect.orDie)
@@ -307,8 +334,9 @@ describe("SessionCost", () => {
       expect(summary.rows.map((row) => [row.providerID, row.modelID, row.responses, row.cost])).toEqual([
         ["a", "b/c#d", 1, 0.25],
         ["a/b", "c#d", 1, 0.25],
+        ["e", "f", 1, 0.1],
       ])
-      expect(summary.api).toBe(1_000)
+      expect(summary.api).toBe(1_500)
       expect(summary.wall).toBe(3_000)
     }),
   )
@@ -379,6 +407,62 @@ describe("SessionCost", () => {
       expect(own.find((row) => row.id === root)).toMatchObject({ lines_added: 3 + 2 + 5 + 1 + 10 + 4, lines_removed: 1 + 0 + 0 + 1 + 10 + 2 })
       const summary = yield* SessionCost.summary(root)
       expect(summary.lines).toEqual({ added: 25 + 7, removed: 14 + 2 })
+    }),
+  )
+
+  it.effect("a result for a message that is not stored counts no lines", () =>
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      yield* seedProject
+      yield* bus.publish(SessionEvent.Created, {
+        sessionID: root,
+        projectID: Project.ID.global,
+        location: { directory: AbsolutePath.make("/project") },
+        slug: "root",
+        version: "test",
+      })
+      yield* bus.publish(SessionEvent.Tool.Success, {
+        sessionID: root,
+        assistantMessageID: SessionMessage.ID.make("msg_cost_absent"),
+        id: "c1",
+        content: [{ type: "text", text: "done" }],
+        metadata: { files: [{ additions: 5, deletions: 5 }] },
+        executed: false,
+      })
+      expect((yield* SessionCost.summary(root)).lines).toEqual({ added: 0, removed: 0 })
+    }),
+  )
+
+  // The projector stores the model a usage record names, so the summary itemizes it. Mutation: leave the columns null.
+  it.effect("usage and side query events that name a model are itemized under it", () =>
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      yield* seedProject
+      yield* bus.publish(SessionEvent.Created, {
+        sessionID: root,
+        projectID: Project.ID.global,
+        location: { directory: AbsolutePath.make("/project") },
+        slug: "root",
+        version: "test",
+      })
+      const spent = { cost: Money.USD.make(0.25), tokens: tokens(10) }
+      yield* bus.publish(SessionEvent.UsageRecorded, {
+        sessionID: root,
+        source: "title",
+        model: { providerID: Provider.ID.make("prov"), id: Model.ID.make("alpha") },
+        ...spent,
+      })
+      yield* bus.publish(SessionEvent.SideQueryRecorded, {
+        sessionID: root,
+        purpose: "webfetch.summarize",
+        model: { providerID: Provider.ID.make("prov"), id: Model.ID.make("beta") },
+        ...spent,
+      })
+      const summary = yield* SessionCost.summary(root)
+      expect(summary.rows.map((row) => [row.providerID, row.modelID, row.responses]).toSorted()).toEqual([
+        ["prov", "alpha", 1],
+        ["prov", "beta", 1],
+      ])
     }),
   )
 

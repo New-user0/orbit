@@ -69,10 +69,13 @@ let override: (() => Stream.Stream<LLMEvent>) | undefined
 let replies: Array<() => Stream.Stream<LLMEvent>> = []
 // Each native compaction call takes the next of these.
 let checkpoints: Array<() => Effect.Effect<CompactionCheckpointResponse, AIError>> = []
+// The callback the last native call was given to say that the provider began to answer.
+let lastOnResponse: (() => void) | undefined
 const client = Layer.mock(LLMClient.Service)({
   // Only the trigger form is scripted; an arrow function cannot spell the overloads, hence the cast.
-  compact: ((request: LLMRequest) => {
+  compact: ((request: LLMRequest, options?: { readonly onResponse?: () => void }) => {
     requests.push(request)
+    lastOnResponse = options?.onResponse
     return checkpoints.shift()?.() ?? Effect.die("no scripted native compaction")
   }) as unknown as Context.Service.Shape<typeof LLMClient.Service>["compact"],
   stream: (request: LLMRequest) => {
@@ -800,6 +803,7 @@ for (const [name, tokens, records] of [
         .all()
         .pipe(Effect.orDie)
       expect(rows).toHaveLength(records)
+      for (const row of rows) expect(row).toMatchObject({ provider_id: "test", model_id: "summary-model" })
     }),
   )
 
@@ -2185,5 +2189,65 @@ it.effect("an automatic summary compaction opens its own message", () =>
       Bus.versionedType(SessionEvent.Compaction.Ended.type, 1),
     ])
     expect((yield* store.context(session.id))[0]).toMatchObject({ type: "compaction", reason: "auto", summary: "Summary:\nT" })
+  }),
+)
+
+// clients-ux-23 part 2: every record of compaction spend names the model that was called, so /cost itemizes it. One test
+// per place a record is written: a completed summary, a native call that returned, and a native call cut off after the
+// provider began to answer.
+const nativeContext = (context: ReturnType<typeof loaded>, endpoint: ReturnType<ReturnType<typeof OpenAI.configure>["responses"]>) =>
+  ({ ...context, model: { ...context.model, model: endpoint, compaction: { type: "native" as const } } }) as SessionContext.Loaded
+const spentRows = (sessionID: string) =>
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    return yield* db.select().from(SessionUsageTable).where(eq(SessionUsageTable.session_id, sessionID as never)).all().pipe(Effect.orDie)
+  })
+
+it.effect("a completed summary compaction records the model that wrote it", () =>
+  Effect.gen(function* () {
+    yield* scripted("ses_cm_model_summary", [userText("Do it")], [])
+    const rows = yield* spentRows("ses_cm_model_summary")
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row).toMatchObject({ source: "compaction", provider_id: "test", model_id: "summary-model" })
+  }),
+)
+
+it.effect("a native compaction that returned records the model it called", () =>
+  Effect.gen(function* () {
+    const endpoint = OpenAI.configure({ apiKey: "fixture", baseURL: "http://127.0.0.1:1" }).responses("gpt-5.4-mini")
+    checkpoints = [
+      () =>
+        Effect.succeed(
+          CompactionCheckpointResponse.make({
+            responseID: "resp_cm_model_native",
+            checkpoint: { type: "compaction", provider: endpoint.provider, encrypted: "native" },
+          }),
+        ),
+    ]
+    yield* scripted("ses_cm_model_native", [userText("Do it")], [], {
+      context: (context) => nativeContext(context, endpoint),
+    }).pipe(Effect.ensuring(Effect.sync(() => (checkpoints = []))))
+    const rows = yield* spentRows("ses_cm_model_native")
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ source: "compaction", provider_id: "test", model_id: "summary-model" })
+  }),
+)
+
+it.effect("a native compaction cut off after the provider began to answer records an estimate with the model", () =>
+  Effect.gen(function* () {
+    const endpoint = OpenAI.configure({ apiKey: "fixture", baseURL: "http://127.0.0.1:1" }).responses("gpt-5.4-mini")
+    checkpoints = [
+      () =>
+        Effect.suspend(() => {
+          lastOnResponse?.()
+          return Effect.fail(new AIError({ reason: new InvalidRequestError({ message: "Cut off" }) }))
+        }),
+    ]
+    yield* scripted("ses_cm_model_native_cut", [userText("Do it")], [], {
+      context: (context) => nativeContext(context, endpoint),
+    }).pipe(Effect.ensuring(Effect.sync(() => (checkpoints = []))))
+    const rows = yield* spentRows("ses_cm_model_native_cut")
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row).toMatchObject({ source: "compaction", provider_id: "test", model_id: "summary-model" })
   }),
 )

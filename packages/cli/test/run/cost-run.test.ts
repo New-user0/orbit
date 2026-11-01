@@ -1,6 +1,6 @@
 import { afterAll, afterEach, expect, spyOn, test } from "bun:test"
 import { Orbit } from "@orbit/client/promise"
-import { costLine, costText, readSessionCost } from "../../src/run/cost-report"
+import { costLine, costText, readCatalog, readSessionCost } from "../../src/run/cost-report"
 import { runNonInteractive, type RunCommandInput } from "../../src/run/run"
 
 // clients-ux-23 part 2: `orb run "/cost"` in process, against a stub server that answers the run's session, its folder and
@@ -39,10 +39,12 @@ const answers: Record<string, () => Response> = {
     }),
   ses_nocatalog: () => Response.json({ data: { ...bare, rows: [{ ...row, providerID: "ollama", modelID: "llama3", responses: 3, cost: 0, zero: 3 }] } }),
   ses_old: () => new Response(null, { status: 404 }),
+  ses_garbled: () => Response.json({ data: { cost: "lots" } }),
   ses_gone: () =>
     Response.json({ _tag: "SessionNotFoundError", sessionID: "ses_gone", message: "Session not found: ses_gone" }, { status: 404 }),
 }
 const unexpected: string[] = []
+const asked: string[] = []
 let catalogDown = false
 const stub = Bun.serve({
   hostname: "127.0.0.1",
@@ -50,7 +52,10 @@ const stub = Bun.serve({
   fetch(request) {
     const pathname = new URL(request.url).pathname
     const cost = pathname.match(/^\/api\/session\/([^/]+)\/cost$/)
-    if (cost) return answers[cost[1]!]?.() ?? new Response(null, { status: 404 })
+    if (cost) {
+      asked.push(pathname)
+      return answers[cost[1]!]?.() ?? new Response(null, { status: 404 })
+    }
     const session = pathname.match(/^\/api\/session\/([^/]+)$/)
     if (session && request.method === "GET")
       return Response.json({
@@ -160,6 +165,60 @@ test("--format result prints one result line whose result is the block", async (
   const line = JSON.parse(run.stdout)
   expect(line).toMatchObject({ type: "result", sessionID: SESSION, is_error: false })
   expect(line.result).toContain("Total cost:")
+})
+
+test("a reasoning count is printed only for a model that used reasoning", () => {
+  const lines = costText(full as never).split("\n")
+  expect(lines.find((line) => line.includes("provider/big"))).toContain("40 reasoning")
+  expect(lines.find((line) => line.includes("provider/free"))).not.toContain("reasoning")
+})
+
+// Class 9: the JSON line goes through `jsonLine`, which escapes what JSON.stringify leaves raw (C1 controls, bidi marks).
+test("the JSON line escapes controls that JSON.stringify leaves raw", () => {
+  const hostile = { ...bare, rows: [{ ...row, modelID: "a\u009b2K‮b c" }] }
+  const line = costLine("ses_x", hostile as never)
+  expect(line).not.toMatch(/\p{C}/u)
+  expect(line).not.toContain(" ")
+})
+
+test("an answer that is not the summary ends the run with one message", async () => {
+  const run = await capture({ format: "default", session: "ses_garbled" })
+  expect(run.exitCode).toBe(1)
+  expect(run.stderr).toContain("The server's answer about session cost could not be read")
+})
+
+// Class 9: the catalog's failure text comes from the network.
+test("a catalog failure's text is escaped, and the figures read without a catalog", async () => {
+  const written: string[] = []
+  const stderrWrite = spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    written.push(String(chunk))
+    return true
+  })
+  try {
+    const client = { model: { list: () => Promise.reject(new Error("down\u001b]0;pwned\u0007\u009b2K‮")) } }
+    expect(await readCatalog(client as never, { directory: "/repo" }, 100)).toBeUndefined()
+  } finally {
+    stderrWrite.mockRestore()
+  }
+  expect(written.join("")).toContain("Could not read the model catalog")
+  expect(written.join("")).not.toMatch(/[\u001b\u009b‮]/)
+})
+
+test("a leading space before /cost still reports", async () => {
+  const run = await capture({ format: "default", message: ["  /cost"] })
+  expect(run.exitCode).toBe(0)
+  expect(run.stdout).toContain("Total cost:")
+})
+
+// Stream input answers its own requests, so the positional `/cost` of a stream run is the stream's first input and the run
+// does not ask the route.
+test("stream input leaves /cost to the stream and does not ask the route", async () => {
+  asked.length = 0
+  const run = await capture({ format: "stream-json", envelope: true, stream: true })
+  unexpected.length = 0
+  expect(asked).toEqual([])
+  expect(run.stdout).not.toContain("Total cost:")
+  expect(run.stdout).not.toContain('"type":"cost"')
 })
 
 test("/cost with --file is refused before any request", async () => {

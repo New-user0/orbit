@@ -41,9 +41,11 @@ async function open(input: {
   readonly models?: ModelInfo[]
   readonly timeout?: number
   readonly done?: (frame: string) => boolean
+  readonly log?: (message: string, tags: Record<string, unknown>) => void
 }) {
   const asked: string[] = []
   const setup = await renderLocal({
+    log: (_level, message, tags) => input.log?.(message, { ...tags }),
     width: 100,
     height: 40,
     models: input.models,
@@ -265,7 +267,9 @@ test("an old server and an unknown session each draw one line", async () => {
 
 // Class 7: an entry of the rows the client cannot read costs only itself.
 test("a row that does not decode costs only itself", async () => {
+  const logged: Array<{ message: string; tags: Record<string, unknown> }> = []
   const { setup, frame } = await open({
+    log: (message, tags) => logged.push({ message, tags }),
     answer: () =>
       json({ data: { ...info({ cost: 0.6, own: 0.6 }), rows: [row("good", { cost: 0.6 }), { providerID: 1 }, null] } }),
     models: [priced("good")],
@@ -273,4 +277,30 @@ test("a row that does not decode costs only itself", async () => {
   await using _ = setup
   expect(flat(frame)).toContain("good")
   expect(flat(frame)).toMatch(/Total cost \$0\.60/)
+  // The two rows left out are named once in the log.
+  expect(logged.filter((line) => line.message.startsWith("Left out cost rows"))).toEqual([
+    expect.objectContaining({ tags: expect.objectContaining({ dropped: ["rows[1]", "rows[2]"] }) }),
+  ])
+})
+
+// Class 9: a refusal's text comes from the server, and a transport error's from the network; neither may carry a control
+// sequence to the screen. A typed refusal shows the server's message alone; any other failure is named as unreadable.
+test("a failure's text is escaped before it is drawn", async () => {
+  const typed = await open({
+    answer: () =>
+      json({ _tag: "SessionNotFoundError", sessionID: ID, message: "Session not found\u001b]0;pwned\u0007\u009b2K" }, { status: 404 }),
+    done: (text) => flat(text).includes("Session not found"),
+  })
+  await using _typed = typed.setup
+  expect(flat(typed.frame)).toContain("Session not found")
+  expect(flat(typed.frame)).not.toContain("Could not read session cost")
+  expect(typed.frame.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
+
+  const other = await open({
+    answer: () => Promise.reject(new Error("socket\u001b]0;pwned\u0007 closed\u009b2K")),
+    done: (text) => flat(text).includes("Could not read session cost"),
+  })
+  await using _other = other.setup
+  expect(flat(other.frame)).toMatch(/Could not read session cost: .*socket.*closed/)
+  expect(other.frame.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
 })
