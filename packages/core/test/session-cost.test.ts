@@ -2,6 +2,7 @@
 // it does not depend on which page of messages a client loaded (FU-M2-026). It reads database rows only: no Location, no
 // folder, no trust gate (PS2 pins that at the route).
 import { describe, expect } from "bun:test"
+import { eq } from "drizzle-orm"
 import { Effect } from "effect"
 import { Bus } from "@orbit/core/bus"
 import { Database } from "@orbit/core/database/database"
@@ -201,6 +202,49 @@ describe("SessionCost", () => {
 
   // PC2 (continued): which responses are unknown spend. A response that used tokens and recorded no cost, and one that
   // failed with neither, are `unrecorded`; one that recorded exactly 0 is `zero`; one that used no tokens is neither.
+  // Mutation: UNION ALL in the family query. A parent cycle then recurses without end, so the mutant is killed by a deadline.
+  it.effect("a parent cycle counts each session once and ends", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 0.5 })).run().pipe(Effect.orDie)
+      yield* db.insert(SessionTable).values(sessionRow(child, { parent_id: root, cost: 0.5 })).run().pipe(Effect.orDie)
+      yield* db.update(SessionTable).set({ parent_id: child }).where(eq(SessionTable.id, root)).run().pipe(Effect.orDie)
+      yield* db.insert(SessionMessageTable).values(message(child, "assistant", { input: 10, cost: 1 })).run().pipe(Effect.orDie)
+
+      const summary = yield* SessionCost.summary(root)
+      expect(summary.cost).toBeCloseTo(1)
+      expect(summary.rows.map((row) => row.responses)).toEqual([1])
+    }),
+  )
+
+  // Mutation: invert either tie-break comparison of the row sort.
+  it.effect("rows of equal cost are ordered by provider, then by model", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 0.4 })).run().pipe(Effect.orDie)
+      yield* db
+        .insert(SessionMessageTable)
+        .values([
+          message(root, "assistant", { provider: "zeta", model: "a", input: 10, cost: 0.1 }),
+          message(root, "assistant", { provider: "alpha", model: "b", input: 10, cost: 0.1 }),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      // Records are merged after messages, so these arrive after zeta and the sort has to move them in front of it.
+      yield* db
+        .insert(SessionUsageTable)
+        .values([
+          usage(root, "usage", "step", 0.1, { provider: "alpha", id: "a" }),
+          usage(root, "usage", "step", 0.1, { provider: "beta", id: "a" }),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+
+      const summary = yield* SessionCost.summary(root)
+      expect(summary.rows.map((row) => `${row.providerID}/${row.modelID}`)).toEqual(["alpha/a", "alpha/b", "beta/a", "zeta/a"])
+    }),
+  )
+
   it.effect("responses with no recorded cost or a recorded zero are counted apart, so a client can call them unknown", () =>
     Effect.gen(function* () {
       const db = yield* seedProject
