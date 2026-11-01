@@ -20,6 +20,8 @@ async function drawCompaction(input: {
   readonly summary?: string
   /** Extra time to let the clock run before the screen is read. */
   readonly wait?: number
+  /** Called with the screen settled, before it is torn down. */
+  readonly settled?: () => void
 }) {
   await using state = await tmpdir()
   const setup = await createTestRenderer({ width: input.width, height: 30, useThread: false, kittyKeyboard: true })
@@ -103,6 +105,7 @@ async function drawCompaction(input: {
     // The deltas have no mark of their own on screen when they change nothing, so give them time to be handled.
     await Bun.sleep(200 + (input.wait ?? 0))
     await setup.renderOnce()
+    input.settled?.()
     return setup.captureCharFrame()
   } finally {
     setup.renderer.destroy()
@@ -112,6 +115,39 @@ async function drawCompaction(input: {
 }
 
 const running = 31_000
+
+test("the row's one-second clock stops when the compaction ends", async () => {
+  // The clock is a timer, so the only way to see it stop is to watch the timers: a spy on the two functions that
+  // start and stop it, restored at once.
+  const started = new Set<unknown>()
+  const realSet = globalThis.setInterval
+  const realClear = globalThis.clearInterval
+  globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+    const id = realSet(...args)
+    if (args[1] === 1000) started.add(id)
+    return id
+  }) as unknown as typeof setInterval
+  globalThis.clearInterval = ((...args: Parameters<typeof clearInterval>) => {
+    started.delete(args[0])
+    return realClear(...args)
+  }) as unknown as typeof clearInterval
+  let open = -1
+  try {
+    await drawCompaction({
+      width: 120,
+      age: running,
+      deltas: [{ characters: 4800 }],
+      status: "completed",
+      settled: () => {
+        open = started.size
+      },
+    })
+  } finally {
+    globalThis.setInterval = realSet
+    globalThis.clearInterval = realClear
+  }
+  expect(open).toBe(0)
+}, 60_000)
 
 test("a running compaction shows its elapsed time and estimated tokens after 30 seconds, never its reply", async () => {
   // (a) after 30 s with a count: elapsed time and characters / 4 as tokens (4800 -> 1200 -> "1.2K").

@@ -26,7 +26,6 @@ export function createCompactionProgress(input: { running: () => boolean; create
   const [now, setNow] = createSignal(Date.now())
   createEffect(() => {
     if (!input.running()) return
-    setNow(Date.now())
     const timer = setInterval(() => setNow(Date.now()), 1000)
     onCleanup(() => clearInterval(timer))
   })

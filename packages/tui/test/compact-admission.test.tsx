@@ -395,6 +395,22 @@ test("Tab at the command list fills in /compact for text, and the text then goes
   }
 })
 
+test("/compact with text cannot be queued: it warns and sends nothing", async () => {
+  const app = await compactApp(100)
+  try {
+    await app.setup.mockInput.typeText("/compact focus on tests")
+    await app.setup.waitForFrame((frame) => frame.includes("focus on tests"))
+    // The queue gesture is the leader key, then Enter.
+    app.setup.mockInput.pressKey("x", { ctrl: true })
+    app.setup.mockInput.pressEnter()
+    await app.setup.waitForFrame((frame) => frame.includes("This prompt cannot be queued"))
+    expect(app.compacts).toEqual([])
+    expect(app.prompts).toEqual([])
+  } finally {
+    await app.close()
+  }
+})
+
 test("a location command named compact keeps its place when typed with text", async () => {
   const app = await compactApp(100, [{ name: "compact", description: "Project compact command" }])
   try {

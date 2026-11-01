@@ -216,6 +216,41 @@ describe("run runtime queue", () => {
     expect(order).toEqual(["run:first", "compact", "run:later"])
   })
 
+  test("a waiting skill command named compact with text is not a compaction barrier", async () => {
+    const ui = createFooterApiFixture()
+    const active = Promise.withResolvers<void>()
+    const order: string[] = []
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      onCompact: async () => {
+        order.push("compact")
+      },
+      admit: async (prompt) => {
+        order.push(`admit:${prompt.text}`)
+      },
+      run: async (prompt, _signal, admitted) => {
+        admitted()
+        order.push(`run:${prompt.text}`)
+        if (prompt.text === "first") await active.promise
+        if (prompt.text === "/compact notes") ui.api.close()
+      },
+    })
+
+    ui.submit("first")
+    await Promise.resolve()
+    // A skill never runs while another prompt is active, so it waits in the queue; it is not the built-in.
+    ui.submit({ text: "/compact notes", parts: [], command: { name: "compact", arguments: "notes", source: "skill" } })
+    ui.submit("later")
+    await Bun.sleep(20)
+    // "later" is admitted behind the active prompt at once, which it could not be behind a compaction barrier.
+    expect(order).toEqual(["run:first", "admit:later"])
+
+    active.resolve()
+    await task
+    expect(order).not.toContain("compact")
+  })
+
   test("shell mode submits /exit as a shell command", async () => {
     const ui = createFooterApiFixture()
     const seen: RunPrompt[] = []
