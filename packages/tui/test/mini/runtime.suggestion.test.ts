@@ -28,7 +28,13 @@ function host(): MiniHost {
   }
 }
 
-async function start(input: { suggestions?: boolean; answer?: () => Promise<unknown> }) {
+async function start(input: {
+  suggestions?: boolean
+  answer?: () => Promise<unknown>
+  /** The session Mini starts with, and how it reads its own session later; the default is ses_1 throughout. */
+  sessionID?: string
+  getSessionID?: () => string
+}) {
   const app = await createTestRenderer({
     width: 100,
     height: 24,
@@ -45,7 +51,8 @@ async function start(input: { suggestions?: boolean; answer?: () => Promise<unkn
     findFiles: async () => [],
     agents: [{ id: "build", name: "Build", mode: "primary", hidden: false }],
     references: [],
-    sessionID: "ses_1",
+    sessionID: input.sessionID ?? "ses_1",
+    getSessionID: input.getSessionID,
     first: false,
     history: [],
     agent: "build",
@@ -69,6 +76,16 @@ async function start(input: { suggestions?: boolean; answer?: () => Promise<unkn
     lifecycle,
     asked,
     sessions,
+    async type(text: string) {
+      await app.mockInput.typeText(text)
+      await Bun.sleep(30)
+      await app.renderOnce()
+    },
+    async erase(count: number) {
+      for (const _ of Array.from({ length: count })) app.mockInput.pressBackspace()
+      await Bun.sleep(30)
+      await app.renderOnce()
+    },
     ended(sessionID = "ses_1") {
       lifecycle.observe?.({ type: "session.execution.succeeded", data: { sessionID } })
     },
@@ -154,5 +171,42 @@ test("a refused or failed request draws nothing", async () => {
     for (const word of ["42", "busy", "not json", "UntrustedFolderError"])
       expect({ name: row.name, word, shown: frame.includes(word) }).toEqual({ name: row.name, word, shown: false })
     expect(mini.lifecycle.footer.isClosed).toBe(false)
+  }
+})
+
+// Mini learns its session after its footer mounts (the real runtime starts with none) and moves to another on /new, so
+// whether its prompt could draw an answer is judged for the session it has when the answer comes.
+test("an answer that comes while Mini's input holds text is dropped, whichever session Mini has come to", async () => {
+  const rows = [
+    { name: "the session became known after the footer mounted", first: "", draft: true, drawn: false },
+    { name: "/new moved Mini to another session", first: "ses_0", draft: true, drawn: false },
+    { name: "control: the input is empty when the answer comes", first: "", draft: false, drawn: true },
+  ]
+  for (const row of rows) {
+    const gate = Promise.withResolvers<void>()
+    let current = row.first
+    using mini = await start({
+      suggestions: true,
+      sessionID: row.first,
+      getSessionID: () => current,
+      answer: async () => {
+        await gate.promise
+        return { suggestion }
+      },
+    })
+    current = "ses_1"
+    if (row.draft) {
+      await mini.type("draft")
+      expect(await mini.frame()).toContain("draft")
+    }
+    mini.ended()
+    await Bun.sleep(50)
+    expect({ name: row.name, asked: mini.sessions }).toEqual({ name: row.name, asked: ["ses_1"] })
+    gate.resolve()
+    await Bun.sleep(50)
+    if (row.draft) await mini.erase("draft".length)
+    const frame = await mini.frame()
+    expect({ name: row.name, draft: frame.includes("draft") }).toEqual({ name: row.name, draft: false })
+    expect({ name: row.name, drawn: frame.includes(suggestion) }).toEqual({ name: row.name, drawn: row.drawn })
   }
 })

@@ -31,6 +31,8 @@ async function mount(
     /** Makes the session in view a subagent's session under this parent. */
     parentID?: string
     width?: number
+    /** cli.json's plugins. */
+    plugins?: string[]
   } = {},
 ) {
   const state = await tmpdir()
@@ -60,6 +62,7 @@ async function mount(
       animations: false,
       keybinds: { "terminal.suspend": "none" },
       ...(input.suggestions === undefined ? {} : { prompt: { suggestions: input.suggestions } }),
+      ...(input.plugins ? { plugins: input.plugins } : {}),
     },
     args: { sessionID },
     fetch: async (url, request) => {
@@ -180,7 +183,10 @@ async function mount(
         location: { directory: sessionDirectory },
       } as OrbitEvent)
     },
-    async press(key: "TAB" | "ARROW_RIGHT" | "BACKSPACE", modifiers?: { ctrl?: boolean; shift?: boolean }) {
+    async press(
+      key: "TAB" | "ARROW_RIGHT" | "ARROW_LEFT" | "BACKSPACE" | "F6" | "x",
+      modifiers?: { ctrl?: boolean; shift?: boolean },
+    ) {
       setup.mockInput.pressKey(key, modifiers)
       await settle()
     },
@@ -430,6 +436,81 @@ test.each([
   expect(app.prompts.filter((prompt) => prompt.text.includes(suggestion))).toEqual([])
   expect(app.shells).toEqual([])
   expect(app.textarea().plainText).toBe(before)
+})
+
+test("Enter on a suggestion that is a slash command runs the command, as typing it would", async () => {
+  {
+    await using app = await mount({ suggestions: true, answer: () => json({ data: { suggestion: "/help" } }) })
+    await ghost(app, "/help")
+    app.setup.mockInput.pressEnter()
+    expect(await app.shows("available actions and commands")).toBe(true)
+    await quiet(app)
+    expect(app.prompts).toEqual([])
+    expect(app.textarea().plainText).toBe("")
+  }
+  // A command that takes no argument, followed by words, is text, as it is when typed.
+  {
+    await using app = await mount({ suggestions: true, answer: () => json({ data: { suggestion: "/help me" } }) })
+    await ghost(app, "/help me")
+    await app.enter()
+    expect(app.prompts.map((prompt) => prompt.text)).toEqual(["/help me"])
+    expect(app.frame()).not.toContain("available actions and commands")
+  }
+  // Control: a suggestion that is not a command is sent to the model.
+  {
+    await using app = await mount({ suggestions: true })
+    await ghost(app)
+    await app.enter()
+    expect(app.prompts.map((prompt) => prompt.text)).toEqual([suggestion])
+    expect(app.frame()).not.toContain("available actions and commands")
+  }
+})
+
+test("a prompt that takes no keys draws no suggestion and takes none, and draws it again when it takes keys", async () => {
+  // A plugin whose side panel, opened with F6, takes the keys from the session's prompt.
+  await using folder = await tmpdir()
+  const plugin = `${folder.path.replaceAll("\\", "/")}/panel`
+  await Bun.write(
+    `${plugin}/tui.ts`,
+    [
+      "export default {",
+      '  id: "test.panel",',
+      "  setup(context) {",
+      "    context.ui.slot({",
+      '      append: "app",',
+      "      render() {",
+      "        context.keymap.layer(() => ({",
+      '          commands: [{ bind: "f6", title: "Open the panel", run: () => void context.ui.panel.open("probe") }],',
+      "        }))",
+      "        return null",
+      "      },",
+      "    })",
+      "  },",
+      "}",
+      "",
+    ].join("\n"),
+  )
+  await using app = await mount({ suggestions: true, plugins: [plugin] })
+  // Control: the prompt has the keys, and the ghost is drawn.
+  await ghost(app)
+  // The plugin loads after the prompt is drawn, so F6 is pressed until the panel opens beside the session.
+  const wide = app.textarea().width
+  const deadline = Date.now() + 8000
+  while (app.textarea().width >= wide && Date.now() < deadline) {
+    await app.press("F6")
+    await Bun.sleep(100)
+  }
+  expect(app.textarea().width).toBeLessThan(wide)
+  await quiet(app)
+  expect(app.frame()).not.toContain(suggestion)
+  await app.press("TAB")
+  await app.press("ARROW_RIGHT")
+  expect(app.textarea().plainText).toBe("")
+  expect(app.prompts).toEqual([])
+  // Back in the session's prompt, the held suggestion is drawn again.
+  await app.press("x", { ctrl: true })
+  await app.press("ARROW_LEFT")
+  expect(await app.shows(suggestion)).toBe(true)
 })
 
 test("a suggestion starting with ! is taken into shell mode by Tab and sent as text by Enter", async () => {

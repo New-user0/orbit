@@ -250,9 +250,13 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   // and the server refuses an untrusted folder as well; the ask is a spend choice, made in the person's own cli.json.
   const ownSession = () => input.getSessionID?.() ?? input.sessionID
   const request = input.suggestion
+  // Mini's one prompt shows whichever session is its own when an answer comes, which is not yet known when the footer
+  // mounts and changes with /new, so whether it could draw one is read then, for that session.
+  let drawable: (() => boolean) | undefined
   const suggestions = request
     ? createPromptSuggestions({
         request,
+        drawable: (sessionID) => (sessionID === ownSession() ? drawable?.() : undefined),
         log: (message, extra) => input.host.diagnostics.trace?.write("suggestion", { message, ...extra }),
       })
     : undefined
@@ -275,7 +279,12 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
       text: () => suggestions.session(ownSession()).text(),
       changed: () => suggestions.session(ownSession()).changed(),
       submitted: () => suggestions.session(ownSession()).submitted(),
-      watch: (drawable) => suggestions.session(ownSession()).watch(drawable),
+      watch(next) {
+        drawable = next
+        return () => {
+          if (drawable === next) drawable = undefined
+        }
+      },
     },
     theme,
     // The transcript always starts one row below the terminal's prior output,

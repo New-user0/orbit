@@ -244,6 +244,18 @@ function argumentSlash(input: string, commands: readonly KeymapCommand[]) {
   return { command, input: head.arguments }
 }
 
+/** The command a slash command line names when it is that command alone and the command takes no argument. */
+function namedSlash(input: string, commands: readonly KeymapCommand[]) {
+  const head = parseSlashHead(input, /\s/)
+  if (!head || head.arguments.trim()) return
+  return commands.find(
+    (command) =>
+      command.slash &&
+      !command.slash.arguments &&
+      (command.slash.name === head.name || command.slash.aliases?.includes(head.name) === true),
+  )
+}
+
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
   let anchor: BoxRenderable
@@ -1390,6 +1402,15 @@ export function Prompt(props: PromptProps) {
       fillPrompt(shown.value, !shown.whole)
       if (!shown.whole) return false
     }
+    // Typed, a slash command that takes no argument runs from the list that opens on it, which a filled input does not
+    // open; Enter on such a suggestion runs it the same way.
+    const named = shown ? namedSlash(shown.value, keymapCommands()) : undefined
+    if (named) {
+      suggestion()?.submitted()
+      clearPrompt()
+      named.run()
+      return true
+    }
     if (move.creating()) return false
     if (auto()?.visible) return false
     const trimmed = store.prompt.text.trim()
@@ -1890,10 +1911,11 @@ export function Prompt(props: PromptProps) {
     if (watch) onCleanup(watch(drawable))
   })
   // The suggestion is model text, so it is drawn, taken and sent in its escaped form: what is drawn is what runs
-  // (class 9). It is cut to the input row.
+  // (class 9). It is cut to the input row. A prompt that takes no keys, or that draws no placeholder, draws none either;
+  // a held suggestion waits for it.
   const ghost = createMemo(() => {
     const text = suggestion()?.text()
-    if (text === undefined || !drawable()) return undefined
+    if (text === undefined || !drawable() || disabled() || props.showPlaceholder === false) return undefined
     const value = plain(text)
     const drawn = Locale.takeWidth(value, inputWidth())
     if (!drawn) return undefined

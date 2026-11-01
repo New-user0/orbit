@@ -28,6 +28,12 @@ export type PromptSuggestion = {
 export function createPromptSuggestions(input: {
   /** Asks the server for the session's suggestion. The signal aborts when the request is cancelled. */
   request: (sessionID: string, signal: AbortSignal) => Promise<unknown>
+  /**
+   * Whether the prompt showing the session could draw a suggestion now, read when an answer comes. For a client whose
+   * one prompt follows whichever session is its own; without it, the prompt that `watch` registered for the session
+   * decides.
+   */
+  drawable?: (sessionID: string) => boolean | undefined
   log?: (message: string, extra: Record<string, unknown>) => void
 }) {
   const [held, setHeld] = createSignal<Readonly<Record<string, string>>>({})
@@ -48,7 +54,7 @@ export function createPromptSuggestions(input: {
     if (Option.isNone(decoded)) return input.log?.("the suggestion answer has another shape", { sessionID })
     const text = decoded.value.suggestion
     if (text === null) return input.log?.("no suggestion", { sessionID, reason: decoded.value.reason })
-    if (prompts.get(sessionID)?.() === false)
+    if ((input.drawable ? input.drawable(sessionID) : prompts.get(sessionID)?.()) === false)
       return input.log?.("the suggestion came when it could not be drawn", { sessionID })
     setHeld((previous) => ({ ...previous, [sessionID]: text }))
   }
