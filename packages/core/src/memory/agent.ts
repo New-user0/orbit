@@ -23,6 +23,9 @@ import { MemoryStore } from "./store.js"
  * the carve-out drops every ask for what is in it. An agent id becomes a folder only when it is a plain name (class 5).
  * A refused root or id costs only itself, with one line in the log (class 7). The value resolved here is the one the
  * block names, the folder that is made, the index that is read and the carve-out all use (class 3).
+ *
+ * A third root of the repository, `<dir>/.orbit/agent-memory-snapshots`, holds the project's snapshots of user-scope
+ * agents' memory (`MemoryAgentSnapshot`). It is resolved by the same rules, and the carve-out never covers it.
  */
 
 export type Scope = typeof ConfigAgent.Memory.Type
