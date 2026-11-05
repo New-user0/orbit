@@ -634,6 +634,16 @@ test("Enter on a suggestion that is a slash command runs the command, as typing 
     await quiet(app)
     expect(app.prompts).toEqual([])
     expect(app.textarea().plainText).toBe("")
+    // Running it ended the suggestion, as typing /help does: once the dialog closes no ghost is drawn again, and
+    // another Enter runs nothing.
+    await app.press("ESCAPE")
+    await quiet(app)
+    expect(app.frame()).not.toContain("available actions and commands")
+    expect(app.frame()).not.toContain("/help")
+    app.setup.mockInput.pressEnter()
+    await quiet(app)
+    expect(app.frame()).not.toContain("available actions and commands")
+    expect(app.prompts).toEqual([])
   }
   // A command that takes no argument, followed by words, is text, as it is when typed.
   {
@@ -652,6 +662,14 @@ test("Enter on a suggestion that is a slash command runs the command, as typing 
     await quiet(app)
     expect(app.prompts).toEqual([])
     expect(app.textarea().plainText).toBe("")
+    await app.press("ESCAPE")
+    await quiet(app)
+    expect(app.frame()).not.toContain("Settings")
+    expect(app.frame()).not.toContain("/config")
+    app.setup.mockInput.pressEnter()
+    await quiet(app)
+    expect(app.frame()).not.toContain("Settings")
+    expect(app.prompts).toEqual([])
   }
   // A command that takes an argument, named alone, runs with an empty one, as Enter on it typed with its trailing space
   // does: /rename then generates a title rather than opening the rename dialog.
@@ -664,6 +682,7 @@ test("Enter on a suggestion that is a slash command runs the command, as typing 
     expect(app.frame()).not.toContain("Rename session")
     expect(app.prompts).toEqual([])
     expect(app.textarea().plainText).toBe("")
+    expect(app.frame()).not.toContain("/rename")
   }
   // A command whose text is optional, named alone, runs bare: /compact compacts with no instructions and sends nothing.
   {
@@ -675,6 +694,7 @@ test("Enter on a suggestion that is a slash command runs the command, as typing 
     expect(app.compacts[0]).not.toHaveProperty("instructions")
     expect(app.prompts).toEqual([])
     expect(app.textarea().plainText).toBe("")
+    expect(app.frame()).not.toContain("/compact")
   }
   // Control: a suggestion that is not a command is sent to the model.
   {
