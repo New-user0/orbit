@@ -201,7 +201,7 @@ for (const row of rows.filter((item, index) => index % 4 === 0 || !item.id.start
 
 // The terminal UI's short prompt while an Edit or Write is reviewed in the linked editor (clients-ux-15 part 3): it names
 // the file of the request's place, and where a link leads, from the request alone. Drawn as the real component.
-async function drawCompact(row: Row) {
+async function drawCompact(row: Row, editor = "Test Editor") {
   const { EditorDiffPrompt } = await import("../src/routes/session/permission")
   const { ConfigProvider } = await import("../src/config")
   const { ClientProvider } = await import("../src/context/client")
@@ -229,7 +229,7 @@ async function drawCompact(row: Row) {
                       <InteractivityProvider enabled>
                         <EditorDiffPrompt
                           request={{ id: "per_matrix", sessionID: "ses_matrix", save: ["*"], ...row.request }}
-                          editor="Test Editor"
+                          editor={editor}
                           onSelect={() => {}}
                         />
                       </InteractivityProvider>
@@ -271,6 +271,14 @@ for (const row of rows.filter((item) => item.tool === "Edit" || item.tool === "W
       expect(slashed(flat)).toContain(tail(slashed(file.link.place)))
     } else expect(flat).not.toMatch(/throughalink|Linktarget/)
   })
+
+// The prompt writes out the editor's name itself, whoever hands it the name.
+test("the compact prompt writes out the editor name it is given", async () => {
+  const frame = await drawCompact(golden.find((row) => row.tool === "Edit")!, "Ed\u001b[31mitor\u202e")
+  expect(frame).not.toContain("\u001b")
+  expect(frame).not.toContain("\u202e")
+  expect(frame.replace(/\s+/g, "")).toContain("OpenedchangesinEd\\x1b[31mitor\\u{202e}")
+})
 
 test("the link rows of the matrix name where the link leads", () => {
   // Without these the link checks above would be vacuous.

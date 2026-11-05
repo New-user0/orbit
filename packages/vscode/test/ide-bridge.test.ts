@@ -888,9 +888,89 @@ test("the bridge stopping closes its clients' reviews and answers nothing", asyn
   ask(client)
   await until(() => editor.shown.length === 1, "the tab")
   bridge.dispose()
+  // The reviews close before the clients' sockets do, so none of them can still answer.
+  expect(editor.closed).toEqual([editor.shown[0]!.title])
   expect((await client.closed).code).toBe(1001)
+  expect(answers(client)).toEqual([])
+})
+
+test("a diff to open after the window began closing is dismissed and opens nothing", async () => {
+  const { client, editor, review } = await reviewing()
+  review.dispose()
+  ask(client)
+  await until(() => answers(client).length === 1, "the answer")
+  expect(answers(client)).toEqual([{ type: "diff.answer", id: "per_a1", answer: "dismissed" }])
+  expect(editor.shown).toEqual([])
+})
+
+test("frames that are not JSON, a close with a malformed id, and diff frames to a bridge without reviews change nothing", async () => {
+  const { client, editor } = await reviewing()
+  ask(client)
+  await until(() => editor.shown.length === 1, "the tab")
+  client.socket.send("not json")
+  client.socket.send(JSON.stringify(["diff.closeAll"]))
+  client.socket.send(JSON.stringify({ type: "diff.close", id: "per_a1/../x" }))
+  client.socket.send(JSON.stringify({ type: "diff.later", id: "per_a1" }))
+  await Bun.sleep(50)
+  expect(editor.closed).toEqual([])
+  expect(client.socket.readyState).toBe(WebSocket.OPEN)
+  // A bridge started without the review service takes a diff frame after hello and does nothing with it.
+  const bare = await start(await folder())
+  const other = await connect(bare.bridge, (await lock(bare.bridge)).authToken, features)
+  await until(() => other.frames.length >= 2, "the hello and the selection")
+  ask(other)
+  await Bun.sleep(50)
+  expect(answers(other)).toEqual([])
+  expect(other.socket.readyState).toBe(WebSocket.OPEN)
+})
+
+test("a question the chat hears answered closes the chat's tabs of it, and leaves a terminal UI's review of it open", async () => {
+  const { client, editor, review } = await reviewing()
+  ask(client)
+  await until(() => editor.shown.length === 1, "the tab")
+  review.settled("per_a1")
+  await Bun.sleep(20)
+  expect(editor.closed).toEqual([])
+  // The terminal UI closes it when its own prompt goes.
+  client.socket.send(JSON.stringify({ type: "diff.close", id: "per_a1" }))
   await until(() => editor.closed.length === 1, "the close")
   expect(answers(client)).toEqual([])
+})
+
+describe("a review closed while its file is still being read opens nothing", () => {
+  // A disk whose first real path waits until the test lets it go, so a close can come while the review is read.
+  function held() {
+    const gate = Promise.withResolvers<void>()
+    const reader: Disk = {
+      realpath: async (file) => (await gate.promise, disk.realpath(file)),
+      lstat: (file) => disk.lstat(file),
+      readFile: (file) => disk.readFile(file),
+    }
+    return { reader, release: gate.resolve }
+  }
+  for (const row of [
+    { name: "by a close-all, which tells its owner", close: (frame: Frame) => frame, dismissed: true },
+    { name: "by its owner, which is told nothing", close: () => ({ type: "diff.close", id: "per_a1" }), dismissed: false },
+  ])
+    test(row.name, async () => {
+      const disk = held()
+      const editor = tabs()
+      const review = new Review(editor.host, disk.reader)
+      editor.holder.review = review
+      const { bridge } = await start(await folder(), { folders: [world.root], diff: review.bridge })
+      cleanup.push(() => review.dispose())
+      await Bun.sleep(60)
+      const client = await connect(bridge, (await lock(bridge)).authToken, features)
+      await until(() => client.frames.length >= 2, "the hello and the selection")
+      ask(client)
+      await Bun.sleep(50)
+      client.socket.send(JSON.stringify(row.close({ type: "diff.closeAll" })))
+      await Bun.sleep(50)
+      disk.release()
+      await Bun.sleep(100)
+      expect(editor.shown).toEqual([])
+      expect(answers(client)).toEqual(row.dismissed ? [{ type: "diff.answer", id: "per_a1", answer: "dismissed" }] : [])
+    })
 })
 
 test("a client that goes away takes its reviews with it, and nothing is answered", async () => {

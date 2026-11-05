@@ -247,8 +247,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       if (disposed) return
       disposed = true
       if (timer) clearTimeout(timer)
-      // The reviews close before their clients do, so none of them answers.
-      for (const client of clients) options.diff?.drop(client.owner)
+      // Each client's close drops its reviews (`accept`), before this returns: nothing of them answers.
       for (const client of clients) client.socket.close(1001, "editor closed")
       sockets.close()
       server.close()

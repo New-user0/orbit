@@ -381,6 +381,16 @@ test("answering in the terminal sends the reply and closes the tab", async () =>
     await setup.until(() => setup.peer!.of("diff.close").length === 1, "the close")
     expect(setup.peer!.of("diff.close")).toEqual([{ type: "diff.close", id: "per_diff1" }])
   }
+  // A terminal answer the server refuses still closes the tab: the question is asked here again, in the full dialog.
+  await using setup = await mount({
+    reply: () => json({ _tag: "InvalidRequestError", message: "Refused here" }, { status: 400 }),
+  })
+  await setup.until(compact, "the compact prompt")
+  setup.app.mockInput.pressKey("1")
+  await setup.until(full, "the full dialog")
+  await setup.until(() => setup.peer!.of("diff.close").length === 1, "the close")
+  expect(setup.replies).toEqual([{ decision: "once" }])
+  expect(setup.toast()?.message).toBe("Refused here")
 })
 
 test("a request answered elsewhere, or a prompt that goes away, closes its tab", async () => {
