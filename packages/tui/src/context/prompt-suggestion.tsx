@@ -46,6 +46,8 @@ export const { use: usePromptSuggestions, provider: PromptSuggestionProvider } =
         if (asks(event.data.sessionID)) suggestions.ended(event.data.sessionID)
       }),
       data.on("session.execution.started", (event) => suggestions.started(event.data.sessionID)),
+      // A busy period asks only when the model replied in it, so a /compact or a redo's wake asks nothing.
+      data.on("session.step.ended", (event) => suggestions.replied(event.data.sessionID)),
       // A rewind of the conversation, from any client, takes away the turns the suggestion was written for.
       data.on("session.revert.staged", (event) => suggestions.started(event.data.sessionID)),
     ]

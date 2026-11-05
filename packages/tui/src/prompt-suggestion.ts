@@ -1,5 +1,7 @@
-// The next-prompt suggestion, shared by the full TUI and Mini. When a turn of a session ends well, the client asks its
-// server what the person might type next and holds the answer for that session, to be drawn dimmed in its empty prompt.
+// The next-prompt suggestion, shared by the full TUI and Mini. When a turn of a session ends well after the model replied
+// in it, the client asks its server what the person might type next and holds the answer for that session, to be drawn
+// dimmed in its empty prompt. A busy period in which the model wrote no reply, such as a `/compact` or the wake after a
+// redo, asks nothing, as the reference asks only at the end of a model turn.
 // At most one request is out per session. Typing cancels a request that is out, a turn starting in the session or a
 // prompt sent from it ends the suggestion, and an answer that cannot be drawn when it comes is dropped, as the
 // reference drops one it has not shown. The server decides whether a suggestion is due; a refusal, a failure or an
@@ -39,6 +41,8 @@ export function createPromptSuggestions(input: {
   const [held, setHeld] = createSignal<Readonly<Record<string, string>>>({})
   const inflight = new Map<string, AbortController>()
   const prompts = new Map<string, () => boolean>()
+  // The sessions whose model finished a step since their busy period started.
+  const replied = new Set<string>()
 
   const cancel = (sessionID: string) => {
     inflight.get(sessionID)?.abort()
@@ -60,8 +64,13 @@ export function createPromptSuggestions(input: {
   }
 
   return {
-    /** A turn of the session ended well: ask again, cancelling a request still out. */
+    /** The model finished a step in the session, so the busy period that ends next ended a model turn. */
+    replied(sessionID: string) {
+      replied.add(sessionID)
+    },
+    /** A busy period of the session ended well: if the model replied in it, ask again, cancelling a request still out. */
     ended(sessionID: string) {
+      if (!replied.delete(sessionID)) return input.log?.("the busy period had no model reply", { sessionID })
       cancel(sessionID)
       const controller = new AbortController()
       inflight.set(sessionID, controller)
@@ -76,6 +85,7 @@ export function createPromptSuggestions(input: {
     },
     /** A turn started in the session: its suggestion ends, and so does a request that is out. */
     started(sessionID: string) {
+      replied.delete(sessionID)
       cancel(sessionID)
       clear(sessionID)
     },

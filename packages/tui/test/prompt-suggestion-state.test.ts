@@ -15,7 +15,17 @@ function setup() {
     },
     log: (message) => logs.push(message),
   })
-  return { suggestions, asks, logs, session: suggestions.session("ses_a") }
+  return {
+    suggestions,
+    asks,
+    logs,
+    session: suggestions.session("ses_a"),
+    /** A busy period of the session ends well after the model replied in it. */
+    ended(sessionID: string) {
+      suggestions.replied(sessionID)
+      suggestions.ended(sessionID)
+    },
+  }
 }
 
 const tick = () => Bun.sleep(0)
@@ -31,7 +41,7 @@ test("each answer holds the suggestion or nothing, and a failure logs one line",
   ]
   for (const row of rows) {
     const state = setup()
-    state.suggestions.ended("ses_a")
+    state.ended("ses_a")
     if (row.fail) state.asks[0]!.answer.reject(row.fail)
     else state.asks[0]!.answer.resolve(row.answer)
     await tick()
@@ -43,7 +53,7 @@ test("each answer holds the suggestion or nothing, and a failure logs one line",
 test("a cancelled or replaced ask holds nothing when its answer comes late", async () => {
   {
     const state = setup()
-    state.suggestions.ended("ses_a")
+    state.ended("ses_a")
     state.session.changed()
     expect(state.asks[0]!.signal.aborted).toBe(true)
     state.asks[0]!.answer.resolve({ suggestion: "late" })
@@ -52,8 +62,8 @@ test("a cancelled or replaced ask holds nothing when its answer comes late", asy
   }
   {
     const state = setup()
-    state.suggestions.ended("ses_a")
-    state.suggestions.ended("ses_a")
+    state.ended("ses_a")
+    state.ended("ses_a")
     expect(state.asks[0]!.signal.aborted).toBe(true)
     state.asks[0]!.answer.resolve({ suggestion: "first" })
     state.asks[1]!.answer.resolve({ suggestion: "second" })
@@ -62,7 +72,7 @@ test("a cancelled or replaced ask holds nothing when its answer comes late", asy
   }
   {
     const state = setup()
-    state.suggestions.ended("ses_a")
+    state.ended("ses_a")
     state.suggestions.dispose()
     expect(state.asks[0]!.signal.aborted).toBe(true)
     state.asks[0]!.answer.reject(new Error("aborted"))
@@ -80,7 +90,7 @@ test("an answer that cannot be drawn is dropped, and one with no prompt in view 
   for (const row of rows) {
     const state = setup()
     if (row.watch) state.session.watch(row.watch)
-    state.suggestions.ended("ses_a")
+    state.ended("ses_a")
     state.asks[0]!.answer.resolve({ suggestion: "run the tests" })
     await tick()
     expect({ name: row.name, held: state.session.text() }).toEqual({ name: row.name, held: row.held })
@@ -90,12 +100,12 @@ test("an answer that cannot be drawn is dropped, and one with no prompt in view 
   const first = state.session.watch(() => false)
   const second = state.session.watch(() => false)
   first()
-  state.suggestions.ended("ses_a")
+  state.ended("ses_a")
   state.asks[0]!.answer.resolve({ suggestion: "run the tests" })
   await tick()
   expect(state.session.text()).toBeUndefined()
   second()
-  state.suggestions.ended("ses_a")
+  state.ended("ses_a")
   state.asks[1]!.answer.resolve({ suggestion: "run the tests" })
   await tick()
   expect(state.session.text()).toBe("run the tests")
@@ -104,8 +114,8 @@ test("an answer that cannot be drawn is dropped, and one with no prompt in view 
 test("a turn start and a sent prompt end a held suggestion, and sessions keep their own", async () => {
   const state = setup()
   const other = state.suggestions.session("ses_b")
-  state.suggestions.ended("ses_a")
-  state.suggestions.ended("ses_b")
+  state.ended("ses_a")
+  state.ended("ses_b")
   state.asks[0]!.answer.resolve({ suggestion: "for a" })
   state.asks[1]!.answer.resolve({ suggestion: "for b" })
   await tick()
@@ -115,10 +125,57 @@ test("a turn start and a sent prompt end a held suggestion, and sessions keep th
   other.submitted()
   expect(other.text()).toBeUndefined()
   // A turn starting while an ask is out cancels it.
-  state.suggestions.ended("ses_a")
+  state.ended("ses_a")
   state.suggestions.started("ses_a")
   expect(state.asks[2]!.signal.aborted).toBe(true)
   state.asks[2]!.answer.resolve({ suggestion: "late" })
   await tick()
   expect(state.session.text()).toBeUndefined()
+})
+
+test("a busy period asks only when the model replied in it since it started", () => {
+  const rows = [
+    { name: "no reply", run: (state: ReturnType<typeof setup>) => state.suggestions.ended("ses_a"), asks: 0 },
+    {
+      name: "a reply before the busy period started",
+      run: (state: ReturnType<typeof setup>) => {
+        state.suggestions.replied("ses_a")
+        state.suggestions.started("ses_a")
+        state.suggestions.ended("ses_a")
+      },
+      asks: 0,
+    },
+    {
+      name: "a reply in another session",
+      run: (state: ReturnType<typeof setup>) => {
+        state.suggestions.replied("ses_b")
+        state.suggestions.ended("ses_a")
+      },
+      asks: 0,
+    },
+    {
+      // One reply asks once: the next busy period needs a reply of its own.
+      name: "a reply, then a busy period without one",
+      run: (state: ReturnType<typeof setup>) => {
+        state.suggestions.replied("ses_a")
+        state.suggestions.ended("ses_a")
+        state.suggestions.ended("ses_a")
+      },
+      asks: 1,
+    },
+    {
+      name: "a reply in the busy period",
+      run: (state: ReturnType<typeof setup>) => {
+        state.suggestions.started("ses_a")
+        state.suggestions.replied("ses_a")
+        state.suggestions.ended("ses_a")
+      },
+      asks: 1,
+    },
+  ]
+  for (const row of rows) {
+    const state = setup()
+    row.run(state)
+    expect({ name: row.name, asks: state.asks.length }).toEqual({ name: row.name, asks: row.asks })
+  }
 })

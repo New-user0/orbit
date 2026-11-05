@@ -1382,14 +1382,21 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   `trust.folder` rather than taken from the folder in view, says trusted, so a trust read that failed asks nothing
   (`PromptSuggestionProvider` in `src/context/prompt-suggestion.tsx`, classes 1, 3 and 12), and only with
   `prompt.suggestions` on in the person's own `cli.json` (class 8).
-  Mini asks for its own session, which `orb mini` checked before it started, never for a subagent's
-  (`createRuntimeLifecycle`). The server's `UntrustedFolderError` stays the authority, and a refusal, a failure or an
-  answer of another shape draws nothing and writes one log line (`createPromptSuggestions` in `src/prompt-suggestion.ts`,
-  class 7). Proof: `test/prompt-suggestion.test.tsx` ("a session whose folder is not trusted is never asked", with the
+  Mini asks for its own session, never for a subagent's (`createRuntimeLifecycle`), and checks no folder itself: `orb
+  mini` checked the folder it starts in, and a session it names in another folder (`orb mini -s`) is checked only by the
+  server, whose `UntrustedFolderError` refuses the ask before any model call, so the stricter answer wins (class 3). The
+  server stays the authority for both clients, and a refusal, a failure or an answer of another shape draws nothing and
+  writes one log line (`createPromptSuggestions` in `src/prompt-suggestion.ts`, class 7). Both clients ask only after a
+  busy period in which the model finished a step of that session, so a `/compact` or a redo's wake spends no call
+  (class 8). Proof: `test/prompt-suggestion.test.tsx` ("a session whose folder is not trusted is never asked", with the
   start folder trusted and the session's own folder not or not read, and a trusted control; "the root's turn ending
   while its subagent's session is in view asks, and the root shows the answer", with the subagent's folder trusted and
   the root's not, and a trusted control; "each failed answer draws
-  nothing and leaves the prompt usable"), `test/prompt-suggestion-state.test.ts`, `test/mini/runtime.suggestion.test.ts`, and
+  nothing and leaves the prompt usable"; "a busy period in which the model wrote no reply asks nothing, as after
+  /compact or a redo"), `test/prompt-suggestion-state.test.ts`, `test/mini/runtime.suggestion.test.ts` (the same
+  busy-period rows, and "a refused or failed request draws nothing" for the server's refusal),
+  `packages/server/test/session-assist.test.ts` (the route refuses a session whose folder is not trusted and asks no
+  model, with a trusted control), and
   `packages/cli/test/config.test.ts` (the key is read from no project folder).
 - The suggestion's text, which a model writes and a planted file can steer, drawn as dimmed text in the prompt line of
   the terminal UI and Mini and taken by Tab, Right or Enter as the person's own prompt: it is drawn, put in the input

@@ -2085,7 +2085,8 @@ than before after a long answer.
 
 `cli.json` takes `prompt.suggestions`, off unless set to `true`, and the settings dialog has a "Prompt suggestions" row
 under Input that writes it. With it on, the terminal UI and Mini ask the server what you might type next whenever a
-turn of the session in view ends well (not after a failed or stopped turn, and not after a subagent's), and draw the
+turn of the session in view ends well after the model replied in it (not after a failed or stopped turn, not after a
+subagent's, and not after a busy period with no model reply, such as a `/compact` or a redo), and draw the
 answer dimmed in the empty prompt, cut to the row. In the terminal UI, a turn of the main session that ends while one
 of its subagents' sessions is in view is asked about too, and its answer is drawn when you go back to the main session. Tab or the Right arrow puts it in the input; a suggestion that starts
 with `!` puts the prompt in shell mode with the command after it. Enter sends it as a prompt, unless it was cut, in
@@ -2095,8 +2096,9 @@ keys; it is drawn again when the prompt has them back. Model text is drawn and s
 written out, so what you see is what is sent. Typing hides it and cancels an ask still out; erasing the input shows it
 again; sending a prompt, running a slash command from the list, a turn starting in the session or, in the terminal UI,
 rewinding its conversation ends it. An answer that comes while you are typing or while a
-turn runs is dropped. Nothing is asked while the session's folder is not trusted, and a refusal, a failure or an older
-server draws nothing. A project's `cli.json` cannot set the key.
+turn runs is dropped. The terminal UI asks nothing while the session's folder is not trusted. Mini checks only the
+folder it starts in; for a session of another folder (`orb mini -s`) it sends the ask, and the server refuses it while
+that folder is not trusted, before any model call. A refusal, a failure or an older server draws nothing. A project's `cli.json` cannot set the key.
 
 **Affects:** terminal UI and Mini users who turn it on, who pay for one call on the session's own model, with the
 conversation, after each turn.

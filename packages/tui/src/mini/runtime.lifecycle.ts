@@ -246,8 +246,9 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
         request: input.recap,
       })
     : undefined
-  // The next-prompt suggestion of Mini's own session. Mini starts only after `orb mini` has checked its folder's trust,
-  // and the server refuses an untrusted folder as well; the ask is a spend choice, made in the person's own cli.json.
+  // The next-prompt suggestion of Mini's own session. `orb mini` checked the trust of the folder it started in; a
+  // session named in another folder is checked by the server, which refuses the ask while that folder is not trusted.
+  // The ask is a spend choice, made in the person's own cli.json.
   const ownSession = () => input.getSessionID?.() ?? input.sessionID
   const request = input.suggestion
   // Mini's one prompt shows whichever session is its own, which is not yet known when the footer mounts and changes
@@ -422,6 +423,15 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   return {
     footer,
     observe: (event) => {
+      // A busy period asks for a suggestion only when the model replied in it, so a /compact or a redo's wake asks
+      // nothing. The transport hands over only Mini's own session's events and its subagents'.
+      if (
+        event.type === "session.step.ended" &&
+        typeof event.data === "object" &&
+        event.data &&
+        "sessionID" in event.data
+      )
+        suggestions?.replied(String(event.data.sessionID))
       if (!isAttentionEvent(event)) return
       attentionEvents.handle(event)
       // The recap waits for the end of a turn of Mini's own session; a subagent's turn is not the person's.

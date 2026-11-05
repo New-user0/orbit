@@ -88,7 +88,9 @@ async function start(input: {
       await Bun.sleep(30)
       await app.renderOnce()
     },
-    ended(sessionID = "ses_1") {
+    /** A busy period of the session ends well, after the model finished a step in it unless `reply` is false. */
+    ended(sessionID = "ses_1", reply = true) {
+      if (reply) lifecycle.observe?.({ type: "session.step.ended", data: { sessionID, finish: "stop" } })
       lifecycle.observe?.({ type: "session.execution.succeeded", data: { sessionID } })
     },
     async frame() {
@@ -102,6 +104,8 @@ async function start(input: {
     },
   }
 }
+
+type Mini = Awaited<ReturnType<typeof start>>
 
 test("Mini asks only with prompt.suggestions on", async () => {
   for (const row of [
@@ -132,6 +136,45 @@ test("a subagent's turn asks nothing", async () => {
     mini.ended()
     await Bun.sleep(100)
     expect(mini.asked).toHaveLength(1)
+  }
+})
+
+// The reference asks only at the end of a model turn, so a busy period with no model reply, such as a /compact or a
+// redo's wake, asks nothing.
+test("a busy period in which the model wrote no reply asks nothing, as after /compact or a redo", async () => {
+  const rows = [
+    { name: "no step, as a /compact or a redo's wake", run: (mini: Mini) => mini.ended("ses_1", false), asks: 0 },
+    {
+      name: "a step of a subagent's session only",
+      run: (mini: Mini) => {
+        mini.lifecycle.observe?.({ type: "session.step.ended", data: { sessionID: "ses_child", finish: "stop" } })
+        mini.ended("ses_1", false)
+      },
+      asks: 0,
+    },
+    {
+      name: "a step of the turn before",
+      run: (mini: Mini) => {
+        mini.lifecycle.observe?.({ type: "session.step.ended", data: { sessionID: "ses_1", finish: "stop" } })
+        mini.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+        mini.ended("ses_1", false)
+      },
+      asks: 0,
+    },
+    {
+      name: "control: a model turn",
+      run: (mini: Mini) => {
+        mini.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+        mini.ended()
+      },
+      asks: 1,
+    },
+  ]
+  for (const row of rows) {
+    using mini = await start({ suggestions: true })
+    row.run(mini)
+    await Bun.sleep(100)
+    expect({ name: row.name, asks: mini.asked.length }).toEqual({ name: row.name, asks: row.asks })
   }
 })
 

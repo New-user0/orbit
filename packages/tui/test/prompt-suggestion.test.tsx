@@ -187,7 +187,26 @@ async function mount(
         | "session.execution.failed"
         | "session.execution.interrupted",
       id = sessionID,
+      /** For a busy period that ends well, whether the model finished a step in it first, as a turn's does. */
+      reply = true,
     ) {
+      if (type === "session.execution.succeeded" && reply) {
+        seq++
+        setup.events.emit({
+          id: `evt_step_${seq}`,
+          created: Date.now(),
+          type: "session.step.ended",
+          durable: { aggregateID: id, seq, version: 1 },
+          data: {
+            sessionID: id,
+            assistantMessageID: `msg_reply_${seq}`,
+            finish: "stop",
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+          location: { directory: sessionDirectory },
+        } as OrbitEvent)
+      }
       seq++
       setup.events.emit({
         id: `evt_execution_${seq}`,
@@ -356,6 +375,80 @@ test("only a succeeded turn of the session in view asks", async () => {
   for (const row of rows) {
     await using app = await mount({ suggestions: true, parentID: row.parentID })
     app.execution(row.type, row.id)
+    expect({ name: row.name, count: await asked(app, row.count) }).toEqual({ name: row.name, count: row.count })
+  }
+})
+
+// The reference asks only at the end of a model turn, so a busy period in which the model wrote no reply asks nothing.
+test("a busy period in which the model wrote no reply asks nothing, as after /compact or a redo", async () => {
+  // /compact sent from the prompt: its busy period compacts the history and writes no reply.
+  {
+    await using app = await mount({ suggestions: true })
+    await ghost(app)
+    await app.type("/compact")
+    app.setup.mockInput.pressEnter()
+    await quiet(app)
+    expect(app.compacts).toHaveLength(1)
+    app.execution("session.execution.started")
+    app.execution("session.execution.succeeded", sessionID, false)
+    expect(await asked(app, 1)).toBe(1)
+    // The control: the model turn after it asks again.
+    app.execution("session.execution.started")
+    app.execution("session.execution.succeeded")
+    expect(await asked(app, 2)).toBe(2)
+  }
+  const rows: Array<{ name: string; run: (app: App) => void; count: number }> = [
+    {
+      name: "a redo's wake",
+      run: (app) => {
+        app.emit("session.revert.cleared", {})
+        app.execution("session.execution.started")
+        app.execution("session.execution.succeeded", sessionID, false)
+      },
+      count: 0,
+    },
+    {
+      name: "a step of a subagent's session only",
+      run: (app) => {
+        app.execution("session.execution.started")
+        app.emit("session.step.ended", {
+          sessionID: childID,
+          assistantMessageID: "msg_child",
+          finish: "stop",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        })
+        app.execution("session.execution.succeeded", sessionID, false)
+      },
+      count: 0,
+    },
+    {
+      // A step that ended before this busy period started belongs to the turn before it.
+      name: "a step of the turn before",
+      run: (app) => {
+        app.emit("session.step.ended", {
+          assistantMessageID: "msg_before",
+          finish: "stop",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        })
+        app.execution("session.execution.started")
+        app.execution("session.execution.succeeded", sessionID, false)
+      },
+      count: 0,
+    },
+    {
+      name: "a model turn",
+      run: (app) => {
+        app.execution("session.execution.started")
+        app.execution("session.execution.succeeded")
+      },
+      count: 1,
+    },
+  ]
+  for (const row of rows) {
+    await using app = await mount({ suggestions: true })
+    row.run(app)
     expect({ name: row.name, count: await asked(app, row.count) }).toEqual({ name: row.name, count: row.count })
   }
 })
