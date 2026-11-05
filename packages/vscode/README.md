@@ -29,6 +29,10 @@ and starts it by its full path, so an `orb` in the folder you opened is never th
   the change. Each message you sent has **View changes**, one diff of everything that prompt changed with the file
   tools, and **Restore files**, which asks first and then puts those files back as they were before it. Orbit writes
   every one of these changes through its service, never from the extension.
+- **The terminal UI's approvals:** when `orb` runs in a terminal of this window, its Edit and Write approvals open here
+  as the same editable diff, under the same checks. Save, close or **Reject** the tab, or answer in the terminal; the
+  terminal UI sends the answer to its service. Set `"diffs": { "tool": "terminal" }` in the terminal UI's `cli.json` to
+  keep its diffs in the terminal.
 - **From the editor** (right-click, or the Command Palette):
   - **Orbit: Ask About Selection** (`Ctrl+Esc` / `Cmd+Esc`) sends the selection with a question.
   - **Orbit: Explain Selection**.
