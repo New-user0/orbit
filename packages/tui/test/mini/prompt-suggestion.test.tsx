@@ -13,14 +13,18 @@ import type { FooterState, FooterSubagentState, FooterView, RunPrompt } from "..
 
 const suggestion = "run the tests"
 
-async function render(text: string, width = 100, options: { phase?: FooterState["phase"]; subagent?: boolean } = {}) {
+async function render(
+  text: string | undefined,
+  width = 100,
+  options: { phase?: FooterState["phase"]; subagent?: boolean; first?: boolean } = {},
+) {
   const [state] = createSignal<FooterState>({
     phase: options.phase ?? "idle",
     status: "",
     notice: "",
     model: "gpt-5",
     usage: undefined,
-    first: false,
+    first: options.first ?? false,
     interrupt: 0,
     exit: 0,
   })
@@ -163,22 +167,58 @@ test.each(keys.flatMap((key) => spellings.map((spelling) => ({ ...key, ...spelli
     }
     expect(footer.text()).toBe(plain(text))
     expect(footer.submitted).toEqual([])
+    // The cursor is left at the end of the text taken, so typing goes on from there.
+    footer.app.mockInput.pressKey("X")
+    await footer.settle()
+    expect(footer.text()).toBe(plain(text) + "X")
   },
 )
 
-test("a ghost cut to the row is filled by Enter, not sent", async () => {
-  const long = "please run every test in the package again and then tell me about each failure you find"
+test.each([
+  {
+    name: "plain text",
+    long: "please run every test in the package again and then tell me about each failure you find",
+    start: "please run every",
+    end: "each failure you find",
+  },
+  // Enter keeps a leading ! as prompt text, as the reference's Enter does, so the second Enter runs no command; only
+  // Tab and Right take a suggestion into shell mode.
+  {
+    name: "a leading !",
+    long: "!git log --oneline and show every commit from the last two weeks",
+    start: "!git log",
+    end: "the last two weeks",
+  },
+])("a ghost cut to the row is filled by Enter, not sent: $name", async ({ long, start, end }) => {
   await using footer = await render(long, 40)
   const frame = footer.app.captureCharFrame()
-  expect(frame).toContain("please run every")
-  expect(frame).not.toContain("each failure you find")
+  expect(frame).toContain(start)
+  expect(frame).not.toContain(end)
   footer.app.mockInput.pressEnter()
   await footer.settle()
   expect(footer.submitted).toEqual([])
+  // The whole text, ! and all, is in the input: in shell mode the input would hold the command after the !.
   expect(footer.text()).toBe(long)
   footer.app.mockInput.pressEnter()
   await footer.settle()
-  expect(footer.submitted.map((prompt) => prompt.text)).toEqual([long])
+  expect(footer.submitted.map((prompt) => [prompt.text, prompt.mode])).toEqual([[long, undefined]])
+})
+
+test("a blank suggestion is not drawn, so the hint stays and Tab takes nothing", async () => {
+  // Control: with nothing held, the first prompt's hint is drawn.
+  {
+    await using footer = await render(undefined, 100, { first: true })
+    expect(footer.app.captureCharFrame()).toContain("Ask anything")
+  }
+  await using footer = await render(" \n\t ", 100, { first: true })
+  expect(footer.app.captureCharFrame()).toContain("Ask anything")
+  footer.app.mockInput.pressTab()
+  await footer.settle()
+  expect(footer.text()).toBe("")
+  expect(footer.app.captureCharFrame()).toContain("Ask anything")
+  footer.app.mockInput.pressEnter()
+  await footer.settle()
+  expect(footer.submitted).toEqual([])
 })
 
 test("Enter sends a suggestion only when the whole of it fits the input row", async () => {

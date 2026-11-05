@@ -513,20 +513,40 @@ test.each(keys.flatMap((key) => spellings.map((spelling) => ({ ...key, ...spelli
     }
     expect(app.textarea().plainText).toBe(plain(text))
     expect(app.prompts).toEqual([])
+    // The cursor is left at the end of the text taken, so typing goes on from there.
+    await app.type("X")
+    expect(app.textarea().plainText).toBe(plain(text) + "X")
   },
 )
 
-test("a ghost cut to the row is filled by Enter, not sent", async () => {
-  const long = "please run every test in the package again and then tell me about each failure you find"
-  expect(long.length).toBeGreaterThanOrEqual(85)
+test.each([
+  {
+    name: "plain text",
+    long: "please run every test in the package again and then tell me about each failure you find",
+    start: "please run every",
+    end: "each failure you find",
+  },
+  // Enter keeps a leading ! as prompt text, as the reference's Enter does, so the second Enter runs no command; only
+  // Tab and Right take a suggestion into shell mode.
+  {
+    name: "a leading !",
+    long: "!git log --oneline and show every commit from the last two weeks",
+    start: "!git log",
+    end: "the last two weeks",
+  },
+])("a ghost cut to the row is filled by Enter, not sent: $name", async ({ long, start, end }) => {
+  expect(long.length).toBeGreaterThanOrEqual(60)
   await using app = await mount({ suggestions: true, width: 40, answer: () => json({ data: { suggestion: long } }) })
-  await ghost(app, "please run every")
-  expect(app.frame()).not.toContain("each failure you find")
+  await ghost(app, start)
+  expect(app.frame()).not.toContain(end)
   await app.enter()
   expect(app.prompts).toEqual([])
+  expect(app.shells).toEqual([])
+  // The whole text, ! and all, is in the input: in shell mode the input would hold the command after the !.
   expect(app.textarea().plainText).toBe(long)
   await app.enter()
   expect(app.prompts.map((prompt) => prompt.text)).toEqual([long])
+  expect(app.shells).toEqual([])
 })
 
 // The prompt's right padding is narrower below 44 columns, so both sides of that line are drawn.
@@ -928,4 +948,53 @@ test("each failed answer draws nothing and leaves the prompt usable", async () =
       sent: ["hello"],
     })
   }
+})
+
+// The ghost is cut to the input row, and a row too narrow for even its first character draws nothing: nothing drawn is
+// nothing to take, so Tab, Right and Enter keep their own meaning (class 8). At 10 columns the first character fits.
+test.each([
+  { width: 8, key: "Tab", drawn: false },
+  { width: 8, key: "Right", drawn: false },
+  { width: 8, key: "Enter", drawn: false },
+  { width: 10, key: "Tab", drawn: true },
+  { width: 10, key: "Right", drawn: true },
+])(
+  "a suggestion whose first character does not fit the row is neither drawn nor taken: $key at $width columns",
+  async (row) => {
+    const wide = "測試run"
+    await using app = await mount({
+      suggestions: true,
+      width: row.width,
+      answer: () => json({ data: { suggestion: wide } }),
+    })
+    app.execution("session.execution.succeeded")
+    expect(await asked(app, 1)).toBe(1)
+    if (row.drawn) expect(await app.shows("測")).toBe(true)
+    else await quiet(app)
+    expect(app.frame().includes("測")).toBe(row.drawn)
+    if (row.key === "Tab") await app.press("TAB")
+    if (row.key === "Right") await app.press("ARROW_RIGHT")
+    if (row.key === "Enter") await app.enter()
+    expect(app.textarea().plainText).toBe(row.drawn ? wide : "")
+    expect(app.prompts).toEqual([])
+  },
+)
+
+test("closing the terminal UI cancels a suggestion request that is still out", async () => {
+  // The answer waits until the request is cancelled, so a request left out keeps the server busy past the test.
+  await using app = await mount({
+    suggestions: true,
+    answer: (request) =>
+      new Promise((resolve) =>
+        request.signal.addEventListener("abort", () => resolve(json({ data: { suggestion } })), { once: true }),
+      ),
+  })
+  app.execution("session.execution.succeeded")
+  expect(await asked(app, 1)).toBe(1)
+  expect(app.requests[0]!.signal.aborted).toBe(false)
+  app.setup.renderer.destroy()
+  await app.setup.ended
+  const deadline = Date.now() + 3000
+  while (!app.requests[0]!.signal.aborted && Date.now() < deadline) await Bun.sleep(10)
+  expect(app.requests[0]!.signal.aborted).toBe(true)
 })

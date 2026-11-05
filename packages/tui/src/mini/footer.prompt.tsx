@@ -1524,10 +1524,11 @@ export function createPromptState(input: PromptInput): PromptState {
     }
     if (disposed || !input.prompt()) return
     // Enter on a drawn suggestion sends the text drawn, as if typed. One cut to the row is put in the input instead, so
-    // nothing is sent that the person could not read first (class 8).
+    // nothing is sent that the person could not read first (class 8). Either way it stays a prompt to the model: as in
+    // the reference, Enter never takes a leading `!` into shell mode, so the next Enter does not run it as a command.
     const shown = ghost()
     if (shown) {
-      fill(shown.value, !shown.whole)
+      fill(shown.value, false)
       if (!shown.whole) return
     }
     syncDraft()
