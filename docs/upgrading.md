@@ -2108,6 +2108,48 @@ conversation, after each turn.
 
 **What to do:** Nothing. Set `prompt.suggestions` to `true` in your `cli.json`, or use the settings row, to turn it on.
 
+### VS Code reviews Edit and Write approvals in the editor, and each prompt can show and restore its changes
+
+When the Orbit chat in VS Code gets an Edit or Write approval, the diff now opens beside the chat on its own, with the
+file as it is on the left and the proposal on the right, which you can edit. Saving (or the tab's Accept button)
+approves your version once; closing the tab approves the proposal as it stands; the tab's Reject button declines. The
+card keeps its buttons, and the first answer from anywhere wins; the tab then closes. Tabs that Orbit closes itself
+answer nothing: when the question is answered elsewhere, when you send a new prompt, start a New Session or pick a
+session from history (every Orbit tab closes then, and the question stays waiting on its card), and when the window
+closes. The card says to answer in the editor only while its review tab is open: once Orbit closes that tab, or you
+close it and the service refuses or does not take the answer in time, the card goes back to its buttons alone. Only
+the answered question's tabs close; the review tabs of other questions stay open and still
+answer. When the question is answered, a new prompt is sent or the window closes while its tab is still opening, no tab
+opens. "Open diff" on a question that is open for review brings its tab forward and opens no second one. Moving
+the tab to another editor group or window answers nothing either. Before, "Open diff"
+showed a read-only diff and only the card could answer. When the question is answered elsewhere while the tab holds
+unsaved edits, the tab closes without asking whether to save them, and those edits are not sent. The tab's title names
+the file; the documents in it are called `proposal` with the file's extension.
+
+Only a save you make answers. With `files.autoSave` on, VS Code's own save after a delay or when the editor loses focus
+keeps your edits in the tab and sends nothing: save with Ctrl+S or press Accept to approve them. Closing the tab still
+approves the proposal as the agent wrote it, without your auto-saved edits. If the service does not answer a save in
+time, the note says so and points to the card, which shows whether the question is still waiting.
+
+Other questions with files (Patch, a move, several files, a notebook) open as a read-only preview from the card's "Open
+diff", as before, and so does every question from an Orbit service older than the edited reply. A file is opened only
+when it is really inside the session's folder and inside one of the window's folders: a file elsewhere, behind a link
+that leads out, or on a share is shown on the card only, with a note. When the file changed since the agent read it,
+nothing opens and the warning no longer names the file.
+
+Each message you send gets two links once the service has taken it: "View changes" opens one multi-file diff of what
+that prompt changed with the file tools, and "Restore files" asks for confirmation, with the number of files and lines,
+before it puts them back as they were before the prompt. Neither works in a folder that is not trusted. When the
+service cannot list one prompt's changes (for example a prompt that moved into a worktree), the chat gives the
+service's reason; when it does not answer within ten seconds, the chat says so. A background service older than this
+release cannot list one prompt alone: it ignores the request to and lists the whole turn's changes under the same
+title. Run `orb service restart` after upgrading so that the service is the new one.
+
+**Affects:** VS Code users of the Orbit chat.
+
+**What to do:** Nothing. To keep using only the card, close the review tab with the card's buttons instead: closing the
+tab itself approves the proposal.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.

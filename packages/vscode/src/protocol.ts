@@ -34,6 +34,8 @@ export type Item =
       readonly text: string
       /** One muted line under the message naming the editor context that went with it; the host writes it. */
       readonly context?: string
+      /** The message ID the server gave the prompt, once it has one: its changes can be viewed and restored. */
+      readonly messageID?: string
     }
   | { readonly type: "text"; readonly id: string; readonly text: string }
   | { readonly type: "reasoning"; readonly id: string; readonly text: string; readonly seconds?: number }
@@ -61,6 +63,12 @@ export type Item =
       readonly view: PermissionView.View
       readonly files: ReadonlyArray<FileChange>
       readonly status: "pending" | "once" | "always" | "reject"
+      /** Whether the person may answer with their own version of the file: an Edit or Write, as the server marks it. */
+      readonly revisable: boolean
+      /** The server's answer approved the person's own version. */
+      readonly revised?: boolean
+      /** A review of it is open in the editor. */
+      readonly reviewing?: boolean
     }
   | { readonly type: "note"; readonly id: string; readonly text: string; readonly tone: "muted" | "error" }
 
@@ -156,6 +164,10 @@ export type FromView =
   | { readonly type: "stop" }
   | { readonly type: "permission"; readonly id: string; readonly decision: "once" | "always" | "reject" }
   | { readonly type: "diff"; readonly id: string }
+  /** Opens the changes of the prompt with this message ID. */
+  | { readonly type: "changes"; readonly messageID: string }
+  /** Restores the files of the prompt with this message ID, after a dry run and the person's confirmation. */
+  | { readonly type: "restore"; readonly messageID: string }
   | { readonly type: "model"; readonly model: string }
   | { readonly type: "mode"; readonly mode: Mode }
   /** Asks whether to trust the folder; the extension host shows the question, so a click here never trusts by itself. */
