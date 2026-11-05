@@ -90,9 +90,12 @@ async function render(
           onFormCancel={() => {}}
           onCycle={() => {}}
           onInterrupt={() => false}
-          onEditorOpen={async () => undefined}
+          onEditorOpen={async () => {
+            events.push("editor")
+            return undefined
+          }}
           onInputClear={() => {}}
-          onExit={() => {}}
+          onExit={() => events.push("exit")}
           onAgentSelect={() => {}}
           onModelSelect={() => {}}
           onVariantSelect={() => {}}
@@ -326,6 +329,36 @@ test.each(["settings", "editor"])("/%s run from the list ends the suggestion", a
   await footer.settle()
   expect(footer.submitted).toEqual([])
   expect(footer.app.captureCharFrame()).not.toContain(suggestion)
+})
+
+// A suggestion that is a slash command on its own does what typing it and pressing Enter does: the list commands run
+// without a prompt, the others are sent as typed, and plain text is sent. Each row is compared with the typed run.
+test.each([
+  { text: "/editor", sent: [], event: "editor", panel: false },
+  { text: "/settings", sent: [], event: undefined, panel: true },
+  { text: "/new", sent: ["/new "], event: undefined, panel: false },
+  { text: "/editor notes", sent: ["/editor notes"], event: undefined, panel: false },
+  { text: "/exit", sent: [], event: "exit", panel: false },
+  { text: "run the tests", sent: ["run the tests"], event: undefined, panel: false },
+])("Enter on a suggestion that is a slash command runs the command, as typing it would: $text", async (row) => {
+  const run = async (held: string | undefined) => {
+    await using footer = await render(held)
+    if (!held) footer.app.mockInput.typeText(row.text)
+    await footer.settle()
+    footer.app.mockInput.pressEnter()
+    await footer.settle()
+    await Bun.sleep(50)
+    await footer.settle()
+    return {
+      sent: footer.submitted.map((prompt) => prompt.text),
+      events: footer.events.filter((event) => event === "editor" || event === "exit"),
+      panel: footer.app.captureCharFrame().includes("Settings"),
+      ended: footer.events.includes("submitted"),
+    }
+  }
+  const taken = await run(row.text)
+  expect(taken).toEqual({ sent: [...row.sent], events: row.event ? [row.event] : [], panel: row.panel, ended: true })
+  expect({ ...(await run(undefined)), ended: true }).toEqual(taken)
 })
 
 // Control: a typed draft only hides the suggestion, and erasing it draws the held one again.

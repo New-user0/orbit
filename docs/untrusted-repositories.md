@@ -1423,8 +1423,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   text never reaches a shell without the person sending it from shell mode (class 2). Proof:
   `test/prompt-suggestion.test.tsx` and `test/mini/prompt-suggestion.test.tsx` (each spelling drawn and taken by each
   key, the cut row with plain text and with a leading `!`, a suggestion that just fills the row against one a cell
-  wider, a row too narrow for its first character, the hidden cases, a side pane holding the keys, and `/help` against
-  `/help me`), each with a plain control row.
+  wider, a row too narrow for its first character, the hidden cases, a side pane holding the keys, `/help` against
+  `/help me` in the terminal UI, and in Mini `/editor`, `/settings`, `/new` and `/exit` against `/editor notes`, each
+  compared with typing it), each with a plain control row.
 - Run store text in the `/runs` dialog: `DialogFlowRuns` passes every string through `plain`. Proof:
   `test/component/dialog-flow-runs.test.tsx`.
 - Agent, skill and command names and descriptions that a folder supplies: the TUI agent and skill dialogs, the `@` and `/` autocomplete and every Mini menu (`RunFooterMenu` in `src/mini/footer.menu.tsx`, the single render site for the Mini `/` and `@` composer) draw them through `plain`. Proof: `test/component/dialog-listings.test.tsx`, `test/prompt/autocomplete-hostile.test.tsx`, `test/mini/footer.view.test.tsx` (hostile row beside a trusted one).

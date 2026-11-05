@@ -1530,6 +1530,14 @@ export function createPromptState(input: PromptInput): PromptState {
     if (shown) {
       fill(shown.value, false)
       if (!shown.whole) return
+      // A suggestion that is only a command's name runs from the list, as typing it and pressing Enter does. Sent as a
+      // prompt, a command that runs only from the list, such as `/editor`, would reach the model as text instead.
+      const head = parseSlashHead(shown.value, /\s/)
+      const named = head && !head.arguments.trim() ? slashOptions().find((item) => item.name === head.name) : undefined
+      if (named) {
+        select(named, delivery)
+        return
+      }
     }
     syncDraft()
     submitPrompt(promptCopy(draft), delivery)
