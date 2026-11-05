@@ -125,6 +125,7 @@ export const generate = Effect.fn("SessionGenerate.generate")(function* (input: 
       .publish(SessionEvent.SideQueryRecorded, {
         sessionID: selection.session.id,
         purpose: "session.generate",
+        model: model.ref,
         ...SessionUsage.record(response.usage, model.cost),
       })
       .pipe(Effect.uninterruptible)

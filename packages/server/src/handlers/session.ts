@@ -619,6 +619,15 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.cost",
+        Effect.fn(function* (ctx) {
+          // Database rows only: the route has no Location and opens no folder, so there is nothing to trust (class 12).
+          return {
+            data: yield* session.cost(ctx.params.sessionID).pipe(Effect.catchTag("Session.NotFoundError", missingSession)),
+          }
+        }),
+      )
+      .handle(
         "session.diff",
         Effect.fn(function* (ctx) {
           return {

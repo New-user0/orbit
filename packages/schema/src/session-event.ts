@@ -161,6 +161,8 @@ export const UsageRecorded = Event.durable({
   schema: {
     ...Base,
     source: Schema.Literals(["title", "compaction"]),
+    /** The model the call used; unset on records written before they named it. */
+    model: Model.Ref.pipe(optional),
     cost: Money.USD,
     tokens: TokenUsage.Info,
   },
@@ -177,6 +179,8 @@ export const SideQueryRecorded = Event.durable({
     purpose: Schema.String.annotate({
       description: "What the side query was for, such as webfetch.summarize or session.away_summary.",
     }),
+    /** The model the call used; unset on records written before they named it. */
+    model: Model.Ref.pipe(optional),
     cost: Money.USD,
     tokens: TokenUsage.Info,
   },
