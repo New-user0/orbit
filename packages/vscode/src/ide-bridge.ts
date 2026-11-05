@@ -1,8 +1,10 @@
 // Orbit's bridge between an editor window and the terminal UI that runs in it. The extension hosts a WebSocket server on
 // the loopback interface and writes a lock file that names its port and token, and the terminal UI finds the lock,
-// connects with the token and gets the file and selection the person is working in. It has no `vscode` import, so the
-// tests load it as it is: the editor's lifecycle, logging and environment come in as arguments. It starts no program and
-// makes no outbound connection.
+// connects with the token and gets the file and selection the person is working in. With the `diff` feature the terminal
+// UI also asks it to open an approval's diff in the editor, and hears back how the person answered there; the review
+// service it hands that to reads and checks the file, and nothing here touches the disk for it. It has no `vscode`
+// import, so the tests load it as it is: the editor's lifecycle, logging and environment come in as arguments. It starts
+// no program and makes no outbound connection.
 import { IdeLock } from "@orbit/util/ide-lock"
 import crypto from "node:crypto"
 import fs from "node:fs"
@@ -28,6 +30,37 @@ export type Mention = {
   readonly lineEnd?: number
 }
 
+/** How the person answered a review in the editor, or why none opened, for the terminal UI that asked for it. */
+export type DiffAnswer =
+  | { readonly id: string; readonly answer: "saved"; readonly content: string }
+  | { readonly id: string; readonly answer: "closed" | "rejected" | "dismissed" }
+  | { readonly id: string; readonly answer: "unavailable"; readonly reason: "outside" | "changed" | "invalid" | "busy" }
+
+/** The terminal UI a review belongs to. `answer` is false when the frame would be too large to send. */
+export type DiffOwner = { readonly key: string; answer(frame: DiffAnswer): boolean }
+
+/** A review the terminal UI asks for, with every field checked for its shape. */
+export type DiffOpen = {
+  readonly id: string
+  readonly place: string
+  readonly patch: string
+  readonly status: "added" | "modified"
+  /** The folders the session's file tools work in, as its server names them. */
+  readonly roots: ReadonlyArray<string>
+}
+
+/** The editor's reviews, which the bridge hands each diff frame to (`Review.bridge`). */
+export type DiffService = {
+  /** Opens the review, or answers `owner` why it did not. `window` is the window's folders. */
+  open(owner: DiffOwner, request: DiffOpen, window: ReadonlyArray<string>): Promise<void>
+  /** Closes the owner's review of `id`; nothing is answered. */
+  close(owner: DiffOwner, id: string): void
+  /** Closes every Orbit diff tab; each terminal UI is told its reviews were dismissed. */
+  closeAll(): void
+  /** The owner is gone: its reviews close, and nothing is answered. */
+  drop(owner: DiffOwner): void
+}
+
 export type BridgeOptions = {
   /** The folder that holds the locks. */
   directory: string
@@ -43,6 +76,8 @@ export type BridgeOptions = {
   debounce?: number
   /** How long a client has to say hello before it is closed. */
   helloTimeout?: number
+  /** The reviews that diff frames open. Without it the bridge names no feature, and a terminal UI sends no diff. */
+  diff?: DiffService
 }
 
 export type Bridge = {
@@ -58,16 +93,16 @@ export type Bridge = {
   dispose(): void
 }
 
-type Client = { socket: WebSocket; order: number; pid?: number; ready: boolean }
+type Client = { socket: WebSocket; order: number; pid?: number; ready: boolean; owner: DiffOwner }
 
 export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   const token = IdeLock.token()
   const debounce = options.debounce ?? 100
   const helloTimeout = options.helloTimeout ?? 5_000
   const clients = new Set<Client>()
-  // A client sends one hello, so a few KiB is plenty.
-  const maxFrame = 4096
-  const sockets = new WebSocketServer({ noServer: true, maxPayload: maxFrame })
+  // A diff to open carries a patch, so a client that said hello may send up to the frame cap; before that only a hello
+  // is expected, which a few KiB holds.
+  const sockets = new WebSocketServer({ noServer: true, maxPayload: IdeLock.frameCap })
   const server = http.createServer((_request, response) => {
     response.writeHead(426).end()
   })
@@ -88,21 +123,41 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
   })
 
   const accept = (socket: WebSocket) => {
-    const client: Client = { socket, order: (count += 1), ready: false }
+    const order = (count += 1)
+    const owner: DiffOwner = {
+      key: `bridge-${order}`,
+      answer: (answer) => {
+        const frame = JSON.stringify({ type: "diff.answer", ...answer })
+        if (Buffer.byteLength(frame) > IdeLock.frameCap) return false
+        if (socket.readyState === socket.OPEN) socket.send(frame)
+        return true
+      },
+    }
+    const client: Client = { socket, order, ready: false, owner }
     clients.add(client)
     const silent = setTimeout(() => socket.close(1008, "no hello"), helloTimeout)
     socket.on("close", () => {
       clearTimeout(silent)
       clients.delete(client)
+      // Its reviews close with it; there is nobody left to answer.
+      options.diff?.drop(owner)
     })
     socket.on("error", () => socket.terminate())
     socket.on("message", (data, binary) => {
       // maxPayload makes ws refuse a large frame while it reads it; this holds under any WebSocket implementation.
-      if (binary || (data as Buffer).length > maxFrame) return socket.close(1009, "frame too large")
-      const hello = parseHello(data.toString())
-      if (!hello || client.ready) return
+      if (binary || (data as Buffer).length > (client.ready ? IdeLock.frameCap : IdeLock.helloCap))
+        return socket.close(1009, "frame too large")
+      const frame = parse(data.toString())
+      if (client.ready) return diffFrame(client, frame)
+      const hello = parseHello(frame)
+      if (!hello) return
       clearTimeout(silent)
-      send(socket, { type: "hello", version: IdeLock.version, editor: options.ideName })
+      send(socket, {
+        type: "hello",
+        version: IdeLock.version,
+        editor: options.ideName,
+        ...(options.diff ? { features: [...IdeLock.features] } : {}),
+      })
       if (hello.version !== IdeLock.version) {
         options.log(`IDE bridge: closed a client that speaks version ${hello.version}`)
         socket.close(IdeLock.closeVersion, "unsupported version")
@@ -112,6 +167,25 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       client.pid = hello.pid
       send(socket, selectionFrame(current))
     })
+  }
+
+  // A frame of a type it does not know is ignored, and a bad one costs only itself (class 7).
+  const diffFrame = (client: Client, frame: Record<string, unknown> | undefined) => {
+    const diff = options.diff
+    if (!diff || !frame) return
+    if (frame.type === "diff.closeAll") return diff.closeAll()
+    if (frame.type === "diff.close") return requestID(frame.id) ? diff.close(client.owner, frame.id) : undefined
+    if (frame.type !== "diff.open") return
+    // The id becomes part of a tab's URI and a key, so it must have the shape the server gives a request (class 5). One
+    // that does not is never named back.
+    if (!requestID(frame.id)) return options.log("IDE bridge: dropped a diff to open whose id is not a request's")
+    const request = diffOpen(frame.id, frame)
+    if (!request) {
+      options.log("IDE bridge: refused a diff to open whose fields do not have their shape")
+      client.owner.answer({ id: frame.id, answer: "unavailable", reason: "invalid" })
+      return
+    }
+    void diff.open(client.owner, request, folders)
   }
 
   await new Promise<void>((resolve, reject) => {
@@ -173,6 +247,8 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       if (disposed) return
       disposed = true
       if (timer) clearTimeout(timer)
+      // The reviews close before their clients do, so none of them answers.
+      for (const client of clients) options.diff?.drop(client.owner)
       for (const client of clients) client.socket.close(1001, "editor closed")
       sockets.close()
       server.close()
@@ -201,7 +277,8 @@ function send(socket: WebSocket, frame: object) {
   if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(frame))
 }
 
-function parseHello(text: string) {
+// A frame as an object, or `undefined` when it is not JSON or not an object.
+function parse(text: string) {
   const value: unknown = (() => {
     try {
       return JSON.parse(text)
@@ -209,11 +286,31 @@ function parseHello(text: string) {
       return undefined
     }
   })()
-  if (typeof value !== "object" || value === null) return undefined
-  const frame = value as Record<string, unknown>
-  if (frame.type !== "hello" || typeof frame.version !== "number") return undefined
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
+}
+
+function parseHello(frame: Record<string, unknown> | undefined) {
+  if (frame?.type !== "hello" || typeof frame.version !== "number") return undefined
   const pid = typeof frame.pid === "number" && Number.isInteger(frame.pid) && frame.pid > 0 ? frame.pid : undefined
   return { version: frame.version, pid }
+}
+
+// `per_` and the server's identifier: letters and digits only, so the id cannot name a folder or carry a control.
+function requestID(value: unknown): value is string {
+  return typeof value === "string" && /^per_[0-9A-Za-z]{1,64}$/.test(value)
+}
+
+// The rest of a diff to open, each field checked for its shape. A notebook's diff is JSON, so it is not reviewed.
+function diffOpen(id: string, frame: Record<string, unknown>): DiffOpen | undefined {
+  const place = frame.place
+  const roots = frame.roots
+  if (typeof place !== "string" || place === "" || /\.ipynb$/i.test(place)) return undefined
+  if (typeof frame.patch !== "string") return undefined
+  if (frame.status !== "added" && frame.status !== "modified") return undefined
+  if (!Array.isArray(roots) || roots.length < 1 || roots.length > 2) return undefined
+  if (!roots.every((root): root is string => typeof root === "string" && root !== "")) return undefined
+  return { id, place, patch: frame.patch, status: frame.status, roots }
 }
 
 /** Compares in constant time on buffers of one length: a different length is a refusal. */

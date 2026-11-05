@@ -16,6 +16,8 @@ type Setting = {
   max?: number
   format?: (value: unknown) => string
   keywords?: readonly string[]
+  /** Listed only while the terminal UI is linked to an editor. */
+  linked?: true
 }
 
 export const settings: Setting[] = [
@@ -195,6 +197,15 @@ export const settings: Setting[] = [
     keywords: ["one file", "selected file"],
   },
   {
+    title: "Diff tool",
+    category: "Diffs",
+    path: ["diffs", "tool"],
+    default: "auto",
+    values: ["auto", "terminal"],
+    keywords: ["editor diff", "ide", "review in editor"],
+    linked: true,
+  },
+  {
     title: "Scroll speed",
     category: "Input",
     path: ["scroll", "speed"],
@@ -321,7 +332,16 @@ export function settingID(setting: Setting) {
   return setting.path.join(".")
 }
 
-export function DialogConfig(props: { current?: string }) {
+/** Whether a setting is listed now: one that needs a linked editor only while one is linked. */
+export function settingShown(setting: Setting, linked: boolean) {
+  return setting.linked !== true || linked
+}
+
+/**
+ * The settings dialog. `linked` says whether the terminal UI is linked to an editor; a dialog is drawn outside the
+ * editor's context, so its opener passes it.
+ */
+export function DialogConfig(props: { current?: string; linked?: () => boolean }) {
   const config = useConfig()
   const toast = useToast()
   const themes = useThemes()
@@ -351,13 +371,19 @@ export function DialogConfig(props: { current?: string }) {
     return index === undefined || index < 0 ? String(current) : (setting.labels?.[index] ?? String(current))
   }
   const options = createMemo(() =>
-    settings.map((setting, index) => ({
-      title: setting.title,
-      category: setting.category,
-      searchText: setting.keywords?.join(" "),
-      footer: display(setting),
-      value: index,
-    })),
+    settings.flatMap((setting, index) =>
+      settingShown(setting, props.linked?.() === true)
+        ? [
+            {
+              title: setting.title,
+              category: setting.category,
+              searchText: setting.keywords?.join(" "),
+              footer: display(setting),
+              value: index,
+            },
+          ]
+        : [],
+    ),
   )
 
   async function change(direction: number, index = selected()) {

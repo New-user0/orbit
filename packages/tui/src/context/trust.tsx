@@ -89,7 +89,7 @@ export function createTrustStatus(input: {
   return { status, settled, refresh }
 }
 
-export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
+export const { use: useTrust, provider: TrustProvider, context: TrustContext } = createSimpleContext({
   name: "Trust",
   // `directory` is the folder the terminal UI was started in, which is where it looks for its project's plugins.
   init: (props: { directory: string }) => {

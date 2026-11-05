@@ -26,7 +26,7 @@ import { ThemeProvider } from "../src/context/theme"
 import { TrustProvider } from "../src/context/trust"
 import { PermissionPrompt } from "../src/routes/session/permission"
 import { DialogProvider } from "../src/ui/dialog"
-import { Toast, ToastProvider } from "../src/ui/toast"
+import { Toast, ToastProvider, useToast } from "../src/ui/toast"
 import { createAppFixture, promptReady } from "./fixture/app"
 import { emptyThemeSource, tmpdir } from "./fixture/fixture"
 import { createApi, createEventStream, createFetch, directory, json, worktree } from "./fixture/tui-client"
@@ -59,6 +59,7 @@ const session = {
   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 0, updated: 0 },
 }
+const entry = { file: "src/a.ts", place, patch, status: "modified", additions: 1, deletions: 1 }
 const base: PermissionRequest = {
   id: "per_diff1",
   sessionID: session.id,
@@ -66,10 +67,10 @@ const base: PermissionRequest = {
   resources: ["src/a.ts"],
   save: ["src/*"],
   revisable: true,
-  source: { messageID: "msg_diff", id: "call_diff" },
+  source: { type: "tool", messageID: "msg_diff", id: "call_diff" },
   metadata: {
     paths: [place],
-    files: [{ file: "src/a.ts", place, patch, status: "modified", additions: 1, deletions: 1 }],
+    files: [entry],
   },
 }
 // The model's own input to the call: it names another file and another change. Nothing of it may reach the editor.
@@ -185,7 +186,9 @@ async function mount(options: Options = {}) {
     if (url.pathname === "/api/location" && url.searchParams.get("location[directory]") === sessionFolder) {
       reads.push(sessionFolder)
       if (options.folders === "fail") return json({ _tag: "InvalidRequestError", message: "no" }, { status: 400 })
-      if (options.folders === "hang") return new Promise<Response>(() => {})
+      // A server that takes the read and never answers; the read gives up when its signal aborts, as a real fetch does.
+      if (options.folders === "hang")
+        return new Promise<Response>((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)))
       return json({
         directory: sessionFolder,
         project: { id: "proj_test", directory: projectFolder, canonical: canonicalFolder },
@@ -193,6 +196,12 @@ async function mount(options: Options = {}) {
     }
   }, events)
   const [shown, setShown] = createSignal(true)
+  // The toasts, read as the app keeps them: a toast is drawn over whatever is on the screen, wrapped in its own box.
+  const toasts: { current?: ReturnType<typeof useToast> } = {}
+  function ToastProbe() {
+    toasts.current = useToast()
+    return <box />
+  }
 
   function Route() {
     const data = useData()
@@ -230,6 +239,7 @@ async function mount(options: Options = {}) {
                                 <InteractivityProvider enabled>
                                   <Route />
                                   <Toast />
+                                  <ToastProbe />
                                 </InteractivityProvider>
                               </EditorContextProvider>
                             </TrustProvider>
@@ -270,6 +280,7 @@ async function mount(options: Options = {}) {
     frame,
     until,
     hide: () => setShown(false),
+    toast: () => toasts.current?.currentToast,
     warnings: () => logs.filter((line) => line.level === "warn" && line.message.includes("diff")),
     async [Symbol.asyncDispose]() {
       app.renderer.destroy()
@@ -343,6 +354,8 @@ test("an editor answer becomes the server reply it stands for", async () => {
     await setup.until(() => setup.replies.length === 1, `${row.name}'s reply`)
     expect([row.name, setup.replies]).toEqual([row.name, [row.reply]])
     const frame = await setup.until((frame) => !compact(frame) && !full(frame), `${row.name}: the prompt to go`)
+    // No reply was refused: a lost race says nothing.
+    expect([row.name, setup.toast()]).toEqual([row.name, null])
     expect(frame).not.toContain("not found")
     await Bun.sleep(100)
     // The tab of a save or a Reject is closed by request; one the person closed is gone already.
@@ -445,7 +458,7 @@ test("a location read that never ends keeps the full dialog once the read limit 
 
 test("no diff opens unless the request is a revisable one-file Edit or Write, the setting is auto and the folder is trusted", async () => {
   const second = { file: "src/b.ts", place: `${sessionFolder}/src/b.ts`, patch, status: "modified" }
-  const file = (fields: Frame) => ({ metadata: { paths: [place], files: [{ ...base.metadata!.files![0]!, ...fields }] } })
+  const file = (fields: Frame) => ({ metadata: { paths: [place], files: [{ ...entry, ...fields }] } })
   const rows: Array<{ name: string; options: Options; opens: boolean }> = [
     { name: "control", options: {}, opens: true },
     { name: "write", options: { request: { action: "Write" } }, opens: true },
@@ -457,7 +470,7 @@ test("no diff opens unless the request is a revisable one-file Edit or Write, th
     },
     {
       name: "two-files",
-      options: { request: { metadata: { paths: [place], files: [base.metadata!.files![0]!, second] } } },
+      options: { request: { metadata: { paths: [place], files: [entry, second] } } },
       opens: false,
     },
     { name: "ipynb", options: { request: file({ place: `${sessionFolder}/N.IPYNB` }) }, opens: false },
@@ -488,7 +501,8 @@ test("a refused reply shows the server's reason and brings back the dialog", asy
   await setup.until(compact, "the compact prompt")
   setup.peer!.answer({ id: "per_diff1", answer: "saved", content: "mine\n" })
   const frame = await setup.until(
-    (frame) => frame.includes("The saved text could not be used here") && full(frame),
+    // The server's own sentence is what the toast says.
+    (frame) => setup.toast()?.message === "The saved text could not be used here" && full(frame),
     "the toast and the dialog",
   )
   expect(frame).toContain("Allow once")
@@ -500,9 +514,9 @@ test("a refused reply shows the server's reason and brings back the dialog", asy
 })
 
 test("the link warning comes from the request: through a link, and outside the session's folder", async () => {
-  const linked = (link: Frame | undefined, tool?: "terminal") => ({
+  const linked = (link: { place: string; outside: boolean } | undefined, tool?: "terminal") => ({
     tool,
-    request: { metadata: { paths: [place], files: [{ ...base.metadata!.files![0]!, ...(link && { link }) }] } },
+    request: { metadata: { paths: [place], files: [{ ...entry, ...(link && { link }) }] } },
   })
   const rows: Array<{ name: string; options: Options; shows?: string; place?: string }> = [
     {
@@ -555,7 +569,7 @@ test("names in the compact prompt are written out", async () => {
         paths: [odd],
         files: [
           {
-            ...base.metadata!.files![0]!,
+            ...entry,
             place: odd,
             link: { place: "/elsewhere/l\u001b[2Jink‮​\nx", outside: true },
           },
@@ -576,7 +590,7 @@ test("names in the compact prompt are written out", async () => {
 test("a diff too large for a frame is not sent, and the dialog stays", async () => {
   const large = `${patch}${"+x\n".repeat(IdeLock.frameCap / 3)}`
   await using setup = await mount({
-    request: { metadata: { paths: [place], files: [{ ...base.metadata!.files![0]!, patch: large }] } },
+    request: { metadata: { paths: [place], files: [{ ...entry, patch: large }] } },
   })
   await setup.until((frame) => frame.includes("Allow once") && setup.reads.length === 1, "the prompt and the read")
   await Bun.sleep(300)

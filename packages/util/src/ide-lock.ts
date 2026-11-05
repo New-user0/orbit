@@ -17,8 +17,14 @@ export namespace IdeLock {
     authToken: string
   }
 
-  /** The version of the lock file and of the message set. A reader that meets another one skips the file. */
+  /**
+   * The version of the lock file and of the message set. A reader that meets another one skips the file. Messages added
+   * since are named as features in each side's hello instead, so a peer from before them keeps working without them.
+   */
   export const version = 1
+
+  /** The features this version's peers name in their hello. `diff`: the review of an approval in the editor's diff. */
+  export const features = ["diff"] as const
 
   /** The header that carries the token on the WebSocket upgrade. A browser page cannot set it, and a URL never holds it. */
   export const header = "x-orbit-ide-token"
@@ -32,8 +38,11 @@ export namespace IdeLock {
   /** The most characters of selected text that go on the wire. The range that goes with it stays exact. */
   export const selectionTextCap = 100_000
 
-  /** The largest frame, in bytes, that the terminal UI takes from a bridge. */
+  /** The largest frame, in bytes, that either side takes once the hellos are exchanged. */
   export const frameCap = 1_048_576
+
+  /** The largest frame, in bytes, that a bridge takes from a client before its hello. */
+  export const helloCap = 4096
 
   /** The most bytes of a lock file that a reader takes. */
   export const lockCap = 65_536

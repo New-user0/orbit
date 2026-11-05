@@ -428,7 +428,11 @@ const world = await (async () => {
   await fs.symlink(path.join(root, "removed"), path.join(project, "gone"), linkType)
   await fs.rm(path.join(root, "removed"), { recursive: true })
   const git = (cwd: string, ...args: string[]) => {
-    const result = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t.invalid", ...args], { cwd })
+    // The worktree's file is checked out as it was written, whatever the machine's line ending setting.
+    const result = Bun.spawnSync(
+      ["git", "-c", "user.name=t", "-c", "user.email=t@t.invalid", "-c", "core.autocrlf=false", ...args],
+      { cwd },
+    )
     if (result.exitCode !== 0) throw new Error(result.stderr.toString())
   }
   git(main, "init", "--quiet")

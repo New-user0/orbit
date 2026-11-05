@@ -7,6 +7,10 @@
 // that leads to a share is found by reading links part by part, which opens nothing (class 6). The real path that was
 // checked is the one read, and the editor is shown that text and never the file's own URI, so nothing reads the path
 // again under another spelling. Nothing here writes a file: every answer goes to the server (class 12).
+//
+// A review can also belong to a terminal UI linked through the bridge (`bridge`). It is checked and read the same way,
+// against the folders the terminal UI names for its session, and its answers go back to that terminal UI, which replies
+// to its server; a tab the extension closes itself tells it the review was dismissed.
 import type { SessionRewindFiles } from "@orbit/client"
 import { plain } from "@orbit/flow/plain"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -14,6 +18,7 @@ import { LinkShare } from "@orbit/util/link-share"
 import { parsePatch } from "diff"
 import fs from "node:fs/promises"
 import path from "node:path"
+import type { DiffOpen, DiffOwner, DiffService } from "./ide-bridge.js"
 import { proposed } from "./patch.js"
 import type { FileChange, Item } from "./protocol.js"
 
@@ -77,10 +82,16 @@ type Permission = Extract<Item, { type: "permission" }>
 export const changedNotice =
   "Orbit: the file changed since the agent read it, so its diff cannot be shown in the editor. The approval card shows the proposed change."
 
+/** Why a save of a terminal UI's review fails: its text would not fit in a frame. The tab stays open. */
+export const tooLargeNotice =
+  "Orbit: the saved file is too large to send back to the terminal, so answer the approval in the terminal instead."
+
 type Entry = {
   readonly title: string
   readonly mode: "review" | "preview" | "changes"
   readonly request?: string
+  /** The terminal UI whose review this is; a review of the chat has none. */
+  readonly owner?: DiffOwner
   readonly paths: ReadonlyArray<string>
   /** The right side of a review, which the person may edit and save. */
   readonly editable?: string
@@ -102,14 +113,28 @@ export class Review {
   // Review sides whose next write is an auto save that VS Code announced.
   private readonly automatic = new Set<string>()
   // Opens still reading folders or the file. An answer to their question, a new prompt or the window closing marks them,
-  // and a marked open shows nothing, so no tab appears for a question that is no longer waiting.
-  private readonly opening = new Set<{ readonly request: string; dropped: boolean }>()
+  // and a marked open shows nothing, so no tab appears for a question that is no longer waiting. A terminal UI's open
+  // that a close-all marks tells it so (`dismiss`).
+  private readonly opening = new Set<{
+    readonly request: string
+    readonly owner?: DiffOwner
+    dropped: boolean
+    dismiss?: boolean
+  }>()
   private disposed = false
 
   constructor(
     private readonly host: Host,
     private readonly reader: Disk = disk,
   ) {}
+
+  /** The reviews of terminal UIs linked through the bridge. Each is its owner's alone: no other client closes it. */
+  readonly bridge: DiffService = {
+    open: (owner, request, window) => this.openBridge(owner, request, window),
+    close: (owner, id) => this.release(owner, id),
+    closeAll: () => this.closeAll(),
+    drop: (owner) => this.release(owner),
+  }
 
   /** The writable side of a review (`orbit-review:`). Saving only hands the text to the review; no file is written. */
   readonly provider = {
@@ -195,10 +220,13 @@ export class Review {
     await this.answer(entry, "once")
   }
 
-  /** The Accept title action on a tab with no unsaved edits: the text it holds, which is the proposal unless auto saved. */
+  /**
+   * The Accept title action on a tab with no unsaved edits: the text it holds, which is the proposal unless auto saved.
+   * A terminal UI hears it as a save of that text, since its answers are saved, closed and rejected.
+   */
   async accept(file: string) {
     const entry = this.editable(file)
-    if (entry) await this.answer(entry, "once", entry.draft)
+    if (entry) await this.answer(entry, "once", entry.owner ? this.texts.get(file) : entry.draft)
   }
 
   /** The Reject title action. */
@@ -207,20 +235,32 @@ export class Review {
     if (entry) await this.answer(entry, "reject")
   }
 
-  /** The question was answered elsewhere (the card, the terminal, another client): its tabs close and answer nothing. */
+  /**
+   * The question was answered elsewhere (the card, the terminal, another client): the chat's tabs of it close and answer
+   * nothing. A terminal UI's review of the same question is closed by that terminal UI.
+   */
   settled(requestID: string) {
     this.opening.forEach((open) => {
-      if (open.request === requestID) open.dropped = true
+      if (open.request === requestID && !open.owner) open.dropped = true
     })
-    this.close([...this.entries.values()].filter((entry) => entry.request === requestID && !entry.closing))
+    this.close(
+      [...this.entries.values()].filter((entry) => entry.request === requestID && !entry.owner && !entry.closing),
+    )
   }
 
-  /** A new prompt: every Orbit tab closes, and none of those closes answers. */
+  /**
+   * A new prompt, from the chat or a terminal UI: every Orbit tab closes, and none of those closes answers the question.
+   * Each terminal UI is told that its reviews were dismissed, so it asks in the terminal again.
+   */
   closeAll() {
     this.opening.forEach((open) => {
       open.dropped = true
+      open.dismiss = true
     })
-    this.close([...this.entries.values()].filter((entry) => !entry.closing))
+    this.close(
+      [...this.entries.values()].filter((entry) => !entry.closing),
+      true,
+    )
   }
 
   /** The window closes or the extension stops: no close or save from now on answers. */
@@ -262,11 +302,8 @@ export class Review {
     click: boolean,
     open: { readonly dropped: boolean },
   ) {
-    const where = { session: folders, window: this.host.workspace() }
-    const place = await contained(change.place, where, this.reader)
-    // A move is read from where it came from, which is checked the same way.
-    const from = change.from === undefined ? place : await contained(change.from, where, this.reader)
-    if (place === undefined || from === undefined) {
+    const found = await this.sides(change, { session: folders, window: this.host.workspace() })
+    if (found === "outside") {
       if (click)
         this.host.note(
           `The diff of ${plain(change.place ?? change.file)} is shown on the card only: the file is not inside the session's folder in this window.`,
@@ -274,15 +311,7 @@ export class Review {
         )
       return undefined
     }
-    const before =
-      change.status === "added"
-        ? ""
-        : await this.reader.readFile(from).then(
-            (bytes) => new TextDecoder().decode(bytes),
-            () => undefined,
-          )
-    const after = before === undefined ? undefined : proposed(before, change.patch)
-    if (before === undefined || after === undefined) {
+    if (found === "changed") {
       this.host.warn(changedNotice)
       this.host.note(changedNotice, "muted")
       return undefined
@@ -295,29 +324,97 @@ export class Review {
       await this.host.reveal(shown.title)
       return mode
     }
-    const title = tabTitle(change.place ?? change.file)
-    const key = `/${item.id}/${title.slice(-7, -1)}`
-    const name = sideName(place)
-    const left = side("orbit-proposed", `${key}/before/${name}`)
-    const right = side(mode === "review" ? "orbit-review" : "orbit-proposed", `${key}/${mode === "review" ? "" : "after/"}${name}`)
-    this.texts.set(left.path, before)
-    this.texts.set(right.path, after)
-    this.entries.set(title, {
-      title,
-      mode,
-      request: item.id,
-      paths: [left.path, right.path],
-      editable: mode === "review" ? right.path : undefined,
-      answering: false,
-    })
-    await this.host.show({ title, mode, left, right })
+    await this.show({ request: item.id, name: change.place ?? change.file, mode, ...found })
     return mode
   }
 
-  // The question's open review tab, if there is one.
+  // A terminal UI's review: checked and read as the chat's is, against the folders it names for its session and the
+  // window's folders. Every way it ends is answered to its owner and to nobody else.
+  private async openBridge(owner: DiffOwner, request: DiffOpen, window: ReadonlyArray<string>) {
+    if (this.disposed) return void owner.answer({ id: request.id, answer: "dismissed" })
+    const busy =
+      [...this.entries.values()].some((entry) => entry.owner === owner && entry.request === request.id && !entry.closing) ||
+      [...this.opening].some((open) => open.owner === owner && open.request === request.id && !open.dropped)
+    if (busy) return void owner.answer({ id: request.id, answer: "unavailable", reason: "busy" })
+    const open = { request: request.id, owner, dropped: false, dismiss: false }
+    this.opening.add(open)
+    const found = await this.sides(request, { session: request.roots, window })
+    this.opening.delete(open)
+    // Closed while it was read: by a close-all, which the owner is told of, or by the owner itself, which knows.
+    if (open.dropped) return void (open.dismiss && !this.disposed && owner.answer({ id: request.id, answer: "dismissed" }))
+    if (typeof found === "string") return void owner.answer({ id: request.id, answer: "unavailable", reason: found })
+    await this.show({ request: request.id, name: request.place, mode: "review", owner, ...found })
+  }
+
+  // The owner closed its review of `id`, or of every question when `id` is not given: the tabs close and answer nothing.
+  private release(owner: DiffOwner, id?: string) {
+    const mine = (entry: { readonly owner?: DiffOwner; readonly request?: string }) =>
+      entry.owner === owner && (id === undefined || entry.request === id)
+    this.opening.forEach((open) => {
+      if (mine(open)) open.dropped = true
+    })
+    this.close([...this.entries.values()].filter((entry) => mine(entry) && !entry.closing))
+  }
+
+  /**
+   * The real path a change is read from and both texts of its diff, or why there are none: the file is not inside the
+   * folders (`outside`), or the patch no longer applies to what was read (`changed`). Nothing is read unless the file is
+   * inside, and what is read is the real path that was checked.
+   */
+  private async sides(
+    change: { readonly place?: string; readonly from?: string; readonly status?: string; readonly patch: string },
+    where: { readonly session: ReadonlyArray<string>; readonly window: ReadonlyArray<string> },
+  ) {
+    const place = await contained(change.place, where, this.reader)
+    // A move is read from where it came from, which is checked the same way.
+    const from = change.from === undefined ? place : await contained(change.from, where, this.reader)
+    if (place === undefined || from === undefined) return "outside" as const
+    const before =
+      change.status === "added"
+        ? ""
+        : await this.reader.readFile(from).then(
+            (bytes) => new TextDecoder().decode(bytes),
+            () => undefined,
+          )
+    const after = before === undefined ? undefined : proposed(before, change.patch)
+    if (before === undefined || after === undefined) return "changed" as const
+    return { place, before, after }
+  }
+
+  // Records a tab and opens it. A terminal UI's sides are kept apart from the chat's, under its own key.
+  private async show(input: {
+    readonly request: string
+    readonly name: string
+    readonly mode: "review" | "preview"
+    readonly place: string
+    readonly before: string
+    readonly after: string
+    readonly owner?: DiffOwner
+  }) {
+    const title = tabTitle(input.name)
+    const key = `${input.owner ? `/${input.owner.key}` : ""}/${input.request}/${title.slice(-7, -1)}`
+    const name = sideName(input.place)
+    const review = input.mode === "review"
+    const left = side("orbit-proposed", `${key}/before/${name}`)
+    const right = side(review ? "orbit-review" : "orbit-proposed", `${key}/${review ? "" : "after/"}${name}`)
+    this.texts.set(left.path, input.before)
+    this.texts.set(right.path, input.after)
+    this.entries.set(title, {
+      title,
+      mode: input.mode,
+      request: input.request,
+      owner: input.owner,
+      paths: [left.path, right.path],
+      editable: review ? right.path : undefined,
+      answering: false,
+    })
+    await this.host.show({ title, mode: input.mode, left, right })
+  }
+
+  // The chat's open review tab of the question, if there is one.
   private reviewing(requestID: string) {
     return [...this.entries.values()].find(
-      (entry) => entry.request === requestID && entry.mode === "review" && !entry.closing,
+      (entry) => entry.request === requestID && entry.mode === "review" && !entry.owner && !entry.closing,
     )
   }
 
@@ -327,7 +424,8 @@ export class Review {
 
   // One answer per question: while it is on its way no other tab of the review answers, and once the server took it, or
   // another answer had, the question's tabs close. A refusal leaves the tab open and the question pending.
-  private async answer(entry: Entry, decision: "once" | "reject", content?: string) {
+  private async answer(entry: Entry, decision: "once" | "reject", content?: string): Promise<Outcome> {
+    if (entry.owner) return this.answerOwner(entry, entry.owner, decision, content)
     entry.answering = true
     const outcome = await this.host.reply(entry.request ?? "", decision, content)
     entry.answering = false
@@ -340,10 +438,32 @@ export class Review {
     return outcome
   }
 
-  private close(entries: ReadonlyArray<Entry>) {
+  // A terminal UI's answer goes to that terminal UI alone, which replies to its server. Once it is sent the review is
+  // settled, and the tab closes unless the person closed it. A text too large to send is refused, and the tab stays.
+  private answerOwner(entry: Entry, owner: DiffOwner, decision: "once" | "reject", content?: string): Outcome {
+    const id = entry.request ?? ""
+    const sent = owner.answer(
+      decision === "reject"
+        ? { id, answer: "rejected" }
+        : content === undefined
+          ? { id, answer: "closed" }
+          : { id, answer: "saved", content },
+    )
+    if (!sent) return { refused: tooLargeNotice }
+    entry.answering = true
+    if (this.entries.get(entry.title) === entry) this.close([entry])
+    return "sent"
+  }
+
+  // `dismiss`: each terminal UI's review that closes is told so, unless the window is closing.
+  private close(entries: ReadonlyArray<Entry>, dismiss = false) {
     if (entries.length === 0) return
     entries.forEach((entry) => {
       entry.closing = true
+      if (entry.owner) {
+        if (dismiss && !this.disposed) entry.owner.answer({ id: entry.request ?? "", answer: "dismissed" })
+        return
+      }
       // The tab closes unanswered, so its card stops saying to answer there; once the window closes there is no card.
       if (entry.mode === "review" && !this.disposed) this.host.unmark(entry.request ?? "")
     })
@@ -385,11 +505,13 @@ export async function contained(
 }
 
 // An absolute local path. On Windows it must be a drive path: a root-relative `\x` or a Git Bash `/c/x` is read from the
-// current drive, and a share or device spelling would connect to a host before anything was checked.
+// current drive, and a share or device spelling would connect to a host before anything was checked. Nor may it hold a
+// `:` after the drive (`a.txt::$DATA` opens `a.txt`) or end its last part in a dot or a space, which Windows drops: each
+// names a file by a spelling other than its own.
 function spelled(file: string) {
   if (LinkShare.isShare(file)) return false
-  if (process.platform === "win32") return /^[A-Za-z]:[\\/]/.test(file)
-  return path.isAbsolute(file)
+  if (process.platform !== "win32") return path.isAbsolute(file)
+  return /^[A-Za-z]:[\\/]/.test(file) && !file.slice(2).includes(":") && !/[. ]$/.test(path.win32.basename(file))
 }
 
 // Each folder is checked as a file is; one that fails is dropped alone.

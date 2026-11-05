@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, beforeEach, expect, mock, test } from "bun:test"
+import { IdeLock } from "@orbit/util/ide-lock"
 import { createTwoFilesPatch } from "diff"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import WebSocket from "ws"
 import { permissionItem } from "../src/controller"
 import type { FormRequest, FromView, Item } from "../src/protocol"
 
@@ -585,8 +587,6 @@ test("the bridge gets the review service, and a bridge review's tab opens with t
   const deadline = Date.now() + 5_000
   while (!environment.has("ORBIT_EDITOR_SSE_PORT") && Date.now() < deadline) await Bun.sleep(10)
   const port = Number(environment.get("ORBIT_EDITOR_SSE_PORT"))
-  const { IdeLock } = await import("@orbit/util/ide-lock")
-  const { default: WebSocket } = await import("ws")
   const lock = JSON.parse(await fs.readFile(IdeLock.file(IdeLock.directory(), port), "utf8")) as IdeLock.Lock
   const frames: Array<Record<string, unknown>> = []
   const socket = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { [IdeLock.header]: lock.authToken } })

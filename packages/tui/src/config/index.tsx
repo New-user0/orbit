@@ -138,6 +138,10 @@ export const Info = Schema.Struct({
       view: Schema.optional(Schema.Literals(["auto", "split", "unified"])).annotate({
         description: "Diff layout; 'auto' selects a layout from the available width",
       }),
+      tool: Schema.optional(Schema.Literals(["auto", "terminal"])).annotate({
+        description:
+          "Where an edit approval shows its diff: 'auto' (the default) opens it in the linked editor when the editor can show it, 'terminal' always shows it here",
+      }),
     }),
   ).annotate({ description: "Diff presentation settings" }),
   terminal: Schema.optional(

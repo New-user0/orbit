@@ -10,7 +10,7 @@ import { DialogConfig, settings } from "../src/component/dialog-config"
 import { TuiKeybind } from "../src/config/keybind"
 import { KeybindingsFile } from "../src/config/keybindings-file"
 import { CommandMap, Definitions } from "../src/config/v1/keybind"
-import { EditorContextProvider } from "../src/context/editor"
+import { EditorContextProvider, useEditorContext } from "../src/context/editor"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider } from "../src/context/theme"
 import { DialogProvider } from "../src/ui/dialog"
@@ -34,6 +34,11 @@ test("diffs.tool defaults to auto and takes terminal", () => {
 })
 
 test("the /config dialog lists Diff tool only while linked to an editor", async () => {
+  // A dialog is drawn outside the editor's context, so its opener says whether an editor is linked, as the app does.
+  function Settings() {
+    const editor = useEditorContext()
+    return <DialogConfig current="diffs.view" linked={editor.connected} />
+  }
   const port = process.env.ORBIT_EDITOR_SSE_PORT
   for (const linked of [true, false]) {
     await using state = await tmpdir()
@@ -43,7 +48,9 @@ test("the /config dialog lists Diff tool only while linked to an editor", async 
       fetch: (request, server) =>
         request.headers.get(IdeLock.header) === token && server.upgrade(request) ? undefined : new Response("no", { status: 401 }),
       websocket: {
-        message: (socket) => socket.send(JSON.stringify({ type: "hello", version: 1, editor: "Test Editor", features: ["diff"] })),
+        message: (socket) => {
+          socket.send(JSON.stringify({ type: "hello", version: 1, editor: "Test Editor", features: ["diff"] }))
+        },
       },
     })
     // Not linked: no window's lock and no port, so there is nothing to connect to.
@@ -64,7 +71,7 @@ test("the /config dialog lists Diff tool only while linked to an editor", async 
                 <ToastProvider>
                   <DialogProvider>
                     <EditorContextProvider compat={() => false}>
-                      <DialogConfig current="diffs.view" />
+                      <Settings />
                     </EditorContextProvider>
                   </DialogProvider>
                 </ToastProvider>

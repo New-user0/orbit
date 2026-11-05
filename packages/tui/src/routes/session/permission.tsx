@@ -1,11 +1,17 @@
 import { createStore } from "solid-js/store"
-import { createMemo, For, Match, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch, useContext } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
+import { plain } from "@orbit/util/plain"
 import { useTheme, useThemes } from "../../context/theme"
 import type { PermissionReply, PermissionRequest } from "@orbit/client"
 import { SplitBorder } from "../../ui/border"
+import { useClient } from "../../context/client"
 import { useData } from "../../context/data"
+import { EditorContext, type EditorDiff, type EditorDiffEvent } from "../../context/editor"
+import { useLog } from "../../context/log"
+import { TrustContext } from "../../context/trust"
+import { isRecord } from "../../util/record"
 import { filetype } from "../../util/filetype"
 import { canonicalToolName } from "../../util/tool-display"
 import { permissionAlwaysLines, permissionOptionLabel, permissionPresentation } from "../../util/permission"
@@ -20,7 +26,14 @@ import { useToast } from "../../ui/toast"
 
 type PermissionStage = "permission" | "reject"
 
-function EditBody(props: { file?: string; diff?: string; diffs?: { file: string; diff: string }[]; patch?: string }) {
+function EditBody(props: {
+  file?: string
+  diff?: string
+  diffs?: { file: string; diff: string }[]
+  patch?: string
+  /** Where a link on the way leads, from the request. */
+  warning?: string
+}) {
   const theme = useTheme()
   const themes = useThemes()
   const syntax = themes.currentSyntax
@@ -42,6 +55,13 @@ function EditBody(props: { file?: string; diff?: string; diffs?: { file: string;
 
   return (
     <box flexDirection="column" gap={1}>
+      <Show when={props.warning}>
+        {(warning) => (
+          <box paddingLeft={1} flexShrink={0}>
+            <text fg={theme.text.feedback.warning.base}>{warning()}</text>
+          </box>
+        )}
+      </Show>
       <Show when={diffs().length > 0}>
         <scrollbox
           height="100%"
@@ -146,15 +166,29 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   })
 
   const theme = useTheme()
+  const review = useEditorReview(props.request, () => session()?.location)
 
   function reply(value: PermissionReply, message?: string) {
     void data.session.permission
       .reply({ sessionID: props.request.sessionID, requestID: props.request.id, decision: value, message })
       .catch((error: unknown) => toast.error(error))
+    // Answered here, so the editor's tab of it closes.
+    review.close()
+  }
+
+  function select(option: string) {
+    if (option === "always") return reply("always")
+    if (option !== "reject") return reply("once")
+    // A subagent's question is rejected with a word for it first.
+    if (session()?.parentID) return void setStore("stage", "reject")
+    reply("reject")
   }
 
   return (
     <Switch>
+      <Match when={store.stage === "permission" && review.open()}>
+        <EditorDiffPrompt request={props.request} editor={review.editor()} onSelect={select} />
+      </Match>
       <Match when={store.stage === "reject"}>
         <RejectPrompt
           action={props.request.action}
@@ -184,7 +218,13 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           const view = () => canonicalToolName(props.request.action)
           const presentationBody = () =>
             view() === "edit" ? (
-              <EditBody file={current.file} diff={current.diff} diffs={current.diffs} patch={current.patch} />
+              <EditBody
+                file={current.file}
+                diff={current.diff}
+                diffs={current.diffs}
+                patch={current.patch}
+                warning={linkWarning(props.request, pathFormatter.format)}
+              />
             ) : view() === "external_directory" ? (
               <Show when={current.lines.length > 0}>
                 <box paddingLeft={1} gap={1}>
@@ -264,21 +304,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
               escapeKey="reject"
               fullscreen
-              onSelect={(option) => {
-                if (option === "always") {
-                  reply("always")
-                  return
-                }
-                if (option === "reject") {
-                  if (session()?.parentID) {
-                    setStore("stage", "reject")
-                    return
-                  }
-                  reply("reject")
-                  return
-                }
-                reply("once")
-              }}
+              onSelect={select}
             />
           )
 
@@ -286,6 +312,186 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
         })()}
       </Match>
     </Switch>
+  )
+}
+
+/**
+ * Opens the request's diff in the linked editor when it can be reviewed there, as the reference does: a revisable Edit
+ * or Write of one file that is not a notebook, while the bridge reviews diffs, `diffs.tool` is `auto` and the folder the
+ * terminal UI started in is trusted. What the editor is sent is the request's own place, patch and status, and the
+ * folders its session works in as the server names them now (classes 3 and 8). The editor's answer becomes the reply it
+ * stands for, sent to the server like any other (class 12). Anything else keeps the question in the terminal, with one
+ * log line (class 7). The editor and trust contexts are optional, so the prompt draws without them.
+ */
+function useEditorReview(request: PermissionRequest, location: () => { directory: string; workspaceID?: string } | undefined) {
+  const editor = useContext(EditorContext)
+  const trust = useContext(TrustContext)
+  const client = useClient()
+  const data = useData()
+  const toast = useToast()
+  const config = useConfig().data
+  const log = useLog({ component: "permission" })
+  const [open, setOpen] = createSignal(false)
+  // Whether the editor still has a tab of this request that the terminal UI may need to close.
+  let tab = false
+  let tried = false
+  let gone = false
+
+  const close = () => {
+    setOpen(false)
+    if (!tab) return
+    tab = false
+    editor?.diff.close(request.id)
+  }
+
+  const answer = (decision: PermissionReply, content?: string, closing = false) =>
+    void data.session.permission
+      .reply({ sessionID: request.sessionID, requestID: request.id, decision, content })
+      .catch((error: unknown) => {
+        // Refused: the question is still pending, and is asked here again.
+        toast.error(error)
+        setOpen(false)
+      })
+      .finally(() => closing && close())
+
+  const handle = (event: EditorDiffEvent) => {
+    if (event.answer === "saved") return answer("once", event.content, true)
+    if (event.answer === "rejected") return answer("reject", undefined, true)
+    tab = false
+    // The person closed the tab: the proposal as it stands, once, as the reference takes it.
+    if (event.answer === "closed") return answer("once")
+    setOpen(false)
+    if (event.answer === "dismissed") return log.warn("the editor closed the diff tab, so the question is asked here")
+    if (event.answer === "unavailable")
+      return log.warn("the editor could not open the diff, so the question is asked here", { reason: event.reason })
+    log.warn("the link to the editor went away with the diff open, so the question is asked here")
+  }
+
+  const start = async () => {
+    const file = reviewable(request)
+    const where = location()
+    if (!editor || !file || !where) return
+    // The folders are read fresh for the session's own location, bounded as other reads at startup are.
+    const found = await client.api.location
+      .get({ location: where }, { signal: AbortSignal.timeout(2_000) })
+      .catch((error: unknown) => {
+        log.warn("could not read the session's folders for the diff, so the question is asked here", { error })
+        return undefined
+      })
+    if (!found || gone) return
+    const review: EditorDiff = {
+      id: request.id,
+      ...file,
+      roots: [...new Set([found.directory, found.project.directory])],
+    }
+    if (!editor.diff.open(review, handle))
+      return log.warn("the diff was not sent to the editor, so the question is asked here")
+    tab = true
+    setOpen(true)
+  }
+
+  createEffect(
+    on(
+      () =>
+        editor?.diff.available() === true &&
+        trust?.startup.trusted() === true &&
+        (config.diffs?.tool ?? "auto") === "auto" &&
+        location() !== undefined,
+      (ready) => {
+        if (!ready || tried) return
+        tried = true
+        void start()
+      },
+    ),
+  )
+  onCleanup(() => {
+    gone = true
+    close()
+  })
+
+  return { open, close, editor: () => editor?.server()?.name ?? "the editor" }
+}
+
+// The file of a request that can be reviewed in the editor: the one file of a revisable request, with an absolute place,
+// a patch and a status, and not a notebook, whose diff is JSON.
+function reviewable(request: PermissionRequest): Omit<EditorDiff, "id" | "roots"> | undefined {
+  const files = request.metadata?.files
+  if (request.revisable !== true || !Array.isArray(files) || files.length !== 1) return undefined
+  const file = files[0]
+  if (!isRecord(file) || typeof file.place !== "string" || typeof file.patch !== "string") return undefined
+  if (!/^(\/|[A-Za-z]:[\\/])/.test(file.place) || /\.ipynb$/i.test(file.place)) return undefined
+  const status = file.status === "added" ? "added" : file.status === "modified" ? "modified" : undefined
+  if (!status) return undefined
+  return { place: file.place, patch: file.patch, status }
+}
+
+/** The link the server says a request's one file is reached through: where it leads, and whether that is outside. */
+export function permissionLink(request: Pick<PermissionRequest, "metadata">) {
+  const files = request.metadata?.files
+  const link = Array.isArray(files) && files.length === 1 && isRecord(files[0]) ? files[0].link : undefined
+  if (!isRecord(link) || typeof link.place !== "string" || typeof link.outside !== "boolean") return undefined
+  return { place: link.place, outside: link.outside }
+}
+
+// The warning about a link, from the request alone (class 8), with its place written out (class 9).
+function linkWarning(request: Pick<PermissionRequest, "metadata">, format: (input?: string) => string) {
+  const link = permissionLink(request)
+  if (!link) return undefined
+  const place = plain(format(link.place))
+  return link.outside ? `This changes ${place}, outside the session's folder, through a link` : `Link target: ${place}`
+}
+
+/**
+ * The short prompt while the request's diff is open in the editor: where it opened, the link warning, and the question
+ * about the file by its name, with the usual options. The diff itself is in the editor, so none is drawn here. Every name
+ * is written out, since the editor and the repository chose them (class 9).
+ */
+export function EditorDiffPrompt(props: {
+  request: PermissionRequest
+  editor: string
+  onSelect: (option: string) => void
+}) {
+  const theme = useTheme()
+  const pathFormatter = usePathFormatter()
+  const name = () => {
+    const files = props.request.metadata?.files
+    const file = Array.isArray(files) && isRecord(files[0]) ? files[0] : undefined
+    const place = typeof file?.place === "string" ? file.place : (props.request.resources[0] ?? "")
+    return plain(place.split(/[\\/]/).at(-1) ?? place)
+  }
+  const warning = () => linkWarning(props.request, pathFormatter.format)
+  return (
+    <SessionQuestion
+      title="Permission required"
+      semanticLabel={permissionSemanticLabel(props.request.action, `Edit ${name()}`)}
+      instance={props.request.id}
+      header={
+        <box flexDirection="row" gap={1} flexShrink={0}>
+          <text fg={theme.text.feedback.warning.base}>{"▲"}</text>
+          <text fg={theme.text.base} flexShrink={1}>{`Opened changes in ${plain(props.editor)}`}</text>
+        </box>
+      }
+      body={
+        <box paddingLeft={1} flexDirection="column" flexShrink={0}>
+          <Show when={warning()}>{(line) => <text fg={theme.text.feedback.warning.base}>{line()}</text>}</Show>
+          <Show when={process.env.TERM_PROGRAM === "vscode"}>
+            <text fg={theme.text.muted}>Save the file to continue…</text>
+          </Show>
+          <text fg={theme.text.base}>{`Make this change to ${name()}?`}</text>
+        </box>
+      }
+      options={
+        props.request.save?.length
+          ? {
+              once: permissionOptionLabel("once"),
+              always: permissionOptionLabel("always"),
+              reject: permissionOptionLabel("reject"),
+            }
+          : { once: permissionOptionLabel("once"), reject: permissionOptionLabel("reject") }
+      }
+      escapeKey="reject"
+      onSelect={props.onSelect}
+    />
   )
 }
 
