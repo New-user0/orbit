@@ -1444,6 +1444,52 @@ every other extension):
   machine scope and is read from the user's own settings only, and the extension stays off in an untrusted VS Code
   workspace. At start it removes only version 1 locks whose pid is gone. Proof: `test/ide-bridge.test.ts` and
   `test/manifest.test.ts` (the setting's decision row, the command's gate row, the scan of the doors).
+- The diff review of an Edit or Write approval, and the read-only preview of any other question with files
+  (`src/review.ts`, clients-ux-15 part 2). It reads the request's own `place`, or `from` for a move, and nothing the
+  tool's input names (class 8). Before each review it reads trust fresh for the chat's folder, then the session
+  (`session.get`), the trust of the session's own folder, which may be another one, and its Location (`location.get`);
+  both folders must be trusted (the stricter answer, class 3). It takes the Location's folder and the project's folder
+  from that answer, and leaves out a project folder that is a filesystem root, as `FileAccess` does. A folder that is not
+  trusted, a failure or a late answer names no folder, and only the trust read goes out (classes 1, 3 and 7). A path
+  is refused by its spelling before the disk is touched (not absolute, on Windows not a drive path, or a share or
+  device spelling, `LinkShare.isShare`), then when a link on the way leads to a share (`LinkShare.ofSync`, which reads
+  links part by part and opens none); then its real path is taken (`realpath`, or for a file not there yet the real
+  path of its nearest folder plus the names below it, and a part that is there but leads nowhere is refused). The real
+  path must be inside a server folder and inside a `file:` window folder, both real, by `FSUtil.contains` (class 4), and
+  that real path is the one read. The editor is shown the text read, as a virtual document, and never the file's own
+  URI. A file outside is shown on the card only, with a note that names it written out. Save, close and Reject answer
+  through the server's reply route (`content` with a `once` reply). Only the person's own answers count: a tab the
+  extension closes itself, a tab moved to another group or window (VS Code reports its close in the old group), and an
+  auto save (`onWillSaveTextDocument` with a reason other than `Manual`) answer nothing; the extension writes no file
+  (classes 8 and 12). A new prompt, New Session and a session picked from history close every Orbit tab before the
+  chat starts over, so no review outlives its card and a later save, close or Reject of an old tab sends nothing while
+  the question stays pending; a pending card says to answer in the editor only while its review tab is open (classes 8,
+  12 and 13; proof: the X row "New Session and a session picked from history close every Orbit tab without answering"
+  and the D rows "New Session or a session from history closes the review tabs unanswered" and "a review tab gone
+  unanswered stops marking its card"). An answer closes only its own question's tabs; an open still reading when its
+  question is answered, a new prompt is sent or the window closes shows nothing; and "Open diff" on a question open for review
+  brings that tab forward instead of opening a second editable one (classes 8 and 12; proof: the D rows "answering one
+  question closes only its own tabs", "an open still reading ... shows nothing" and "Open diff on a question open for
+  review shows its tab again"). A tab the extension closes keeps its sides readable until VS Code reports it closed, so
+  the save VS Code makes on the way succeeds without asking the person again. Each virtual document is named by a fixed
+  word and the file's extension when that is plain, never by the file's own name, because VS Code names it in its own
+  save-failure notification, which draws links (class 9). Proof: `test/diff-review.test.ts` (the containment table with a
+  marker outside and a control inside, the share and device spellings with an empty disk recorder, the linked
+  worktree, the answers on a real `orb serve`), `test/approval-matrix.test.ts` (every matrix row reads only its place
+  and from), `test/extension-review.test.ts` (the glue, with a stand-in `vscode`) and `test/manifest.test.ts` ("the
+  extension writes no file but the bridge's lock").
+- The changes of a prompt and the restore (`Controller.changes`, `Controller.restore`): after a fresh trust read, the
+  changes are the server's per-prompt diff (`scope: "prompt"`), and both sides of each file are rebuilt from its
+  whole-file patch, so no file is read whatever the names say (class 5). A patch that is not a whole file, a binary
+  one or a malformed entry costs only itself. The restore sends the server's dry run, shows its totals and files written
+  out in a modal, and sends the restore only when the person confirms; the server resolves and checks every path.
+  A refusal of the diff gets one note with the server's own sentence, and the diff, the dry run and the restore each
+  give up after `limits.grant` with one note; a late restore's note says it may still finish (class 13).
+  Proof: `test/diff-review.test.ts` ("the changes view reads no file, whatever the names", "a restore calls the dry run,
+  shows its totals, and changes files only after confirm", "a restore the server refuses says why and changes
+  nothing", "a restore the server refuses after the person confirms says why and changes nothing", "no review, changes view or restore while the folder is not trusted",
+  "a server that cannot diff a prompt gets a note", "View changes and a restore give up on a service that does not
+  answer, with one note each").
 
 - Whether the folder is trusted, and the question before work starts: `Controller` asks the server for the folder's
   trust, with a two-second limit, when it starts, on every trust, config and connection event, and in `send`, which every
@@ -2155,8 +2201,10 @@ one table covers every spelling.
     Mutations: `LinkShare.scan` entering a link entry without asking fails the nested rows of `share-roots.test.ts`;
     taking the check out of `discoverThemes` or `Store.at` fails the rows of their files; reverting `LinkShare` and
     `FSUtil.up` to the walk that starts again from the root at every hop fails three rows of `link-share-bounds.test.ts`.
-    Not covered, and still a gap: the terminal UI's plugin folders, the VS Code diff view (another process), the native
-    watcher. (The git calls of the flow runner are a different class: they wait for trust, see the Known gaps on
+    The VS Code diff review refuses a share or device spelling before it touches the disk and a link that leads to a
+    share before it takes a real path (`packages/vscode/test/diff-review.test.ts` "a share or device spelling is refused
+    before the disk is touched", whose `link-to-share` row needs the right to make links on Windows).
+    Not covered, and still a gap: the terminal UI's plugin folders, the native watcher. (The git calls of the flow runner are a different class: they wait for trust, see the Known gaps on
     `orb flow run`.)
 
 **Review questions:**
@@ -3168,9 +3216,13 @@ The program-wide register of every follow-up, these gaps included, with each one
   trust question and banner are about that folder. The Runs view and the terminals follow the editor in view, so in a
   workspace of several folders they can act in another one. What they start gates itself in its own process
   (`orb flow resume` refuses an untrusted folder, `packages/cli/test/trust.test.ts`), but the extension does not ask
-  about that folder. No task yet.
-- **VS Code, the part that loads `vscode`.** `extension.ts`, `runs-view.ts` and the webview import `vscode` or the DOM,
-  so no test loads them. What they do with trust (the banner, the status bar item, the dialog, the command and the
+  about that folder. No task yet. The diff review is not one of these: it reads only inside the session's folders as the
+  server names them and inside a window folder (`packages/vscode/test/diff-review.test.ts`, "the session's folders as
+  the server names them").
+- **VS Code, the part that loads `vscode`.** `extension.ts`, `runs-view.ts` and the webview import `vscode` or the DOM.
+  `test/extension-trust.test.ts` and `test/extension-review.test.ts` load `extension.ts` with a stand-in `vscode`, and
+  the review's glue (the file system it registers, the diff it opens, the tabs it closes, its commands and messages) is
+  pinned there; the real editor is not. What they do with trust (the banner, the status bar item, the dialog, the command and the
   terminals) is not exercised by any test or by a recorded manual run. The logic behind it is in `Controller`,
   `trust.ts` and `program.ts`, which are tested. That includes the refetch of the model list when the trust check starts
   to answer after a restart of an old service. No task yet.

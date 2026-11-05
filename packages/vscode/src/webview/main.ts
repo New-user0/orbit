@@ -11,7 +11,7 @@ import type {
   WorkflowAgent,
   Workspace,
 } from "../protocol.js"
-import { approvalCard } from "./approval.js"
+import { answeredLabel, approvalCard } from "./approval.js"
 import { agentsOf, chips, describe, duration, phases, rearms, segments, tokens } from "./present.js"
 import { legacyToolName } from "../tool-name.js"
 
@@ -250,6 +250,16 @@ function build(item: Item): HTMLElement {
     case "user": {
       const node = element("div", "user", item.text)
       if (item.context) node.append(element("div", "context muted", item.context))
+      const messageID = item.messageID
+      if (messageID === undefined) return node
+      // What this prompt changed with the file tools, and putting it back; the host asks before anything changes.
+      const actions = element("div", "user-actions")
+      const changes = element("a", "link", "View changes")
+      changes.addEventListener("click", () => vscode.postMessage({ type: "changes", messageID }))
+      const restore = element("a", "link", "Restore files")
+      restore.addEventListener("click", () => vscode.postMessage({ type: "restore", messageID }))
+      actions.append(changes, restore)
+      node.append(actions)
       return node
     }
     case "text":
@@ -409,10 +419,8 @@ function permission(item: Extract<Item, { type: "permission" }>) {
   // The card draws the request's own values: the places, folder, method, URL, arguments and diffs the server resolved.
   const shown = approvalCard(item)
   const title = shown.title
-  if (item.status !== "pending") {
-    const label = { once: "Allowed", always: "Always allowed", reject: "Rejected" }[item.status]
-    return element("div", item.status === "reject" ? "note error" : "note muted", `${label} · ${title}`)
-  }
+  if (item.status !== "pending")
+    return element("div", item.status === "reject" ? "note error" : "note muted", `${answeredLabel(item)} · ${title}`)
   const card = element("div", "permission")
   const head = element("div", "perm-head")
   head.append(element("span", "grow strong", title))
@@ -426,6 +434,14 @@ function permission(item: Extract<Item, { type: "permission" }>) {
     card.append(diff)
   }
   if (shown.lines.length > 0) card.append(element("pre", "resources", shown.lines.join("\n")))
+  if (item.reviewing)
+    card.append(
+      element(
+        "div",
+        "muted",
+        "Opened in the editor: save to accept your version, close to accept as proposed, or Reject.",
+      ),
+    )
   const actions = element("div", "actions")
   const reply = (decision: "once" | "always" | "reject") => () =>
     vscode.postMessage({ type: "permission", id: item.id, decision })
