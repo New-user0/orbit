@@ -178,6 +178,25 @@ test("a busy period in which the model wrote no reply asks nothing, as after /co
   }
 })
 
+// Mini's observe takes any event the transport hands it, so a step's end whose body has another shape, as an old or
+// broken server could send, marks nothing and leaves Mini running (class 7).
+test("a step's end with a body of another shape marks no reply and leaves Mini running", async () => {
+  const rows = [
+    { name: "no body", data: undefined, asks: 0 },
+    { name: "a null body", data: null, asks: 0 },
+    { name: "a string body", data: "ses_1", asks: 0 },
+    { name: "a body with no session", data: { finish: "stop" }, asks: 0 },
+    { name: "control: Mini's own session", data: { sessionID: "ses_1", finish: "stop" }, asks: 1 },
+  ]
+  for (const row of rows) {
+    using mini = await start({ suggestions: true })
+    expect(() => mini.lifecycle.observe?.({ type: "session.step.ended", data: row.data })).not.toThrow()
+    mini.ended("ses_1", false)
+    await Bun.sleep(100)
+    expect({ name: row.name, asks: mini.asked.length }).toEqual({ name: row.name, asks: row.asks })
+  }
+})
+
 test("a turn starting in Mini's own session ends its suggestion, and a subagent's turn does not", async () => {
   using mini = await start({ suggestions: true })
   mini.ended()
