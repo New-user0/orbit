@@ -84,7 +84,10 @@ const vscode = stub({
     showQuickPick: async (...args: unknown[]) => (picks.push(args), "Yes"),
     tabGroups: stub({
       get all() {
-        return [{ tabs }, { tabs: moved }]
+        return [
+          { tabs, viewColumn: 1 },
+          { tabs: moved, viewColumn: 2 },
+        ]
       },
       // As VS Code does, a tab with unsaved edits is not closed but asked about, and the tabs that close are reported.
       close: async (closed: Tab[]) => {
@@ -116,7 +119,8 @@ const vscode = stub({
     },
     executeCommand: async (...args: unknown[]) => {
       executed.push(args)
-      if (args[0] === "vscode.diff")
+      // As VS Code does, a diff whose tab is open already brings that tab forward and adds none.
+      if (args[0] === "vscode.diff" && ![...tabs, ...moved].some((tab) => tab.label === String(args[3])))
         tabs.push({ label: String(args[3]), input: new TabInputTextDiff(args[1] as Uri, args[2] as Uri) })
     },
   }),
@@ -479,6 +483,24 @@ test("a question answered elsewhere while its tab has unsaved edits closes the t
   expect(prompts).toEqual([])
   expect(closing.map((tab) => tab.label)).toContain(title)
   expect(replies).toEqual([])
+})
+
+test("Open diff on a question open for review brings its tab forward in its own group and opens no second one", async () => {
+  const [, left, right, title] = await open("per_reveal")
+  // The person moved the tab to the other group.
+  const tab = tabs.find((entry) => entry.label === title)!
+  tabs.splice(tabs.indexOf(tab), 1)
+  moved.push(tab)
+  const before = executed.length
+  await chat().receive({ type: "diff", id: question.id })
+  expect(executed.slice(before)).toEqual([["vscode.diff", left, right, title, { viewColumn: 2, preview: false }]])
+  expect([...tabs, ...moved].filter((entry) => entry.label === title)).toHaveLength(1)
+  // A tab VS Code no longer shows is not opened again.
+  moved.splice(moved.indexOf(tab), 1)
+  await chat().receive({ type: "diff", id: question.id })
+  expect(executed.length).toBe(before + 1)
+  await fire(title)
+  expect(replies).toEqual([["per_reveal", "once", undefined]])
 })
 
 // Last of the review rows: the review is disposed from here on.

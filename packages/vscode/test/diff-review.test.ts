@@ -264,6 +264,7 @@ function editor(
   const tabs: Tab[] = []
   const views: Changes[] = []
   const closed: string[] = []
+  const revealed: string[] = []
   const notes: Array<{ text: string; tone: string }> = []
   const warnings: string[] = []
   const replies: unknown[][] = []
@@ -283,10 +284,11 @@ function editor(
     show: async (tab) => void tabs.push(tab),
     changes: async (view) => void views.push(view),
     close: async (titles) => void closed.push(...titles),
+    reveal: async (title) => void revealed.push(title),
     note: (text, tone) => void notes.push({ text, tone }),
     warn: (text) => void warnings.push(text),
   }
-  return { host, tabs, views, closed, notes, warnings, replies }
+  return { host, tabs, views, closed, revealed, notes, warnings, replies }
 }
 
 function item(files: ReadonlyArray<unknown>, options: { revisable?: boolean; action?: string; sessionID?: string } = {}) {
@@ -1029,6 +1031,126 @@ test("a side the extension closes stays readable until VS Code reports its tab c
   const closed = await opened()
   await review.closed(closed.tab.title)
   expect(review.provider.readFile(closed.tab.right.path)).toBeUndefined()
+})
+
+test("answering one question closes only its own tabs, and another question's tab still answers", async () => {
+  // Parallel tool calls: three questions are open for review at once.
+  const shown = editor({ folders: [project], window: [project] })
+  const review = new Review(shown.host)
+  const questions = [1, 2, 3].map(() => item([{ file: "a.txt", place: inside, patch }]))
+  for (const question of questions) expect(await review.open(question, false)).toBe(true)
+  const [saved, elsewhere, last] = shown.tabs
+  // A save answers its own question, and only that question's tab closes.
+  await review.provider.writeFile(saved!.right.path, new TextEncoder().encode("mine\n"))
+  expect(shown.closed).toEqual([saved!.title])
+  // An answer from elsewhere closes only its own question's tab too.
+  review.settled(questions[1]!.id)
+  expect(shown.closed).toEqual([saved!.title, elsewhere!.title])
+  // The tab left open still answers, with the person's text.
+  await review.provider.writeFile(last!.right.path, new TextEncoder().encode("theirs\n"))
+  expect(shown.replies).toEqual([
+    [questions[0]!.id, "once", "mine\n"],
+    [questions[2]!.id, "once", "theirs\n"],
+  ])
+  expect(shown.closed).toEqual([saved!.title, elsewhere!.title, last!.title])
+})
+
+describe("an open still reading when its question is answered, a new prompt starts or the window closes shows nothing", () => {
+  // The open waits on the server's folders or on the file's read; `act` runs while it waits.
+  async function racing(act: (review: Review, id: string) => void, at: "folders" | "read") {
+    const started = Promise.withResolvers<void>()
+    const go = Promise.withResolvers<void>()
+    const wait = () => {
+      started.resolve()
+      return go.promise
+    }
+    const shown = editor({ folders: [project], window: [project] })
+    const host: Host = {
+      ...shown.host,
+      folders: async (sessionID) => {
+        if (at === "folders") await wait()
+        return shown.host.folders(sessionID)
+      },
+    }
+    const reader: Disk = {
+      ...disk,
+      readFile: async (file) => {
+        if (at === "read") await wait()
+        return disk.readFile(file)
+      },
+    }
+    const review = new Review(host, reader)
+    const question = item([{ file: "a.txt", place: inside, patch }])
+    const opening = review.open(question, false)
+    await started.promise
+    act(review, question.id)
+    go.resolve()
+    return { opened: await opening, shown, review, question }
+  }
+  const rows = [
+    { name: "answered", act: (review: Review, id: string) => review.settled(id) },
+    { name: "new prompt", act: (review: Review) => review.closeAll() },
+    { name: "window closes", act: (review: Review) => review.dispose() },
+  ]
+  for (const row of rows)
+    for (const at of ["folders", "read"] as const)
+      test(`${row.name} while reading ${at}`, async () => {
+        const run = await racing(row.act, at)
+        expect(run.opened).toBe(false)
+        expect(run.shown.tabs).toEqual([])
+        expect(run.shown.closed).toEqual([])
+        expect(run.shown.replies).toEqual([])
+      })
+
+  test("the control: an answer to another question leaves the open alone", async () => {
+    for (const at of ["folders", "read"] as const) {
+      const run = await racing((review) => review.settled("per_other"), at)
+      expect(run.opened).toBe(true)
+      expect(run.shown.tabs).toHaveLength(1)
+      await run.review.closed(run.shown.tabs[0]!.title)
+      expect(run.shown.replies).toEqual([[run.question.id, "once"]])
+    }
+  })
+})
+
+test("Open diff on a question open for review shows its tab again and opens no second one", async () => {
+  const seen = recorded()
+  const shown = editor({ folders: [project], window: [project] })
+  const review = new Review(shown.host, seen.recorder)
+  const question = item([{ file: "a.txt", place: inside, patch }])
+  expect(await review.open(question, false)).toBe(true)
+  const touched = seen.log.length
+  // The card's "Open diff": the tab comes forward as it is, so the disk is not read again.
+  expect(await review.open(question, true)).toBe(true)
+  expect(shown.tabs).toHaveLength(1)
+  expect(shown.revealed).toEqual([shown.tabs[0]!.title])
+  expect(seen.log).toHaveLength(touched)
+
+  // The click while the open on its own is still reading: whichever finishes second shows the first one's tab.
+  const raced = item([{ file: "a.txt", place: inside, patch }])
+  expect(await Promise.all([review.open(raced, false), review.open(raced, true)])).toEqual([true, true])
+  expect(shown.tabs).toHaveLength(2)
+  expect(shown.revealed).toEqual([shown.tabs[0]!.title, shown.tabs[1]!.title])
+  // The one tab answers once when the person closes it.
+  await review.closed(shown.tabs[1]!.title)
+  expect(shown.replies).toEqual([[raced.id, "once"]])
+
+  // A tab the extension is closing is not brought forward: a new prompt closed it while the question still waits, so
+  // "Open diff" opens a fresh one.
+  const waiting = item([{ file: "a.txt", place: inside, patch }])
+  await review.open(waiting, false)
+  review.closeAll()
+  expect(await review.open(waiting, true)).toBe(true)
+  expect(shown.tabs).toHaveLength(4)
+  expect(shown.tabs.at(-1)).toMatchObject({ mode: "review" })
+  expect(shown.revealed).toHaveLength(2)
+  // A preview answers nothing, so each click opens it afresh, with the file as it is then.
+  const previewed = item([{ file: "a.txt", place: inside, patch }], { revisable: false })
+  await review.open(previewed, true)
+  await review.open(previewed, true)
+  expect(shown.tabs).toHaveLength(6)
+  expect(shown.tabs.slice(-2).map((tab) => tab.mode)).toEqual(["preview", "preview"])
+  expect(shown.revealed).toHaveLength(2)
 })
 
 test("two changes views of as many files keep their own texts when one of them closes", async () => {
