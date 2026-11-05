@@ -2088,12 +2088,15 @@ under Input that writes it. With it on, the terminal UI and Mini ask the server 
 turn of the session in view ends well after the model replied in it (not after a failed or stopped turn, not after a
 subagent's, and not after a busy period with no model reply, such as a `/compact` or a redo), and draw the
 answer dimmed in the empty prompt, cut to the row. In the terminal UI, a turn of the main session that ends while one
-of its subagents' sessions is in view is asked about too, and its answer is drawn when you go back to the main session. Tab or the Right arrow puts it in the input; a suggestion that starts
-with `!` puts the prompt in shell mode with the command after it. Enter sends it as a prompt, unless it was cut, in
-which case Enter puts it in the input first; a suggestion that is a slash command on its own, such as `/help`, runs
-that command as typing it would. In the terminal UI it is not drawn, and no key takes it, while another pane has the
-keys; it is drawn again when the prompt has them back. Model text is drawn and sent with its control and format characters
-written out, so what you see is what is sent. Typing hides it and cancels an ask still out; erasing the input shows it
+of its subagents' sessions is in view is asked about too, and its answer is drawn when you go back to the main
+session. Tab or the Right arrow puts it in the input, with the cursor at its end; only these two keys take a
+suggestion that starts with `!` into shell mode, with the command after it. Enter sends it as a prompt, unless it was
+cut, in which case Enter puts the whole text in the input first; either way a leading `!` stays part of the prompt
+text, so Enter never runs a suggestion as a shell command. A suggestion that is a slash command on its own, such as
+`/help`, runs that command as typing it would. In the terminal UI, a row too narrow to draw even the first character
+of a suggestion draws none and no key takes it, and while another pane has the keys it is not drawn and no key takes
+it; it is drawn again when the prompt has them back. Model text is drawn and sent with its control and format
+characters written out, so what you see is what is sent. Typing hides it and cancels an ask still out; erasing the input shows it
 again; sending a prompt, running a slash command from the list, a turn starting in the session or, in the terminal UI,
 rewinding its conversation ends it. An answer that comes while you are typing or while a
 turn runs is dropped. The terminal UI asks nothing while the session's folder is not trusted. Mini checks only the
