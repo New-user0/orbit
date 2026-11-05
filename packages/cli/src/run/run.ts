@@ -310,7 +310,7 @@ async function printCost(
   if ("error" in answer) return reportRunError(input, answer.error, sessionID)
   if (answer.dropped.length > 0)
     UI.println(`Left out cost rows this client could not read: ${answer.dropped.join(", ")}`)
-  const models = await readCatalog(client, session.location, REPORT_TIMEOUT)
+  const models = await readCatalog(client, session.location, REPORT_TIMEOUT, input)
   printLocalCommand(input, sessionID, costText(answer.info, models), costLine(sessionID, answer.info))
 }
 

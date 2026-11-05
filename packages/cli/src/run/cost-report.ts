@@ -83,7 +83,10 @@ export async function readCatalog(
   client: OrbitClient,
   location: { readonly directory: string },
   timeout: number,
+  /** The structured formats print a line with the raw summary and price nothing, so they skip the catalog. */
+  output: { readonly format?: string; readonly envelope?: boolean } = {},
 ): Promise<ReadonlyArray<ModelInfo> | undefined> {
+  if (output.format === "json" || (output.format === "stream-json" && !output.envelope)) return undefined
   return client.model.list({ location }, { signal: AbortSignal.timeout(timeout) }).then(
     (answer) => answer.data,
     (error: unknown) => {

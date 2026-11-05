@@ -113,7 +113,7 @@ test("an unknown session and an old server exit 1 with the message", async () =>
   expect(missing.stdout).not.toContain("Total cost")
   expect(chats).toEqual([])
 
-  const { readSessionCost } = await import("../src/run/cost-report")
+  const { readCatalog, readSessionCost } = await import("../src/run/cost-report")
   const stub = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -128,6 +128,16 @@ test("an unknown session and an old server exit 1 with the message", async () =>
     const client = Orbit.make({ baseUrl: `http://127.0.0.1:${stub.port}` })
     expect(await readSessionCost(client, "ses_old", 5_000)).toEqual({ error: expect.stringContaining("older") })
     expect(await readSessionCost(client, "known", 5_000)).toEqual({ error: expect.stringContaining("not found") })
+    // The structured formats price nothing, so a catalog that cannot be read is neither asked for nor reported (class 7).
+    const asks: string[] = []
+    const failing = { model: { list: async () => (asks.push("list"), Promise.reject(new Error("down"))) } } as never
+    const where = { directory: "/x" }
+    await readCatalog(failing, where, 5_000, { format: "json" })
+    await readCatalog(failing, where, 5_000, { format: "stream-json", envelope: false })
+    expect(asks).toEqual([])
+    await readCatalog(failing, where, 5_000, { format: "stream-json", envelope: true })
+    await readCatalog(failing, where, 5_000, { format: "default" })
+    expect(asks).toEqual(["list", "list"])
   } finally {
     await stub.stop(true)
   }

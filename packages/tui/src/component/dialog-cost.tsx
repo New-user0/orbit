@@ -25,12 +25,8 @@ export function DialogCost(props: { readonly sessionID: string; readonly timeout
   const [answer] = createResource(
     () => props.sessionID,
     async (sessionID): Promise<Answer> => {
-      const session =
-        data.session.get(sessionID) ??
-        (await data.session.sync(sessionID).then(
-          () => data.session.get(sessionID),
-          () => undefined,
-        ))
+      // The command is offered on a session route, where the session is already loaded; without it nothing is priced.
+      const session = data.session.get(sessionID)
       const read = await readSessionCost(client.api, sessionID, props.timeout ?? TIMEOUT)
       if ("error" in read) return read
       if (read.dropped.length > 0) log.warn("Left out cost rows this client could not read", { dropped: read.dropped })

@@ -40,6 +40,7 @@ async function open(input: {
   readonly answer: (url: URL) => Response | Promise<Response>
   readonly models?: ModelInfo[]
   readonly timeout?: number
+  readonly loaded?: boolean
   readonly done?: (frame: string) => boolean
   readonly log?: (message: string, tags: Record<string, unknown>) => void
 }) {
@@ -73,6 +74,8 @@ async function open(input: {
       }
     },
   })
+  // The session route has loaded the session before the command is offered.
+  if (input.loaded !== false) await setup.data.session.sync(ID)
   setup.dialog.replace(() => <DialogCost sessionID={ID} timeout={input.timeout} />)
   const done = input.done ?? ((frame: string) => frame.includes("Total cost"))
   for (let attempt = 0; attempt < 200 && !done(setup.captureCharFrame()); attempt++) {
@@ -329,4 +332,17 @@ test("a failure's text is escaped before it is drawn", async () => {
   await using _other = other.setup
   expect(flat(other.frame)).toMatch(/Could not read session cost: .*socket.*closed/)
   expect(other.frame.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
+})
+
+// Mutation: price with the catalog of a session that is not loaded. Without the session there is no catalog, and the
+// dialog still draws what the server said.
+test("a session that is not loaded draws the cost without a catalog", async () => {
+  const { setup, frame } = await open({
+    answer: () => json({ data: info({ cost: 1.5, own: 1.5, rows: [row("m", { cost: 1.5 })] }) }),
+    models: [priced("m")],
+    loaded: false,
+  })
+  await using _ = setup
+  expect(flat(frame)).toContain("Total cost")
+  expect(flat(frame)).toContain("$1.50")
 })
