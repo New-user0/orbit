@@ -162,6 +162,18 @@
         "command": "orbit.mentionSelection",
         "title": "Mention Selection in Terminal",
         "category": "Orbit"
+      },
+      {
+        "command": "orbit.review.accept",
+        "title": "Accept",
+        "category": "Orbit",
+        "icon": "$(check)"
+      },
+      {
+        "command": "orbit.review.reject",
+        "title": "Reject",
+        "category": "Orbit",
+        "icon": "$(close)"
       }
     ],
     "menus": {
@@ -250,6 +262,14 @@
         {
           "command": "orbit.runs.watch",
           "when": "false"
+        },
+        {
+          "command": "orbit.review.accept",
+          "when": "false"
+        },
+        {
+          "command": "orbit.review.reject",
+          "when": "false"
         }
       ],
       "editor/title": [
@@ -267,6 +287,16 @@
           "command": "orbit.openTerminal",
           "when": "activeWebviewPanelId == orbit.chat",
           "group": "navigation@3"
+        },
+        {
+          "command": "orbit.review.accept",
+          "when": "resourceScheme == orbit-review",
+          "group": "navigation@1"
+        },
+        {
+          "command": "orbit.review.reject",
+          "when": "resourceScheme == orbit-review",
+          "group": "navigation@2"
         }
       ]
     },

@@ -2312,3 +2312,30 @@ it.effect("each summary request counts its characters from zero", () =>
     expect(Array.from(yield* Fiber.join(deltas)).map((event) => event.data.characters)).toEqual([2, 10, 20])
   }),
 )
+
+// A compaction's message shows the total of its calls, and the total starts again for the next compaction of the same
+// session: the fallback request after a silent reply is a second billed call.
+it.effect("a compaction message totals every billed call of its own run and does not carry it to the next run", () =>
+  Effect.gen(function* () {
+    requests = []
+    const store = yield* SessionStore.Service
+    const session = yield* insertSession(Session.ID.make("ses_cm2_spent_total"))
+    const user = userText("Do it")
+    const perCall = { input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 2 } }
+    const completed = () =>
+      store
+        .context(session.id)
+        .pipe(Effect.map((messages) => messages.filter((message) => message.type === "compaction")))
+
+    replies = [silent, answer("<handoff>\nfirst\n</handoff>")]
+    expect(yield* compactManually(session, [user])).toEqual({ status: "completed" })
+    expect((yield* completed()).map((message) => message.tokens)).toEqual([
+      { input: 20, output: 8, reasoning: 4, cache: { read: 6, write: 4 } },
+    ])
+
+    replies = [answer("<handoff>\nsecond\n</handoff>")]
+    expect(yield* compactManually(session, [user])).toEqual({ status: "completed" })
+    // The later checkpoint stands for the earlier one in the session's context.
+    expect((yield* completed()).map((message) => message.tokens)).toEqual([perCall])
+  }),
+)
