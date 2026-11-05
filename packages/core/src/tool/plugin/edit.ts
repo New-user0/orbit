@@ -302,15 +302,17 @@ export const Plugin = {
                   source,
                 )
               const shown = FileAccess.shownName(target)
+              const link = access.link(target)
               const revision = yield* permission.assert({
                 action: "Edit",
                 resources: [target.resource],
                 save: ["*"],
                 ...FileAccess.leadsOf([target]),
-                // `paths` and each file's `place` are where the edit lands as resolved here, absolute, for a client to show.
+                // `paths` and each file's `place` are where the edit lands as resolved here, absolute, for a client to show,
+                // and `link` where a link on the way really leads, for a client to warn about.
                 metadata: {
                   paths: [target.place],
-                  files: [{ ...fileDiff(shown, source, replaced), place: target.place }],
+                  files: [{ ...fileDiff(shown, source, replaced), place: target.place, ...(link && { link }) }],
                 },
                 // The person may approve their own version of the file instead; it is written at this same target.
                 original: { file: shown, place: target.place, text: source, status: "modified" },

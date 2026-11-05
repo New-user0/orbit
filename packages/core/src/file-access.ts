@@ -140,6 +140,13 @@ export interface Interface {
    * The failure names the kinds of credential found, never the text.
    */
   readonly refuseTeamSecrets: (targets: readonly Target[], text: string) => Effect.Effect<void, ToolFailure>
+  /**
+   * The link a target is reached through, if any: where it really leads, and whether that is outside the project's
+   * folders, both by real path (class 4). An approval names it from this value, so a client never resolves the path
+   * itself (class 8). A file below a project folder that is itself reached through a link of the system's, such as
+   * macOS's `/var`, is not reached through one of the repository's.
+   */
+  readonly link: (target: Target) => { readonly place: AbsolutePath; readonly outside: boolean } | undefined
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileAccess") {}
@@ -549,6 +556,16 @@ const layer = Layer.effect(
       })
     })
 
+    const link = (target: Target) => {
+      const lead = realPlace(target)
+      const index = folders.findIndex((folder) => FSUtil.contains(folder, target.absolute))
+      // Where the target would be if no link of the repository were on its way: its path under the folder's real path.
+      const plainly =
+        index === -1 ? target.absolute : path.join(real[index]!, path.relative(folders[index]!, target.absolute))
+      if (FSUtil.contains(lead, plainly) && FSUtil.contains(plainly, lead)) return undefined
+      return { place: lead, outside: !real.some((folder) => FSUtil.contains(folder, lead)) }
+    }
+
     return Service.of({
       resolve,
       externalRequest,
@@ -558,6 +575,7 @@ const layer = Layer.effect(
       escaped,
       inMemory,
       refuseTeamSecrets,
+      link,
     })
   }),
 )
