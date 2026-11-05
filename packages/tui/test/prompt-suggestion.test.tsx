@@ -41,6 +41,8 @@ async function mount(
   const requests: Request[] = []
   const prompts: Array<{ text: string; files?: unknown[] }> = []
   const shells: string[] = []
+  // The bodies of the compactions the client asks for.
+  const compacts: unknown[] = []
   // The bodies of the session updates the client sends, such as a title to set or regenerate.
   const updates: unknown[] = []
   const trustReads: string[] = []
@@ -129,6 +131,10 @@ async function mount(
           },
         })
       }
+      if (request.method === "POST" && url.pathname === `/api/session/${sessionID}/compact`) {
+        compacts.push(await request.json())
+        return json({ data: { id: "inb_compact" } })
+      }
       if (request.method === "POST" && url.pathname === `/api/session/${sessionID}/shell`) {
         shells.push((await request.json()).command)
         return json({ data: {} })
@@ -159,6 +165,7 @@ async function mount(
     requests,
     prompts,
     shells,
+    compacts,
     updates,
     textarea,
     frame: () => setup.captureCharFrame(),
@@ -544,6 +551,17 @@ test("Enter on a suggestion that is a slash command runs the command, as typing 
     expect(app.prompts).toEqual([])
     expect(app.textarea().plainText).toBe("")
   }
+  // A command whose text is optional, named alone, runs bare: /compact compacts with no instructions and sends nothing.
+  {
+    await using app = await mount({ suggestions: true, answer: () => json({ data: { suggestion: "/compact" } }) })
+    await ghost(app, "/compact")
+    app.setup.mockInput.pressEnter()
+    await quiet(app)
+    expect(app.compacts).toHaveLength(1)
+    expect(app.compacts[0]).not.toHaveProperty("instructions")
+    expect(app.prompts).toEqual([])
+    expect(app.textarea().plainText).toBe("")
+  }
   // Control: a suggestion that is not a command is sent to the model.
   {
     await using app = await mount({ suggestions: true })
@@ -680,6 +698,31 @@ test("typing, a turn start and a submit end a suggestion as the reference does",
     expect(app.textarea().plainText).toBe("")
     expect(app.prompts).toEqual([])
     expect(app.frame()).not.toContain(suggestion)
+  }
+  // /compact takes optional text: Enter in the list runs it bare, which is a submit and ends the suggestion.
+  {
+    await using app = await mount({ suggestions: true })
+    await ghost(app)
+    await app.type("/compact")
+    app.setup.mockInput.pressEnter()
+    await quiet(app)
+    expect(app.compacts).toHaveLength(1)
+    expect(app.textarea().plainText).toBe("")
+    expect(app.prompts).toEqual([])
+    expect(app.frame()).not.toContain(suggestion)
+  }
+  // Tab in the list only fills in `/compact ` for the text, so nothing ran and the held suggestion shows again once
+  // that is erased.
+  {
+    await using app = await mount({ suggestions: true })
+    await ghost(app)
+    await app.type("/compact")
+    await app.press("TAB")
+    expect(app.textarea().plainText).toBe("/compact ")
+    for (const _ of "/compact ") await app.press("BACKSPACE")
+    expect(await app.shows(suggestion)).toBe(true)
+    expect(app.compacts).toEqual([])
+    expect(app.prompts).toEqual([])
   }
   // Rewinding the conversation ends it: it was written for the turns the rewind takes away.
   {
