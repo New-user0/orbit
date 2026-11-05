@@ -186,7 +186,7 @@ type Options = {
   early?: Frame
   folders?: "ok" | "fail" | "hang" | "slow"
   WebSocketImpl?: typeof WebSocket
-  reply?: (body: Frame) => Response | undefined
+  reply?: (body: Frame) => Response | Promise<Response> | undefined
 }
 
 // The real prompt in the real contexts, for the first pending request of the session, while `shown()` holds.
@@ -447,6 +447,49 @@ test("answering in the terminal sends the reply and closes the tab", async () =>
   await setup.until(() => setup.peer!.of("diff.close").length === 1, "the close")
   expect(setup.replies).toEqual([{ decision: "once" }])
   expect(setup.toast()?.message).toBe("Refused here")
+})
+
+// An answer goes away with its request: while the reply is on its way the short prompt stays up, and the full dialog,
+// with its diff and live options, is never drawn, neither then nor once the server takes the reply.
+test("an answer on its way keeps the short prompt, and the full dialog is never drawn", async () => {
+  const rows: Array<{ name: string; key?: string; answer?: Frame; taken: boolean; closes: boolean }> = [
+    { name: "key 1, on its way", key: "1", taken: false, closes: true },
+    { name: "key 2, on its way", key: "2", taken: false, closes: true },
+    { name: "key 3, on its way", key: "3", taken: false, closes: true },
+    { name: "key 1, taken", key: "1", taken: true, closes: true },
+    { name: "saved, on its way", answer: { answer: "saved", content: "mine\n" }, taken: false, closes: false },
+    { name: "saved, taken", answer: { answer: "saved", content: "mine\n" }, taken: true, closes: true },
+    { name: "rejected, on its way", answer: { answer: "rejected" }, taken: false, closes: false },
+    { name: "rejected, taken", answer: { answer: "rejected" }, taken: true, closes: true },
+  ]
+  for (const row of rows) {
+    // A reply the server takes after a round trip, or one that has not come back yet.
+    await using setup = await mount({
+      reply: () =>
+        row.taken
+          ? Bun.sleep(300).then(() => new Response(null, { status: 204 }))
+          : new Promise<Response>(() => {}),
+    })
+    await setup.until(compact, "the compact prompt")
+    if (row.key) setup.app.mockInput.pressKey(row.key)
+    if (row.answer) setup.peer!.answer({ id: "per_diff1", ...row.answer })
+    await setup.until(() => setup.replies.length === 1, `${row.name}: the reply`)
+    // Every frame drawn over the round trip and after it.
+    const frames: string[] = []
+    const started = Date.now()
+    while (Date.now() - started < 600) {
+      frames.push(await setup.frame())
+      await Bun.sleep(20)
+    }
+    expect([row.name, frames.some(full)]).toEqual([row.name, false])
+    // Taken, the request goes away with its prompt; on its way, the short prompt is still up.
+    expect([row.name, compact(frames.at(-1)!)]).toEqual([row.name, !row.taken])
+    expect([row.name, setup.peer!.of("diff.close")]).toEqual([
+      row.name,
+      row.closes ? [{ type: "diff.close", id: "per_diff1" }] : [],
+    ])
+    expect([row.name, setup.replies.length]).toEqual([row.name, 1])
+  }
 })
 
 test("a request answered elsewhere, or a prompt that goes away, closes its tab", async () => {

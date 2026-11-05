@@ -2162,7 +2162,8 @@ When the terminal UI is linked to VS Code through Orbit's bridge, an Edit or Wri
 diff in the editor, beside the file you work in, and the terminal shows a short prompt instead of the diff: which editor
 it opened in, the file's name and the usual options. Saving the right-hand side approves your version once, closing the
 tab approves the proposal as it stands, and the tab's Reject button declines. Answering in the terminal still works and
-closes the tab. In VS Code's own terminal the prompt also asks you to save in the editor to answer. When VS Code cannot
+closes the tab. Once you answer, the short prompt stays until the server takes the answer; when the server refuses it,
+the full dialog comes back with the server's reason. In VS Code's own terminal the prompt also asks you to save in the editor to answer. When VS Code cannot
 open the diff (the file is not inside the session's folder and one of the window's folders, it changed since the agent
 read it, it is too large to send, or VS Code fails to open the tab), when Orbit closes the tab itself, or when the link
 drops, the full dialog comes back in the terminal. Sending a prompt or a command closes every Orbit diff tab in the

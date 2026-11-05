@@ -171,8 +171,12 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   function reply(value: PermissionReply, message?: string) {
     void data.session.permission
       .reply({ sessionID: props.request.sessionID, requestID: props.request.id, decision: value, message })
-      .catch((error: unknown) => toast.error(error))
-    // Answered here, so the editor's tab of it closes.
+      .catch((error: unknown) => {
+        // Refused: the question is still pending, and is asked here again.
+        toast.error(error)
+        review.ask()
+      })
+    // Answered here, so the editor's tab of it closes; the short prompt stays until the request goes away.
     review.close()
   }
 
@@ -337,8 +341,8 @@ function useEditorReview(request: PermissionRequest, location: () => { directory
   let tried = false
   let gone = false
 
+  // Closes the editor's tab only: the question comes back to the full dialog only where it is asked here again.
   const close = () => {
-    setOpen(false)
     if (!tab) return
     tab = false
     editor?.diff.close(request.id)
@@ -409,7 +413,7 @@ function useEditorReview(request: PermissionRequest, location: () => { directory
     close()
   })
 
-  return { open, close, editor: () => editor?.server()?.name ?? "the editor" }
+  return { open, close, ask: () => setOpen(false), editor: () => editor?.server()?.name ?? "the editor" }
 }
 
 // The file of a request that can be reviewed in the editor: the one file of a revisable request, with an absolute place,
