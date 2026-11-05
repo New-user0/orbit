@@ -282,8 +282,9 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
       submitted: () => suggestions.session(ownSession()).submitted(),
       watch(next) {
         drawable = next
+        // Mini has one prompt for as long as its footer lives, so no later prompt can have taken its place.
         return () => {
-          if (drawable === next) drawable = undefined
+          drawable = undefined
         }
       },
     },

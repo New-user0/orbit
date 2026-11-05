@@ -11,7 +11,7 @@ import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 const noop = () => () => {}
 const suggestion = "run the tests"
 
-function host(): MiniHost {
+function host(traces?: unknown[]): MiniHost {
   return {
     version: "test",
     terminal: { stdin: process.stdin },
@@ -23,7 +23,7 @@ function host(): MiniHost {
     paths: { home: "/home" },
     signals: { sigint: { subscribe: noop }, sigusr2: { subscribe: noop } },
     startup: { showTiming: false, now: () => 0 },
-    diagnostics: {},
+    diagnostics: traces ? { trace: { write: (type, data) => traces.push({ type, data }) } } : {},
     preferences: { resolveVariant: async () => undefined, saveVariant: async () => {} },
   }
 }
@@ -34,6 +34,8 @@ async function start(input: {
   /** The session Mini starts with, and how it reads its own session later; the default is ses_1 throughout. */
   sessionID?: string
   getSessionID?: () => string
+  /** Collects what Mini writes to its trace. */
+  traces?: unknown[]
 }) {
   const app = await createTestRenderer({
     width: 100,
@@ -45,7 +47,7 @@ async function start(input: {
   const asked: AbortSignal[] = []
   const sessions: string[] = []
   const lifecycle = await createRuntimeLifecycle({
-    host: host(),
+    host: host(input.traces),
     createRenderer: async () => app.renderer as CliRenderer,
     getDirectory: () => "/project",
     findFiles: async () => [],
@@ -208,5 +210,36 @@ test("an answer that comes while Mini's input holds text is dropped, whichever s
     const frame = await mini.frame()
     expect({ name: row.name, draft: frame.includes("draft") }).toEqual({ name: row.name, draft: false })
     expect({ name: row.name, drawn: frame.includes(suggestion) }).toEqual({ name: row.name, drawn: row.drawn })
+  }
+})
+
+// Mini's prompt goes with its footer, which can end before Mini itself closes. An answer that comes in between is no
+// longer judged by that prompt: like a session with no prompt in view, it is kept rather than dropped as one that could
+// not be drawn.
+test("an answer that comes after Mini's prompt is gone is not judged by that prompt", async () => {
+  const rows = [
+    { name: "the prompt is gone", destroy: true, dropped: false },
+    { name: "control: the prompt in view holds text", destroy: false, dropped: true },
+  ]
+  for (const row of rows) {
+    const gate = Promise.withResolvers<void>()
+    const traces: unknown[] = []
+    using mini = await start({
+      suggestions: true,
+      traces,
+      answer: async () => {
+        await gate.promise
+        return { suggestion }
+      },
+    })
+    await mini.type("draft")
+    mini.ended()
+    await Bun.sleep(50)
+    expect({ name: row.name, asked: mini.asked.length }).toEqual({ name: row.name, asked: 1 })
+    if (row.destroy) mini.app.renderer.destroy()
+    gate.resolve()
+    await Bun.sleep(50)
+    const dropped = traces.some((trace) => JSON.stringify(trace).includes("could not be drawn"))
+    expect({ name: row.name, dropped }).toEqual({ name: row.name, dropped: row.dropped })
   }
 })
