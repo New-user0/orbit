@@ -106,6 +106,7 @@ import { UpdateNotificationProvider, useUpdateNotification, type UpdateSource } 
 import { PluginProvider, usePlugin, type PackageSource } from "./plugin/context"
 import { localPluginDirectories } from "./plugin/discovery"
 import { TrustProvider, useTrust } from "./context/trust"
+import { PromptSuggestionProvider } from "./context/prompt-suggestion"
 import { PluginRoute, Slot } from "./plugin/render"
 import { CommandPaletteDialog } from "./component/command-palette"
 import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "./context/keymap"
@@ -429,12 +430,14 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                                             <PanelProvider>
                                                                               <TrustProvider directory={cwd}>
                                                                                 <ProjectThemes source={themeSource} />
-                                                                                <PluginProvider
-                                                                                  packages={input.packages}
-                                                                                  directories={pluginDirectories}
-                                                                                >
-                                                                                  <App />
-                                                                                </PluginProvider>
+                                                                                <PromptSuggestionProvider>
+                                                                                  <PluginProvider
+                                                                                    packages={input.packages}
+                                                                                    directories={pluginDirectories}
+                                                                                  >
+                                                                                    <App />
+                                                                                  </PluginProvider>
+                                                                                </PromptSuggestionProvider>
                                                                               </TrustProvider>
                                                                             </PanelProvider>
                                                                           </UpdateNotificationProvider>

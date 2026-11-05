@@ -261,6 +261,15 @@ export const settings: Setting[] = [
     keywords: ["attachments", "clipboard", "images", "prompt"],
   },
   {
+    title: "Prompt suggestions",
+    category: "Input",
+    path: ["prompt", "suggestions"],
+    default: false,
+    values: [false, true],
+    labels: ["off", "on"],
+    keywords: ["ghost text", "next prompt", "suggest"],
+  },
+  {
     title: "Leader timeout",
     category: "Input",
     path: ["leader", "timeout"],

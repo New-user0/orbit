@@ -21,6 +21,7 @@ import { createMiniTitle } from "../util/renderer"
 import { createTuiAttention } from "../attention"
 import { createAttentionEvents, isAttentionEvent } from "../attention-events"
 import { createRecapTrigger } from "../recap"
+import { createPromptSuggestions } from "../prompt-suggestion"
 import { monoSnapshot } from "./mono"
 import { entrySplash, exitSplash } from "./splash"
 import { resolveRunTheme } from "./theme"
@@ -90,6 +91,8 @@ export type LifecycleInput = {
   onSubagentInterrupt?: (sessionID: string) => void
   /** Asks the server for the away summary; the signal aborts when the person comes back. */
   recap?: (signal: AbortSignal) => Promise<unknown>
+  /** Asks the server what the person might type next in the session; the signal aborts when the ask is cancelled. */
+  suggestion?: (sessionID: string, signal: AbortSignal) => Promise<unknown>
 }
 
 export type Lifecycle = {
@@ -243,6 +246,22 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
         request: input.recap,
       })
     : undefined
+  // The next-prompt suggestion of Mini's own session. `orb mini` checked the trust of the folder it started in; a
+  // session named in another folder is checked by the server, which refuses the ask while that folder is not trusted.
+  // The ask is a spend choice, made in the person's own cli.json.
+  const ownSession = () => input.getSessionID?.() ?? input.sessionID
+  const request = input.suggestion
+  // Mini's one prompt shows whichever session is its own, which is not yet known when the footer mounts and changes
+  // with /new, so whether it could draw an answer is read from that prompt when the answer comes. Mini never returns to
+  // a session it has left, so an answer for one is never drawn either way.
+  let drawable: (() => boolean) | undefined
+  const suggestions = request
+    ? createPromptSuggestions({
+        request,
+        drawable: () => drawable?.(),
+        log: (message, extra) => input.host.diagnostics.trace?.write("suggestion", { message, ...extra }),
+      })
+    : undefined
   let closed = false
   let sigintRegistered = false
   let detachSigintListener: (() => void) | undefined
@@ -258,6 +277,18 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     variant: input.variant,
     first: input.first,
     history: input.history,
+    suggestion: suggestions && {
+      text: () => suggestions.session(ownSession()).text(),
+      changed: () => suggestions.session(ownSession()).changed(),
+      submitted: () => suggestions.session(ownSession()).submitted(),
+      watch(next) {
+        drawable = next
+        // Mini has one prompt for as long as its footer lives, so no later prompt can have taken its place.
+        return () => {
+          drawable = undefined
+        }
+      },
+    },
     theme,
     // The transcript always starts one row below the terminal's prior output,
     // even when the entry splash itself is hidden.
@@ -355,6 +386,7 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     attentionEvents.dispose()
     attention.dispose()
     recap?.dispose()
+    suggestions?.dispose()
     let wroteExit = false
 
     try {
@@ -391,6 +423,15 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
   return {
     footer,
     observe: (event) => {
+      // A busy period asks for a suggestion only when the model replied in it, so a /compact or a redo's wake asks
+      // nothing. The transport hands over only Mini's own session's events and its subagents'.
+      if (
+        event.type === "session.step.ended" &&
+        typeof event.data === "object" &&
+        event.data &&
+        "sessionID" in event.data
+      )
+        suggestions?.replied(String(event.data.sessionID))
       if (!isAttentionEvent(event)) return
       attentionEvents.handle(event)
       // The recap waits for the end of a turn of Mini's own session; a subagent's turn is not the person's.
@@ -402,6 +443,16 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
         event.data.sessionID === (input.getSessionID?.() ?? input.sessionID)
       )
         setRunning(event.type === "session.execution.started")
+      // A suggestion follows Mini's own session too: a turn starting in a session ends that session's suggestion, and
+      // one of Mini's own that ends well asks for the next while prompt.suggestions is on (class 8). A subagent's turn
+      // asks nothing, so only Mini's own session ever holds one.
+      if (event.type === "session.execution.started") suggestions?.started(event.data.sessionID)
+      if (
+        event.type === "session.execution.succeeded" &&
+        event.data.sessionID === ownSession() &&
+        tuiConfig.prompt?.suggestions === true
+      )
+        suggestions?.ended(event.data.sessionID)
     },
     setRunning,
     refreshTheme() {

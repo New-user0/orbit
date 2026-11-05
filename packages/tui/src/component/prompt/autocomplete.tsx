@@ -69,6 +69,8 @@ export function Autocomplete(props: {
   anchor: () => BoxRenderable
   input: () => TextareaRenderable
   ref: (ref: AutocompleteRef) => void
+  /** A command that takes no argument is about to run from the list, which submits the prompt as Enter would. */
+  onCommand?: () => void
   fileStyleId: number
   agentStyleId: number
   skillStyleId: number
@@ -485,7 +487,13 @@ export function Autocomplete(props: {
       return [slash.name, ...(slash.aliases ?? [])].map((name) => ({
         display: `/${name}`,
         description: command.description ?? command.title,
-        onSelect: slash.arguments === true ? () => insertSlash(name) : command.run,
+        onSelect:
+          slash.arguments === true
+            ? () => insertSlash(name)
+            : () => {
+                props.onCommand?.()
+                command.run()
+              },
         onComplete: slash.arguments === "optional" ? () => insertSlash(name) : undefined,
       }))
     })
