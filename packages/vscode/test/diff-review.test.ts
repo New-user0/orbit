@@ -1412,12 +1412,13 @@ test("View changes and a restore give up on a service that does not answer, with
   const sessionID = asked?.type === "permission" ? asked.sessionID : ""
   const hang = (init: RequestInit | undefined) =>
     new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)))
-  // A chat on the same session whose service holds the diff, the dry run, or only the restore itself.
-  const held = async (at: (url: URL, body: string) => boolean) => {
+  // A chat on the same session whose service holds the diff, the dry run, or only the restore itself. The last one
+  // waits longer, because its dry run reaches the real server and must answer within the same limit on a loaded host.
+  const held = async (at: (url: URL, body: string) => boolean, grant = 300) => {
     const log = recording((url, init) =>
       at(url, typeof init?.body === "string" ? init.body : "") ? hang(init) : undefined,
     )
-    const again = await chat(work, { fetcher: log.fetcher, wait: { read: 20_000, grant: 300 } })
+    const again = await chat(work, { fetcher: log.fetcher, wait: { read: 20_000, grant } })
     await again.controller.open(sessionID)
     log.sent.length = 0
     return { ...again, log, before: again.notes().length }
@@ -1439,7 +1440,7 @@ test("View changes and a restore give up on a service that does not answer, with
   ])
   expect(dry.log.sent.filter((call) => call.path.endsWith("/revert/files"))).toHaveLength(1)
 
-  const real = await held((url, body) => url.pathname.endsWith("/revert/files") && !body.includes("dryRun"))
+  const real = await held((url, body) => url.pathname.endsWith("/revert/files") && !body.includes("dryRun"), 5_000)
   await real.controller.restore(messageID, confirm)
   expect(confirmed).toBe(1)
   expect(real.notes().slice(real.before)).toEqual([
