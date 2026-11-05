@@ -267,10 +267,13 @@ export class Controller {
     this.update({ type: "note", id: `note:${crypto.randomUUID()}`, text, tone })
   }
 
-  /** Marks a question as open for review in the editor, so its card says how to answer there. */
-  reviewing(id: string) {
+  /**
+   * Marks a question as open for review in the editor, so its card says how to answer there; with `open` false, clears
+   * the mark once that tab is gone unanswered.
+   */
+  reviewing(id: string, open = true) {
     const item = this.items.get(id)
-    if (item?.type === "permission" && item.status === "pending") this.update({ ...item, reviewing: true })
+    if (item?.type === "permission" && item.status === "pending") this.update({ ...item, reviewing: open })
   }
 
   /**

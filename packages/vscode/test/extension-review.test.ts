@@ -80,8 +80,12 @@ const vscode = stub({
       return args.slice(1).find((item) => (item as { title?: string })?.title === answer.title)
     },
     showInformationMessage: async (...args: unknown[]) => void informations.push(args),
-    // A form's yes-or-no field is answered Yes.
-    showQuickPick: async (...args: unknown[]) => (picks.push(args), "Yes"),
+    // A form's yes-or-no field is answered Yes; the history list's first session is the one picked.
+    showQuickPick: async (...args: unknown[]) => {
+      picks.push(args)
+      const first = Array.isArray(args[0]) ? args[0][0] : undefined
+      return typeof first === "object" && first !== null && "id" in first ? first : "Yes"
+    },
     tabGroups: stub({
       get all() {
         return [
@@ -162,6 +166,9 @@ let extension: Extension
 const replies: unknown[][] = []
 const sent: string[] = []
 const marked: string[] = []
+const unmarked: string[] = []
+const resets: string[] = []
+const opened: string[] = []
 const restored: Array<{ messageID: string; confirmed: boolean }> = []
 const answered: unknown[][] = []
 const listed: { files: unknown[] | undefined } = { files: [] }
@@ -192,7 +199,10 @@ beforeAll(async () => {
       return "sent"
     },
     folders: async () => ({ folders: [folder] }),
-    reviewing: (id: string) => void marked.push(id),
+    reviewing: (id: string, open = true) => void (open ? marked : unmarked).push(id),
+    reset: () => void resets.push(question.id),
+    sessions: async () => [{ id: "ses_old", title: "Old", time: { updated: Date.now() } }],
+    open: async (id: string) => (opened.push(id), "build"),
     note: () => {},
     send: async (text: string) => void sent.push(text),
     answer: async (...args: unknown[]) => void answered.push(args),
@@ -359,8 +369,28 @@ test("a new question opens for review on its own, and a new prompt closes every 
   await chat().send("next")
   expect(sent).toEqual(["next"])
   expect(closing.map((tab) => tab.label)).toContain(title)
+  // The question stays pending, and its card stops saying to answer in a tab that is gone.
+  expect(unmarked).toContain("per_auto")
   await fire(title)
   expect(replies).toEqual([])
+})
+
+test("New Session and a session picked from history close every Orbit tab without answering", async () => {
+  for (const command of ["orbit.newSession", "orbit.history"]) {
+    const [, , right, title] = await open(`per_${command}`)
+    const before = resets.length
+    await commands.get(command)!()
+    expect(resets.length).toBe(before + 1)
+    expect(closing.map((tab) => tab.label)).toContain(title)
+    expect(unmarked).toContain(`per_${command}`)
+    // VS Code reports the close; a save of the side it showed, arriving late, answers nothing either.
+    await fire(title)
+    await system().writeFile(right, new TextEncoder().encode("mine\n"), { create: false, overwrite: true })
+    await commands.get("orbit.review.reject")!(right)
+    await commands.get("orbit.review.accept")!(right)
+    expect(replies).toEqual([])
+  }
+  expect(opened).toEqual(["ses_old"])
 })
 
 test("View changes opens one multi-file diff, and Restore files asks before it restores", async () => {

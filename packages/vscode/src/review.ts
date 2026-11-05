@@ -64,6 +64,8 @@ export interface Host {
   reveal(title: string): PromiseLike<unknown>
   note(text: string, tone: "muted" | "error"): void
   warn(text: string): void
+  /** The question's review tab is gone and was not answered from: its card stops pointing at the editor. */
+  unmark(requestID: string): void
 }
 
 type Permission = Extract<Item, { type: "permission" }>
@@ -329,8 +331,12 @@ export class Review {
     entry.answering = true
     const outcome = await this.host.reply(entry.request ?? "", decision, content)
     entry.answering = false
-    if (typeof outcome === "object") return outcome
-    this.settled(entry.request ?? "")
+    if (typeof outcome !== "object") {
+      this.settled(entry.request ?? "")
+      return outcome
+    }
+    // A close whose answer was refused or late leaves no tab behind, and the question waits on its card alone.
+    if (this.entries.get(entry.title) !== entry) this.host.unmark(entry.request ?? "")
     return outcome
   }
 
@@ -338,6 +344,8 @@ export class Review {
     if (entries.length === 0) return
     entries.forEach((entry) => {
       entry.closing = true
+      // The tab closes unanswered, so its card stops saying to answer there; once the window closes there is no card.
+      if (entry.mode === "review" && !this.disposed) this.host.unmark(entry.request ?? "")
     })
     void this.host.close(entries.map((entry) => entry.title)).then(undefined, () => undefined)
   }

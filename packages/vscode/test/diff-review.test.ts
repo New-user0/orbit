@@ -268,6 +268,7 @@ function editor(
   const notes: Array<{ text: string; tone: string }> = []
   const warnings: string[] = []
   const replies: unknown[][] = []
+  const unmarked: string[] = []
   const host: Host = {
     reply: (id, decision, content) => {
       replies.push(content === undefined ? [id, decision] : [id, decision, content])
@@ -287,8 +288,13 @@ function editor(
     reveal: async (title) => void revealed.push(title),
     note: (text, tone) => void notes.push({ text, tone }),
     warn: (text) => void warnings.push(text),
+    // As the chat does: the card of a question whose tab is gone unanswered stops pointing at the editor.
+    unmark: (id) => {
+      unmarked.push(id)
+      options.controller?.reviewing(id, false)
+    },
   }
-  return { host, tabs, views, closed, revealed, notes, warnings, replies }
+  return { host, tabs, views, closed, revealed, notes, warnings, replies, unmarked }
 }
 
 function item(files: ReadonlyArray<unknown>, options: { revisable?: boolean; action?: string; sessionID?: string } = {}) {
@@ -887,6 +893,85 @@ describe("answers from a review tab", () => {
     expect(replies(log.sent)).toEqual([{ decision: "once" }])
     expect(shown.closed.at(-1)).toBe(shown.tabs[2]!.title)
     expect(await Bun.file(run.file).text()).toBe("two\n")
+  })
+
+  test("New Session or a session from history closes the review tabs unanswered, and the question stays pending", async () => {
+    const log = recording()
+    const run = await asked("reset.txt", { fetcher: log.fetcher })
+    const shown = editor({ controller: run.controller, window: [work] })
+    const review = new Review(shown.host)
+    expect(await review.open(run.question, false)).toBe(true)
+    const tab = shown.tabs[0]!
+    // What the chat's reset does: every Orbit tab closes first, then the controller forgets the session.
+    review.closeAll()
+    run.controller.reset()
+    expect(shown.closed).toEqual([tab.title])
+    // The person's save, Reject or close of the old tab, before VS Code has closed it, sends nothing and says nothing.
+    await review.provider.writeFile(tab.right.path, new TextEncoder().encode("mine\n"))
+    await review.reject(tab.right.path)
+    await review.accept(tab.right.path)
+    await review.closed(tab.title)
+    expect(replies(log.sent)).toEqual([])
+    expect(shown.notes).toEqual([])
+    expect(await Bun.file(run.file).text()).toBe("one\n")
+    expect((await server.client.permission.list({ sessionID: run.question.sessionID })).map((request) => request.id)).toEqual([
+      run.question.id,
+    ])
+    await server.client.permission.reply({ sessionID: run.question.sessionID, requestID: run.question.id, decision: "reject" })
+  })
+
+  test("a review tab gone unanswered stops marking its card: closed by the extension, or closed with a refused answer", async () => {
+    const run = await asked("unmark.txt")
+    const marked = () => {
+      const current = run.items.get(run.question.id)
+      return current?.type === "permission" ? current.reviewing : undefined
+    }
+    // The extension closes the tab, as on a new prompt: the question stays pending and its card loses the hint.
+    const first = editor({ controller: run.controller, window: [work] })
+    const closing = new Review(first.host)
+    expect(await closing.open(run.question, false)).toBe(true)
+    run.controller.reviewing(run.question.id)
+    expect(marked()).toBe(true)
+    closing.closeAll()
+    expect(first.unmarked).toEqual([run.question.id])
+    expect(marked()).toBe(false)
+
+    // The person's answers are refused. A save leaves the tab open, so the mark stays; a close leaves no tab, so it goes.
+    const second = editor({ controller: run.controller, window: [work], reply: async () => ({ refused: "no" }) })
+    const refused = new Review(second.host)
+    expect(await refused.open(run.question, false)).toBe(true)
+    run.controller.reviewing(run.question.id)
+    const tab = second.tabs[0]!
+    const failure = await refused.provider.writeFile(tab.right.path, new TextEncoder().encode("mine\n")).then(
+      () => undefined,
+      (error: Error) => error.message,
+    )
+    expect(failure).toBe("no")
+    expect(second.unmarked).toEqual([])
+    expect(marked()).toBe(true)
+    await refused.closed(tab.title)
+    expect(second.unmarked).toEqual([run.question.id])
+    expect(marked()).toBe(false)
+
+    // The window closes: there is no card left to change, so nothing is unmarked.
+    const third = editor({ controller: run.controller, window: [work] })
+    const closed = new Review(third.host)
+    expect(await closed.open(run.question, false)).toBe(true)
+    run.controller.reviewing(run.question.id)
+    closed.dispose()
+    expect(third.closed).toHaveLength(1)
+    expect(third.unmarked).toEqual([])
+    expect(marked()).toBe(true)
+    await server.client.permission.reply({ sessionID: run.question.sessionID, requestID: run.question.id, decision: "reject" })
+
+    // A preview never marked its card, so closing it unmarks nothing.
+    const fourth = editor({ folders: [project], window: [project] })
+    const previews = new Review(fourth.host)
+    await previews.open(item([{ file: "a.txt", place: inside, patch }], { revisable: false }), true)
+    expect(fourth.tabs.map((tab) => tab.mode)).toEqual(["preview"])
+    previews.closeAll()
+    expect(fourth.closed).toHaveLength(1)
+    expect(fourth.unmarked).toEqual([])
   })
 
   test("a refused or late reply keeps the question pending and says why", async () => {

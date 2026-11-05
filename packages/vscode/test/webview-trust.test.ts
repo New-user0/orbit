@@ -132,8 +132,14 @@ test("a card under review says how to answer in the editor, and an answered one 
   item({ ...card, id: "per_reviewing", status: "pending", reviewing: true })
   item({ ...card, id: "per_revised", status: "once", revised: true })
   item({ ...card, id: "per_plain", status: "once" })
+  // A pending card whose review tab closed unanswered is unmarked, and says nothing about the editor.
+  item({ ...card, id: "per_unmarked", status: "pending", reviewing: false })
   const text = all(body).map((node) => node.own ?? "")
-  expect(text).toContain("Opened in the editor: save to accept your version, close to accept as proposed, or Reject.")
+  expect(
+    text.filter(
+      (line) => line === "Opened in the editor: save to accept your version, close to accept as proposed, or Reject.",
+    ),
+  ).toHaveLength(1)
   expect(text.filter((line) => line.startsWith("Allowed with your changes · "))).toHaveLength(1)
   expect(text.filter((line) => line.startsWith("Allowed · "))).toHaveLength(1)
 })

@@ -171,6 +171,7 @@ for (const row of reviewRows)
       reveal: async () => {},
       note: () => {},
       warn: () => {},
+      unmark: () => {},
     }
     const item = permissionItem({ id: "per_matrix", sessionID: "ses_matrix", ...row.request })
     await new module.Review(host, recorder).open(item, true)

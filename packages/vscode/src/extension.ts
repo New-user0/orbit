@@ -444,6 +444,7 @@ class Chat implements vscode.WebviewViewProvider {
     },
     note: (text, tone) => void this.controller?.then((controller) => controller?.note(text, tone)),
     warn: (text) => void vscode.window.showWarningMessage(text),
+    unmark: (id) => void this.controller?.then((controller) => controller?.reviewing(id, false)),
   })
   private view: vscode.WebviewView | undefined
   private panel: vscode.WebviewPanel | undefined
@@ -530,6 +531,9 @@ class Chat implements vscode.WebviewViewProvider {
   }
 
   async reset() {
+    // New Session and a session picked from history close every Orbit tab first, unanswered, as a new prompt does: no
+    // review outlives its card, and the old session's questions stay pending on the server.
+    this.diffs.closeAll()
     const controller = await this.controller
     controller?.reset()
     this.items.length = 0
