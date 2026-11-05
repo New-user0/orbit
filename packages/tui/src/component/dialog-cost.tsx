@@ -57,7 +57,7 @@ async function readSessionCost(api: OrbitClient, sessionID: string, timeout: num
   )
 }
 
-function failure(error: unknown) {
+export function failure(error: unknown) {
   const named = (value: unknown, name: string) =>
     typeof value === "object" && value !== null && "name" in value && value.name === name
   if (named(error, "TimeoutError") || (error instanceof Error && named(error.cause, "TimeoutError")))

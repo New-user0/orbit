@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { ModelInfo } from "@orbit/client"
 import type { SessionCost } from "@orbit/schema/session-cost"
-import { DialogCost } from "../../src/component/dialog-cost"
+import { DialogCost, failure } from "../../src/component/dialog-cost"
 import { json } from "../fixture/tui-client"
 import { model, renderLocal, session as sessionFixture } from "../fixture/local"
 
@@ -261,6 +261,17 @@ test("an old server and an unknown session each draw one line", async () => {
     },
     { name: "bad body", answer: () => json({ data: { cost: "lots" } }), line: "could not be read" },
     { name: "no answer", answer: () => new Promise<Response>(() => {}), timeout: 50, line: "did not answer in time" },
+    {
+      name: "a timeout wrapped as an error's cause",
+      answer: () =>
+        Promise.reject(Object.assign(new Error("slow"), { name: "TimeoutError" })),
+      line: "did not answer in time",
+    },
+    {
+      name: "an error that only says UnsupportedContentType",
+      answer: () => new Response("nope", { status: 200, headers: { "content-type": "text/plain" } }),
+      line: "Could not read session cost",
+    },
   ]
   for (const item of cases) {
     const { setup, frame } = await open({
@@ -274,6 +285,17 @@ test("an old server and an unknown session each draw one line", async () => {
     // A failure replaces the waiting line.
     expect(frame, item.name).not.toContain("Reading the cost")
   }
+})
+
+// The client may wrap what a timeout raises, and only its own unsupported-content-type error means an old server; the
+// real client cannot be made to raise either shape, so the failure reader is asked directly.
+test("a wrapped timeout reads as no answer, and only the client's own error reads as an old server", () => {
+  const timeout = Object.assign(new Error("slow"), { name: "TimeoutError" })
+  expect(failure(new Error("transport", { cause: timeout }))).toBe("The server did not answer in time.")
+  expect(failure(new Error("transport", { cause: new Error("other") }))).not.toContain("did not answer")
+  const old = Object.assign(new Error("UnsupportedContentType"), { name: "ClientError" })
+  expect(failure(old)).toContain("older than this client")
+  expect(failure(new Error("UnsupportedContentType"))).not.toContain("older than this client")
 })
 
 // A reasoning count is drawn only for a model that used reasoning.
