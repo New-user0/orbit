@@ -1082,7 +1082,10 @@ export function createPromptState(input: PromptInput): PromptState {
     }
 
     if (next.kind === "slash") {
+      // Running a command from the list is a submit, so it ends the suggestion as sending a prompt does. These two run
+      // here without reaching submitPrompt; every other item goes into the input and ends it when it is sent.
       if (next.action === "editor") {
+        input.suggestion?.submitted()
         void openEditor({
           value: resolveEditorSlashValue(area.plainText),
         })
@@ -1091,6 +1094,7 @@ export function createPromptState(input: PromptInput): PromptState {
 
       if (next.action === "settings" && !shell()) {
         cancelAutocomplete()
+        input.suggestion?.submitted()
         input.onSettings()
         return
       }

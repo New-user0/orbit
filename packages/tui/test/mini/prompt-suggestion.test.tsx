@@ -271,6 +271,37 @@ test("typing hides the ghost and erasing shows it again, and nothing hidden is t
   }
 })
 
+// A command run from the list is a submit, so it ends the suggestion even when it runs without sending a prompt.
+test.each(["settings", "editor"])("/%s run from the list ends the suggestion", async (name) => {
+  await using footer = await render(suggestion)
+  expect(footer.app.captureCharFrame()).toContain(suggestion)
+  footer.app.mockInput.typeText(`/${name}`)
+  await footer.settle()
+  footer.app.mockInput.pressEnter()
+  await footer.settle()
+  expect(footer.events).toContain("submitted")
+  footer.app.mockInput.pressEscape()
+  await footer.settle()
+  await Bun.sleep(50)
+  await footer.settle()
+  expect(footer.submitted).toEqual([])
+  expect(footer.app.captureCharFrame()).not.toContain(suggestion)
+})
+
+// Control: a typed draft only hides the suggestion, and erasing it draws the held one again.
+test("a typed slash draft hides the suggestion without ending it", async () => {
+  await using footer = await render(suggestion)
+  footer.app.mockInput.typeText("/settings")
+  await footer.settle()
+  expect(footer.app.captureCharFrame()).not.toContain(suggestion)
+  "/settings".split("").forEach(() => footer.app.mockInput.pressBackspace())
+  await footer.settle()
+  await Bun.sleep(50)
+  await footer.settle()
+  expect(footer.events).not.toContain("submitted")
+  expect(footer.app.captureCharFrame()).toContain(suggestion)
+})
+
 test("a menu over the prompt takes no suggestion", async () => {
   await using footer = await render(suggestion, 100, { subagent: true })
   expect(footer.app.captureCharFrame()).toContain(suggestion)
