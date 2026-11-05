@@ -330,6 +330,25 @@ test("session.contextUsage uses the public HTTP contract and decodes the payload
   ])
 })
 
+// clients-ux-23 part 2: `/cost` reads the whole session's cost from `GET /api/session/:sessionID/cost`.
+test("session.cost uses the public HTTP contract and decodes the payload", async () => {
+  const cost = { cost: 0.75, own: 0.5, subagents: 0.25, rows: [] }
+  const requests: Array<{ method: string; url: URL }> = []
+  const httpClient = HttpClient.make((request) => {
+    requests.push({ method: request.method, url: new URL(request.url) })
+    return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ data: cost })))
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    return yield* client.session.cost({ sessionID: Session.ID.make("ses_cost") })
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result).toEqual(cost as unknown as typeof result)
+  expect(requests.map((request) => [request.method, request.url.pathname])).toEqual([
+    ["GET", "/api/session/ses_cost/cost"],
+  ])
+})
+
 test("event.subscribe exposes and decodes the native Effect event stream", async () => {
   const httpClient = HttpClient.make((request) =>
     Effect.succeed(

@@ -230,6 +230,8 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
           \`share_url\` text,
           \`summary_additions\` integer,
           \`summary_deletions\` integer,
+          \`lines_added\` integer,
+          \`lines_removed\` integer,
           \`summary_files\` integer,
           \`summary_diffs\` text,
           \`metadata\` text,
@@ -268,6 +270,8 @@ const schema: Omit<DatabaseMigration.Migration, "id"> = {
           \`tokens_reasoning\` integer NOT NULL,
           \`tokens_cache_read\` integer NOT NULL,
           \`tokens_cache_write\` integer NOT NULL,
+          \`provider_id\` text,
+          \`model_id\` text,
           CONSTRAINT \`session_usage_pk\` PRIMARY KEY(\`session_id\`, \`seq\`),
           CONSTRAINT \`fk_session_usage_session_id_session_v2_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session_v2\`(\`id\`) ON DELETE CASCADE
         );

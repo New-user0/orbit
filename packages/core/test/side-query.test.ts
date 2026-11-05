@@ -346,6 +346,21 @@ it.effect("object() forces one tool call and decodes its input", () =>
   }),
 )
 
+// clients-ux-23 part 2: the record of a finished call names the model that answered, so /cost can itemize it.
+it.effect("a finished side query records the model that answered", () =>
+  Effect.gen(function* () {
+    const { db, sideQuery } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* test.push(answer("pear"))
+
+    const result = yield* sideQuery.text(base)
+
+    const rows = yield* db.select().from(SessionUsageTable).where(eq(SessionUsageTable.session_id, sessionID)).all().pipe(Effect.orDie)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ provider_id: "test", model_id: String(result.model.id) })
+  }),
+)
+
 it.effect("object() reports malformed input, a missing call and a call to another tool as InvalidOutputError", () =>
   Effect.gen(function* () {
     const { sideQuery } = yield* setup()
@@ -404,6 +419,8 @@ it.effect("a side query that times out after the request was sent records an est
     const rows = yield* db.select().from(SessionUsageTable).where(eq(SessionUsageTable.session_id, sessionID)).all().pipe(Effect.orDie)
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ kind: "side_query", source: base.purpose })
+    // The estimate for a call that was cut off names the model it was sent to (clients-ux-23 part 2).
+    expect(rows[0]).toMatchObject({ provider_id: "test", model_id: "side-small" })
     // The prompt is estimated and the reply is taken at the model's output limit, priced at the model's rates.
     expect(rows[0]!.tokens_input).toBeGreaterThan(0)
     expect(rows[0]!.tokens_output).toBe(32_000)

@@ -367,6 +367,7 @@ export const make = Effect.gen(function* () {
             ? bus.publish(SessionEvent.SideQueryRecorded, {
                 sessionID: input.sessionID,
                 purpose: "step.retry",
+                model: input.model.ref,
                 ...spent,
               })
             : Effect.void

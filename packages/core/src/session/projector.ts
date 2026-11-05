@@ -8,6 +8,8 @@ import { Bus } from "../bus.js"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { Agent } from "@orbit/schema/agent"
 import { Model } from "@orbit/schema/model"
+import { NonNegativeInt } from "@orbit/schema/schema"
+import { ToolNames } from "@orbit/schema/tool-names"
 import { SessionEvent } from "./event.js"
 import { SessionMessage } from "./message.js"
 import { SessionMessageUpdater } from "./message-updater.js"
@@ -55,6 +57,54 @@ type Usage = {
 
 const ForkBatchSize = 500
 
+const decodeCall = Schema.decodeUnknownOption(
+  Schema.Struct({
+    type: Schema.Literal("tool"),
+    id: Schema.String,
+    name: Schema.String,
+    state: Schema.Struct({ status: Schema.String }),
+  }),
+)
+const decodeFileLines = Schema.decodeUnknownOption(
+  Schema.Struct({ additions: NonNegativeInt, deletions: NonNegativeInt }),
+)
+
+/**
+ * The lines a finished edit tool call added and removed, from the per-file counts its result carries. Edit, Write and
+ * Patch count; NotebookEdit does not, as in the reference. A file entry that does not decode costs only itself (class 7).
+ * Read before the result is applied: only a call that is still running is counted, as the projection of the result is.
+ */
+const changedLines = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  event: { readonly sessionID: SessionSchema.ID; readonly assistantMessageID: SessionMessage.ID; readonly id: string; readonly metadata?: Readonly<Record<string, Schema.Json>> },
+) {
+  const none = { added: 0, removed: 0 }
+  const files = event.metadata?.files
+  if (!Array.isArray(files)) return none
+  const stored = yield* db
+    .select({ data: SessionMessageTable.data })
+    .from(SessionMessageTable)
+    .where(
+      and(eq(SessionMessageTable.id, event.assistantMessageID), eq(SessionMessageTable.session_id, event.sessionID)),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  const content = (stored?.data as { readonly content?: unknown } | undefined)?.content
+  if (!Array.isArray(content)) return none
+  const call = content
+    .toReversed()
+    .flatMap((part) => {
+      const decoded = decodeCall(part)
+      return decoded._tag === "Some" && decoded.value.id === event.id ? [decoded.value] : []
+    })
+    .at(0)
+  if (call?.state.status !== "running" || !["Edit", "Write", "Patch"].includes(ToolNames.canonical(call.name))) return none
+  return files.flatMap((file) => {
+    const counts = decodeFileLines(file)
+    return counts._tag === "Some" ? [counts.value] : []
+  }).reduce((total, counts) => ({ added: total.added + counts.additions, removed: total.removed + counts.deletions }), none)
+})
+
 // Terminal events for active projections stay on the parent, so forks copy only settled rows. Session.fork asks the
 // same question for its exact-fork tail check, so the copy rule lives in one place.
 export const settledRows = [
@@ -94,7 +144,11 @@ const recordUsage = Effect.fnUntraced(function* (
   db: DatabaseService,
   event: { readonly durable: { readonly seq: number }; readonly created: number },
   kind: "usage" | "side_query",
-  value: Usage & { readonly sessionID: SessionSchema.ID; readonly source: string },
+  value: Usage & {
+    readonly sessionID: SessionSchema.ID
+    readonly source: string
+    readonly model?: { readonly providerID: string; readonly id: string }
+  },
 ) {
   const session = yield* db
     .select({ id: SessionTable.id })
@@ -117,6 +171,8 @@ const recordUsage = Effect.fnUntraced(function* (
       tokens_reasoning: value.tokens.reasoning,
       tokens_cache_read: value.tokens.cache.read,
       tokens_cache_write: value.tokens.cache.write,
+      provider_id: value.model?.providerID ?? null,
+      model_id: value.model?.id ?? null,
     })
     .onConflictDoNothing()
     .run()
@@ -219,6 +275,8 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
       tokens_reasoning: 0,
       tokens_cache_read: 0,
       tokens_cache_write: 0,
+      lines_added: 0,
+      lines_removed: 0,
       time_created: event.created,
       time_updated: event.created,
     })
@@ -545,6 +603,8 @@ const layer = Layer.effectDiscard(
             metadata: event.data.metadata,
             permission: event.data.permissions,
             version: event.data.version,
+            lines_added: 0,
+            lines_removed: 0,
             time_created: event.created,
             time_updated: event.created,
           })
@@ -833,7 +893,25 @@ const layer = Layer.effectDiscard(
     yield* bus.project(SessionEvent.Tool.Input.Started, (event) => run(db, event))
     yield* bus.project(SessionEvent.Tool.Input.Ended, (event) => run(db, event))
     yield* bus.project(SessionEvent.Tool.Called, (event) => run(db, event))
-    yield* bus.project(SessionEvent.Tool.Success, (event) => run(db, event))
+    yield* bus.project(SessionEvent.Tool.Success, (event) =>
+      Effect.gen(function* () {
+        const lines = yield* changedLines(db, event.data)
+        yield* run(db, event)
+        if (lines.added === 0 && lines.removed === 0) return
+        // A session from before the counter keeps null columns, and null plus a count stays null, so it never starts
+        // from a partial count.
+        yield* db
+          .update(SessionTable)
+          .set({
+            lines_added: sql`${SessionTable.lines_added} + ${lines.added}`,
+            lines_removed: sql`${SessionTable.lines_removed} + ${lines.removed}`,
+            time_updated: sql`${SessionTable.time_updated}`,
+          })
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .run()
+          .pipe(Effect.orDie)
+      }),
+    )
     yield* bus.project(SessionEvent.Tool.Failed, (event) => run(db, event))
     yield* bus.project(SessionEvent.Tool.Overridden, (event) => run(db, event))
     yield* bus.project(SessionEvent.Reasoning.Started, (event) => run(db, event))

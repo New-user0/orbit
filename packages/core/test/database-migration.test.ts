@@ -22,6 +22,7 @@ import sessionInboxMigration from "@orbit/core/database/migration/20260812181746
 import sessionViewedStateMigration from "@orbit/core/database/migration/20260819222447_session_viewed_state"
 import sessionRetentionMigration from "@orbit/core/database/migration/20261024013745_session_retention"
 import sessionRemovedMigration from "@orbit/core/database/migration/20261024071601_session_removed"
+import sessionCostMigration from "@orbit/core/database/migration/20261101042827_session_cost"
 import { SessionRemovedTable, SessionStatsArchiveTable } from "@orbit/core/session/sql"
 import { getTableConfig } from "drizzle-orm/sqlite-core"
 import { Global } from "@orbit/util/global"
@@ -277,6 +278,30 @@ describe("DatabaseMigration", () => {
             .toSorted(),
         )
         expect(columns.find((column) => column.name === "id")?.pk).toBe(1)
+      }),
+    )
+  })
+
+  // An existing database gets the edit-line counts and the model on each usage record, all of them empty for old rows.
+  test("adds the line counts and the usage model to an existing database", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session_v2 (id text PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE session_usage (id text PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO session_v2 (id) VALUES ('ses_old')`)
+
+        yield* DatabaseMigration.applyOnly(db, [sessionCostMigration])
+        yield* DatabaseMigration.applyOnly(db, [sessionCostMigration])
+
+        const names = (table: string) =>
+          db.all<{ name: string }>(sql`SELECT name FROM pragma_table_info(${table})`).pipe(
+            Effect.map((columns) => columns.map((column) => column.name)),
+          )
+        expect(yield* names("session_v2")).toEqual(expect.arrayContaining(["lines_added", "lines_removed"]))
+        expect(yield* names("session_usage")).toEqual(expect.arrayContaining(["provider_id", "model_id"]))
+        const old = yield* db.all<{ lines_added: number | null }>(sql`SELECT lines_added FROM session_v2`)
+        expect(old).toEqual([{ lines_added: null }])
       }),
     )
   })

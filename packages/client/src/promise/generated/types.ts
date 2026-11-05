@@ -324,6 +324,8 @@ export type SessionContextUsageSkill = { id: string; tokens: number }
 
 export type SessionContextUsageNamed = { name: string; tokens: number }
 
+export type SessionCostLines = { added: number; removed: number }
+
 export type InstructionStatusFile = {
   path: string
   kind: "managed" | "user" | "project" | "local"
@@ -739,6 +741,16 @@ export type AgentMcpServer =
 export type ConfigHooksHook = ConfigHooksCommand | ConfigHooksPrompt | ConfigHooksAgent | ConfigHooksHttp
 
 export type PluginInfo = { id?: string; source: PluginSource; features: PluginFeatures; state: PluginState }
+
+export type SessionCostRow = {
+  providerID: string
+  modelID: string
+  responses: number
+  tokens: TokenUsageInfo
+  cost: MoneyUSD
+  unrecorded: number
+  zero: number
+}
 
 export type SessionRevert = { messageID: string; partID?: string; snapshot?: string; files?: Array<FileDiffInfo> }
 
@@ -1164,7 +1176,7 @@ export type SessionUsageRecorded = {
   type: "session.usage.recorded"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { sessionID: string; source: "title" | "compaction"; cost: MoneyUSD; tokens: TokenUsageInfo }
+  data: { sessionID: string; source: "title" | "compaction"; model?: ModelRef; cost: MoneyUSD; tokens: TokenUsageInfo }
 }
 
 export type SessionSideQueryRecorded = {
@@ -1174,7 +1186,7 @@ export type SessionSideQueryRecorded = {
   type: "session.side_query.recorded"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { sessionID: string; purpose: string; cost: MoneyUSD; tokens: TokenUsageInfo }
+  data: { sessionID: string; purpose: string; model?: ModelRef; cost: MoneyUSD; tokens: TokenUsageInfo }
 }
 
 export type LocationShutdown = {
@@ -2133,6 +2145,17 @@ export type ProviderInfo = {
 export type PermissionRuleset = Array<PermissionRule>
 
 export type ConfigHooksMatcher = { matcher?: string; hooks: Array<ConfigHooksHook> }
+
+export type SessionCostInfo = {
+  cost: MoneyUSD
+  own: MoneyUSD
+  subagents: MoneyUSD
+  other?: MoneyUSD
+  api?: number
+  wall?: number
+  lines?: SessionCostLines
+  rows: Array<SessionCostRow>
+}
 
 export type SessionRevertStaged = {
   id: string
@@ -5550,6 +5573,10 @@ export type SessionContextOutput = { data: Array<SessionMessageInfo> }["data"]
 export type SessionContextUsageInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionContextUsageOutput = { data: SessionContextUsageInfo }["data"]
+
+export type SessionCostInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionCostOutput = { data: SessionCostInfo }["data"]
 
 export type SessionDiffInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

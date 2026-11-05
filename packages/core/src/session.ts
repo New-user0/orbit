@@ -51,6 +51,7 @@ import { InstructionState } from "./session/instruction-state.js"
 import { SessionGenerate } from "./session/generate.js"
 import { SessionInstructionPreview } from "./session/instruction-preview.js"
 import { SessionContextUsage } from "./session/context-usage.js"
+import { SessionCost } from "./session/cost.js"
 import { SessionCommand } from "./session/command.js"
 import {
   SessionMove,
@@ -213,6 +214,10 @@ export interface Interface {
   readonly contextUsage: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<SessionContextUsage.Info, Effect.Error<ReturnType<typeof SessionContextUsage.analyze>>>
+  /** What the session and its subagents have cost, by model, from the stored rows alone. */
+  readonly cost: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<Effect.Success<ReturnType<typeof SessionCost.summary>>, NotFoundError>
   readonly command: (input: {
     sessionID: SessionSchema.ID
     command: string
@@ -496,6 +501,7 @@ const layer = Layer.effect(
           Effect.provideService(Instance.Service, instances),
           Effect.provideService(Database.Service, database),
         ),
+      cost: (sessionID) => SessionCost.summary(sessionID).pipe(Effect.provideService(Database.Service, database)),
       command: Effect.fn("Session.command")(function* (input) {
         const session = yield* result.get(input.sessionID)
         return yield* SessionCommand.execute({ ...input, session }).pipe(

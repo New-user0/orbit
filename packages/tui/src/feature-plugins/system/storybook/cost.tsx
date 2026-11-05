@@ -2,7 +2,8 @@ import type { Plugin } from "@orbit/plugin/tui"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, createSignal } from "solid-js"
 import { CostView } from "../../../component/dialog-cost"
-import type { CostSummary } from "../../../util/cost"
+import type { SessionCost } from "@orbit/schema/session-cost"
+import { costSummary, type CostSummary } from "../../../util/cost"
 import type { Story } from "./index"
 import { StoryFooter } from "./footer"
 
@@ -13,110 +14,76 @@ const tokens = (scale: number) => ({
   cache: { read: 90_000 * scale, write: 6_000 * scale },
 })
 
-// Fixture summaries: a priced session with two models, one with a model that has no price, and a session with nothing.
+// Fixtures state plain numbers where the schema brands money.
+const row = (modelID: string, overrides: Record<string, unknown> = {}) =>
+  ({
+    providerID: "a",
+    modelID,
+    responses: 3,
+    tokens: tokens(1),
+    cost: 0,
+    unrecorded: 0,
+    zero: 0,
+    ...overrides,
+  }) as unknown as SessionCost.Row
+const summary = (info: Record<string, unknown>) =>
+  costSummary({ cost: 0, own: 0, subagents: 0, rows: [], ...info } as unknown as SessionCost.Info, undefined)
+
+// Fixture summaries: a priced session with two models, a model with no price, a partly priced session, subagents,
+// spend no row explains, a session from before lines were counted, and a session with nothing.
 const FIXTURES: ReadonlyArray<{ label: string; summary: CostSummary }> = [
   {
     label: "two priced models",
-    summary: {
+    summary: summary({
       cost: 1.2345,
-      partial: false,
-      subagents: undefined,
-      other: undefined,
-      loaded: undefined,
-      tokens: tokens(3),
+      own: 1.2345,
       wall: 18 * 60_000 + 5_000,
       api: 6 * 60_000 + 40_000,
-      models: [
-        { providerID: "a", modelID: "large", name: "Large", responses: 5, tokens: tokens(2), cost: 1.0, unpriced: 0 },
-        { providerID: "a", modelID: "small", name: "Small", responses: 3, tokens: tokens(1), cost: 0.2345, unpriced: 0 },
+      lines: { added: 214, removed: 37 },
+      rows: [
+        row("large", { responses: 5, tokens: tokens(2), cost: 1.0 }),
+        row("small", { cost: 0.2345 }),
       ],
-    },
+    }),
   },
   {
     label: "price unknown",
-    summary: {
-      cost: undefined,
-      partial: false,
-      subagents: undefined,
-      other: undefined,
-      loaded: undefined,
-      tokens: tokens(1),
-      wall: undefined,
-      api: undefined,
-      models: [
-        { providerID: "local", modelID: "mystery", name: "Mystery", responses: 2, tokens: tokens(1), cost: undefined, unpriced: 2 },
-      ],
-    },
+    summary: summary({ rows: [row("mystery", { providerID: "local", responses: 2, unrecorded: 2 })] }),
   },
   {
     label: "partly priced",
-    summary: {
+    summary: summary({
       cost: 0.5,
-      partial: true,
-      subagents: undefined,
-      other: undefined,
-      loaded: undefined,
-      tokens: tokens(2),
+      own: 0.5,
       wall: 95_000,
       api: 40_000,
-      models: [
-        { providerID: "a", modelID: "large", name: "Large", responses: 2, tokens: tokens(1), cost: 0.5, unpriced: 1 },
-        { providerID: "local", modelID: "mystery", name: "Mystery", responses: 1, tokens: tokens(1), cost: undefined, unpriced: 1 },
-      ],
-    },
-  },
-  {
-    label: "partly loaded history",
-    summary: {
-      cost: 0.5,
-      partial: false,
-      subagents: undefined,
-      other: undefined,
-      loaded: 1,
-      tokens: tokens(2),
-      wall: 95_000,
-      api: 40_000,
-      models: [
-        { providerID: "a", modelID: "large", name: "Large", responses: 1, tokens: tokens(1), cost: 0.3, unpriced: 0 },
-      ],
-    },
+      rows: [row("large", { responses: 2, cost: 0.5, unrecorded: 1 }), row("mystery", { providerID: "local", unrecorded: 1, responses: 1 })],
+    }),
   },
   {
     label: "with subagents",
-    summary: {
+    summary: summary({
       cost: 2,
-      partial: false,
+      own: 1.2,
       subagents: 0.8,
-      other: undefined,
-      loaded: undefined,
-      tokens: tokens(2),
       wall: 95_000,
       api: 40_000,
-      models: [
-        { providerID: "a", modelID: "large", name: "Large", responses: 2, tokens: tokens(2), cost: 1.2, unpriced: 0 },
-      ],
-    },
+      lines: { added: 3, removed: 0 },
+      rows: [row("large", { responses: 4, tokens: tokens(2), cost: 2 })],
+    }),
   },
   {
-    label: "other usage",
-    summary: {
+    label: "other usage, no line counts",
+    summary: summary({
       cost: 0.62,
-      partial: false,
-      subagents: undefined,
+      own: 0.62,
       other: 0.12,
-      loaded: undefined,
-      tokens: tokens(2),
       wall: 95_000,
       api: 40_000,
-      models: [
-        { providerID: "a", modelID: "large", name: "Large", responses: 2, tokens: tokens(2), cost: 0.5, unpriced: 0 },
-      ],
-    },
+      rows: [row("large", { responses: 2, tokens: tokens(2), cost: 0.5 })],
+    }),
   },
-  {
-    label: "no responses",
-    summary: { cost: 0, partial: false, subagents: undefined, other: undefined, loaded: undefined, tokens: tokens(0), wall: undefined, api: undefined, models: [] },
-  },
+  { label: "no responses", summary: summary({ lines: { added: 0, removed: 0 } }) },
 ]
 
 function CostStory(props: { context: Plugin.Context }) {
