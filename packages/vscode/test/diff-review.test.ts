@@ -486,6 +486,19 @@ test("an added file inside opens against an empty left side", async () => {
   expect(seen.reads()).toEqual([])
 })
 
+test("a changed file that is gone when the diff opens gets the changed-since-read notice, not an empty left side", async () => {
+  // The agent read the file as empty, and it was removed since: the patch would apply to an empty text, so only the
+  // failed read tells the two apart.
+  const gone = path.join(project, "vanished.txt")
+  const seen = recorded()
+  const shown = editor({ folders: [project], window: [project] })
+  const review = new Review(shown.host, seen.recorder)
+  expect(await review.open(item([{ file: "vanished.txt", place: gone, patch: added, status: "modified" }]), true)).toBe(false)
+  expect(seen.reads()).toEqual([gone])
+  expect(shown.tabs).toEqual([])
+  expect(shown.warnings).toEqual([changedNotice])
+})
+
 test("a move inside shows the old file against the proposal at its new name", async () => {
   const seen = recorded()
   const shown = editor({ folders: [project], window: [project] })
@@ -1216,9 +1229,11 @@ describe("a request without revisable opens a read-only preview and closing it a
       expect(shown.tabs.length).toBe(row.request.files.length)
       for (const tab of shown.tabs) {
         expect(tab).toMatchObject({ mode: "preview", right: { scheme: "orbit-proposed" } })
-        await review.closed(tab.title)
+        // While the preview is open, neither a save of its side, Accept nor Reject answers; nor does closing it.
         await review.provider.writeFile(tab.right.path, new TextEncoder().encode("x\n"))
+        await review.accept(tab.right.path)
         await review.reject(tab.right.path)
+        await review.closed(tab.title)
       }
       expect(shown.replies).toEqual([])
     })
@@ -1227,7 +1242,15 @@ describe("a request without revisable opens a read-only preview and closing it a
 test("one malformed file entry costs only itself", async () => {
   const shown = editor({ folders: [project], window: [project] })
   const review = new Review(shown.host)
-  const request = item([{ file: 3, patch }, "junk", { place: inside }, { file: "a.txt", place: 7, patch }, { file: "a.txt", place: inside, patch }])
+  const request = item([
+    { file: 3, patch },
+    "junk",
+    { place: inside },
+    { file: "a.txt", place: 7, patch },
+    { file: "a.txt", place: inside, from: 5, patch },
+    { file: "a.txt", place: inside, status: 1, patch },
+    { file: "a.txt", place: inside, patch },
+  ])
   expect(request.files).toHaveLength(1)
   await review.open(request, false)
   expect(shown.tabs).toHaveLength(1)
@@ -1264,6 +1287,11 @@ test("the card says Allowed with your changes only when the server approved the 
     "Allowed",
     "Always allowed",
     "Rejected",
+  ])
+  // Only an allowed once says "with your changes", whatever the item carries.
+  expect([answeredLabel({ status: "reject", revised: true }), answeredLabel({ status: "always", revised: true })]).toEqual([
+    "Rejected",
+    "Always allowed",
   ])
 })
 
@@ -1303,6 +1331,7 @@ test("a partial or binary entry in the changes view costs only itself", () => {
     { file: "image.bin", status: "modified", patch: "Binary files a/image.bin and b/image.bin differ\n" },
     { file: 7, status: "modified", patch: "x" },
     { file: "new.txt", status: "added", patch: whole("new.txt", "", "fresh\n") },
+    { file: "q.txt", status: "modified", patch: 9 },
   ])
   expect(view).toEqual([
     { label: "a.txt", before: "one\n", after: "two\n" },
@@ -1310,6 +1339,7 @@ test("a partial or binary entry in the changes view costs only itself", () => {
     { label: "image.bin", text: "binary file, not shown" },
     { label: "file 4", text: "this entry could not be read" },
     { label: "new.txt", before: "", after: "fresh\n" },
+    { label: "file 6", text: "this entry could not be read" },
   ])
 })
 
@@ -1491,6 +1521,17 @@ describe("restore files", () => {
     expect(run.notes().at(-1)).toEqual({ text: "Restored 2 files to how they were before this prompt.", tone: "muted" })
   })
 
+  test("a chat that continues a session can view the changes of a prompt sent before", async () => {
+    const run = await prompted()
+    const asked = [...run.items.values()].find((entry) => entry.type === "permission")
+    const again = await chat(work)
+    await again.controller.open(asked?.type === "permission" ? asked.sessionID : "")
+    const user = [...again.items.values()].find((entry) => entry.type === "user")
+    expect(user?.type === "user" && user.messageID).toBe(run.messageID)
+    const files = await again.controller.changes(run.messageID)
+    expect(changesView(files ?? []).map((entry) => entry.label).sort()).toEqual(["r1.txt", "r2.txt"])
+  })
+
   test("a restore the server refuses says why and changes nothing", async () => {
     const log = recording()
     const run = await prompted({ fetcher: log.fetcher })
@@ -1651,6 +1692,9 @@ test("file names in titles, notes and the restore list are written out", async (
   expect(restoreQuestion({ canRewind: true, filesChanged: [inside], insertions: 0, deletions: 2 }, project).message).toContain(
     "Restore 1 file to",
   )
+  // A file on another drive is shown as the server named it, not as Windows rewrites it when asked for a relative path.
+  const elsewhere = /^e:/i.test(project) ? "F:/elsewhere/x.txt" : "E:/elsewhere/x.txt"
+  expect(restoreQuestion({ canRewind: true, filesChanged: [elsewhere, inside] }, project).detail).toBe(`${elsewhere}\na.txt`)
 })
 
 test("the sides of a review, a preview and a changes view are named without the file's own name", async () => {

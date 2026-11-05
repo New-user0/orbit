@@ -300,6 +300,10 @@ test("the Accept and Reject title actions answer through the controller, and Acc
   await commands.get("orbit.review.accept")!(accepted)
   expect(replies).toEqual([["per_accept", "once", undefined]])
   const [, , rejected] = await open("per_reject")
+  // A document of another scheme at the review side's own path is not the review's.
+  await commands.get("orbit.review.accept")!(uri({ scheme: "file", path: rejected.path }))
+  await commands.get("orbit.review.reject")!(uri({ scheme: "file", path: rejected.path }))
+  expect(replies).toHaveLength(1)
   await commands.get("orbit.review.reject")!(rejected)
   expect(replies.at(-1)).toEqual(["per_reject", "reject", undefined])
   // Only the review's own documents.
@@ -501,6 +505,29 @@ test("Open diff on a question open for review brings its tab forward in its own 
   expect(executed.length).toBe(before + 1)
   await fire(title)
   expect(replies).toEqual([["per_reveal", "once", undefined]])
+})
+
+test("closing Orbit tabs saves the unsaved edits of a review's own side and of no other document", async () => {
+  question = permissionItem({
+    id: "per_preview_dirty",
+    sessionID: "ses_glue",
+    action: "Edit",
+    resources: ["glue.txt"],
+    revisable: false,
+    metadata: { files: [{ file: "glue.txt", place: file, patch }] },
+  })
+  await chat().receive({ type: "diff", id: question.id })
+  const [, , preview, title] = lastDiff()
+  expect(preview.scheme).toBe("orbit-proposed")
+  // VS Code keeps such a side read-only; were its document ever dirty, the extension still would not save it.
+  const document = { uri: preview, isDirty: true, save: async () => (saved.push(preview.path), true) }
+  documents.push(document)
+  await chat().send("after the preview")
+  await Bun.sleep(50)
+  expect(saved).not.toContain(preview.path)
+  document.isDirty = false
+  await fire(title)
+  expect(replies).toEqual([])
 })
 
 // Last of the review rows: the review is disposed from here on.
