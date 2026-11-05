@@ -2087,8 +2087,11 @@ When the Orbit chat in VS Code gets an Edit or Write approval, the diff now open
 file as it is on the left and the proposal on the right, which you can edit. Saving (or the tab's Accept button)
 approves your version once; closing the tab approves the proposal as it stands; the tab's Reject button declines. The
 card keeps its buttons, and the first answer from anywhere wins; the tab then closes. Tabs that Orbit closes itself
-answer nothing: when the question is answered elsewhere, when you send a new prompt (every Orbit tab closes then), and
-when the window closes. Only the answered question's tabs close; the review tabs of other questions stay open and still
+answer nothing: when the question is answered elsewhere, when you send a new prompt, start a New Session or pick a
+session from history (every Orbit tab closes then, and the question stays waiting on its card), and when the window
+closes. The card says to answer in the editor only while its review tab is open: once Orbit closes that tab, or you
+close it and the service refuses or does not take the answer in time, the card goes back to its buttons alone. Only
+the answered question's tabs close; the review tabs of other questions stay open and still
 answer. When the question is answered, a new prompt is sent or the window closes while its tab is still opening, no tab
 opens. "Open diff" on a question that is open for review brings its tab forward and opens no second one. Moving
 the tab to another editor group or window answers nothing either. Before, "Open diff"

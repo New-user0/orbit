@@ -1461,8 +1461,13 @@ every other extension):
   through the server's reply route (`content` with a `once` reply). Only the person's own answers count: a tab the
   extension closes itself, a tab moved to another group or window (VS Code reports its close in the old group), and an
   auto save (`onWillSaveTextDocument` with a reason other than `Manual`) answer nothing; the extension writes no file
-  (classes 8 and 12). An answer closes only its own question's tabs; an open still reading when its question is
-  answered, a new prompt is sent or the window closes shows nothing; and "Open diff" on a question open for review
+  (classes 8 and 12). A new prompt, New Session and a session picked from history close every Orbit tab before the
+  chat starts over, so no review outlives its card and a later save, close or Reject of an old tab sends nothing while
+  the question stays pending; a pending card says to answer in the editor only while its review tab is open (classes 8,
+  12 and 13; proof: the X row "New Session and a session picked from history close every Orbit tab without answering"
+  and the D rows "New Session or a session from history closes the review tabs unanswered" and "a review tab gone
+  unanswered stops marking its card"). An answer closes only its own question's tabs; an open still reading when its
+  question is answered, a new prompt is sent or the window closes shows nothing; and "Open diff" on a question open for review
   brings that tab forward instead of opening a second editable one (classes 8 and 12; proof: the D rows "answering one
   question closes only its own tabs", "an open still reading ... shows nothing" and "Open diff on a question open for
   review shows its tab again"). A tab the extension closes keeps its sides readable until VS Code reports it closed, so
