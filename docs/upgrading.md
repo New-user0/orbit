@@ -2088,7 +2088,10 @@ file as it is on the left and the proposal on the right, which you can edit. Sav
 approves your version once; closing the tab approves the proposal as it stands; the tab's Reject button declines. The
 card keeps its buttons, and the first answer from anywhere wins; the tab then closes. Tabs that Orbit closes itself
 answer nothing: when the question is answered elsewhere, when you send a new prompt (every Orbit tab closes then), and
-when the window closes. Moving the tab to another editor group or window answers nothing either. Before, "Open diff"
+when the window closes. Only the answered question's tabs close; the review tabs of other questions stay open and still
+answer. When the question is answered, a new prompt is sent or the window closes while its tab is still opening, no tab
+opens. "Open diff" on a question that is open for review brings its tab forward and opens no second one. Moving
+the tab to another editor group or window answers nothing either. Before, "Open diff"
 showed a read-only diff and only the card could answer. When the question is answered elsewhere while the tab holds
 unsaved edits, the tab closes without asking whether to save them, and those edits are not sent. The tab's title names
 the file; the documents in it are called `proposal` with the file's extension.

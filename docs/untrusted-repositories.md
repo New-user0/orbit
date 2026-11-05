@@ -1461,9 +1461,13 @@ every other extension):
   through the server's reply route (`content` with a `once` reply). Only the person's own answers count: a tab the
   extension closes itself, a tab moved to another group or window (VS Code reports its close in the old group), and an
   auto save (`onWillSaveTextDocument` with a reason other than `Manual`) answer nothing; the extension writes no file
-  (classes 8 and 12). A tab the extension closes keeps its sides readable until VS Code reports it closed, so the save
-  VS Code makes on the way succeeds without asking the person again. Each virtual document is named by a fixed word and
-  the file's extension when that is plain, never by the file's own name, because VS Code names it in its own
+  (classes 8 and 12). An answer closes only its own question's tabs; an open still reading when its question is
+  answered, a new prompt is sent or the window closes shows nothing; and "Open diff" on a question open for review
+  brings that tab forward instead of opening a second editable one (classes 8 and 12; proof: the D rows "answering one
+  question closes only its own tabs", "an open still reading ... shows nothing" and "Open diff on a question open for
+  review shows its tab again"). A tab the extension closes keeps its sides readable until VS Code reports it closed, so
+  the save VS Code makes on the way succeeds without asking the person again. Each virtual document is named by a fixed
+  word and the file's extension when that is plain, never by the file's own name, because VS Code names it in its own
   save-failure notification, which draws links (class 9). Proof: `test/diff-review.test.ts` (the containment table with a
   marker outside and a control inside, the share and device spellings with an empty disk recorder, the linked
   worktree, the answers on a real `orb serve`), `test/approval-matrix.test.ts` (every matrix row reads only its place
