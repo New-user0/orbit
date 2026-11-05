@@ -1380,18 +1380,76 @@ test("the changes view reads no file, whatever the names", async () => {
 })
 
 test("a server that cannot diff a prompt gets a note", async () => {
-  const old = recording((url) =>
-    url.pathname.endsWith("/diff")
-      ? Promise.resolve(Response.json({ _tag: "InvalidRequestError", message: "Unknown field scope" }, { status: 400 }))
-      : undefined,
-  )
-  const run = await chat(work, { fetcher: old.fetcher, auto: true })
-  await run.controller.send(calls())
+  // A prompt that moves into a worktree and then writes there spans a location change, which the server cannot diff as
+  // one prompt. The note gives the server's own reason; restarting the service would not help.
+  const repo = path.join(root, "moves")
+  await fs.mkdir(repo, { recursive: true })
+  await Bun.write(path.join(repo, "seed.txt"), "seed\n")
+  git(repo, "init", "--quiet")
+  git(repo, "add", ".")
+  git(repo, "commit", "--quiet", "-m", "init")
+  await server.client.location.trust.update({ location: { directory: repo }, trust: true, persist: false })
+  const run = await chat(repo, { auto: true })
+  await run.controller.send(calls([{ name: "EnterWorktree", args: { name: "exp" } }], [write("x.txt", "x\n")]))
   await run.idle()
   const user = [...run.items.values()].find((entry) => entry.type === "user")
+  const before = run.notes().length
   expect(await run.controller.changes(user?.type === "user" ? user.messageID! : "msg_x")).toBeUndefined()
-  expect(run.notes().at(-1)).toMatchObject({ tone: "error" })
-  expect(run.notes().at(-1)?.text).toContain("orb service restart")
+  expect(run.notes().slice(before)).toEqual([
+    { tone: "error", text: "Could not list the changes: Turn range spans a location change" },
+  ])
+})
+
+test("View changes and a restore give up on a service that does not answer, with one note each", async () => {
+  await Bun.write(path.join(work, "slow.txt"), "one\n")
+  git(work, "add", ".")
+  const run = await chat(work, { auto: true })
+  await run.controller.send(calls([read("slow.txt")], [write("slow.txt", "two\n")]))
+  await run.idle()
+  const user = [...run.items.values()].find((entry) => entry.type === "user")
+  const messageID = user?.type === "user" ? user.messageID! : ""
+  const asked = [...run.items.values()].find((entry) => entry.type === "permission")
+  const sessionID = asked?.type === "permission" ? asked.sessionID : ""
+  const hang = (init: RequestInit | undefined) =>
+    new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)))
+  // A chat on the same session whose service holds the diff, the dry run, or only the restore itself.
+  const held = async (at: (url: URL, body: string) => boolean) => {
+    const log = recording((url, init) =>
+      at(url, typeof init?.body === "string" ? init.body : "") ? hang(init) : undefined,
+    )
+    const again = await chat(work, { fetcher: log.fetcher, wait: { read: 20_000, grant: 300 } })
+    await again.controller.open(sessionID)
+    log.sent.length = 0
+    return { ...again, log, before: again.notes().length }
+  }
+  const diff = await held((url) => url.pathname.endsWith("/diff"))
+  expect(await diff.controller.changes(messageID)).toBeUndefined()
+  expect(diff.notes().slice(diff.before)).toEqual([
+    { tone: "error", text: "Could not list the changes: the Orbit service did not answer in time." },
+  ])
+  expect(diff.log.sent.filter((call) => call.path.endsWith("/diff"))).toHaveLength(1)
+
+  let confirmed = 0
+  const confirm = async () => (confirmed++, true)
+  const dry = await held((url, body) => url.pathname.endsWith("/revert/files") && body.includes("dryRun"))
+  await dry.controller.restore(messageID, confirm)
+  expect(confirmed).toBe(0)
+  expect(dry.notes().slice(dry.before)).toEqual([
+    { tone: "error", text: "Files not restored: the Orbit service did not answer in time." },
+  ])
+  expect(dry.log.sent.filter((call) => call.path.endsWith("/revert/files"))).toHaveLength(1)
+
+  const real = await held((url, body) => url.pathname.endsWith("/revert/files") && !body.includes("dryRun"))
+  await real.controller.restore(messageID, confirm)
+  expect(confirmed).toBe(1)
+  expect(real.notes().slice(real.before)).toEqual([
+    {
+      tone: "error",
+      text: "The Orbit service did not answer the restore in time. It may still finish: look at the files before you restore again.",
+    },
+  ])
+  expect(real.log.sent.filter((call) => call.path.endsWith("/revert/files"))).toHaveLength(2)
+  expect(await Bun.file(path.join(work, "slow.txt")).text()).toBe("two\n")
 })
 
 test("a prompt's changes are its own, not those of a prompt steered into the same turn", async () => {

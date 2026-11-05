@@ -299,15 +299,20 @@ export class Controller {
   async changes(messageID: string) {
     if (!(await this.trustedNow())) return undefined
     if (!this.session) return void this.note("Send a message first: this chat has no session yet.", "error")
-    return this.client.session.diff({ sessionID: this.session, from: messageID, scope: "prompt" }).catch((error: unknown) => {
-      this.note(
-        error instanceof Error && error.name === "InvalidRequestError"
-          ? "This Orbit service cannot list the changes of one prompt. Run `orb service restart`, then try again."
-          : `Could not list the changes: ${plain(message(error))}`,
-        "error",
+    // Every refusal gets the server's own sentence: a prompt that moved into a worktree, for one, cannot be listed. A
+    // service older than `scope` ignores it and lists the whole turn instead (docs/upgrading.md).
+    return this.client.session
+      .diff(
+        { sessionID: this.session, from: messageID, scope: "prompt" },
+        { signal: AbortSignal.timeout(this.wait.grant) },
       )
-      return undefined
-    })
+      .catch((error: unknown) => {
+        this.note(
+          `Could not list the changes: ${late(error) ? "the Orbit service did not answer in time." : plain(message(error))}`,
+          "error",
+        )
+        return undefined
+      })
   }
 
   /**
@@ -318,15 +323,26 @@ export class Controller {
     if (!(await this.trustedNow())) return
     if (!this.session) return this.note("Send a message first: this chat has no session yet.", "error")
     const target = { sessionID: this.session, messageID }
-    const fail = (error: unknown) => {
-      this.note(`Files not restored: ${plain(message(error))}`, "error")
+    // Each call takes at most `limits.grant`. A restore that gave up waiting may still finish on the server, so its note
+    // does not say that nothing changed.
+    const limit = () => ({ signal: AbortSignal.timeout(this.wait.grant) })
+    const fail = (slow: string) => (error: unknown) => {
+      this.note(late(error) ? slow : `Files not restored: ${plain(message(error))}`, "error")
       return undefined
     }
-    const dry = await this.client.session.revert.files({ ...target, dryRun: true }).catch(fail)
+    const dry = await this.client.session.revert
+      .files({ ...target, dryRun: true }, limit())
+      .catch(fail("Files not restored: the Orbit service did not answer in time."))
     if (!dry) return
     if (!dry.canRewind) return this.note(`Files not restored: ${plain(dry.error ?? "the server cannot restore them")}`, "error")
     if (!(await confirm(dry))) return
-    const done = await this.client.session.revert.files(target).catch(fail)
+    const done = await this.client.session.revert
+      .files(target, limit())
+      .catch(
+        fail(
+          "The Orbit service did not answer the restore in time. It may still finish: look at the files before you restore again.",
+        ),
+      )
     const count = dry.filesChanged?.length ?? 0
     if (done)
       this.note(`Restored ${count} ${count === 1 ? "file" : "files"} to how they were before this prompt.`, "muted")
@@ -807,10 +823,15 @@ function message(error: unknown) {
 // Why an answer was not taken: the server's sentence, written out, or a fixed one when it did not answer in time. A late
 // answer may still be taken, since giving up on it here does not stop the server, so that sentence points to the card.
 function refusal(error: unknown) {
-  const cause = error instanceof ClientError ? error.cause : undefined
-  if (typeof cause === "object" && cause !== null && "name" in cause && cause.name === "TimeoutError")
+  if (late(error))
     return "The Orbit service did not answer in time. The card shows the question's state; answer again if it is still waiting."
   return plain(message(error))
+}
+
+// The call gave up because the server did not answer within its time limit.
+function late(error: unknown) {
+  const cause = error instanceof ClientError ? error.cause : undefined
+  return typeof cause === "object" && cause !== null && "name" in cause && cause.name === "TimeoutError"
 }
 
 // A server older than workspace trust has no trust route, and answers 404.
