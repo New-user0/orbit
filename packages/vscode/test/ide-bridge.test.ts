@@ -6,6 +6,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import WebSocket from "ws"
+import { permissionItem } from "../src/controller"
 import { startBridge, type Bridge, type DiffService, type EditorSelection } from "../src/ide-bridge"
 import { contained, disk, Review, tooLargeNotice, type Disk, type Host, type Tab } from "../src/review"
 
@@ -1015,6 +1016,29 @@ test("a question the chat hears answered closes the chat's tabs of it, and leave
   client.socket.send(JSON.stringify({ type: "diff.close", id: "per_a1" }))
   await until(() => editor.closed.length === 1, "the close")
   expect(answers(client)).toEqual([])
+})
+
+// The chat's own review of a question is its alone: a terminal UI's tab of the same question is not the chat's tab, so
+// the chat neither reveals it nor answers through it, and asks its own server for the folders instead.
+test("the chat's open of a question a terminal UI reviews does not take that terminal UI's tab for its own", async () => {
+  const { client, editor, review } = await reviewing()
+  ask(client)
+  await until(() => editor.shown.length === 1, "the tab")
+  const opened = await review.open(
+    permissionItem({
+      id: "per_a1",
+      sessionID: "ses_chat",
+      action: "Edit",
+      resources: ["a.txt"],
+      revisable: true,
+      metadata: { files: [{ file: "a.txt", place: world.inside, patch, status: "modified" }] },
+    }),
+    false,
+  )
+  // This host's server refuses the folders, so the chat opens nothing of its own.
+  expect(opened).toBe(false)
+  expect(editor.replies).toEqual([["ses_chat"]])
+  expect(editor.shown).toHaveLength(1)
 })
 
 // A disk whose first real path waits until the test lets it go, so a close can come while the review is read.
