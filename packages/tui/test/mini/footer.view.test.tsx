@@ -1693,6 +1693,39 @@ test("direct footer rejects local commands submitted with the queue shortcut", a
   }
 })
 
+test("direct footer queues /compact with text only when no project command named compact exists", async () => {
+  const run = async (commands: RunCommand[]) => {
+    const submitted: RunPrompt[] = []
+    const statuses: string[] = []
+    const app = await renderFooter({
+      commands,
+      onSubmit: (prompt) => {
+        submitted.push(prompt)
+        return true
+      },
+      onStatus: (status) => statuses.push(status),
+    })
+    try {
+      await app.renderOnce()
+      await app.mockInput.typeText("/compact keep notes")
+      app.mockInput.pressKey("x", { ctrl: true })
+      app.mockInput.pressEnter()
+      await Bun.sleep(0)
+      return { submitted, statuses }
+    } finally {
+      app.cleanup()
+    }
+  }
+
+  const builtin = await run([])
+  expect(builtin.submitted).toEqual([])
+  expect(builtin.statuses).toContain("this prompt cannot be queued")
+
+  const project = await run([command({ name: "compact", description: "Project compact" })])
+  expect(project.statuses).not.toContain("this prompt cannot be queued")
+  expect(project.submitted.map((item) => item.command?.name)).toEqual(["compact"])
+})
+
 // OpenTUI currently crashes Bun in the full `test/cli/run` directory run here.
 // Re-enable after the upstream OpenTUI fix lands in this repo.
 test.skip("direct footer recreates the frame across command panel transitions", async () => {
@@ -2054,7 +2087,9 @@ test("the mini footer takes the keys of the mini context from the keybindings fi
       {},
       {
         keybindings: KeybindingsFile.decode(
-          JSON.stringify({ contexts: { mini: { "prompt.clear": "ctrl+alt+x" }, prompt: { "prompt.clear": "ctrl+alt+z" } } }),
+          JSON.stringify({
+            contexts: { mini: { "prompt.clear": "ctrl+alt+x" }, prompt: { "prompt.clear": "ctrl+alt+z" } },
+          }),
         ),
       },
     ),

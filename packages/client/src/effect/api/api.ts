@@ -524,6 +524,7 @@ export type SessionCompactInput = {
   readonly sessionID: Session.ID
   readonly id?: SessionMessage.ID | undefined
   readonly delivery?: SessionInbox.Delivery | undefined
+  readonly instructions?: string | undefined
 }
 export type SessionCompactOutput = SessionInbox.Compaction
 export type SessionCompactOperation<E = never> = (input: SessionCompactInput) => Effect.Effect<SessionCompactOutput, E>

@@ -640,7 +640,7 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
-  test("shows an active compaction boundary before live summary output without history replay", async () => {
+  test("compaction progress writes no reply text; the summary arrives whole at the end", async () => {
     const events = feed()
     events.push(connected())
     const ui = footer()
@@ -661,8 +661,15 @@ describe("V2 mini transport", () => {
       id: "evt_compaction_delta",
       created: 2,
       type: "session.compaction.delta",
-      data: { sessionID: "ses_1", text: "Transport" },
+      data: { sessionID: "ses_1", characters: 9 },
     })
+    // An older server still sends the text and no count: it is not written either.
+    events.push({
+      id: "evt_compaction_delta_old",
+      created: 2,
+      type: "session.compaction.delta",
+      data: { sessionID: "ses_1", text: "HOSTILE" },
+    } as never)
     events.push({
       id: "evt_compaction_ended",
       created: 3,
@@ -677,6 +684,7 @@ describe("V2 mini transport", () => {
       { text: "Transport", phase: "progress", messageID: "msg_compaction" },
       { text: "", phase: "final", messageID: "msg_compaction" },
     ])
+    expect(JSON.stringify(ui.commits)).not.toContain("HOSTILE")
     await transport.close()
   })
 

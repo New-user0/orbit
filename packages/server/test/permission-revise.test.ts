@@ -117,7 +117,7 @@ test("a once reply with revised content writes it where the request resolved, wh
   })
   expect(answer.status).toBe(204)
   // Waits for the tool to write, then compares: the base ignores the content and writes the proposal.
-  expect(await until(() => read("a.txt"))).toBe("revised\n")
+  expect(await until(() => written("a.txt"))).toBe("revised\n")
   expect(await fs.readFile(outsideFile, "utf8")).toBe("marker\n")
   expect(await fs.readdir(outside)).toEqual(["marker.txt"])
 }, 60_000)
@@ -126,7 +126,7 @@ test("a once reply with revised content to an Edit writes the person's version, 
   // The session writes the file first, so the Edit that follows edits a file this session knows.
   const session = await start("Write", { file_path: "e.txt", content: "alpha\nbeta\n" })
   expect((await reply(session, (await pending(session, "Edit")).id, { decision: "once" })).status).toBe(204)
-  expect(await until(() => read("e.txt"))).toBe("alpha\nbeta\n")
+  expect(await until(() => written("e.txt"))).toBe("alpha\nbeta\n")
   // The Edit is prompted only once the Write's run is over: a prompt sent while it still runs reaches the model wrapped
   // as a message sent mid-task, which the scripted model does not read as a call.
   await until(async () => ((await client().session.active())[session] ? undefined : true))
@@ -152,7 +152,7 @@ test("revised content with an always reply is a typed 400, and the question stay
   })
   expect((await list(session)).map((item) => item.id)).toContain(request.id)
   expect((await reply(session, request.id, { decision: "once" })).status).toBe(204)
-  expect(await until(() => read("b.txt"))).toBe("proposed\n")
+  expect(await until(() => written("b.txt"))).toBe("proposed\n")
 }, 60_000)
 
 test("revised content on a question that is not an Edit or Write is a typed 400, and the question stays", async () => {
@@ -216,6 +216,12 @@ function reply(sessionID: string, requestID: string, body: Record<string, unknow
 
 function read(name: string) {
   return fs.readFile(path.join(workspace, name), "utf8").catch(() => undefined)
+}
+
+// The tool creates the file before it fills it, so an empty read is a write in progress, not a result.
+async function written(name: string) {
+  const text = await read(name)
+  return text === "" ? undefined : text
 }
 
 async function until<T>(check: () => Promise<T | undefined>, timeout = 30_000) {

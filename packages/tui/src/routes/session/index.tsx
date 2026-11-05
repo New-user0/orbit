@@ -39,6 +39,7 @@ import type {
 import { useLocal } from "../../context/local"
 import { AssistantFooter } from "./assistant-footer"
 import { Locale } from "../../util/locale"
+import { createCompactionProgress } from "./compaction-progress"
 import { bodyText, outputText } from "../../util/renderer"
 import { FilePath } from "../../ui/file-path"
 import { PlanDock } from "./plan-dock"
@@ -1082,14 +1083,13 @@ export function Session(props: {
       title: "Compact session",
       id: "session.compact",
       group: "Session",
-      slash: {
-        name: "compact",
-      },
-      run: () => {
+      slash: { name: "compact", arguments: "optional" as const },
+      run: (input?: string) => {
         const selection = local.model.current()
         void data.session
           .compact({
             sessionID: route.sessionID,
+            instructions: input || undefined,
             model: selection
               ? {
                   providerID: selection.providerID,
@@ -2192,6 +2192,11 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
   const content = createMemo(() => bodyText(text()).trim())
   const color = () => (status() === "failed" && !cancelled() ? theme.text.feedback.error.base : theme.text.muted)
   // Usage of the compaction request itself; the resulting context size only shows on the next assistant step.
+  const progress = createCompactionProgress({
+    running: () => status() === "running",
+    created: () => props.message.time.created,
+    width: () => ctx.width,
+  })
   const usage = () => {
     if (props.message.status === "running" || !props.message.tokens) return
     const tokens = props.message.tokens
@@ -2226,10 +2231,13 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
           <Show when={usage()}>
             <text fg={color()}>· {usage()}</text>
           </Show>
+          <Show when={progress()}>
+            <text fg={color()}>{progress()}</text>
+          </Show>
         </box>
         <box border={["top"]} borderColor={color()} flexGrow={1} />
       </box>
-      <Show when={content()}>
+      <Show when={props.message.status !== "running" && content()}>
         <box paddingTop={1} paddingLeft={3}>
           <markdown
             syntaxStyle={syntax()}

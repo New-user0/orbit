@@ -402,7 +402,7 @@ describe("SessionProjector", () => {
       })
       yield* bus.publish(SessionEvent.Compaction.Delta, {
         sessionID,
-        text: "partial",
+        characters: 7,
       })
       expect(
         yield* db
