@@ -258,7 +258,7 @@ for (const row of rows.filter((item) => item.tool === "Edit" || item.tool === "W
   test(`the terminal UI's compact prompt for ${row.id} names the request's place and no decoy`, async () => {
     const frame = await drawCompact(row)
     const flat = frame.replace(/\s+/g, "")
-    expect(flat).toContain("OpenedchangesinTestEditor")
+    expect(flat).toContain("ReviewinginTestEditor")
     expect(frame).not.toContain("DECOY")
     const own = misleading(row)
     if (own !== undefined) expect(slashed(flat)).not.toContain(slashed(own).replace(/\s+/g, ""))
@@ -267,9 +267,9 @@ for (const row of rows.filter((item) => item.tool === "Edit" || item.tool === "W
     // A link warning only where the request names one: where the file really is, and whether that is outside.
     const tail = (value: string) => value.split(/[\\/]/).slice(-2).join("/")
     if (file?.link) {
-      expect(flat).toContain(file.link.outside ? "outsidethesession'sfolder,throughalink" : "Linktarget:")
+      expect(flat).toContain(file.link.outside ? "outsidethesession'sfolder,throughalink" : "Thelinkleadsto")
       expect(slashed(flat)).toContain(tail(slashed(file.link.place)))
-    } else expect(flat).not.toMatch(/throughalink|Linktarget/)
+    } else expect(flat).not.toMatch(/throughalink|Thelinkleadsto/)
   })
 
 // The prompt writes out the editor's name itself, whoever hands it the name.
@@ -277,7 +277,7 @@ test("the compact prompt writes out the editor name it is given", async () => {
   const frame = await drawCompact(golden.find((row) => row.tool === "Edit")!, "Ed\u001b[31mitor\u202e")
   expect(frame).not.toContain("\u001b")
   expect(frame).not.toContain("\u202e")
-  expect(frame.replace(/\s+/g, "")).toContain("OpenedchangesinEd\\x1b[31mitor\\u{202e}")
+  expect(frame.replace(/\s+/g, "")).toContain("ReviewinginEd\\x1b[31mitor\\u{202e}")
 })
 
 test("the link rows of the matrix name where the link leads", () => {

@@ -438,7 +438,7 @@ function linkWarning(request: Pick<PermissionRequest, "metadata">, format: (inpu
   const link = permissionLink(request)
   if (!link) return undefined
   const place = plain(format(link.place))
-  return link.outside ? `This changes ${place}, outside the session's folder, through a link` : `Link target: ${place}`
+  return link.outside ? `This changes ${place}, outside the session's folder, through a link` : `The link leads to ${place}`
 }
 
 /**
@@ -468,14 +468,14 @@ export function EditorDiffPrompt(props: {
       header={
         <box flexDirection="row" gap={1} flexShrink={0}>
           <text fg={theme.text.feedback.warning.base}>{"▲"}</text>
-          <text fg={theme.text.base} flexShrink={1}>{`Opened changes in ${plain(props.editor)}`}</text>
+          <text fg={theme.text.base} flexShrink={1}>{`Reviewing in ${plain(props.editor)}`}</text>
         </box>
       }
       body={
         <box paddingLeft={1} flexDirection="column" flexShrink={0}>
           <Show when={warning()}>{(line) => <text fg={theme.text.feedback.warning.base}>{line()}</text>}</Show>
           <Show when={process.env.TERM_PROGRAM === "vscode"}>
-            <text fg={theme.text.muted}>Save the file to continue…</text>
+            <text fg={theme.text.muted}>Save in the editor to answer</text>
           </Show>
           <text fg={theme.text.base}>{`Make this change to ${name()}?`}</text>
         </box>

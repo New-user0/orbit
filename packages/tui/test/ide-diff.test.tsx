@@ -322,7 +322,7 @@ async function mount(options: Options = {}) {
 }
 
 // The compact prompt says where the diff opened; the full dialog draws the diff itself.
-const compact = (frame: string) => frame.includes("Opened changes in")
+const compact = (frame: string) => frame.includes("Reviewing in")
 const full = (frame: string) => frame.includes("NEW-LINE-TEXT") && !compact(frame)
 type Setup = Awaited<ReturnType<typeof mount>>
 const opened = (setup: Setup) => setup.until(() => (setup.peer?.of("diff.open").length ?? 0) === 1, "the diff to open")
@@ -343,7 +343,7 @@ test("the diff the TUI opens is the request's place and patch, never the tool in
 test("while the diff is open the prompt says where it opened and asks about the file by name", async () => {
   await using setup = await mount()
   const frame = await setup.until(compact, "the compact prompt")
-  expect(frame).toContain("Opened changes in Test Editor")
+  expect(frame).toContain("Reviewing in Test Editor")
   expect(frame).toContain("Make this change to a.ts?")
   expect(frame).toContain("Allow once")
   expect(frame).toContain("Always allow")
@@ -360,7 +360,7 @@ test("the save hint shows only in the editor's own terminal", async () => {
     else process.env.TERM_PROGRAM = program
     await using setup = await mount()
     const frame = await setup.until(compact, "the compact prompt")
-    expect([program, frame.includes("Save the file to continue")]).toEqual([program, program === "vscode"])
+    expect([program, frame.includes("Save in the editor to answer")]).toEqual([program, program === "vscode"])
   }
 })
 
@@ -610,13 +610,13 @@ test("the link warning comes from the request: through a link, and outside the s
     {
       name: "inside, compact",
       options: linked({ place: `${sessionFolder}/real/a.ts`, outside: false }),
-      shows: "Link target:",
+      shows: "The link leads to",
       place: "real/a.ts",
     },
     {
       name: "inside, full",
       options: linked({ place: `${sessionFolder}/real/a.ts`, outside: false }, "terminal"),
-      shows: "Link target:",
+      shows: "The link leads to",
       place: "real/a.ts",
     },
     // The tool's input names a link too, and the request does not: nothing is said.
@@ -631,7 +631,7 @@ test("the link warning comes from the request: through a link, and outside the s
     )
     const flat = frame.replace(/\s+/g, " ")
     if (row.shows) expect([row.name, flat.includes(row.shows), flat.includes(row.place!)]).toEqual([row.name, true, true])
-    else expect([row.name, flat.includes("through a link") || flat.includes("Link target")]).toEqual([row.name, false])
+    else expect([row.name, flat.includes("through a link") || flat.includes("The link leads to")]).toEqual([row.name, false])
     expect(flat).not.toContain("DECOY")
   }
 })
