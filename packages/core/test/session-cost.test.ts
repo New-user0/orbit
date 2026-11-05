@@ -62,7 +62,7 @@ const sessionRow = (id: Session.ID, overrides: Partial<typeof SessionTable.$infe
 let serial = 0
 const message = (
   sessionID: Session.ID,
-  type: "assistant" | "compaction",
+  type: "assistant" | "compaction" | "shell",
   fields: {
     readonly provider?: string
     readonly model?: string
@@ -243,8 +243,6 @@ describe("SessionCost", () => {
     }),
   )
 
-  // PC2 (continued): which responses are unknown spend. A response that used tokens and recorded no cost, and one that
-  // failed with neither, are `unrecorded`; one that recorded exactly 0 is `zero`; one that used no tokens is neither.
   // Mutation: UNION ALL in the family query. A parent cycle then recurses without end, so the mutant is killed by a deadline.
   it.effect("a parent cycle counts each session once and ends", () =>
     Effect.gen(function* () {
@@ -288,6 +286,8 @@ describe("SessionCost", () => {
     }),
   )
 
+  // PC2 (continued): which responses are unknown spend. A response that used tokens and recorded no cost, and one that
+  // failed with neither, are `unrecorded`; one that recorded exactly 0 is `zero`; one that used no tokens is neither.
   it.effect("responses with no recorded cost or a recorded zero are counted apart, so a client can call them unknown", () =>
     Effect.gen(function* () {
       const db = yield* seedProject
@@ -314,6 +314,55 @@ describe("SessionCost", () => {
       expect(summary.rows[0]).toMatchObject({ responses: 6, unrecorded: 1, zero: 2 })
       expect(summary.rows[0]?.cost).toBeCloseTo(0.5)
       expect(summary.rows[1]).toMatchObject({ responses: 1, unrecorded: 1, zero: 0 })
+    }),
+  )
+
+  // A usage record that reported no tokens and $0 is a response, but not a free one: it is not `zero`.
+  // Mutation: `> 0` to `>= 0` on the usage record's token sum.
+  it.effect("a usage record with no tokens and no cost is a response and is not counted as zero", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 0 })).run().pipe(Effect.orDie)
+      yield* db
+        .insert(SessionUsageTable)
+        .values([usage(root, "usage", "compaction", 0, { provider: "prov", id: "alpha" }, { input: 0, output: 0, reasoning: 0, read: 0, write: 0 })])
+        .run()
+        .pipe(Effect.orDie)
+
+      const summary = yield* SessionCost.summary(root)
+      expect(summary.rows).toHaveLength(1)
+      expect(summary.rows[0]).toMatchObject({ responses: 1, zero: 0, unrecorded: 0 })
+    }),
+  )
+
+  // Mutation: drop the `$.tokens` object check from the compaction branch.
+  it.effect("a completed compaction that ran no model adds no response", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 0 })).run().pipe(Effect.orDie)
+      yield* db.insert(SessionMessageTable).values([message(root, "compaction", {})]).run().pipe(Effect.orDie)
+
+      const summary = yield* SessionCost.summary(root)
+      expect(summary.rows).toEqual([])
+    }),
+  )
+
+  // Mutation: drop `message.type = 'assistant'` from the times query.
+  it.effect("a shell message finishing after the last response does not stretch the wall time", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      yield* db.insert(SessionTable).values(sessionRow(root, { time_created: 1_000 })).run().pipe(Effect.orDie)
+      yield* db
+        .insert(SessionMessageTable)
+        .values([
+          message(root, "assistant", { input: 10, cost: 0.1, created: 1_500, streamed: 2_000, completed: 5_000 }),
+          message(root, "shell", { created: 6_000, completed: 9_000 }),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+
+      const summary = yield* SessionCost.summary(root)
+      expect(summary.wall).toBe(4_000)
     }),
   )
 

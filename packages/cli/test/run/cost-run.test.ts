@@ -97,6 +97,8 @@ test("costText prints every part of a full summary, and drops the parts a bare o
   expect(text).toContain("1.2K input, 300 output, 500 cache read, 60 cache write")
   expect(text).toContain("(undone responses, older usage)")
   expect(text).not.toContain("\u001b")
+  // The total says so when some row is unpriced. Mutation: call `price(summary.cost)` without the partial flag.
+  expect(text.split("\n").find((line) => line.startsWith("Total cost:"))).toContain("+ unpriced")
   // The row that is unpriced in part says so; the fully priced one does not.
   expect(text.split("\n").find((line) => line.includes("provider/free"))).toContain("+ unpriced")
   expect(text.split("\n").find((line) => line.includes("provider/big"))).not.toContain("unpriced")
