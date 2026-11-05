@@ -73,7 +73,13 @@ import { ConfigToolExecution } from "@orbit/schema/config/tool-execution"
 import { Tool } from "@orbit/core/tool"
 import { ToolTraits } from "@orbit/core/tool/traits"
 import type { Info as ToolInfo } from "@orbit/schema/tool"
-import { InstructionStateTable, SessionInboxTable, SessionMessageTable, SessionTable } from "@orbit/core/session/sql"
+import {
+  InstructionStateTable,
+  SessionInboxTable,
+  SessionMessageTable,
+  SessionTable,
+  SessionUsageTable,
+} from "@orbit/core/session/sql"
 import { InstructionEntry } from "@orbit/core/session/instruction-entry"
 import { SessionStore } from "@orbit/core/session/store"
 import { Instructions } from "@orbit/core/instructions/index"
@@ -6229,6 +6235,10 @@ describe("SessionRunnerLLM", () => {
       expect(s.requests).toHaveLength(2)
       // Both attempts: $1 each, and the retry is no second step.
       expect(yield* turnSpend(s)).toMatchObject({ cost: 2, tokens: 4, steps: 1, unknown: 0 })
+      // The discarded attempt is a record that names the model it was sent to (clients-ux-23 part 2).
+      const discarded = yield* s.db.select().from(SessionUsageTable).where(eq(SessionUsageTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(discarded).toHaveLength(1)
+      expect(discarded[0]).toMatchObject({ source: "step.retry", provider_id: expect.any(String), model_id: expect.any(String) })
     })
 
     scenario("counts nothing for an attempt the provider refused before streaming", function* (s) {

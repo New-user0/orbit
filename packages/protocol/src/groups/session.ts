@@ -6,6 +6,7 @@ import { PromptInput } from "@orbit/schema/prompt-input"
 import { Session } from "@orbit/schema/session"
 import { SessionStats } from "@orbit/schema/session-stats"
 import { SessionContextUsage } from "@orbit/schema/session-context-usage"
+import { SessionCost } from "@orbit/schema/session-cost"
 import { InstructionEntry } from "@orbit/schema/instruction-entry"
 import { Instruction } from "@orbit/schema/instruction"
 import { Project } from "@orbit/schema/project"
@@ -640,6 +641,20 @@ export const makeSessionGroup = <
               "Estimate what the session's next request would carry, by category: the system prompt, tools, MCP tools, custom agents, instruction files, skills and messages, with the reserve and free space of the model's window. The total is the newest response's measured prompt when there is one. Only a main session is answered (a child gets MainSessionOnlyError), and only in a trusted folder. It is read only: nothing is recorded and no model is asked.",
           }),
         ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.cost", "/api/session/:sessionID/cost", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: SessionCost.Info }),
+        error: SessionNotFoundError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "session.cost",
+          summary: "Get session cost",
+          description:
+            "Summarize what the session and its subagents have cost, by provider and model, over the whole history and not only the part a client has loaded: the cost, the tokens, the time the providers spent answering, the lines the edit tools changed (unset for a session from before they were counted), and the spend no row explains. It reads stored rows only: it opens no folder and sends nothing to a model.",
+        }),
+      ),
     )
     .add(
       HttpApiEndpoint.get("session.diff", "/api/session/:sessionID/diff", {

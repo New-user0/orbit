@@ -82,6 +82,8 @@ import type {
   SessionContextOutput,
   SessionContextUsageInput,
   SessionContextUsageOutput,
+  SessionCostInput,
+  SessionCostOutput,
   SessionDiffInput,
   SessionDiffOutput,
   SessionInboxListInput,
@@ -1016,6 +1018,17 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/context/usage`,
             successStatus: 200,
             declaredStatuses: [400, 401, 403, 404, 409, 503],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      cost: (input: SessionCostInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionCostOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/cost`,
+            successStatus: 200,
+            declaredStatuses: [400, 401, 404],
             empty: false,
           },
           requestOptions,

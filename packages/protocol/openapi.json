@@ -4322,6 +4322,75 @@
         "summary": "Get context usage"
       }
     },
+    "/api/session/{sessionID}/cost": {
+      "get": {
+        "tags": ["session"],
+        "operationId": "session.cost",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SessionCost.Info"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Summarize what the session and its subagents have cost, by provider and model, over the whole history and not only the part a client has loaded: the cost, the tokens, the time the providers spent answering, the lines the edit tools changed (unset for a session from before they were counted), and the spend no row explains. It reads stored rows only: it opens no folder and sends nothing to a model.",
+        "summary": "Get session cost"
+      }
+    },
     "/api/session/{sessionID}/diff": {
       "get": {
         "tags": ["session"],
@@ -23025,6 +23094,86 @@
           }
         },
         "required": ["id", "tokens"],
+        "additionalProperties": false
+      },
+      "SessionCost.Info": {
+        "type": "object",
+        "properties": {
+          "cost": {
+            "$ref": "#/components/schemas/Money.USD"
+          },
+          "own": {
+            "$ref": "#/components/schemas/Money.USD"
+          },
+          "subagents": {
+            "$ref": "#/components/schemas/Money.USD"
+          },
+          "other": {
+            "$ref": "#/components/schemas/Money.USD"
+          },
+          "api": {
+            "type": "number"
+          },
+          "wall": {
+            "type": "number"
+          },
+          "lines": {
+            "$ref": "#/components/schemas/SessionCost.Lines"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionCost.Row"
+            }
+          }
+        },
+        "required": ["cost", "own", "subagents", "rows"],
+        "additionalProperties": false
+      },
+      "SessionCost.Lines": {
+        "type": "object",
+        "properties": {
+          "added": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["added", "removed"],
+        "additionalProperties": false
+      },
+      "SessionCost.Row": {
+        "type": "object",
+        "properties": {
+          "providerID": {
+            "type": "string"
+          },
+          "modelID": {
+            "type": "string"
+          },
+          "responses": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/TokenUsage.Info"
+          },
+          "cost": {
+            "$ref": "#/components/schemas/Money.USD"
+          },
+          "unrecorded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "zero": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["providerID", "modelID", "responses", "tokens", "cost", "unrecorded", "zero"],
         "additionalProperties": false
       },
       "SessionGenerateResponse": {

@@ -453,7 +453,7 @@ export const layer = Layer.effect(
 
       // A call that completed without reporting usage records zeros, which a turn limit reads as unknown, never as free.
       const toResult = (window: ReadonlyArray<Message>, usage: Usage | undefined) =>
-        spend(context.session.id, SessionUsage.record(usage, context.model.cost)).pipe(
+        spend(context.session.id, context.model.ref, SessionUsage.record(usage, context.model.cost)).pipe(
           Effect.as<Result>({
             text: "",
             recent: "",
@@ -475,6 +475,7 @@ export const layer = Layer.effect(
                 answered
                   ? spend(
                       context.session.id,
+                      context.model.ref,
                       SessionUsage.estimate(context.model.cost, { input: estimateRequest(request), output: 0 }),
                     )
                   : Effect.void,
@@ -672,7 +673,7 @@ export const layer = Layer.effect(
             }
 
             if (LLMEvent.is.stepFinish(event)) {
-              return spend(sessionID, SessionUsage.record(event.usage, context.model.cost)).pipe(
+              return spend(sessionID, context.model.ref, SessionUsage.record(event.usage, context.model.cost)).pipe(
                 Effect.as({ ...streamed, providerState: event.providerMetadata?.[metadataKey] }),
               )
             }
@@ -707,6 +708,7 @@ export const layer = Layer.effect(
             observed && !reported
               ? spend(
                   sessionID,
+                  context.model.ref,
                   SessionUsage.estimate(context.model.cost, {
                     input: estimateRequest(request),
                     output: Token.estimateLength(streamedLength),
@@ -762,7 +764,7 @@ export const layer = Layer.effect(
       // A hook that reports no tokens ran no model, so there is nothing to record: a record of zero tokens would read
       // as spend the provider failed to report.
       const usage = reported && SessionUsage.hasTokens(reported) ? reported : undefined
-      return yield* spend(context.session.id, usage).pipe(
+      return yield* spend(context.session.id, context.model.ref, usage).pipe(
         Effect.as<Result>({
           text: summary,
           recent: "",
@@ -780,12 +782,16 @@ export const layer = Layer.effect(
     const spent = new Map<SessionContext.Loaded["session"]["id"], SessionUsage.Recorded>()
     // The sessions whose running compaction has stored its end.
     const settled = new Set<SessionContext.Loaded["session"]["id"]>()
-    const spend = (sessionID: SessionContext.Loaded["session"]["id"], usage: SessionUsage.Recorded | undefined) =>
+    const spend = (
+      sessionID: SessionContext.Loaded["session"]["id"],
+      model: SessionContext.Loaded["model"]["ref"],
+      usage: SessionUsage.Recorded | undefined,
+    ) =>
       Effect.gen(function* () {
         if (!usage) return
         const total = spent.get(sessionID)
         spent.set(sessionID, total ? SessionUsage.add(total, usage) : usage)
-        yield* bus.publish(SessionEvent.UsageRecorded, { sessionID, source: "compaction", ...usage })
+        yield* bus.publish(SessionEvent.UsageRecorded, { sessionID, source: "compaction", model, ...usage })
       })
 
     const publish = Effect.fnUntraced(function* (

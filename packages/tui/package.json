@@ -40,6 +40,7 @@
     "./prompt/content": "./src/prompt/content.ts",
     "./prompt/display": "./src/prompt/display.ts",
     "./parsers-config": "./src/parsers-config.ts",
+    "./util/cost": "./src/util/cost.ts",
     "./util/error": "./src/util/error.ts",
     "./util/filetype": "./src/util/filetype.ts",
     "./util/form": "./src/util/form.ts",

@@ -1,8 +1,8 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "c9d282d4-2a7f-4c7d-a53f-f04672f710e6",
-  "prevIds": ["ad2a907d-a9d2-4a01-b0c3-e17c66090596"],
+  "id": "ce19ff19-6ab2-4f93-85db-0265fc23e0ea",
+  "prevIds": ["c9d282d4-2a7f-4c7d-a53f-f04672f710e6"],
   "ddl": [
     {
       "name": "account_state",
@@ -1452,6 +1452,26 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "lines_added",
+      "entityType": "columns",
+      "table": "session_v2"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "lines_removed",
+      "entityType": "columns",
+      "table": "session_v2"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "summary_files",
       "entityType": "columns",
       "table": "session_v2"
@@ -1773,6 +1793,26 @@
       "default": null,
       "generated": null,
       "name": "tokens_cache_write",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_id",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model_id",
       "entityType": "columns",
       "table": "session_usage"
     },
