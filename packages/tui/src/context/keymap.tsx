@@ -32,7 +32,8 @@ declare module "@opentui/keymap" {
     slash?: {
       name: string
       aliases?: string[]
-      arguments?: true
+      // "optional": Enter at the command list still runs the command bare; Tab fills in `/name ` for the text.
+      arguments?: true | "optional"
     }
   }
 }

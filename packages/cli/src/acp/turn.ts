@@ -66,7 +66,8 @@ type PreparedPrompt = {
   readonly text: string
   readonly files: Array<{ readonly uri: string; readonly name?: string }>
   readonly synthetic: ReadonlyArray<string>
-  readonly slash?: { readonly name: string; readonly args: string }
+  /** `args` joins the words with single spaces; `text` is everything after the name as typed, outer whitespace trimmed. */
+  readonly slash?: { readonly name: string; readonly args: string; readonly text: string }
   readonly command?: CommandInfo
 }
 
@@ -227,7 +228,10 @@ export const make = Effect.fnUntraced(function* (input: {
     }
     if (prompt.start.type === "compaction") {
       yield* ACPPromise.promise((signal) =>
-        input.client.session.compact({ sessionID, id: prompt.start.id }, { signal }),
+        input.client.session.compact(
+          { sessionID, id: prompt.start.id, instructions: prompt.slash?.text || undefined },
+          { signal },
+        ),
       )
       return
     }
@@ -446,12 +450,12 @@ function turnStart(messageID: string, slash: PreparedPrompt["slash"]): ACPTransl
   return { type: "input", id: messageID }
 }
 
-function detectSlashCommand(text: string): { readonly name: string; readonly args: string } | undefined {
+function detectSlashCommand(text: string): PreparedPrompt["slash"] {
   const value = text.trim()
   if (!value.startsWith("/")) return undefined
   const [name, ...rest] = value.slice(1).split(/\s+/)
   if (!name) return undefined
-  return { name, args: rest.join(" ").trim() }
+  return { name, args: rest.join(" ").trim(), text: value.slice(1 + name.length).trim() }
 }
 
 export * as ACPTurn from "./turn"

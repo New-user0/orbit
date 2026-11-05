@@ -615,8 +615,9 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     expect(yield* compactManually(session, messages, SessionMessage.ID.make("msg_manual_compaction"))).toEqual({
       status: "completed",
     })
-    expect(Array.from(yield* Fiber.join(delta)).map((event) => event.data.text)).toEqual([
-      "## Objective\n- manual summary",
+    // The event carries the running character count of the reply, never its text.
+    expect(Array.from(yield* Fiber.join(delta)).map((event) => event.data.characters)).toEqual([
+      "## Objective\n- manual summary".length,
     ])
 
     expect(requests).toHaveLength(1)
@@ -2249,5 +2250,65 @@ it.effect("a native compaction cut off after the provider began to answer record
     const rows = yield* spentRows("ses_cm_model_native_cut")
     expect(rows.length).toBeGreaterThan(0)
     for (const row of rows) expect(row).toMatchObject({ source: "compaction", provider_id: "test", model_id: "summary-model" })
+  }),
+)
+
+// context-memory-2 part 2: the streamed event carries a count of reply characters and never the text (class 9).
+const chunks = (...texts: string[]) => () =>
+  Stream.make(
+    ...texts.map((text) => LLMEvent.textDelta({ id: "summary", text })),
+    LLMEvent.stepFinish({ index: 0, reason: { normalized: "stop" }, usage }),
+    LLMEvent.finish({ reason: { normalized: "stop" } }),
+  )
+
+it.effect("the streamed compaction event carries a character count, never text", () =>
+  Effect.gen(function* () {
+    const bus = yield* Bus.Service
+    const deltas = yield* bus
+      .subscribe(SessionEvent.Compaction.Delta)
+      .pipe(Stream.take(2), Stream.runCollect, Effect.forkScoped)
+    yield* Effect.yieldNow
+    // Reasoning is not counted: only the text deltas are.
+    const run = yield* scripted(
+      "ses_cm2p2_count",
+      [userText("Count the reply")],
+      [
+        () =>
+          Stream.make(
+            LLMEvent.reasoningDelta({ id: "thought", text: "thinking out loud" }),
+            LLMEvent.textDelta({ id: "summary", text: "<analysis>x</analysis>" }),
+            LLMEvent.textDelta({ id: "summary", text: "<handoff>ab</handoff>" }),
+            LLMEvent.stepFinish({ index: 0, reason: { normalized: "stop" }, usage }),
+            LLMEvent.finish({ reason: { normalized: "stop" } }),
+          ),
+      ],
+    )
+    expect(run.outcome).toEqual({ status: "completed" })
+    const sessionID = Session.ID.make("ses_cm2p2_count")
+    const data = Array.from(yield* Fiber.join(deltas)).map((event) => event.data)
+    expect(data).toEqual([
+      { sessionID, characters: 22 },
+      { sessionID, characters: 43 },
+    ])
+    for (const entry of data) expect(Object.keys(entry)).not.toContain("text")
+    expect(JSON.stringify(data)).not.toContain("<analysis>")
+  }),
+)
+
+it.effect("each summary request counts its characters from zero", () =>
+  Effect.gen(function* () {
+    const bus = yield* Bus.Service
+    const deltas = yield* bus
+      .subscribe(SessionEvent.Compaction.Delta)
+      .pipe(Stream.take(3), Stream.runCollect, Effect.forkScoped)
+    yield* Effect.yieldNow
+    // A whitespace-only reply has no summary, so the fallback request follows and counts again from zero.
+    const run = yield* scripted(
+      "ses_cm2p2_reset",
+      [userText("Count each request")],
+      [chunks("  "), chunks("<handoff>a", "</handoff>")],
+    )
+    expect(run.sent).toHaveLength(2)
+    expect(Array.from(yield* Fiber.join(deltas)).map((event) => event.data.characters)).toEqual([2, 10, 20])
   }),
 )

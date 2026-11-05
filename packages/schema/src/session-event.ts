@@ -696,7 +696,8 @@ export namespace Compaction {
     type: "session.compaction.delta",
     schema: {
       ...Base,
-      text: Schema.String,
+      /** Text characters received so far in the current summary request. The text itself never travels. */
+      characters: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
     },
   })
   export type Delta = typeof Delta.Type

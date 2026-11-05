@@ -290,7 +290,7 @@ export type SessionActive = { type: "running" }
 
 export type SessionInboxSyntheticPayload = { text: string; description?: string; metadata?: { [x: string]: JsonValue } }
 
-export type SessionInboxCompactionPayload = {}
+export type SessionInboxCompactionPayload = { instructions?: string }
 
 export type SessionRewindFiles = {
   canRewind: boolean
@@ -1332,7 +1332,7 @@ export type SessionCompactionDelta = {
   metadata?: { [x: string]: any }
   type: "session.compaction.delta"
   location?: LocationRef
-  data: { sessionID: string; text: string }
+  data: { sessionID: string; characters: number }
 }
 
 export type FilesystemChanged = {
@@ -5519,11 +5519,21 @@ export type SessionShellOutput = void
 
 export type SessionCompactInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly id?: { readonly id?: string | undefined; readonly delivery?: ("steer" | "queue") | undefined }["id"]
+  readonly id?: {
+    readonly id?: string | undefined
+    readonly delivery?: ("steer" | "queue") | undefined
+    readonly instructions?: string | undefined
+  }["id"]
   readonly delivery?: {
     readonly id?: string | undefined
     readonly delivery?: ("steer" | "queue") | undefined
+    readonly instructions?: string | undefined
   }["delivery"]
+  readonly instructions?: {
+    readonly id?: string | undefined
+    readonly delivery?: ("steer" | "queue") | undefined
+    readonly instructions?: string | undefined
+  }["instructions"]
 }
 
 export type SessionCompactOutput = { data: SessionInboxCompaction }["data"]

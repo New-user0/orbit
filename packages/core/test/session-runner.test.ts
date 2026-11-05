@@ -1948,6 +1948,29 @@ describe("SessionRunnerLLM", () => {
     expect(userTexts(s.requests[2])).toContain("Queued for later")
   })
 
+  scenario("a /compact with instructions puts them in its summary prompt", function* (s) {
+    yield* s.llm.push(
+      TestLLM.text("First answer", "answer"),
+      TestLLM.text("<handoff>\nWith instructions\n</handoff>", "with-instructions"),
+      TestLLM.text("Second answer", "answer-2"),
+      TestLLM.text("<handoff>\nBare\n</handoff>", "bare"),
+    )
+    yield* s.runPrompt("Earlier question")
+    yield* s.session.compact({ sessionID, instructions: "  focus on tests  " })
+    yield* s.resume
+    const prompt = userTexts(s.requests.at(-1)!).at(-1) ?? ""
+    expect(prompt).toContain("Additional instructions for this handoff:\nfocus on tests")
+    expect(prompt.indexOf("Additional instructions for this handoff:")).toBeLessThan(prompt.lastIndexOf("Last word:"))
+    expect(yield* s.inbox).toEqual([])
+
+    // Control: a bare /compact adds no block.
+    yield* s.runPrompt("Later question")
+    yield* s.session.compact({ sessionID })
+    yield* s.resume
+    expect(s.requests).toHaveLength(4)
+    expect(userTexts(s.requests.at(-1)!).at(-1) ?? "").not.toContain("Additional instructions")
+  })
+
   scenario("runs a queued control on Location entry before a carried continuation", function* (s) {
     const runner = yield* SessionRunner.Service
     yield* s.admit("Echo before moving")

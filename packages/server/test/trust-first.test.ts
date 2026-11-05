@@ -129,6 +129,8 @@ it.live("a session whose folder is no longer trusted takes no more work, though 
         ["synthetic", "POST", `/api/session/${id}/synthetic`, { text: "hi", resume: false }],
         ["shell", "POST", `/api/session/${id}/shell`, { command: "echo hi" }],
         ["compact", "POST", `/api/session/${id}/compact`, {}],
+        // context-memory-2 part 2: the instructions are not read, stored or sent for an untrusted folder.
+        ["compact with instructions", "POST", `/api/session/${id}/compact`, { instructions: "CLONE-MARKER" }],
         ["fork", "POST", `/api/session/${id}/fork`, {}],
         // These ask the model from the session's context, or read the folder's instruction files.
         ["generate", "POST", `/api/session/${id}/generate`, { prompt: "hi" }],
@@ -924,7 +926,7 @@ it.live("a plugin of a trusted folder starts no session work in a folder that is
               await attempt("prompt", () => ctx.session.prompt({ sessionID, text: "hi", resume: false }))
               await attempt("command", () => ctx.session.command({ sessionID, name: "clone-command", text: "" }))
               await attempt("synthetic", () => ctx.session.synthetic({ sessionID, text: "hi", resume: false }))
-              await attempt("compact", () => ctx.session.compact({ sessionID }))
+              await attempt("compact", () => ctx.session.compact({ sessionID, instructions: "CLONE-MARKER" }))
               await attempt("generate", () => ctx.session.generate({ sessionID, prompt: "hi" }))
               // The control: the same plugin drives a session in its own, trusted folder.
               await attempt("own generate", () => ctx.session.generate({ sessionID: own.id, prompt: "hi" }))

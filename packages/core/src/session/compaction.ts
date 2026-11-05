@@ -244,7 +244,9 @@ export const layer = Layer.effect(
       // A native compaction keeps its own window of user messages and cannot keep an arbitrary span, so a trigger that
       // names one is summarized.
       const compaction =
-        trigger.retain === undefined && context.model.compaction?.type === "native"
+        trigger.retain === undefined &&
+        context.model.compaction?.type === "native" &&
+        !(trigger.reason === "manual" && trigger.instructions?.trim()) // only a summary can follow instructions
           ? compactNatively(trigger, budget, settings.keep)
           : summarize(trigger, budget, compactable(kept?.summarized ?? context.messages), true)
       // A result that keeps messages must leave room below the automatic threshold. On the automatic paths one that does
@@ -644,6 +646,7 @@ export const layer = Layer.effect(
       let observed = false
       let reported = false
       let streamedLength = 0
+      let characters = 0
 
       return llm.stream(request, options).pipe(
         Stream.runFoldEffect(
@@ -663,8 +666,9 @@ export const layer = Layer.effect(
             }
 
             if (LLMEvent.is.textDelta(event)) {
+              characters += event.text.length
               return bus
-                .publish(SessionEvent.Compaction.Delta, { sessionID, text: event.text })
+                .publish(SessionEvent.Compaction.Delta, { sessionID, characters })
                 .pipe(Effect.as({ ...streamed, text: streamed.text + event.text }))
             }
 

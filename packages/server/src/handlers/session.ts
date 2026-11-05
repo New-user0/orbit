@@ -475,7 +475,12 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           yield* requireTrusted()
           return {
             data: yield* session
-              .compact({ sessionID: ctx.params.sessionID, id: ctx.payload.id, delivery: ctx.payload.delivery })
+              .compact({
+                sessionID: ctx.params.sessionID,
+                id: ctx.payload.id,
+                delivery: ctx.payload.delivery,
+                instructions: ctx.payload.instructions,
+              })
               .pipe(
                 Effect.catchTag("Session.NotFoundError", missingSession),
                 Effect.catchTag("Session.CompactionConflictError", (error) =>

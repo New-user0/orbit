@@ -28,7 +28,11 @@ export const SyntheticPayload = Schema.Struct({
 }).annotate({ identifier: "Session.Inbox.SyntheticPayload" })
 
 export interface CompactionPayload extends Schema.Schema.Type<typeof CompactionPayload> {}
-export const CompactionPayload = Schema.Struct({}).annotate({ identifier: "Session.Inbox.CompactionPayload" })
+export const CompactionPayload = Schema.Struct({
+  instructions: Schema.String.annotate({
+    description: "Text from the person, added to this compaction's summary prompt.",
+  }).pipe(optional),
+}).annotate({ identifier: "Session.Inbox.CompactionPayload" })
 
 export interface MovePayload extends Schema.Schema.Type<typeof MovePayload> {}
 export const MovePayload = Schema.Struct({
