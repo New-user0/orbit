@@ -2325,7 +2325,13 @@ it.effect("a compaction message totals every billed call of its own run and does
     const completed = () =>
       store
         .context(session.id)
-        .pipe(Effect.map((messages) => messages.filter((message) => message.type === "compaction")))
+        .pipe(
+          Effect.map((messages) =>
+            messages.flatMap((message) =>
+              message.type === "compaction" && message.status === "completed" ? [message] : [],
+            ),
+          ),
+        )
 
     replies = [silent, answer("<handoff>\nfirst\n</handoff>")]
     expect(yield* compactManually(session, [user])).toEqual({ status: "completed" })
