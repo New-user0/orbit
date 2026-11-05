@@ -624,6 +624,11 @@ describe("opens a diff the terminal UI asks for from the request's place and pat
       expect(review.text(tab.left.path)).toBe(row.left)
       expect(right(review, tab)).toBe(row.right)
       expect(tab.title).toMatch(/^Orbit: [^()]+ \([a-z0-9]{6}\)$/)
+      // Both sides are kept under the terminal UI's own key and the request's id, apart from the chat's.
+      expect([tab.left.path, tab.right.path]).toEqual([
+        expect.stringMatching(/^\/bridge-\d+\/per_a1\//),
+        expect.stringMatching(/^\/bridge-\d+\/per_a1\//),
+      ])
       expect(seen.reads()).toEqual(row.read ? [await fs.realpath(row.read())] : [])
       expect(answers(client)).toEqual([])
       expect(editor.replies).toEqual([])
@@ -1012,17 +1017,38 @@ test("a question the chat hears answered closes the chat's tabs of it, and leave
   expect(answers(client)).toEqual([])
 })
 
-describe("a review closed while its file is still being read opens nothing", () => {
-  // A disk whose first real path waits until the test lets it go, so a close can come while the review is read.
-  function held() {
-    const gate = Promise.withResolvers<void>()
-    const reader: Disk = {
-      realpath: async (file) => (await gate.promise, disk.realpath(file)),
-      lstat: (file) => disk.lstat(file),
-      readFile: (file) => disk.readFile(file),
-    }
-    return { reader, release: gate.resolve }
+// A disk whose first real path waits until the test lets it go, so a close can come while the review is read.
+function held() {
+  const gate = Promise.withResolvers<void>()
+  const reader: Disk = {
+    realpath: async (file) => (await gate.promise, disk.realpath(file)),
+    lstat: (file) => disk.lstat(file),
+    readFile: (file) => disk.readFile(file),
   }
+  return { reader, release: gate.resolve }
+}
+
+// The chat hearing a question answered closes only the chat's tabs of it, so a terminal UI's review of the same question
+// that is still being read opens once the read ends: that terminal UI closes it when its own prompt goes.
+test("a question the chat hears answered while a terminal UI's review of it is read leaves that review to open", async () => {
+  const disk = held()
+  const editor = tabs()
+  const review = new Review(editor.host, disk.reader)
+  editor.holder.review = review
+  const { bridge } = await start(await folder(), { folders: [world.root], diff: review.bridge })
+  cleanup.push(() => review.dispose())
+  await Bun.sleep(60)
+  const client = await connect(bridge, (await lock(bridge)).authToken, features)
+  await until(() => client.frames.length >= 2, "the hello and the selection")
+  ask(client)
+  await Bun.sleep(50)
+  review.settled("per_a1")
+  disk.release()
+  await until(() => editor.shown.length === 1, "the tab")
+  expect(answers(client)).toEqual([])
+})
+
+describe("a review closed while its file is still being read opens nothing", () => {
   for (const row of [
     { name: "by a close-all, which tells its owner", close: (frame: Frame) => frame, dismissed: true },
     { name: "by its owner, which is told nothing", close: () => ({ type: "diff.close", id: "per_a1" }), dismissed: false },

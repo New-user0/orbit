@@ -103,7 +103,10 @@ const message = {
 type Frame = Record<string, unknown>
 
 // An editor window's bridge: it answers a hello with its own, names the features it is given, and keeps every frame.
-async function editor(state: string, options: { features?: readonly string[] | null; name?: string } = {}) {
+async function editor(
+  state: string,
+  options: { features?: readonly string[] | null; name?: string; early?: Frame } = {},
+) {
   const token = IdeLock.token()
   const frames: Frame[] = []
   const sockets = new Set<{ send(data: string): void; close(): void }>()
@@ -120,6 +123,8 @@ async function editor(state: string, options: { features?: readonly string[] | n
         const frame = JSON.parse(String(data)) as Frame
         frames.push(frame)
         if (frame.type !== "hello") return
+        // A frame a window sends before its own hello, which the terminal UI must not take.
+        if (options.early) socket.send(JSON.stringify(options.early))
         socket.send(
           JSON.stringify({
             type: "hello",
@@ -178,6 +183,7 @@ type Options = {
   features?: readonly string[] | null
   linked?: boolean
   name?: string
+  early?: Frame
   folders?: "ok" | "fail" | "hang" | "slow"
   WebSocketImpl?: typeof WebSocket
   reply?: (body: Frame) => Response | undefined
@@ -400,6 +406,23 @@ test("an editor answer becomes the server reply it stands for", async () => {
   }
 })
 
+// A review is answered once. A second answer for it, such as a save after the person closed the tab, names no review
+// that is open: it is dropped with one log line, and only the first answer is replied.
+test("a second answer for a review already answered is dropped with one log line", async () => {
+  await using setup = await mount()
+  await setup.until(compact, "the compact prompt")
+  setup.peer!.answer({ id: "per_diff1", answer: "closed" })
+  setup.peer!.answer({ id: "per_diff1", answer: "saved", content: "LATE-TEXT\n" })
+  await setup.until(() => setup.replies.length === 1, "the reply")
+  await setup.until(
+    () => setup.warnings().some((line) => line.message.includes("a review that is not open")),
+    "the dropped answer",
+  )
+  await Bun.sleep(300)
+  expect(setup.replies).toEqual([{ decision: "once" }])
+  expect(setup.warnings()).toHaveLength(1)
+})
+
 test("answering in the terminal sends the reply and closes the tab", async () => {
   for (const row of [
     { key: "1", reply: { decision: "once" } },
@@ -502,6 +525,15 @@ test("an odd answer, a dismissed tab, a lost bridge or a bridge without diffs ke
       lines: 1,
     },
     { name: "drop", act: (setup) => setup.peer!.drop(), dialog: "full", lines: 1 },
+    // An answer the window sends before its hello is not taken, and is not counted as a dropped answer either: like a
+    // selection before the hello, it is not read at all.
+    {
+      name: "before-hello",
+      options: { early: { type: "diff.answer", id: "per_diff1", answer: "closed" } },
+      act: () => {},
+      dialog: "compact",
+      lines: 0,
+    },
     { name: "no-feature", options: { features: null }, dialog: "full", lines: 0 },
     { name: "no-folders", options: { folders: "fail" }, dialog: "full", lines: 1 },
   ]
@@ -583,6 +615,9 @@ test("a refused reply shows the server's reason and brings back the dialog", asy
   )
   expect(frame).toContain("Allow once")
   expect(setup.replies).toEqual([{ decision: "once", content: "mine\n" }])
+  // The editor's tab of a saved answer is closed by request, refused or not.
+  await setup.until(() => setup.peer!.of("diff.close").length === 1, "the tab's close")
+  expect(setup.peer!.of("diff.close")).toEqual([{ type: "diff.close", id: "per_diff1" }])
   // The question is still pending: it can be answered in the terminal.
   setup.app.mockInput.pressKey("1")
   await setup.until(() => setup.replies.length === 2, "the second reply")
