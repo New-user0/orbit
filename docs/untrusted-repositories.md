@@ -1487,11 +1487,14 @@ every other extension):
   nothing and answers `unavailable`. Save, close and Reject answer the terminal UI that asked, never a server, and
   nothing writes a file (class 12): the terminal UI replies to its own server. A review belongs to its client: another
   client cannot close it, a close-all or a chat prompt closes it and tells its owner `dismissed`, and a client that goes
-  away, the bridge stopping and the window closing close its reviews and answer nothing. A save whose answer would not
-  fit in a frame fails with a fixed sentence and the tab stays. Proof: the part 3 rows of `test/ide-bridge.test.ts`
-  (the door table with an outside marker, a trusted control, Windows case and short names and a linked worktree, the
-  share table with an empty disk recorder, the malformed-frame table, the answers, Orbit's own closes, the frame caps)
-  and the bridge row of `test/extension-review.test.ts`.
+  away, the bridge stopping and the window closing close its reviews and answer nothing; the bridge stopping drops each
+  client's reviews before it closes that client's socket, whose close event may come a round trip later. A tab the
+  editor fails to open is forgotten and answers `unavailable` with `failed`, with one log line, so the terminal UI asks
+  there (class 7). A save or an Accept whose answer would not fit in a frame sends nothing, says so in a fixed sentence
+  (the save fails with it, Accept shows it as a warning), and the tab stays. Proof: the part 3 rows of
+  `test/ide-bridge.test.ts` (the door table with an outside marker, a trusted control, Windows case and short names and
+  a linked worktree, the share table with an empty disk recorder, the malformed-frame table, the answers, Orbit's own
+  closes, the frame caps) and the bridge row of `test/extension-review.test.ts`.
 - The diff review of an Edit or Write approval, and the read-only preview of any other question with files
   (`src/review.ts`, clients-ux-15 part 2). It reads the request's own `place`, or `from` for a move, and nothing the
   tool's input names (class 8). Before each review it reads trust fresh for the chat's folder, then the session

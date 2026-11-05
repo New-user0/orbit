@@ -2159,14 +2159,14 @@ tab itself approves the proposal.
 ### The terminal UI opens Edit and Write approvals in VS Code's diff
 
 When the terminal UI is linked to VS Code through Orbit's bridge, an Edit or Write approval of one file now opens its
-diff in the editor, beside the file you work in, and the terminal shows a short prompt instead of the diff: which
-editor it opened in, the file's name and the usual options. Saving the right-hand side approves your version once,
-closing the tab approves the proposal as it stands, and the tab's Reject button declines. Answering in the terminal
-still works and closes the tab. In VS Code's own terminal the prompt also says to save the file to continue. When VS
-Code cannot open the diff (the file is not inside the session's folder and one of the window's folders, it changed
-since the agent read it, or it is too large to send), when Orbit closes the tab itself, or when the link drops, the
-full dialog comes back in the terminal. Sending a prompt or a command closes every Orbit diff tab in the window; a `!`
-command does not. Before, the diff was shown only in the terminal.
+diff in the editor, beside the file you work in, and the terminal shows a short prompt instead of the diff: which editor
+it opened in, the file's name and the usual options. Saving the right-hand side approves your version once, closing the
+tab approves the proposal as it stands, and the tab's Reject button declines. Answering in the terminal still works and
+closes the tab. In VS Code's own terminal the prompt also asks you to save in the editor to answer. When VS Code cannot
+open the diff (the file is not inside the session's folder and one of the window's folders, it changed since the agent
+read it, it is too large to send, or VS Code fails to open the tab), when Orbit closes the tab itself, or when the link
+drops, the full dialog comes back in the terminal. Sending a prompt or a command closes every Orbit diff tab in the
+window; a `!` command does not. Before, the diff was shown only in the terminal.
 
 It does not open for a Patch, a notebook, several files, a folder that is not trusted, or a VS Code extension or
 terminal UI from before this release; those keep the full dialog. To keep every diff in the terminal, set
