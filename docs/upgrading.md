@@ -2109,7 +2109,11 @@ nothing opens and the warning no longer names the file.
 
 Each message you send gets two links once the service has taken it: "View changes" opens one multi-file diff of what
 that prompt changed with the file tools, and "Restore files" asks for confirmation, with the number of files and lines,
-before it puts them back as they were before the prompt. Neither works in a folder that is not trusted.
+before it puts them back as they were before the prompt. Neither works in a folder that is not trusted. When the
+service cannot list one prompt's changes (for example a prompt that moved into a worktree), the chat gives the
+service's reason; when it does not answer within ten seconds, the chat says so. A background service older than this
+release cannot list one prompt alone: it ignores the request to and lists the whole turn's changes under the same
+title. Run `orb service restart` after upgrading so that the service is the new one.
 
 **Affects:** VS Code users of the Orbit chat.
 

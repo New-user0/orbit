@@ -1478,9 +1478,13 @@ every other extension):
   whole-file patch, so no file is read whatever the names say (class 5). A patch that is not a whole file, a binary
   one or a malformed entry costs only itself. The restore sends the server's dry run, shows its totals and files written
   out in a modal, and sends the restore only when the person confirms; the server resolves and checks every path.
+  A refusal of the diff gets one note with the server's own sentence, and the diff, the dry run and the restore each
+  give up after `limits.grant` with one note; a late restore's note says it may still finish (class 13).
   Proof: `test/diff-review.test.ts` ("the changes view reads no file, whatever the names", "a restore calls the dry run,
   shows its totals, and changes files only after confirm", "a restore the server refuses says why and changes
-  nothing", "a restore the server refuses after the person confirms says why and changes nothing", "no review, changes view or restore while the folder is not trusted").
+  nothing", "a restore the server refuses after the person confirms says why and changes nothing", "no review, changes view or restore while the folder is not trusted",
+  "a server that cannot diff a prompt gets a note", "View changes and a restore give up on a service that does not
+  answer, with one note each").
 
 - Whether the folder is trusted, and the question before work starts: `Controller` asks the server for the folder's
   trust, with a two-second limit, when it starts, on every trust, config and connection event, and in `send`, which every
