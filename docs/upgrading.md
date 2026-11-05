@@ -2089,7 +2089,7 @@ start at zero, and a session that was never counted stays uncounted.
 of lines and send nothing to the model. `--format result` and `orb -p --output-format json` print one result line whose
 `result` is the block; `orb run --format json` prints one `{"type":"cost","sessionID","cost"}` line. `--file` with
 `/cost` is refused. The block reads the session's model catalog, so a model listed without a price reads "unknown" there
-as in the dialog (if the catalog cannot be read, one line says so and a recorded $0 stays $0). An unknown session or a server older than this client ends the run with exit code 1 and its message.
+as in the dialog (if the catalog cannot be read, one line says so and a recorded $0 stays $0). Token figures are compact (`1.2K input`), as in the dialog, and a session with no usage prints one `Usage:` line without the `Usage by model:` heading. An unknown session or a server older than this client ends the run with exit code 1 and its message.
 
 The server answers at `GET /api/session/:sessionID/cost` (`client.session.cost`), reading stored rows only: it needs no
 trusted folder and answers an unknown session with `SessionNotFoundError` (404). `session.usage.recorded` and

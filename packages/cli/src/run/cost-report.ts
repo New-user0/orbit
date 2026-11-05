@@ -8,7 +8,8 @@ import { errorMessage } from "../util/error"
 import { UI } from "./ui"
 
 // `orb run "/cost"` and `orb -p "/cost"`: the whole session's cost, as the reference prints it in its print mode, a block
-// of dimmed lines. The server sums the session and its subagents from stored rows, so the figures do not depend on how
+// of plain lines with compact token figures, as the dialog shows them. The server sums the session and its subagents from
+// stored rows, so the figures do not depend on how
 // much history the run loaded. Every model name comes from a record or a provider, so each goes through `plain` (class 9).
 
 const count = new Intl.NumberFormat("en-US")
@@ -24,11 +25,11 @@ export function costText(info: SessionCost.Info, models?: ReadonlyArray<ModelInf
   const usage = summary.models.map((row) => {
     const name = `${plain(row.providerID)}/${plain(row.modelID)}`
     const tokens = [
-      `${count.format(row.tokens.input)} input`,
-      `${count.format(row.tokens.output)} output`,
-      `${count.format(row.tokens.cache.read)} cache read`,
-      `${count.format(row.tokens.cache.write)} cache write`,
-      ...(row.tokens.reasoning > 0 ? [`${count.format(row.tokens.reasoning)} reasoning`] : []),
+      `${Locale.number(row.tokens.input)} input`,
+      `${Locale.number(row.tokens.output)} output`,
+      `${Locale.number(row.tokens.cache.read)} cache read`,
+      `${Locale.number(row.tokens.cache.write)} cache write`,
+      ...(row.tokens.reasoning > 0 ? [`${Locale.number(row.tokens.reasoning)} reasoning`] : []),
     ].join(", ")
     return `  ${name}:  ${tokens} (${price(row.cost, row.unpriced > 0)})`
   })
@@ -44,8 +45,7 @@ export function costText(info: SessionCost.Info, models?: ReadonlyArray<ModelInf
     ...(summary.other === undefined
       ? []
       : [row("Other:", `${money(summary.other)} (undone responses, older usage)`)]),
-    "Usage by model:",
-    ...(usage.length > 0 ? usage : [`  Usage: ${NO_USAGE}`]),
+    ...(usage.length > 0 ? ["Usage by model:", ...usage] : [row("Usage:", NO_USAGE)]),
   ].join("\n")
 }
 

@@ -87,6 +87,8 @@ test("costText prints every part of a full summary, and drops the parts a bare o
   expect(text).toContain("1 line added, 2 lines removed")
   expect(text).toContain("Other:")
   expect(text).toContain("40 reasoning")
+  // Token figures are compact, as in the dialog.
+  expect(text).toContain("1.2K input, 300 output, 500 cache read, 60 cache write")
   expect(text).toContain("(undone responses, older usage)")
   expect(text).not.toContain("\u001b")
   // The row that is unpriced in part says so; the fully priced one does not.
@@ -102,7 +104,8 @@ test("costText prints every part of a full summary, and drops the parts a bare o
   expect(empty).not.toContain("Subagents:")
   expect(empty).not.toContain("Other:")
   expect(empty).not.toContain("Total code changes:")
-  expect(empty).toContain("Usage: 0 input, 0 output, 0 cache read, 0 cache write")
+  expect(empty).not.toContain("Usage by model:")
+  expect(empty.split("\n").at(-1)).toBe(`${"Usage:".padEnd(22)} 0 input, 0 output, 0 cache read, 0 cache write`)
   expect(JSON.parse(costLine("ses_x", bare as never))).toEqual({ type: "cost", sessionID: "ses_x", cost: bare })
 })
 
