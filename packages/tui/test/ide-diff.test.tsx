@@ -1,0 +1,644 @@
+/** @jsxImportSource @opentui/solid */
+// clients-ux-15 part 3: an Edit or Write approval opens in the linked editor's diff while the terminal UI shows a short
+// prompt, as the reference does. The prompt is the real `PermissionPrompt` in the real contexts, drawn and read from the
+// screen. The editor is a real WebSocket peer that speaks Orbit's bridge, and the server is the recording `tui-client`
+// fixture, so a test sees every frame the terminal UI sends and every reply it makes. What the editor is told comes from
+// the request alone, never the tool's input (class 8); its answers become the reply they stand for, sent to the server
+// (class 12); and whatever does not fit keeps the question in the terminal (class 7).
+import { afterEach, expect, test } from "bun:test"
+import { mkdir, writeFile } from "node:fs/promises"
+import path from "node:path"
+import type { PermissionRequest } from "@orbit/client"
+import { IdeLock } from "@orbit/util/ide-lock"
+import { testRender } from "@opentui/solid"
+import { createSignal, onMount, Show } from "solid-js"
+import { ConfigProvider } from "../src/config"
+import { ClientProvider } from "../src/context/client"
+import { DataProvider, useData } from "../src/context/data"
+import { EditorContextProvider } from "../src/context/editor"
+import { ExitProvider } from "../src/context/exit"
+import { InteractivityProvider } from "../src/context/interactivity"
+import { Keymap } from "../src/context/keymap"
+import { LocationProvider } from "../src/context/location"
+import type { LogLevel } from "../src/context/log"
+import { RouteProvider } from "../src/context/route"
+import { ThemeProvider } from "../src/context/theme"
+import { TrustProvider } from "../src/context/trust"
+import { PermissionPrompt } from "../src/routes/session/permission"
+import { DialogProvider } from "../src/ui/dialog"
+import { Toast, ToastProvider } from "../src/ui/toast"
+import { createAppFixture, promptReady } from "./fixture/app"
+import { emptyThemeSource, tmpdir } from "./fixture/fixture"
+import { createApi, createEventStream, createFetch, directory, json, worktree } from "./fixture/tui-client"
+import { TestTuiContexts } from "./fixture/tui-environment"
+import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+
+const environment = { port: process.env.ORBIT_EDITOR_SSE_PORT, program: process.env.TERM_PROGRAM }
+afterEach(() => {
+  for (const [key, value] of [
+    ["ORBIT_EDITOR_SSE_PORT", environment.port],
+    ["TERM_PROGRAM", environment.program],
+  ] as const)
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+})
+
+// The session works in a folder of its own, and its project's folder is another: neither is the folder the terminal UI
+// started in, nor the project's canonical folder, so a frame that names one of those took the wrong folder (class 3).
+const sessionFolder = "/work/session-folder"
+const projectFolder = "/work/session-project"
+const canonicalFolder = "/work/canonical"
+const place = `${sessionFolder}/src/a.ts`
+const patch = "Index: src/a.ts\n===\n--- src/a.ts\n+++ src/a.ts\n@@ -1,1 +1,1 @@\n-OLD-LINE-TEXT\n+NEW-LINE-TEXT\n"
+const session = {
+  id: "ses_diff",
+  title: "Diff session",
+  projectID: "proj_test",
+  location: { directory: sessionFolder },
+  cost: 0,
+  tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  time: { created: 0, updated: 0 },
+}
+const base: PermissionRequest = {
+  id: "per_diff1",
+  sessionID: session.id,
+  action: "Edit",
+  resources: ["src/a.ts"],
+  save: ["src/*"],
+  revisable: true,
+  source: { messageID: "msg_diff", id: "call_diff" },
+  metadata: {
+    paths: [place],
+    files: [{ file: "src/a.ts", place, patch, status: "modified", additions: 1, deletions: 1 }],
+  },
+}
+// The model's own input to the call: it names another file and another change. Nothing of it may reach the editor.
+const decoy = {
+  file_path: "/work/DECOY-FILE.ts",
+  content: "DECOY-CONTENT",
+  old_string: "DECOY-OLD",
+  new_string: "DECOY-NEW",
+  link: { place: "/work/DECOY-LINK", outside: true },
+}
+const message = {
+  id: "msg_diff",
+  type: "assistant",
+  agent: "build",
+  model: { id: "model", providerID: "provider" },
+  time: { created: 0 },
+  content: [
+    {
+      type: "tool",
+      id: "call_diff",
+      name: "edit",
+      time: { created: 0 },
+      state: { status: "running", input: decoy, metadata: {} },
+    },
+  ],
+}
+
+type Frame = Record<string, unknown>
+
+// An editor window's bridge: it answers a hello with its own, names the features it is given, and keeps every frame.
+async function editor(state: string, options: { features?: readonly string[] | null; name?: string } = {}) {
+  const token = IdeLock.token()
+  const frames: Frame[] = []
+  const sockets = new Set<{ send(data: string): void; close(): void }>()
+  const server = Bun.serve({
+    port: 0,
+    fetch(request, server) {
+      if (request.headers.get(IdeLock.header) !== token) return new Response("no", { status: 401 })
+      return server.upgrade(request) ? undefined : new Response("upgrade required", { status: 426 })
+    },
+    websocket: {
+      open: (socket) => void sockets.add(socket),
+      close: (socket) => void sockets.delete(socket),
+      message(socket, data) {
+        const frame = JSON.parse(String(data)) as Frame
+        frames.push(frame)
+        if (frame.type !== "hello") return
+        socket.send(
+          JSON.stringify({
+            type: "hello",
+            version: 1,
+            editor: options.name ?? "Test Editor",
+            ...(options.features === null ? {} : { features: options.features ?? ["diff"] }),
+          }),
+        )
+      },
+    },
+  })
+  await mkdir(path.join(state, "ide"), { recursive: true })
+  await writeFile(
+    path.join(state, "ide", `${server.port}.lock`),
+    JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      port: server.port,
+      workspaceFolders: [],
+      ideName: "Test Editor",
+      authToken: token,
+    }),
+  )
+  process.env.ORBIT_EDITOR_SSE_PORT = String(server.port)
+  return {
+    frames,
+    of: (type: string) => frames.filter((frame) => frame.type === type),
+    answer: (fields: Frame) => sockets.forEach((socket) => socket.send(JSON.stringify({ type: "diff.answer", ...fields }))),
+    drop: () => sockets.forEach((socket) => socket.close()),
+    stop: () => server.stop(true),
+  }
+}
+
+type Options = {
+  request?: Partial<PermissionRequest>
+  trusted?: boolean
+  tool?: "auto" | "terminal"
+  features?: readonly string[] | null
+  linked?: boolean
+  name?: string
+  folders?: "ok" | "fail" | "hang"
+  reply?: (body: Frame) => Response | undefined
+}
+
+// The real prompt in the real contexts, for the first pending request of the session, while `shown()` holds.
+async function mount(options: Options = {}) {
+  const state = await tmpdir()
+  const peer = options.linked === false ? undefined : await editor(state.path, options)
+  if (options.linked === false) delete process.env.ORBIT_EDITOR_SSE_PORT
+  const request = { ...base, ...options.request }
+  const events = createEventStream()
+  const replies: Frame[] = []
+  const reads: string[] = []
+  const logs: Array<{ level: LogLevel; message: string }> = []
+  const calls = createFetch(async (url, init) => {
+    if (url.pathname === `/api/session/${session.id}`) return json({ data: session })
+    if (url.pathname === `/api/session/${session.id}/message`) return json({ data: [message], cursor: {} })
+    if (url.pathname === `/api/session/${session.id}/permission`) return json({ data: [request] })
+    if (url.pathname === `/api/session/${session.id}/permission/${request.id}/reply`) {
+      const body = (await init.json()) as Frame
+      replies.push(body)
+      return options.reply?.(body) ?? new Response(null, { status: 204 })
+    }
+    if (url.pathname === "/api/location/trust")
+      return json({ directory: worktree, trusted: options.trusted ?? true, persistent: true, source: "saved", withheld: [] })
+    if (url.pathname === "/api/location" && url.searchParams.get("location[directory]") === sessionFolder) {
+      reads.push(sessionFolder)
+      if (options.folders === "fail") return json({ _tag: "InvalidRequestError", message: "no" }, { status: 400 })
+      if (options.folders === "hang") return new Promise<Response>(() => {})
+      return json({
+        directory: sessionFolder,
+        project: { id: "proj_test", directory: projectFolder, canonical: canonicalFolder },
+      })
+    }
+  }, events)
+  const [shown, setShown] = createSignal(true)
+
+  function Route() {
+    const data = useData()
+    onMount(() => {
+      void data.session.sync(session.id)
+      void data.session.message.sync(session.id)
+      void data.session.permission.sync(session.id)
+    })
+    return (
+      <Show when={shown() && data.session.get(session.id) && data.session.permission.list(session.id)?.[0]}>
+        {(pending) => <PermissionPrompt request={pending()} directory={sessionFolder} />}
+      </Show>
+    )
+  }
+
+  const app = await testRender(
+    () => (
+      <TestTuiContexts
+        directory={directory}
+        paths={{ state: state.path, home: "/home/test" }}
+        log={(level, text) => void logs.push({ level, message: text })}
+      >
+        <ExitProvider exit={() => {}}>
+          <ConfigProvider config={createTuiResolvedConfig({ animations: false, diffs: { tool: options.tool } })}>
+            <Keymap.Provider>
+              <ToastProvider>
+                <RouteProvider initialRoute={{ type: "home" }}>
+                  <ClientProvider api={createApi(calls.fetch)}>
+                    <DataProvider directory={directory}>
+                      <LocationProvider>
+                        <ThemeProvider mode="dark" source={emptyThemeSource}>
+                          <DialogProvider>
+                            <TrustProvider directory={directory}>
+                              <EditorContextProvider compat={() => false}>
+                                <InteractivityProvider enabled>
+                                  <Route />
+                                  <Toast />
+                                </InteractivityProvider>
+                              </EditorContextProvider>
+                            </TrustProvider>
+                          </DialogProvider>
+                        </ThemeProvider>
+                      </LocationProvider>
+                    </DataProvider>
+                  </ClientProvider>
+                </RouteProvider>
+              </ToastProvider>
+            </Keymap.Provider>
+          </ConfigProvider>
+        </ExitProvider>
+      </TestTuiContexts>
+    ),
+    { width: 140, height: 40, kittyKeyboard: true },
+  )
+  app.renderer.start()
+  const frame = async () => {
+    await app.renderOnce()
+    return app.captureCharFrame()
+  }
+  const until = async (condition: (frame: string) => boolean, label: string, timeout = 8_000) => {
+    const started = Date.now()
+    while (!condition(await frame())) {
+      if (Date.now() - started > timeout) throw new Error(`timed out waiting for ${label}:\n${await frame()}`)
+      await Bun.sleep(20)
+    }
+    return frame()
+  }
+  return {
+    app,
+    peer,
+    events,
+    replies,
+    reads,
+    request,
+    frame,
+    until,
+    hide: () => setShown(false),
+    warnings: () => logs.filter((line) => line.level === "warn" && line.message.includes("diff")),
+    async [Symbol.asyncDispose]() {
+      app.renderer.destroy()
+      await peer?.stop()
+      await state[Symbol.asyncDispose]()
+    },
+  }
+}
+
+// The compact prompt says where the diff opened; the full dialog draws the diff itself.
+const compact = (frame: string) => frame.includes("Opened changes in")
+const full = (frame: string) => frame.includes("NEW-LINE-TEXT") && !compact(frame)
+type Setup = Awaited<ReturnType<typeof mount>>
+const opened = (setup: Setup) => setup.until(() => (setup.peer?.of("diff.open").length ?? 0) === 1, "the diff to open")
+
+test("the diff the TUI opens is the request's place and patch, never the tool input", async () => {
+  await using setup = await mount()
+  await opened(setup)
+  expect(setup.peer!.of("diff.open")).toEqual([
+    { type: "diff.open", id: "per_diff1", place, patch, status: "modified", roots: [sessionFolder, projectFolder] },
+  ])
+  expect(JSON.stringify(setup.peer!.frames)).not.toContain("DECOY")
+  // The folders were read for the session's own location, once, as the open was made.
+  expect(setup.reads).toEqual([sessionFolder])
+  // A hello names the feature, so a bridge from before it is never sent a diff.
+  expect(setup.peer!.of("hello")[0]).toMatchObject({ type: "hello", version: 1, features: ["diff"] })
+})
+
+test("while the diff is open the prompt says where it opened and asks about the file by name", async () => {
+  await using setup = await mount()
+  const frame = await setup.until(compact, "the compact prompt")
+  expect(frame).toContain("Opened changes in Test Editor")
+  expect(frame).toContain("Make this change to a.ts?")
+  expect(frame).toContain("Allow once")
+  expect(frame).toContain("Always allow")
+  expect(frame).toContain("Reject")
+  expect(frame).not.toContain("NEW-LINE-TEXT")
+  expect(frame).not.toContain("DECOY")
+})
+
+test("the save hint shows only in the editor's own terminal", async () => {
+  for (const program of ["vscode", undefined]) {
+    if (program === undefined) delete process.env.TERM_PROGRAM
+    else process.env.TERM_PROGRAM = program
+    await using setup = await mount()
+    const frame = await setup.until(compact, "the compact prompt")
+    expect([program, frame.includes("Save the file to continue")]).toEqual([program, program === "vscode"])
+  }
+})
+
+test("an editor answer becomes the server reply it stands for", async () => {
+  const rows: Array<{ name: string; answer: Frame; reply: Frame; close: boolean; status?: number }> = [
+    { name: "saved", answer: { answer: "saved", content: "mine\n" }, reply: { decision: "once", content: "mine\n" }, close: true },
+    { name: "closed", answer: { answer: "closed" }, reply: { decision: "once" }, close: false },
+    { name: "rejected", answer: { answer: "rejected" }, reply: { decision: "reject" }, close: true },
+    // Another client answered first: the server's 404 is dropped quietly, and the question goes away.
+    { name: "lost-race", answer: { answer: "closed" }, reply: { decision: "once" }, close: false, status: 404 },
+  ]
+  for (const row of rows) {
+    await using setup = await mount({
+      reply: () =>
+        row.status === 404
+          ? json(
+              { _tag: "PermissionNotFoundError", requestID: "per_diff1", message: "Permission request not found" },
+              { status: 404 },
+            )
+          : undefined,
+    })
+    await setup.until(compact, "the compact prompt")
+    setup.peer!.answer({ id: "per_diff1", ...row.answer })
+    await setup.until(() => setup.replies.length === 1, `${row.name}'s reply`)
+    expect([row.name, setup.replies]).toEqual([row.name, [row.reply]])
+    const frame = await setup.until((frame) => !compact(frame) && !full(frame), `${row.name}: the prompt to go`)
+    expect(frame).not.toContain("not found")
+    await Bun.sleep(100)
+    // The tab of a save or a Reject is closed by request; one the person closed is gone already.
+    expect([row.name, setup.peer!.of("diff.close")]).toEqual([
+      row.name,
+      row.close ? [{ type: "diff.close", id: "per_diff1" }] : [],
+    ])
+    expect(setup.replies).toHaveLength(1)
+  }
+})
+
+test("answering in the terminal sends the reply and closes the tab", async () => {
+  for (const row of [
+    { key: "1", reply: { decision: "once" } },
+    { key: "2", reply: { decision: "always" } },
+    { key: "3", reply: { decision: "reject" } },
+  ]) {
+    await using setup = await mount()
+    await setup.until(compact, "the compact prompt")
+    setup.app.mockInput.pressKey(row.key)
+    await setup.until(() => setup.replies.length === 1, "the reply")
+    expect(setup.replies).toEqual([row.reply])
+    await setup.until(() => setup.peer!.of("diff.close").length === 1, "the close")
+    expect(setup.peer!.of("diff.close")).toEqual([{ type: "diff.close", id: "per_diff1" }])
+  }
+})
+
+test("a request answered elsewhere, or a prompt that goes away, closes its tab", async () => {
+  {
+    await using setup = await mount()
+    await setup.until(compact, "the compact prompt")
+    setup.events.emit({
+      id: "evt_replied",
+      created: 1,
+      type: "permission.replied",
+      data: { sessionID: session.id, requestID: "per_diff1", reply: "once" },
+    } as never)
+    await setup.until(() => setup.peer!.of("diff.close").length === 1, "the close")
+    expect(setup.peer!.of("diff.close")).toEqual([{ type: "diff.close", id: "per_diff1" }])
+    expect(setup.replies).toEqual([])
+  }
+  {
+    await using setup = await mount()
+    await setup.until(compact, "the compact prompt")
+    setup.hide()
+    await setup.until(() => setup.peer!.of("diff.close").length === 1, "the close")
+    expect(setup.replies).toEqual([])
+  }
+})
+
+test("an odd answer, a dismissed tab, a lost bridge or a bridge without diffs keeps the terminal dialog, with one log line", async () => {
+  const rows: Array<{
+    name: string
+    options?: Options
+    act?: (setup: Setup) => void
+    dialog: "full" | "compact"
+    lines: number
+  }> = [
+    // A save without its text does not decode, and an answer for another request names nothing open.
+    { name: "malformed", act: (setup) => setup.peer!.answer({ id: "per_diff1", answer: "saved" }), dialog: "compact", lines: 1 },
+    { name: "unknown-id", act: (setup) => setup.peer!.answer({ id: "per_other", answer: "closed" }), dialog: "compact", lines: 1 },
+    { name: "unknown-answer", act: (setup) => setup.peer!.answer({ id: "per_diff1", answer: "accepted" }), dialog: "compact", lines: 1 },
+    { name: "dismissed", act: (setup) => setup.peer!.answer({ id: "per_diff1", answer: "dismissed" }), dialog: "full", lines: 1 },
+    {
+      name: "unavailable",
+      act: (setup) => setup.peer!.answer({ id: "per_diff1", answer: "unavailable", reason: "outside" }),
+      dialog: "full",
+      lines: 1,
+    },
+    { name: "drop", act: (setup) => setup.peer!.drop(), dialog: "full", lines: 1 },
+    { name: "no-feature", options: { features: null }, dialog: "full", lines: 0 },
+    { name: "no-folders", options: { folders: "fail" }, dialog: "full", lines: 1 },
+  ]
+  for (const row of rows) {
+    await using setup = await mount(row.options)
+    if (row.act) {
+      await setup.until(compact, `${row.name}: the compact prompt`)
+      row.act(setup)
+    }
+    if (row.dialog === "full") await setup.until(full, `${row.name}: the full dialog`)
+    await Bun.sleep(300)
+    const frame = await setup.frame()
+    expect([row.name, row.dialog === "full" ? full(frame) : compact(frame)]).toEqual([row.name, true])
+    expect([row.name, setup.replies]).toEqual([row.name, []])
+    expect([row.name, setup.warnings().length]).toEqual([row.name, row.lines])
+    if (!row.act) expect([row.name, setup.peer!.of("diff.open")]).toEqual([row.name, []])
+    // The question is still answered in the terminal.
+    expect(frame).toContain("Allow once")
+  }
+})
+
+test("a location read that never ends keeps the full dialog once the read limit passes", async () => {
+  await using setup = await mount({ folders: "hang" })
+  await setup.until(full, "the full dialog")
+  await Bun.sleep(2_500)
+  expect(setup.peer!.of("diff.open")).toEqual([])
+  expect(full(await setup.frame())).toBe(true)
+  expect(setup.warnings()).toHaveLength(1)
+})
+
+test("no diff opens unless the request is a revisable one-file Edit or Write, the setting is auto and the folder is trusted", async () => {
+  const second = { file: "src/b.ts", place: `${sessionFolder}/src/b.ts`, patch, status: "modified" }
+  const file = (fields: Frame) => ({ metadata: { paths: [place], files: [{ ...base.metadata!.files![0]!, ...fields }] } })
+  const rows: Array<{ name: string; options: Options; opens: boolean }> = [
+    { name: "control", options: {}, opens: true },
+    { name: "write", options: { request: { action: "Write" } }, opens: true },
+    { name: "patch", options: { request: { action: "Patch", revisable: undefined } }, opens: false },
+    {
+      name: "notebook-edit",
+      options: { request: { action: "NotebookEdit", revisable: false, ...file({ place: `${sessionFolder}/n.ipynb` }) } },
+      opens: false,
+    },
+    {
+      name: "two-files",
+      options: { request: { metadata: { paths: [place], files: [base.metadata!.files![0]!, second] } } },
+      opens: false,
+    },
+    { name: "ipynb", options: { request: file({ place: `${sessionFolder}/N.IPYNB` }) }, opens: false },
+    { name: "no-place", options: { request: file({ place: undefined }) }, opens: false },
+    { name: "relative-place", options: { request: file({ place: "src/a.ts" }) }, opens: false },
+    { name: "terminal-setting", options: { tool: "terminal" }, opens: false },
+    { name: "untrusted", options: { trusted: false }, opens: false },
+    { name: "not-linked", options: { linked: false }, opens: false },
+  ]
+  for (const row of rows) {
+    await using setup = await mount(row.options)
+    if (row.opens) await opened(setup)
+    else {
+      await setup.until((frame) => frame.includes("Allow once"), `${row.name}: the prompt`)
+      await Bun.sleep(400)
+    }
+    expect([row.name, setup.peer?.of("diff.open").length ?? 0]).toEqual([row.name, row.opens ? 1 : 0])
+    // Nothing is read for a request that is not reviewed in the editor.
+    expect([row.name, setup.reads.length]).toEqual([row.name, row.opens ? 1 : 0])
+    if (!row.opens) expect([row.name, compact(await setup.frame())]).toEqual([row.name, false])
+  }
+})
+
+test("a refused reply shows the server's reason and brings back the dialog", async () => {
+  await using setup = await mount({
+    reply: () => json({ _tag: "InvalidRequestError", message: "The saved text could not be used here" }, { status: 400 }),
+  })
+  await setup.until(compact, "the compact prompt")
+  setup.peer!.answer({ id: "per_diff1", answer: "saved", content: "mine\n" })
+  const frame = await setup.until(
+    (frame) => frame.includes("The saved text could not be used here") && full(frame),
+    "the toast and the dialog",
+  )
+  expect(frame).toContain("Allow once")
+  expect(setup.replies).toEqual([{ decision: "once", content: "mine\n" }])
+  // The question is still pending: it can be answered in the terminal.
+  setup.app.mockInput.pressKey("1")
+  await setup.until(() => setup.replies.length === 2, "the second reply")
+  expect(setup.replies[1]).toEqual({ decision: "once" })
+})
+
+test("the link warning comes from the request: through a link, and outside the session's folder", async () => {
+  const linked = (link: Frame | undefined, tool?: "terminal") => ({
+    tool,
+    request: { metadata: { paths: [place], files: [{ ...base.metadata!.files![0]!, ...(link && { link }) }] } },
+  })
+  const rows: Array<{ name: string; options: Options; shows?: string; place?: string }> = [
+    {
+      name: "outside, compact",
+      options: linked({ place: "/elsewhere/secrets/a.ts", outside: true }),
+      shows: "outside the session's folder, through a link",
+      place: "/elsewhere/secrets/a.ts",
+    },
+    {
+      name: "outside, full",
+      options: linked({ place: "/elsewhere/secrets/a.ts", outside: true }, "terminal"),
+      shows: "outside the session's folder, through a link",
+      place: "/elsewhere/secrets/a.ts",
+    },
+    {
+      name: "inside, compact",
+      options: linked({ place: `${sessionFolder}/real/a.ts`, outside: false }),
+      shows: "Link target:",
+      place: "real/a.ts",
+    },
+    {
+      name: "inside, full",
+      options: linked({ place: `${sessionFolder}/real/a.ts`, outside: false }, "terminal"),
+      shows: "Link target:",
+      place: "real/a.ts",
+    },
+    // The tool's input names a link too, and the request does not: nothing is said.
+    { name: "decoy, compact", options: linked(undefined) },
+    { name: "decoy, full", options: linked(undefined, "terminal") },
+  ]
+  for (const row of rows) {
+    await using setup = await mount(row.options)
+    const frame = await setup.until(
+      (frame) => (row.name.endsWith("compact") ? compact(frame) : full(frame)),
+      `${row.name}: the prompt`,
+    )
+    const flat = frame.replace(/\s+/g, " ")
+    if (row.shows) expect([row.name, flat.includes(row.shows), flat.includes(row.place!)]).toEqual([row.name, true, true])
+    else expect([row.name, flat.includes("through a link") || flat.includes("Link target")]).toEqual([row.name, false])
+    expect(flat).not.toContain("DECOY")
+  }
+})
+
+test("names in the compact prompt are written out", async () => {
+  const odd = `${sessionFolder}/src/e\u001b]0;pwned\u0007‮gnp.ts​\nx.ts`
+  await using setup = await mount({
+    name: "Ed\u001b[31mitor‮",
+    request: {
+      metadata: {
+        paths: [odd],
+        files: [
+          {
+            ...base.metadata!.files![0]!,
+            place: odd,
+            link: { place: "/elsewhere/l\u001b[2Jink‮​\nx", outside: true },
+          },
+        ],
+      },
+    },
+  })
+  const frame = await setup.until(compact, "the compact prompt")
+  for (const raw of ["\u001b", "\u0007", "‮", "​"]) expect(frame).not.toContain(raw)
+  expect(frame).not.toContain("pwned\n")
+  const flat = frame.replace(/\s+/g, "")
+  // Each name is drawn, with its hidden characters written out where they were.
+  expect(flat).toContain("Ed\\x1b[31mitor\\u{202e}")
+  expect(flat).toContain("e\\x1b]0;pwned\\x07\\u{202e}gnp.ts\\u{200b}\\nx.ts")
+  expect(flat).toContain("l\\x1b[2Jink\\u{202e}\\u{200b}\\nx")
+})
+
+test("a diff too large for a frame is not sent, and the dialog stays", async () => {
+  const large = `${patch}${"+x\n".repeat(IdeLock.frameCap / 3)}`
+  await using setup = await mount({
+    request: { metadata: { paths: [place], files: [{ ...base.metadata!.files![0]!, patch: large }] } },
+  })
+  await setup.until((frame) => frame.includes("Allow once") && setup.reads.length === 1, "the prompt and the read")
+  await Bun.sleep(300)
+  expect(setup.peer!.of("diff.open")).toEqual([])
+  expect(compact(await setup.frame())).toBe(false)
+  expect(setup.warnings()).toHaveLength(1)
+})
+
+// The real app: a prompt or a command sent to the model closes every diff tab, as the reference does; a `!` command
+// runs in the shell and does not.
+test("a prompt sent to the model closes every diff tab; a shell command does not", async () => {
+  await using state = await tmpdir()
+  const peer = await editor(state.path)
+  const location = { directory, project: { id: "proj_test", directory: worktree, canonical: worktree } }
+  const sent: string[] = []
+  const appSession = { ...session, location: { directory } }
+  await using setup = await createAppFixture({
+    state: state.path,
+    width: 120,
+    args: { sessionID: session.id },
+    config: { animations: false },
+    fetch: async (url, request) => {
+      if (url.pathname === "/api/location") return json(location)
+      if (url.pathname === "/api/agent")
+        return json({ location, data: [{ id: "build", mode: "primary", hidden: false, permissions: [] }] })
+      if (url.pathname === "/api/provider") return json({ location, data: [{ id: "provider", name: "Provider" }] })
+      if (url.pathname === "/api/model")
+        return json({ location, data: [{ id: "model", providerID: "provider", name: "Model", variants: [] }] })
+      if (url.pathname === "/api/command")
+        return json({ location, data: [{ name: "review", description: "Review the input" }] })
+      if (url.pathname === `/api/session/${session.id}`) return json({ data: appSession })
+      if (/^\/api\/session\/[^/]+\/(message|inbox|permission)$/.test(url.pathname)) return json({ data: [], cursor: {} })
+      const kind = url.pathname.match(/^\/api\/session\/[^/]+\/(prompt|command|shell|agent|model)$/)?.[1]
+      if (!kind) return
+      sent.push(kind)
+      if (request.method === "POST") await request.text()
+      return kind === "prompt" ? json({ data: {} }) : new Response(null, { status: 204 })
+    },
+  })
+  try {
+    await setup.waitForFrame(promptReady)
+    while (peer.of("hello").length === 0) await Bun.sleep(20)
+    await Bun.sleep(200)
+
+    await setup.mockInput.typeText("hello")
+    setup.mockInput.pressEnter()
+    await setup.waitFor(() => sent.includes("prompt"))
+    await setup.waitFor(() => peer.of("diff.closeAll").length === 1)
+
+    await setup.mockInput.typeText("/review selected input")
+    setup.mockInput.pressEscape()
+    setup.mockInput.pressEnter()
+    await setup.waitFor(() => sent.includes("command"))
+    await setup.waitFor(() => peer.of("diff.closeAll").length === 2)
+
+    await setup.mockInput.typeText("!")
+    await setup.mockInput.typeText("ls")
+    setup.mockInput.pressEnter()
+    await setup.waitFor(() => sent.includes("shell"))
+    await Bun.sleep(300)
+    expect(peer.of("diff.closeAll")).toEqual([{ type: "diff.closeAll" }, { type: "diff.closeAll" }])
+  } finally {
+    await peer.stop()
+  }
+})

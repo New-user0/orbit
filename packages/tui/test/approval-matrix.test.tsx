@@ -199,6 +199,90 @@ for (const row of rows.filter((item, index) => index % 4 === 0 || !item.id.start
   })
 }
 
+// The terminal UI's short prompt while an Edit or Write is reviewed in the linked editor (clients-ux-15 part 3): it names
+// the file of the request's place, and where a link leads, from the request alone. Drawn as the real component.
+async function drawCompact(row: Row) {
+  const { EditorDiffPrompt } = await import("../src/routes/session/permission")
+  const { ConfigProvider } = await import("../src/config")
+  const { ClientProvider } = await import("../src/context/client")
+  const { DataProvider } = await import("../src/context/data")
+  const { Keymap } = await import("../src/context/keymap")
+  const { InteractivityProvider } = await import("../src/context/interactivity")
+  const { LocationProvider } = await import("../src/context/location")
+  const { ThemeProvider } = await import("../src/context/theme")
+  const { ToastProvider } = await import("../src/ui/toast")
+  const { emptyThemeSource } = await import("./fixture/fixture")
+  const { createApi, createEventStream, createFetch } = await import("./fixture/tui-client")
+  const { TestTuiContexts } = await import("./fixture/tui-environment")
+  const { createTuiResolvedConfig } = await import("./fixture/tui-runtime")
+  const transport = createFetch(() => undefined, createEventStream())
+  const app = await testRender(
+    () => (
+      <TestTuiContexts directory={world.project} paths={{ home: os.homedir() }}>
+        <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
+          <Keymap.Provider>
+            <ClientProvider api={createApi(transport.fetch)}>
+              <DataProvider directory={world.project}>
+                <LocationProvider>
+                  <ThemeProvider mode="dark" source={emptyThemeSource}>
+                    <ToastProvider>
+                      <InteractivityProvider enabled>
+                        <EditorDiffPrompt
+                          request={{ id: "per_matrix", sessionID: "ses_matrix", save: ["*"], ...row.request }}
+                          editor="Test Editor"
+                          onSelect={() => {}}
+                        />
+                      </InteractivityProvider>
+                    </ToastProvider>
+                  </ThemeProvider>
+                </LocationProvider>
+              </DataProvider>
+            </ClientProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 220, height: 30, kittyKeyboard: true },
+  )
+  try {
+    await app.renderOnce()
+    await Bun.sleep(0)
+    await app.renderOnce()
+    return app.captureCharFrame()
+  } finally {
+    app.renderer.destroy()
+  }
+}
+
+for (const row of rows.filter((item) => item.tool === "Edit" || item.tool === "Write"))
+  test(`the terminal UI's compact prompt for ${row.id} names the request's place and no decoy`, async () => {
+    const frame = await drawCompact(row)
+    const flat = frame.replace(/\s+/g, "")
+    expect(flat).toContain("OpenedchangesinTestEditor")
+    expect(frame).not.toContain("DECOY")
+    const own = misleading(row)
+    if (own !== undefined) expect(slashed(flat)).not.toContain(slashed(own).replace(/\s+/g, ""))
+    const file = ((row.request.metadata?.files ?? []) as { place?: string; link?: { place: string; outside: boolean } }[])[0]
+    expect(flat).toContain(`Makethischangeto${path.basename(file!.place!)}?`)
+    // A link warning only where the request names one: where the file really is, and whether that is outside.
+    const tail = (value: string) => value.split(/[\\/]/).slice(-2).join("/")
+    if (file?.link) {
+      expect(flat).toContain(file.link.outside ? "outsidethesession'sfolder,throughalink" : "Linktarget:")
+      expect(slashed(flat)).toContain(tail(slashed(file.link.place)))
+    } else expect(flat).not.toMatch(/throughalink|Linktarget/)
+  })
+
+test("the link rows of the matrix name where the link leads", () => {
+  // Without these the link checks above would be vacuous.
+  const linked = golden.filter((row) => row.id.startsWith("Edit/link/") || row.id.startsWith("Write/link/"))
+  expect(linked.length).toBeGreaterThan(0)
+  for (const row of linked)
+    expect([row.id, ((row.request.metadata?.files ?? []) as { link?: unknown }[])[0]?.link]).toEqual([
+      row.id,
+      { place: `${world.outside}/file.txt`, outside: true },
+    ])
+})
+
 // The model picks the order of an MCP call's arguments, so the value that matters can come after a long one. The argument
 // text is whole in the presentation and on Mini's screen.
 const longArguments: Row = {
