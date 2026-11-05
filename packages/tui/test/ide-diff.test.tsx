@@ -9,13 +9,15 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { PermissionRequest } from "@orbit/client"
+import { SimulationSemantics } from "@orbit/simulation/frontend/semantics"
 import { IdeLock } from "@orbit/util/ide-lock"
+import { InputRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { createSignal, onMount, Show } from "solid-js"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
 import { DataProvider, useData } from "../src/context/data"
-import { EditorContextProvider } from "../src/context/editor"
+import { EditorContextProvider, useEditorContext } from "../src/context/editor"
 import { ExitProvider } from "../src/context/exit"
 import { InteractivityProvider } from "../src/context/interactivity"
 import { Keymap } from "../src/context/keymap"
@@ -129,26 +131,44 @@ async function editor(state: string, options: { features?: readonly string[] | n
       },
     },
   })
-  await mkdir(path.join(state, "ide"), { recursive: true })
-  await writeFile(
-    path.join(state, "ide", `${server.port}.lock`),
-    JSON.stringify({
-      version: 1,
-      pid: process.pid,
-      port: server.port,
-      workspaceFolders: [],
-      ideName: "Test Editor",
-      authToken: token,
-    }),
-  )
-  process.env.ORBIT_EDITOR_SSE_PORT = String(server.port)
+  // Listening on TCP, so the server has a port.
+  const port = Number(server.port)
+  await lock(state, port, token)
+  process.env.ORBIT_EDITOR_SSE_PORT = String(port)
   return {
+    port,
     frames,
     of: (type: string) => frames.filter((frame) => frame.type === type),
     answer: (fields: Frame) => sockets.forEach((socket) => socket.send(JSON.stringify({ type: "diff.answer", ...fields }))),
     drop: () => sockets.forEach((socket) => socket.close()),
     stop: () => server.stop(true),
   }
+}
+
+// A WebSocket whose close event waits a second, as one does for a window slow to answer the close: the standard waits
+// for the peer, while Bun's own fires on the next tick.
+class SlowClose extends WebSocket {
+  override close(code?: number, reason?: string) {
+    setTimeout(() => super.close(code, reason), 1_000)
+  }
+}
+
+// The lock of a window on `port`, where the terminal UI looks for one.
+async function lock(state: string, port: number, token: string) {
+  await mkdir(path.join(state, "ide"), { recursive: true })
+  await writeFile(
+    path.join(state, "ide", `${port}.lock`),
+    JSON.stringify({ version: 1, pid: process.pid, port, workspaceFolders: [], ideName: "Test Editor", authToken: token }),
+  )
+}
+
+// The labels of the dialogs drawn, as the simulation reads them.
+function dialogs(renderable: Renderable): string[] {
+  const own = SimulationSemantics.read(renderable)?.()
+  return [
+    ...(own?.role === "dialog" && own.label !== undefined ? [own.label] : []),
+    ...renderable.getChildren().flatMap(dialogs),
+  ]
 }
 
 type Options = {
@@ -158,7 +178,8 @@ type Options = {
   features?: readonly string[] | null
   linked?: boolean
   name?: string
-  folders?: "ok" | "fail" | "hang"
+  folders?: "ok" | "fail" | "hang" | "slow"
+  WebSocketImpl?: typeof WebSocket
   reply?: (body: Frame) => Response | undefined
 }
 
@@ -189,6 +210,7 @@ async function mount(options: Options = {}) {
       // A server that takes the read and never answers; the read gives up when its signal aborts, as a real fetch does.
       if (options.folders === "hang")
         return new Promise<Response>((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)))
+      if (options.folders === "slow") await Bun.sleep(400)
       return json({
         directory: sessionFolder,
         project: { id: "proj_test", directory: projectFolder, canonical: canonicalFolder },
@@ -200,6 +222,12 @@ async function mount(options: Options = {}) {
   const toasts: { current?: ReturnType<typeof useToast> } = {}
   function ToastProbe() {
     toasts.current = useToast()
+    return <box />
+  }
+  // The editor context, so a test can link to another window as `/ide` does.
+  const editors: { current?: ReturnType<typeof useEditorContext> } = {}
+  function EditorProbe() {
+    editors.current = useEditorContext()
     return <box />
   }
 
@@ -235,11 +263,12 @@ async function mount(options: Options = {}) {
                         <ThemeProvider mode="dark" source={emptyThemeSource}>
                           <DialogProvider>
                             <TrustProvider directory={directory}>
-                              <EditorContextProvider compat={() => false}>
+                              <EditorContextProvider compat={() => false} WebSocketImpl={options.WebSocketImpl}>
                                 <InteractivityProvider enabled>
                                   <Route />
                                   <Toast />
                                   <ToastProbe />
+                                  <EditorProbe />
                                 </InteractivityProvider>
                               </EditorContextProvider>
                             </TrustProvider>
@@ -279,7 +308,9 @@ async function mount(options: Options = {}) {
     request,
     frame,
     until,
+    state: state.path,
     hide: () => setShown(false),
+    editor: () => editors.current!,
     toast: () => toasts.current?.currentToast,
     warnings: () => logs.filter((line) => line.level === "warn" && line.message.includes("diff")),
     async [Symbol.asyncDispose]() {
@@ -319,6 +350,8 @@ test("while the diff is open the prompt says where it opened and asks about the 
   expect(frame).toContain("Reject")
   expect(frame).not.toContain("NEW-LINE-TEXT")
   expect(frame).not.toContain("DECOY")
+  // The dialog names the file by name for a screen reader too.
+  expect(dialogs(setup.app.renderer.root)).toEqual(["Permission required: Edit a.ts"])
 })
 
 test("the save hint shows only in the editor's own terminal", async () => {
@@ -413,6 +446,39 @@ test("a request answered elsewhere, or a prompt that goes away, closes its tab",
     setup.hide()
     await setup.until(() => setup.peer!.of("diff.close").length === 1, "the close")
     expect(setup.replies).toEqual([])
+  }
+})
+
+// A prompt that goes away while the session's folders are still being read sends nothing once the read ends: no tab
+// opens for a question that is no longer shown.
+test("a prompt that goes away while its folders are read opens no diff", async () => {
+  await using setup = await mount({ folders: "slow" })
+  await setup.until(() => setup.reads.length === 1, "the read")
+  setup.hide()
+  await Bun.sleep(800)
+  expect(setup.peer!.of("diff.open")).toEqual([])
+})
+
+// A review belongs to the link it was opened over. After `/ide` links to another window, an answer from that window
+// for the review is dropped with one line, and no reply is sent, even while the first window's link has not closed.
+test("an answer from a window linked later is not taken for a review opened in the window before", async () => {
+  await using setup = await mount({ WebSocketImpl: SlowClose })
+  await opened(setup)
+  await setup.until(compact, "the compact prompt")
+  const other = await editor(setup.state)
+  try {
+    expect(await setup.editor().connect(other.port)).toBe("connected")
+    // The first window's link has not closed yet, so its review is still open.
+    expect(setup.warnings()).toEqual([])
+    other.answer({ id: "per_diff1", answer: "saved", content: "OTHER-TEXT\n" })
+    await setup.until(
+      () => setup.warnings().some((line) => line.message.includes("a review that is not open")),
+      "the dropped answer",
+    )
+    await Bun.sleep(1_200)
+    expect(setup.replies).toEqual([])
+  } finally {
+    await other.stop()
   }
 })
 
@@ -595,6 +661,10 @@ test("names in the compact prompt are written out", async () => {
   expect(flat).toContain("Ed\\x1b[31mitor\\u{202e}")
   expect(flat).toContain("e\\x1b]0;pwned\\x07\\u{202e}gnp.ts\\u{200b}\\nx.ts")
   expect(flat).toContain("l\\x1b[2Jink\\u{202e}\\u{200b}\\nx")
+  // The dialog's label, which a screen reader speaks, holds the name written out as well.
+  const [label] = dialogs(setup.app.renderer.root)
+  for (const raw of ["\u001b", "\u0007", "‮", "​", "\n"]) expect(label).not.toContain(raw)
+  expect(label?.replace(/\s+/g, "")).toContain("Edite\\x1b]0;pwned\\x07\\u{202e}gnp.ts\\u{200b}\\nx.ts")
 })
 
 test("a diff too large for a frame is not sent, and the dialog stays", async () => {
@@ -607,6 +677,39 @@ test("a diff too large for a frame is not sent, and the dialog stays", async () 
   expect(setup.peer!.of("diff.open")).toEqual([])
   expect(compact(await setup.frame())).toBe(false)
   expect(setup.warnings()).toHaveLength(1)
+})
+
+// The real app: its settings dialog and its palette are drawn outside the editor's context, and the app tells them that
+// an editor is linked, so both list where an edit approval's diff shows.
+test("the app's settings and palette list Diff tool while an editor is linked", async () => {
+  await using state = await tmpdir()
+  const peer = await editor(state.path)
+  await using setup = await createAppFixture({
+    state: state.path,
+    config: { animations: false, keybinds: { "orbit.settings": "f6" } },
+  })
+  try {
+    await setup.ready
+    await setup.waitForFrame(promptReady)
+    while (peer.of("hello").length === 0) await Bun.sleep(20)
+    await Bun.sleep(200)
+
+    setup.mockInput.pressKey("F6")
+    await setup.waitForFrame((frame) => frame.includes("Settings") && frame.includes("Color mode"))
+    await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof InputRenderable)
+    await setup.mockInput.typeText("diff tool")
+    await setup.waitForFrame((frame) => frame.includes("Diff tool"))
+    setup.mockInput.pressEscape()
+    await setup.waitForFrame((frame) => !frame.includes("Diff tool"))
+
+    setup.mockInput.pressKey("p", { ctrl: true })
+    await setup.waitForFrame((frame) => frame.includes("Commands"))
+    await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof InputRenderable)
+    await setup.mockInput.typeText("diff tool")
+    await setup.waitForFrame((frame) => frame.includes("Diff tool"))
+  } finally {
+    await peer.stop()
+  }
 })
 
 // The real app: a prompt or a command sent to the model closes every diff tab, as the reference does; a `!` command

@@ -242,3 +242,37 @@ describe("an Edit or Write through a link names where it leads, and says whether
         ),
       )
 })
+
+// The session's folder is itself reached through a link, as a system folder such as macOS's `/var` is: a plain file in
+// it is not reached through a link of the repository's, so its request names none.
+describe("an Edit or Write in a project folder that is itself reached through a link names no link", () => {
+  for (const tool of ["Edit", "Write"] as const)
+    it.live(tool, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (root) =>
+          Effect.gen(function* () {
+            const project = path.join(root.path, "proj")
+            const made = yield* Effect.promise(() => link(path.join(root.path, "real-proj"), project, "junction"))
+            if (made === "skip") return
+            const real = yield* Effect.promise(() => fs.realpath(path.join(root.path, "real-proj")))
+            yield* Effect.promise(() => fs.writeFile(path.join(real, "b.txt"), "alpha\nbeta\n"))
+            const settled = yield* run(
+              project,
+              tool,
+              tool === "Edit"
+                ? { file_path: "b.txt", old_string: "beta", new_string: "BETA" }
+                : { file_path: "b.txt", content: "written\n" },
+            )
+            expect(Exit.isSuccess(settled.exit)).toBe(true)
+            const entry = fileEntry(settled.request)
+            expect(entry).toBeDefined()
+            expect(entry?.link).toBeUndefined()
+            expect(yield* Effect.promise(() => fs.readFile(path.join(real, "b.txt"), "utf8"))).toBe(
+              tool === "Edit" ? "alpha\nBETA\n" : "written\n",
+            )
+          }),
+        (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+      ),
+    )
+})
