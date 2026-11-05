@@ -5,7 +5,14 @@ import { Schema } from "effect"
 import { writeFile } from "node:fs/promises"
 import path from "node:path"
 import { read, resolve, ConfigProvider, Info, useConfig, type Interface, type Resolved } from "../src/config"
-import { settings } from "../src/component/dialog-config"
+import { DialogConfig, settings } from "../src/component/dialog-config"
+import { Keymap } from "../src/context/keymap"
+import { ThemeProvider } from "../src/context/theme"
+import { DialogProvider, useDialog } from "../src/ui/dialog"
+import { ToastProvider } from "../src/ui/toast"
+import { onMount } from "solid-js"
+import { TestTuiContexts } from "./fixture/tui-environment"
+import { emptyThemeSource } from "./fixture/fixture"
 import { TuiKeybind } from "../src/config/keybind"
 import { KeybindingsFile } from "../src/config/keybindings-file"
 import { CommandMap, Definitions } from "../src/config/v1/keybind"
@@ -510,4 +517,63 @@ test("idle_reminder decodes any non-negative value and resolves to at most a day
     86400,
   )
   expect(resolve({ attention: { idle_reminder: 0 } }, { terminalSuspend: true }).attention.idle_reminder).toBe(0)
+})
+
+// clients-ux-37 part 2, class 8: whether the model is asked for a next-prompt suggestion is a spend choice, so the key is
+// off unless the person turns it on, and the settings row writes it to their own cli.json.
+test("prompt.suggestions is a boolean, off by default, with an Input row in settings", async () => {
+  expect(decodeInfo({ prompt: { suggestions: true } })).toEqual({ prompt: { suggestions: true } })
+  expect(decodeInfo({ prompt: { suggestions: false } })).toEqual({ prompt: { suggestions: false } })
+  expect(Schema.decodeUnknownOption(Info)({ prompt: { suggestions: "yes" } })._tag).toBe("None")
+  expect(resolve({}, { terminalSuspend: true }).prompt?.suggestions).toBeUndefined()
+  expect(settings.find((setting) => setting.path.join(".") === "prompt.suggestions")).toMatchObject({
+    title: "Prompt suggestions",
+    category: "Input",
+    default: false,
+    values: [false, true],
+    labels: ["off", "on"],
+  })
+
+  let current: Info = {}
+  const service: Interface = {
+    get: async () => current,
+    update: async (update) => {
+      const draft = structuredClone(current)
+      update(draft)
+      current = draft
+      return current
+    },
+  }
+  function Fixture() {
+    const dialog = useDialog()
+    onMount(() => dialog.replace(() => <DialogConfig current="prompt.suggestions" />))
+    return null
+  }
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={resolve(current, { terminalSuspend: true })} service={service}>
+          <Keymap.Provider>
+            <ThemeProvider mode="dark" source={emptyThemeSource}>
+              <ToastProvider>
+                <DialogProvider>
+                  <Fixture />
+                </DialogProvider>
+              </ToastProvider>
+            </ThemeProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 80, height: 40, kittyKeyboard: true },
+  )
+  app.renderer.start()
+  try {
+    const frame = await app.waitForFrame((frame) => frame.includes("Prompt suggestions"))
+    expect(frame.split("\n").find((line) => line.includes("Prompt suggestions"))).toContain("off")
+    app.mockInput.pressEnter()
+    await app.waitFor(() => current.prompt?.suggestions === true)
+  } finally {
+    app.renderer.destroy()
+  }
 })

@@ -410,6 +410,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     recap: async (signal) => {
       if (state.sessionID) await state.sdk.session.recap({ sessionID: state.sessionID }, { signal })
     },
+    suggestion: (sessionID, signal) => state.sdk.session.assist.suggestion({ sessionID }, { signal }),
     onSubagentInterrupt: (sessionID) => {
       log?.write("send.subagent.interrupt", { sessionID })
       void state.sdk.session.interrupt({ sessionID }).catch(() => {})

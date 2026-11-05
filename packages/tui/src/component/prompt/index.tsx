@@ -59,6 +59,7 @@ import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { useConfig } from "../../config"
 import { useTrust } from "../../context/trust"
+import { usePromptSuggestions } from "../../context/prompt-suggestion"
 import { Vim } from "./vim-state"
 import { VimAdapter } from "./vim-adapter"
 import { StatusLine } from "./status-line"
@@ -245,6 +246,18 @@ function argumentSlash(input: string, commands: readonly KeymapCommand[], locati
   return { command, input: head.arguments }
 }
 
+/** The command a slash command line names when it is that command alone and the command takes no argument. */
+function namedSlash(input: string, commands: readonly KeymapCommand[]) {
+  const head = parseSlashHead(input, /\s/)
+  if (!head || head.arguments.trim()) return
+  return commands.find(
+    (command) =>
+      command.slash &&
+      !command.slash.arguments &&
+      (command.slash.name === head.name || command.slash.aliases?.includes(head.name) === true),
+  )
+}
+
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
   let anchor: BoxRenderable
@@ -308,6 +321,10 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
+  const suggestions = usePromptSuggestions()
+  const suggestion = createMemo(() => (props.sessionID ? suggestions.session(props.sessionID) : undefined))
+  // The width of the input row, measured once it is laid out, which a suggestion is cut to.
+  const [inputWidth, setInputWidth] = createSignal(0)
   const history = usePromptHistory()
   // The folder that a sent prompt is filed under in history: the session's own, or where the next session starts.
   const historyDirectory = () =>
@@ -1236,6 +1253,8 @@ export function Prompt(props: PromptProps) {
     }
   })
 
+  // Each layer on the text area adds a `destroyed` listener to it, and past ten the runtime prints a leak warning on
+  // every prompt, so layers that share a condition share one layer.
   Keymap.createLayer(() => {
     return {
       context: "prompt",
@@ -1269,20 +1288,6 @@ export function Prompt(props: PromptProps) {
             input.cursorOffset = 0
           },
         },
-      ],
-    }
-  })
-
-  Keymap.createLayer(() => {
-    return {
-      context: "prompt",
-      priority: 1,
-      target: inputTarget,
-      enabled: (() => {
-        cursorVersion()
-        return inputTarget() !== undefined && !disabled() && !auto()?.visible && input !== undefined
-      })(),
-      commands: [
         {
           id: "prompt.history.next",
           title: "Next prompt history",
@@ -1380,11 +1385,29 @@ export function Prompt(props: PromptProps) {
       setStore("prompt", "text", input.plainText)
       syncExtmarksWithPromptParts()
     }
+    // Enter on a drawn suggestion sends the text drawn, as if typed. One cut to the row is put in the input instead, so
+    // nothing is sent that the person could not read first (class 8). Either way it stays a prompt to the model: as in
+    // the reference, Enter never takes a leading `!` into shell mode, so the next Enter does not run it as a command.
+    const shown = ghost()
+    if (shown) {
+      fillPrompt(shown.value, false)
+      if (!shown.whole) return false
+    }
+    // Typed, a slash command that takes no argument runs from the list that opens on it, which a filled input does not
+    // open; Enter on such a suggestion runs it the same way.
+    const named = shown ? namedSlash(shown.value, keymapCommands()) : undefined
+    if (named) {
+      suggestion()?.submitted()
+      clearPrompt()
+      named.run()
+      return true
+    }
     if (move.creating()) return false
     if (auto()?.visible) return false
     const trimmed = store.prompt.text.trim()
     if (!trimmed && (!props.sessionID || store.mode === "shell" || delivery === "queue"))
       return delivery === "steer" ? (await props.onEmptySubmit?.()) === true : false
+    if (trimmed) suggestion()?.submitted()
     const exitWord = trimmed === "exit" || trimmed === "quit" || trimmed === ":q"
     const inputText = expandTrackedPastedText(
       store.prompt.text,
@@ -1875,7 +1898,51 @@ export function Prompt(props: PromptProps) {
   // The command is handed this folder as `cwd` and `project_dir`, and programs it starts there (git, bun) read what the
   // folder chose, so it is a folder the person has to trust as well. It is not always the one the terminal UI started in.
   const statusLineTrusted = trust.folder(() => statusLineLocation().directory)
+  // Whether a next-prompt suggestion can be seen now: an exactly empty input in prompt mode, on an idle session. A list
+  // opens only on typed text, so none is open then. A key takes a suggestion only while it is drawn (class 8).
+  const drawable = () => store.mode === "normal" && store.prompt.text === "" && status() === "idle"
+  createEffect(() => {
+    const watch = suggestion()?.watch
+    if (watch) onCleanup(watch(drawable))
+  })
+  // The suggestion is model text, so it is drawn, taken and sent in its escaped form: what is drawn is what runs
+  // (class 9). It is cut to the input row. A prompt that takes no keys draws none either; a held suggestion waits for it.
+  const ghost = createMemo(() => {
+    const text = suggestion()?.text()
+    if (text === undefined || !drawable() || disabled()) return undefined
+    const value = plain(text)
+    const drawn = Locale.takeWidth(value, inputWidth())
+    if (!drawn) return undefined
+    return { value, drawn, whole: drawn === value }
+  })
+  // Puts a suggestion in the input with the cursor at its end. To be edited, a leading `!` takes the prompt into shell
+  // mode with the command after it, as typing it would; to be sent, the text stays as it is, a prompt to the model.
+  function fillPrompt(value: string, edit = true) {
+    const shell = edit && value.startsWith("!")
+    const text = shell ? value.slice(1) : value
+    if (shell) setStore("mode", "shell")
+    input.setText(text)
+    setStore("prompt", "text", text)
+    input.gotoBufferEnd()
+  }
+  Keymap.createLayer(() => ({
+    context: "prompt",
+    target: inputTarget,
+    enabled: inputTarget() !== undefined && ghost() !== undefined,
+    commands: ["tab", "right"].map((bind) => ({
+      bind,
+      title: "Take the suggestion",
+      group: "Prompt",
+      run: () => {
+        const shown = ghost()
+        if (!shown) return false
+        fillPrompt(shown.value)
+      },
+    })),
+  }))
   const placeholderText = createMemo(() => {
+    const shown = ghost()
+    if (shown) return shown.drawn
     // A prompt that cannot be used yet does not invite typing.
     if (props.showPlaceholder === false || !trust.typing()) return undefined
     const value = (() => {
@@ -2037,7 +2104,17 @@ export function Prompt(props: PromptProps) {
               {store.mode === "shell" ? "!" : "›"}
             </text>
           </box>
-          <box paddingLeft={1} paddingRight={dimensions().width < 44 ? 1 : 2} flexShrink={0} flexGrow={1} minWidth={0}>
+          <box
+            paddingLeft={1}
+            paddingRight={dimensions().width < 44 ? 1 : 2}
+            flexShrink={0}
+            flexGrow={1}
+            minWidth={0}
+            // The text area does not report its own size, so the row it gets is this box less its padding.
+            onSizeChange={function (this: BoxRenderable) {
+              setInputWidth(this.width - 1 - (dimensions().width < 44 ? 1 : 2))
+            }}
+          >
             <Show when={config.prompt?.image_preview && visibleImageAttachments().length > 0}>
               <box
                 width="100%"
@@ -2117,6 +2194,8 @@ export function Prompt(props: PromptProps) {
               cursorStyle={vimCommand() ? { ...config.cursor, style: "block" } : insertCursor()}
               onContentChange={() => {
                 const value = input.plainText
+                // Typing cancels a suggestion request that is still out; a suggestion already drawn stays held.
+                suggestion()?.changed()
                 setStore("prompt", "text", value)
                 auto()?.onInput(value)
                 syncExtmarksWithPromptParts()
@@ -2353,6 +2432,8 @@ export function Prompt(props: PromptProps) {
         ref={(r) => {
           setAuto(() => r)
         }}
+        // A command run from the list is a submit, so it ends the suggestion as sending a prompt does.
+        onCommand={() => suggestion()?.submitted()}
         anchor={() => anchor}
         input={() => input}
         setPrompt={(cb) => {

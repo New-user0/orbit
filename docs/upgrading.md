@@ -2114,6 +2114,33 @@ than before after a long answer.
 
 **What to do:** Nothing.
 
+### Prompt suggestions in the terminal UI and Mini
+
+`cli.json` takes `prompt.suggestions`, off unless set to `true`, and the settings dialog has a "Prompt suggestions" row
+under Input that writes it. With it on, the terminal UI and Mini ask the server what you might type next whenever a
+turn of the session in view ends well after the model replied in it (not after a failed or stopped turn, not after a
+subagent's, and not after a busy period with no model reply, such as a `/compact` or a redo), and draw the
+answer dimmed in the empty prompt, cut to the row. In the terminal UI, a turn of the main session that ends while one
+of its subagents' sessions is in view is asked about too, and its answer is drawn when you go back to the main
+session. Tab or the Right arrow puts it in the input, with the cursor at its end; only these two keys take a
+suggestion that starts with `!` into shell mode, with the command after it. Enter sends it as a prompt, unless it was
+cut, in which case Enter puts the whole text in the input first; either way a leading `!` stays part of the prompt
+text, so Enter never runs a suggestion as a shell command. A suggestion that is a slash command on its own, such as
+`/help`, runs that command as typing it would. In the terminal UI, a row too narrow to draw even the first character
+of a suggestion draws none and no key takes it, and while another pane has the keys it is not drawn and no key takes
+it; it is drawn again when the prompt has them back. Model text is drawn and sent with its control and format
+characters written out, so what you see is what is sent. Typing hides it and cancels an ask still out; erasing the input shows it
+again; sending a prompt, running a slash command from the list, a turn starting in the session or, in the terminal UI,
+rewinding its conversation ends it. An answer that comes while you are typing or while a
+turn runs is dropped. The terminal UI asks nothing while the session's folder is not trusted. Mini checks only the
+folder it starts in; for a session of another folder (`orb mini -s`) it sends the ask, and the server refuses it while
+that folder is not trusted, before any model call. A refusal, a failure or an older server draws nothing. A project's `cli.json` cannot set the key.
+
+**Affects:** terminal UI and Mini users who turn it on, who pay for one call on the session's own model, with the
+conversation, after each turn.
+
+**What to do:** Nothing. Set `prompt.suggestions` to `true` in your `cli.json`, or use the settings row, to turn it on.
+
 ### VS Code reviews Edit and Write approvals in the editor, and each prompt can show and restore its changes
 
 When the Orbit chat in VS Code gets an Edit or Write approval, the diff now opens beside the chat on its own, with the

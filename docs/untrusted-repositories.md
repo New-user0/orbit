@@ -1392,6 +1392,40 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   control run).
 - The trust dialog, bound to the folder in view when it opened: `TrustProvider` and `useTrustPrompt` in
   `src/context/trust.tsx`. Proof: `test/cli/tui/dialog-trust.test.tsx`.
+- The next-prompt suggestion's ask (`session.assist.suggestion`, which sends the session's history to its model):
+  the terminal UI asks only for the main session of the session in view (that session, or the root above a subagent's
+  session in view), and only while the trust status of that main session's own folder, read for it by name with
+  `trust.folder` rather than taken from the folder in view, says trusted, so a trust read that failed asks nothing
+  (`PromptSuggestionProvider` in `src/context/prompt-suggestion.tsx`, classes 1, 3 and 12), and only with
+  `prompt.suggestions` on in the person's own `cli.json` (class 8).
+  Mini asks for its own session, never for a subagent's (`createRuntimeLifecycle`), and checks no folder itself: `orb
+  mini` checked the folder it starts in, and a session it names in another folder (`orb mini -s`) is checked only by the
+  server, whose `UntrustedFolderError` refuses the ask before any model call, so the stricter answer wins (class 3). The
+  server stays the authority for both clients, and a refusal, a failure or an answer of another shape draws nothing and
+  writes one log line (`createPromptSuggestions` in `src/prompt-suggestion.ts`, class 7). Both clients ask only after a
+  busy period in which the model finished a step of that session, so a `/compact` or a redo's wake spends no call
+  (class 8). Proof: `test/prompt-suggestion.test.tsx` ("a session whose folder is not trusted is never asked", with the
+  start folder trusted and the session's own folder not or not read, and a trusted control; "the root's turn ending
+  while its subagent's session is in view asks, and the root shows the answer", with the subagent's folder trusted and
+  the root's not, and a trusted control; "each failed answer draws
+  nothing and leaves the prompt usable"; "a busy period in which the model wrote no reply asks nothing, as after
+  /compact or a redo"), `test/prompt-suggestion-state.test.ts`, `test/mini/runtime.suggestion.test.ts` (the same
+  busy-period rows, and "a refused or failed request draws nothing" for the server's refusal),
+  `packages/server/test/session-assist.test.ts` (the route refuses a session whose folder is not trusted and asks no
+  model, with a trusted control), and
+  `packages/cli/test/config.test.ts` (the key is read from no project folder).
+- The suggestion's text, which a model writes and a planted file can steer, drawn as dimmed text in the prompt line of
+  the terminal UI and Mini and taken by Tab, Right or Enter as the person's own prompt: it is drawn, put in the input
+  and sent as `plain(text)`, cut where the input's text area ends, and a key takes it only while it is drawn, which in the
+  terminal UI also needs the prompt to have the keys; Enter on a cut one fills the input instead of sending, and Enter
+  on a slash command on its own runs it as typed (class 9, and class 8's "what is shown is what runs"). Only Tab and
+  Right take a leading `!` into shell mode; Enter, on a whole or a cut suggestion, keeps it as prompt text, so model
+  text never reaches a shell without the person sending it from shell mode (class 2). Proof:
+  `test/prompt-suggestion.test.tsx` and `test/mini/prompt-suggestion.test.tsx` (each spelling drawn and taken by each
+  key, the cut row with plain text and with a leading `!`, a suggestion that just fills the row against one a cell
+  wider, a row too narrow for its first character, the hidden cases, a side pane holding the keys, `/help` against
+  `/help me` in the terminal UI, and in Mini `/editor`, `/settings`, `/new` and `/exit` against `/editor notes`, each
+  compared with typing it), each with a plain control row.
 - Run store text in the `/runs` dialog: `DialogFlowRuns` passes every string through `plain`. Proof:
   `test/component/dialog-flow-runs.test.tsx`.
 - Agent, skill and command names and descriptions that a folder supplies: the TUI agent and skill dialogs, the `@` and `/` autocomplete and every Mini menu (`RunFooterMenu` in `src/mini/footer.menu.tsx`, the single render site for the Mini `/` and `@` composer) draw them through `plain`. Proof: `test/component/dialog-listings.test.tsx`, `test/prompt/autocomplete-hostile.test.tsx`, `test/mini/footer.view.test.tsx` (hostile row beside a trusted one).

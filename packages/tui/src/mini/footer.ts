@@ -40,6 +40,7 @@ import { resolveRunTheme, type RunTheme } from "./theme"
 import { modelInfo } from "./variant.shared"
 import { entrySplash } from "./splash"
 import { SEED_LAUNCH } from "../ui/one-cell-motion"
+import type { PromptSuggestion } from "../prompt-suggestion"
 import type {
   FooterApi,
   FooterEvent,
@@ -85,6 +86,8 @@ type RunFooterOptions = {
   variant: string | undefined
   first: boolean
   history?: RunPrompt[]
+  /** The session's next-prompt suggestion, drawn dimmed in the empty prompt. */
+  suggestion?: PromptSuggestion
   theme: RunTheme
   tuiConfig: RunTuiConfig
   /** The folder the server decided trust for, which bounds the theme walk when the theme is resolved again (class 3). */
@@ -356,6 +359,7 @@ export class RunFooter implements FooterApi {
               },
               miniSettings: footer.miniSettings,
               history: footer.history,
+              suggestion: options.suggestion,
               onSubmit: footer.handlePrompt,
               onPermissionReply: footer.handlePermissionReply,
               onFormReply: footer.handleFormReply,
