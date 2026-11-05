@@ -101,6 +101,8 @@ test("costText prints every part of a full summary, and drops the parts a bare o
   expect(hostile.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
 
   const empty = costText(bare as never)
+  // An unknown duration reads as a dash.
+  expect(empty).toContain(`${"Total API duration:".padEnd(22)} -\n`)
   expect(empty).not.toContain("Subagents:")
   expect(empty).not.toContain("Other:")
   expect(empty).not.toContain("Total code changes:")
@@ -171,6 +173,13 @@ test("a server error is not taken for an old server", async () => {
 test("only the client's own unsupported-content-type error reads as an old server", async () => {
   const client = { session: { cost: () => Promise.reject(new Error("UnsupportedContentType")) } } as unknown as Parameters<typeof readSessionCost>[0]
   expect(await readSessionCost(client, "ses_x", 1_000)).toEqual({ error: "UnsupportedContentType" })
+})
+
+// Mutation: reading only the error's own name. The client may wrap the abort in an error whose cause is the timeout.
+test("a timeout wrapped as an error's cause reads as no answer in time", async () => {
+  const wrapped = new Error("transport", { cause: Object.assign(new Error("timed out"), { name: "TimeoutError" }) })
+  const client = { session: { cost: () => Promise.reject(wrapped) } } as unknown as Parameters<typeof readSessionCost>[0]
+  expect(await readSessionCost(client, "ses_x", 1_000)).toEqual({ error: "The server did not answer in time" })
 })
 
 test("a server that does not answer in time ends the read with one message", async () => {

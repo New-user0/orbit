@@ -214,6 +214,35 @@ describe("SessionCost", () => {
     }),
   )
 
+  // Mutation: dropping the `model.id IS NOT NULL` test of the message query, or the `provider_id IS NOT NULL` test of the
+  // usage query. A record that names only half of a model cannot be grouped under one, so it falls into other.
+  it.effect("a response or record that names only a provider or only a model is other, not a row", () =>
+    Effect.gen(function* () {
+      const db = yield* seedProject
+      yield* db.insert(SessionTable).values(sessionRow(root, { cost: 1 })).run().pipe(Effect.orDie)
+      yield* db
+        .insert(SessionMessageTable)
+        .values([
+          message(root, "assistant", { input: 10, cost: 0.2, extra: { model: { providerID: "prov" } } }),
+          message(root, "assistant", { input: 10, cost: 0.2, extra: { model: { id: "alpha" } } }),
+        ])
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionUsageTable)
+        .values([
+          { ...usage(root, "usage", "title", 0.3), provider_id: "prov" },
+          { ...usage(root, "usage", "title", 0.3), model_id: "alpha" },
+        ])
+        .run()
+        .pipe(Effect.orDie)
+
+      const summary = yield* SessionCost.summary(root)
+      expect(summary.rows).toEqual([])
+      expect(summary.other).toBeCloseTo(1)
+    }),
+  )
+
   // PC2 (continued): which responses are unknown spend. A response that used tokens and recorded no cost, and one that
   // failed with neither, are `unrecorded`; one that recorded exactly 0 is `zero`; one that used no tokens is neither.
   // Mutation: UNION ALL in the family query. A parent cycle then recurses without end, so the mutant is killed by a deadline.
@@ -559,6 +588,9 @@ describe("SessionCost", () => {
         executed: false,
       })
 
+      // Counting lines is bookkeeping: it does not make the session look recently used. Mutation: stamping the update time.
+      const before = (yield* db.select().from(SessionTable).all().pipe(Effect.orDie)).find((row) => row.id === root)
+      yield* Effect.promise(() => Bun.sleep(5))
       yield* bus.publish(SessionEvent.Tool.Success, {
         sessionID: root,
         assistantMessageID: SessionMessage.ID.make("msg_cost_edit"),
@@ -569,6 +601,7 @@ describe("SessionCost", () => {
       })
 
       const own = yield* db.select().from(SessionTable).all().pipe(Effect.orDie)
+      expect(own.find((row) => row.id === root)?.time_updated).toBe(before?.time_updated)
       expect(own.find((row) => row.id === root)).toMatchObject({ lines_added: 3 + 2 + 5 + 1 + 10 + 4 + 6, lines_removed: 1 + 0 + 0 + 1 + 10 + 2 + 3 })
       const summary = yield* SessionCost.summary(root)
       expect(summary.lines).toEqual({ added: 31 + 7, removed: 17 + 2 })
