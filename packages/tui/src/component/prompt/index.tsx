@@ -232,12 +232,14 @@ export function formatEditorContext(selection: EditorSelection) {
 /** The most of a selection that reaches the model, as in core and the VS Code chat. */
 const EDITOR_SELECTION_LIMIT = 2000
 
-function argumentSlash(input: string, commands: readonly KeymapCommand[]) {
+function argumentSlash(input: string, commands: readonly KeymapCommand[], locationCommands: ReadonlySet<string>) {
   const head = parseSlashHead(input, /\s/)
   if (!head) return
   const command = commands.find(
     (command) =>
       command.slash?.arguments &&
+      // A location command of the same name keeps its place, as it did before the built-in took optional text.
+      !(command.slash.arguments === "optional" && locationCommands.has(head.name)) &&
       (command.slash.name === head.name || command.slash.aliases?.includes(head.name) === true),
   )
   if (!command) return
@@ -1416,7 +1418,11 @@ export function Prompt(props: PromptProps) {
         return [{ start: extmark.start, end: extmark.end, text: part.text }]
       }),
     )
-    const slash = argumentSlash(inputText, keymapCommands())
+    const slash = argumentSlash(
+      inputText,
+      keymapCommands(),
+      new Set((data.location.command.list(currentLocation.ref) ?? []).map((command) => command.name)),
+    )
     if (delivery === "queue" && (store.mode === "shell" || exitWord || slash)) {
       toast.show({ message: "This prompt cannot be queued", variant: "warning" })
       return false

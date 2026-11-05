@@ -42,6 +42,8 @@ export type AutocompleteOption = {
   description?: string
   isDirectory?: boolean
   onSelect?: () => void
+  /** Tab: fill in the command name for its text instead of running it. Absent means Tab selects. */
+  onComplete?: () => void
   path?: string
   absolute?: string
   destructive?: { id: string; confirm: string; run: () => void }
@@ -485,12 +487,14 @@ export function Autocomplete(props: {
       return [slash.name, ...(slash.aliases ?? [])].map((name) => ({
         display: `/${name}`,
         description: command.description ?? command.title,
-        onSelect: slash.arguments
-          ? () => insertSlash(name)
-          : () => {
-              props.onCommand?.()
-              command.run()
-            },
+        onSelect:
+          slash.arguments === true
+            ? () => insertSlash(name)
+            : () => {
+                props.onCommand?.()
+                command.run()
+              },
+        onComplete: slash.arguments === "optional" ? () => insertSlash(name) : undefined,
       }))
     })
     const commandNames = new Set<string>()
@@ -731,6 +735,12 @@ export function Autocomplete(props: {
           const selected = options()[store.selected]
           if (selected?.isDirectory) {
             expandDirectory()
+            return
+          }
+
+          if (selected?.onComplete) {
+            hide(true)
+            selected.onComplete()
             return
           }
 

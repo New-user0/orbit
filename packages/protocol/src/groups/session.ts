@@ -511,6 +511,13 @@ export const makeSessionGroup = <
         payload: Schema.Struct({
           id: SessionMessage.ID.pipe(Schema.optional),
           delivery: SessionInbox.Delivery.pipe(Schema.optional),
+          instructions: Schema.String.pipe(
+            Schema.optional,
+            Schema.annotateKey({
+              description:
+                "Text added to this compaction's summary prompt. Blank counts as none. A request with instructions replaces a pending compaction; one without joins it.",
+            }),
+          ),
         }),
         success: Schema.Struct({ data: SessionInbox.Compaction }),
         error: [ConflictError, SessionNotFoundError, UntrustedFolderError],
@@ -521,7 +528,7 @@ export const makeSessionGroup = <
             identifier: "session.compact",
             summary: "Compact session",
             description:
-              "Durably admit a session compaction request. Steers by default: it runs at the next step boundary instead of waiting behind queued prompts.",
+              "Durably admit a session compaction request. Steers by default: it runs at the next step boundary instead of waiting behind queued prompts. Optional instructions are added to the summary prompt; a request with instructions replaces a pending compaction, and one without joins it.",
           }),
         ),
     )

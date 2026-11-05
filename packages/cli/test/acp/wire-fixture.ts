@@ -54,7 +54,7 @@ const Files = Schema.Array(Schema.Struct({ uri: Schema.String, name: Schema.opti
 const Delivery = Schema.optional(Schema.String)
 const PromptBody = Schema.Struct({ id: Schema.String, text: Schema.String, files: Files, delivery: Delivery })
 const CommandBody = Schema.Struct({ name: Schema.String, text: Schema.String, files: Files, delivery: Delivery })
-const CompactBody = Schema.Struct({ id: Schema.String })
+const CompactBody = Schema.Struct({ id: Schema.String, instructions: Schema.optional(Schema.String) })
 const SyntheticBody = Schema.Struct({
   text: Schema.String,
   description: Schema.optional(Schema.String),

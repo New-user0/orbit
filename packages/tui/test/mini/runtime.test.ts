@@ -459,6 +459,71 @@ describe("run interactive runtime", () => {
     await task
   })
 
+  test("sends the text after /compact to the compact route as its instructions", async () => {
+    const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
+    const ui = createFooterApiFixture()
+    stubCatalogLists(sdk)
+    const compacted = defer<void>()
+    const compact = spyOn(sdk.session, "compact").mockImplementation(() => {
+      compacted.resolve()
+      return ok({ id: "inb_1" } as never)
+    })
+
+    const task = runInteractiveDeferredMode(
+      {
+        host: host(),
+        sdk,
+        directory: "/tmp",
+        target: async () => ({
+          sessionID: "ses_root",
+          location: { directory: "/tmp", project: { id: "pro-1", directory: "/tmp", canonical: "/tmp" } },
+          agent: "build",
+          model: { providerID: "test", modelID: "model" },
+          variant: undefined,
+          resume: false,
+        }),
+        agent: "build",
+        model: { providerID: "test", modelID: "model" },
+        variant: undefined,
+        files: [],
+        thinking: false,
+      },
+      {
+        createRuntimeLifecycle: async () => ({
+          footer: ui.api,
+          onResize: () => () => {},
+          refreshTheme: () => {},
+          setTitle: () => {},
+          resetForReplay: () => Promise.resolve(),
+          close: () => Promise.resolve(),
+          setRunning: () => {},
+        }),
+        streamTransport: Promise.resolve({
+          createSessionTransport: async () => ({
+            runPromptTurn: async () => {},
+            admitPromptTurn: async () => {},
+            waitForIdle: async () => {},
+            interruptActiveTurn: async () => {},
+            selectSubagent: () => {},
+            settleForm: () => {},
+            replayOnResize: async () => false,
+            close: async () => {},
+          }),
+          formatUnknownError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        }),
+      },
+    )
+    await ui.promptReady
+    ui.submit("/compact focus on tests")
+    await compacted.promise
+
+    expect(compact).toHaveBeenCalledTimes(1)
+    expect(compact.mock.calls[0]?.[0]).toEqual({ sessionID: "ses_root", instructions: "focus on tests" })
+
+    ui.api.close()
+    await task
+  })
+
   test("resolves the deferred session only after first paint", async () => {
     const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
     const lifecycleStarted = defer<void>()

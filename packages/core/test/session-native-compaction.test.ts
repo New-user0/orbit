@@ -295,6 +295,7 @@ const setup = Effect.fnUntraced(function* (options: { endpoint?: boolean } = {})
     sessionID,
     store,
     hooks,
+    bus,
     model,
     compaction,
   }
@@ -591,3 +592,28 @@ test("retained user budget counts attachments and drops whole oldest messages", 
     SessionCompaction.recentUserMessages([user("x".repeat(63_000 * 4)), { ...newest, text: "new" }], model, 64_000),
   ).toHaveLength(1)
 })
+
+it.live("a manual compaction with instructions on a native-compaction model is summarized with them", () =>
+  Effect.gen(function* () {
+    // The first test of this file is the control: a bare manual compaction on this model is native.
+    const fixture = yield* setup()
+    yield* fixture.prompt("Real user request")
+    const inputID = SessionMessage.ID.create()
+    yield* fixture.bus.publish(SessionEvent.Compaction.Started, {
+      sessionID: fixture.sessionID,
+      reason: "manual",
+      recent: "",
+      inputID,
+    })
+    yield* fixture.compaction.compact({
+      reason: "manual",
+      context: yield* fixture.load,
+      inputID,
+      instructions: "  focus on tests  ",
+    })
+    // A summary request went out with the block, and no native request (trigger or endpoint) was made.
+    expect(fixture.bodies.length).toBeGreaterThan(0)
+    expect(JSON.stringify(fixture.bodies[0])).toContain("Additional instructions for this handoff:\\nfocus on tests")
+    expect(JSON.stringify(fixture.bodies)).not.toContain("compaction_trigger")
+  }),
+)
