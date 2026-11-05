@@ -34,7 +34,12 @@ export type Mention = {
 export type DiffAnswer =
   | { readonly id: string; readonly answer: "saved"; readonly content: string }
   | { readonly id: string; readonly answer: "closed" | "rejected" | "dismissed" }
-  | { readonly id: string; readonly answer: "unavailable"; readonly reason: "outside" | "changed" | "invalid" | "busy" }
+  | {
+      readonly id: string
+      readonly answer: "unavailable"
+      /** `failed`: the editor did not open the tab. */
+      readonly reason: "outside" | "changed" | "invalid" | "busy" | "failed"
+    }
 
 /** The terminal UI a review belongs to. `answer` is false when the frame would be too large to send. */
 export type DiffOwner = { readonly key: string; answer(frame: DiffAnswer): boolean }
@@ -185,7 +190,10 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       client.owner.answer({ id: frame.id, answer: "unavailable", reason: "invalid" })
       return
     }
-    void diff.open(client.owner, request, folders)
+    // The review answers its owner however it ends; a failure it could not answer is logged here, once.
+    diff.open(client.owner, request, folders).then(undefined, () =>
+      options.log("IDE bridge: the editor could not open a diff, so the terminal UI asks there"),
+    )
   }
 
   await new Promise<void>((resolve, reject) => {
@@ -247,8 +255,13 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
       if (disposed) return
       disposed = true
       if (timer) clearTimeout(timer)
-      // Each client's close drops its reviews (`accept`), before this returns: nothing of them answers.
-      for (const client of clients) client.socket.close(1001, "editor closed")
+      // Each client's reviews close before its socket does. The socket's close event can come a round trip later (a
+      // whole close timeout if the terminal UI is stopped), and a save in that time would be sent to a closing socket and
+      // lost while its tab says it went (class 12).
+      for (const client of clients) {
+        options.diff?.drop(client.owner)
+        client.socket.close(1001, "editor closed")
+      }
       sockets.close()
       server.close()
       server.closeAllConnections()

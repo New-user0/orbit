@@ -226,7 +226,10 @@ export class Review {
    */
   async accept(file: string) {
     const entry = this.editable(file)
-    if (entry) await this.answer(entry, "once", entry.owner ? this.texts.get(file) : entry.draft)
+    if (!entry) return
+    const outcome = await this.answer(entry, "once", entry.owner ? this.texts.get(file) : entry.draft)
+    // A save says why it failed by failing; Accept has no such place. The chat's refusals are noted on its card already.
+    if (entry.owner && typeof outcome === "object") this.host.warn(outcome.refused)
   }
 
   /** The Reject title action. */
@@ -343,7 +346,18 @@ export class Review {
     // Closed while it was read: by a close-all, which the owner is told of, or by the owner itself, which knows.
     if (open.dropped) return void (open.dismiss && !this.disposed && owner.answer({ id: request.id, answer: "dismissed" }))
     if (typeof found === "string") return void owner.answer({ id: request.id, answer: "unavailable", reason: found })
-    await this.show({ request: request.id, name: request.place, mode: "review", owner, ...found })
+    const opened = this.show({ request: request.id, name: request.place, mode: "review", owner, ...found })
+    await opened.catch((error: unknown) => {
+      // The tab did not open. Its entry goes, so the question is not busy, and the terminal UI asks there (class 7);
+      // one closed meanwhile has been answered already.
+      const entry = [...this.entries.values()].find(
+        (entry) => entry.owner === owner && entry.request === request.id && !entry.closing,
+      )
+      if (!entry) throw error
+      this.forget(entry)
+      owner.answer({ id: request.id, answer: "unavailable", reason: "failed" })
+      throw error
+    })
   }
 
   // The owner closed its review of `id`, or of every question when `id` is not given: the tabs close and answer nothing.

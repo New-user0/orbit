@@ -1080,6 +1080,17 @@ test("an auto save keeps the draft and answers nothing; Accept sends the draft, 
   expect(shown.replies).toHaveLength(4)
 })
 
+test("Accept that the server refuses is said on the card alone, with no editor warning", async () => {
+  // The chat notes a refusal on the question's card (`Controller.reply`); a warning would say it twice.
+  const shown = editor({ folders: [project], window: [project], reply: async () => ({ refused: "Refused." }) })
+  const review = new Review(shown.host)
+  await review.open(item([{ file: "a.txt", place: inside, patch }]), false)
+  await review.accept(shown.tabs[0]!.right.path)
+  expect(shown.replies).toHaveLength(1)
+  expect(shown.warnings).toEqual([])
+  expect(shown.closed).toEqual([])
+})
+
 test("a side the extension closes stays readable until VS Code reports its tab closed", async () => {
   // VS Code reads a side again after a save returns and before it closes a tab with unsaved edits; a side gone by then
   // fails the save, and VS Code asks the person whether to save.

@@ -6,8 +6,8 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import WebSocket from "ws"
-import { startBridge, type Bridge, type EditorSelection } from "../src/ide-bridge"
-import { contained, disk, Review, type Disk, type Host, type Tab } from "../src/review"
+import { startBridge, type Bridge, type DiffService, type EditorSelection } from "../src/ide-bridge"
+import { contained, disk, Review, tooLargeNotice, type Disk, type Host, type Tab } from "../src/review"
 
 const cleanup: Array<() => Promise<unknown> | unknown> = []
 afterEach(async () => {
@@ -464,38 +464,60 @@ function recorded() {
 
 // What the review would do in the editor, written down. A tab the review closes is reported closed, as VS Code reports
 // it. A server is never asked anything for a bridge review, so `reply` and `folders` only record.
-function tabs() {
+function tabs(options: { fail?: number; hold?: Promise<void> } = {}) {
   const shown: Tab[] = []
+  const attempts: string[] = []
   const closed: string[] = []
   const replies: unknown[] = []
+  const warnings: string[] = []
   const holder: { review?: Review } = {}
+  // The first `fail` tabs fail to open, as `vscode.diff` can, once `hold` lets them.
+  const failing = { left: options.fail ?? 0 }
   const host: Host = {
     reply: async (...args) => (replies.push(args), "gone"),
     folders: async (...args) => (replies.push(args), { refused: "unavailable" }),
     workspace: () => [],
-    show: async (tab) => void shown.push(tab),
+    show: async (tab) => {
+      attempts.push(tab.title)
+      if (failing.left-- > 0) {
+        await options.hold
+        throw new Error("the editor could not open the tab")
+      }
+      shown.push(tab)
+    },
     changes: async () => {},
     close: async (titles) => {
       closed.push(...titles)
       await Bun.sleep(0)
-      for (const title of titles) await holder.review?.closed(title)
+      // A tab that never opened has no close to report.
+      for (const title of titles) if (shown.some((tab) => tab.title === title)) await holder.review?.closed(title)
     },
     reveal: async () => {},
     note: () => {},
-    warn: () => {},
+    warn: (text) => void warnings.push(text),
     unmark: () => {},
   }
-  return { host, shown, closed, replies, holder }
+  return { host, shown, attempts, closed, replies, warnings, holder }
 }
 
 const features = { type: "hello", version: 1, pid: 4242, features: ["diff"] }
 
-async function reviewing(options: { window?: readonly string[] } = {}) {
+async function reviewing(
+  options: {
+    window?: readonly string[]
+    fail?: number
+    hold?: Promise<void>
+    diff?: (review: Review) => DiffService
+  } = {},
+) {
   const seen = recorded()
-  const editor = tabs()
+  const editor = tabs({ fail: options.fail, hold: options.hold })
   const review = new Review(editor.host, seen.recorder)
   editor.holder.review = review
-  const { bridge, logs } = await start(await folder(), { folders: options.window ?? [world.root], diff: review.bridge })
+  const { bridge, logs } = await start(await folder(), {
+    folders: options.window ?? [world.root],
+    diff: options.diff?.(review) ?? review.bridge,
+  })
   cleanup.push(() => review.dispose())
   await Bun.sleep(60)
   const client = await connect(bridge, (await lock(bridge)).authToken, features)
@@ -779,6 +801,34 @@ describe("a frame with a malformed id, place, patch or roots answers unavailable
   })
 })
 
+test("a tab the editor fails to open answers unavailable, logs one line and leaves the question free to open again", async () => {
+  const { client, editor, logs } = await reviewing({ fail: 1 })
+  ask(client)
+  await until(() => answers(client).length === 1, "the answer")
+  expect(answers(client)).toEqual([{ type: "diff.answer", id: "per_a1", answer: "unavailable", reason: "failed" }])
+  await until(() => logs.some((line) => line.includes("could not open a diff")), "the log line")
+  expect(logs.filter((line) => line.includes("could not open a diff"))).toHaveLength(1)
+  expect(editor.shown).toEqual([])
+  // Its entry is gone, so the same question opens and is not busy.
+  ask(client)
+  await until(() => editor.shown.length === 1, "the tab")
+  await Bun.sleep(20)
+  expect(answers(client)).toHaveLength(1)
+})
+
+test("a tab closed by a close-all while it fails to open answers dismissed alone", async () => {
+  const hold = Promise.withResolvers<void>()
+  const { client, editor, logs } = await reviewing({ fail: 1, hold: hold.promise })
+  ask(client)
+  await until(() => editor.attempts.length === 1, "the tab opening")
+  client.socket.send(JSON.stringify({ type: "diff.closeAll" }))
+  await until(() => answers(client).length === 1, "the dismissal")
+  hold.resolve()
+  await until(() => logs.some((line) => line.includes("could not open a diff")), "the log line")
+  await Bun.sleep(20)
+  expect(answers(client)).toEqual([{ type: "diff.answer", id: "per_a1", answer: "dismissed" }])
+})
+
 test("a patch that no longer applies answers unavailable and opens nothing", async () => {
   const { client, editor } = await reviewing()
   ask(client, { patch: createTwoFilesPatch("a.txt", "a.txt", "else\n", "two\n") })
@@ -840,6 +890,7 @@ test("Accept on a tab with no unsaved edits answers saved with the text the tab 
   await review.accept(editor.shown[0]!.right.path)
   await until(() => answers(client).length === 1, "the answer")
   expect(answers(client)).toEqual([{ type: "diff.answer", id: "per_a1", answer: "saved", content: proposal }])
+  expect(editor.warnings).toHaveLength(0)
 })
 
 test("a tab Orbit closes answers nothing to the server and tells its owner it was dismissed", async () => {
@@ -891,6 +942,30 @@ test("the bridge stopping closes its clients' reviews and answers nothing", asyn
   // The reviews close before the clients' sockets do, so none of them can still answer.
   expect(editor.closed).toEqual([editor.shown[0]!.title])
   expect((await client.closed).code).toBe(1001)
+  expect(answers(client)).toEqual([])
+})
+
+test("the bridge stopping drops each client's reviews before it closes that client's socket", async () => {
+  // Whether a socket's close event fires inside close() depends on the WebSocket implementation (Bun's does, the ws
+  // that VS Code runs does not), so the order is read from the bridge: a client whose socket closed has left its count.
+  const dropped: number[] = []
+  const holder: { bridge?: Bridge } = {}
+  const { bridge, client, editor } = await reviewing({
+    diff: (review) => ({
+      ...review.bridge,
+      drop: (owner) => {
+        dropped.push(holder.bridge!.clients())
+        review.bridge.drop(owner)
+      },
+    }),
+  })
+  holder.bridge = bridge
+  ask(client)
+  await until(() => editor.shown.length === 1, "the tab")
+  bridge.dispose()
+  expect(dropped[0]).toBe(1)
+  expect(editor.closed).toEqual([editor.shown[0]!.title])
+  await client.closed
   expect(answers(client)).toEqual([])
 })
 
@@ -1002,4 +1077,29 @@ test("a saved text too large for a frame is not sent, and the save says why", as
   await review.provider.writeFile(tab.right.path, new TextEncoder().encode("fits\n"))
   await until(() => answers(client).length === 1, "the answer")
   expect(answers(client)[0]).toEqual({ type: "diff.answer", id: "per_a1", answer: "saved", content: "fits\n" })
+  expect(editor.warnings).toHaveLength(0)
+})
+
+test("Accept on a tab whose text is too large for a frame sends nothing, keeps the tab and says why", async () => {
+  const large = await fs.realpath(await folder())
+  const file = path.join(large, "large.txt")
+  // Many short lines, so the patch holds a few of them and the text the tab holds is over the cap.
+  const body = `${"y".repeat(99)}\n`.repeat(Math.ceil(IdeLock.frameCap / 100))
+  await fs.writeFile(file, `${body}alpha\n`)
+  const { client, editor, review } = await reviewing({ window: [large] })
+  ask(client, {
+    place: file,
+    roots: [large],
+    patch: createTwoFilesPatch("large.txt", "large.txt", `${body}alpha\n`, `${body}ALPHA\n`),
+  })
+  await until(() => editor.shown.length === 1, "the tab")
+  await review.accept(editor.shown[0]!.right.path)
+  await Bun.sleep(30)
+  expect(answers(client)).toEqual([])
+  expect(editor.closed).toEqual([])
+  expect(editor.warnings).toEqual([tooLargeNotice])
+  // A save that fits still answers.
+  await review.provider.writeFile(editor.shown[0]!.right.path, new TextEncoder().encode("fits\n"))
+  await until(() => answers(client).length === 1, "the answer")
+  expect(editor.warnings).toEqual([tooLargeNotice])
 })
