@@ -78,6 +78,12 @@ afterEach(() => {
   expect(unexpected).toEqual([])
 })
 
+test("costText prints line counts without thousands separators", () => {
+  const big = { ...full, lines: { added: 1234, removed: 0 } }
+  const text = costText(big as never)
+  expect(text).toContain("1234 lines added, 0 lines removed")
+})
+
 test("costText prints every part of a full summary, and drops the parts a bare one lacks", () => {
   const text = costText(full as never)
   expect(text).toContain("Total cost:")

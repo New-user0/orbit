@@ -12,8 +12,7 @@ import { UI } from "./ui"
 // stored rows, so the figures do not depend on how
 // much history the run loaded. Every model name comes from a record or a provider, so each goes through `plain` (class 9).
 
-const count = new Intl.NumberFormat("en-US")
-const lines = (value: number) => `${count.format(value)} ${value === 1 ? "line" : "lines"}`
+const lines = (value: number) => `${value} ${value === 1 ? "line" : "lines"}`
 
 /**
  * The block `orb run "/cost"` prints. With the session's catalog, a response that recorded $0 for a model the catalog
