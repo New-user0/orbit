@@ -303,6 +303,18 @@ test("typing hides the ghost and erasing shows it again, and nothing hidden is t
     await footer.settle()
     expect(footer.app.captureCharFrame()).toContain(suggestion)
   }
+  // A space is text too: the ghost is hidden and Enter sends no suggestion, as in the terminal UI.
+  {
+    await using footer = await render(suggestion)
+    expect(footer.app.captureCharFrame()).toContain(suggestion)
+    footer.app.mockInput.pressKey(" ")
+    await footer.settle()
+    expect(footer.app.captureCharFrame()).not.toContain(suggestion)
+    footer.app.mockInput.pressEnter()
+    await footer.settle()
+    expect(footer.submitted).toEqual([])
+    expect(footer.app.captureCharFrame()).not.toContain(suggestion)
+  }
   // While a turn runs nothing is drawn, and no key takes it.
   for (const press of keys) {
     await using footer = await render(suggestion, 100, { phase: "running" })

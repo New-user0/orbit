@@ -139,6 +139,27 @@ test("a subagent's turn asks nothing", async () => {
   }
 })
 
+// The reference asks only at the end of a turn that ends normally, so a failed or interrupted one asks nothing even
+// after the model finished a step in it.
+test("a failed or interrupted turn of Mini's own session asks nothing", async () => {
+  for (const row of [
+    {
+      type: "session.execution.failed",
+      data: { sessionID: "ses_1", error: { type: "provider", message: "The provider is unavailable" } },
+      asks: 0,
+    },
+    { type: "session.execution.interrupted", data: { sessionID: "ses_1", reason: "user" }, asks: 0 },
+    { type: "session.execution.succeeded", data: { sessionID: "ses_1" }, asks: 1 },
+  ]) {
+    using mini = await start({ suggestions: true })
+    mini.lifecycle.observe?.({ type: "session.execution.started", data: { sessionID: "ses_1" } })
+    mini.lifecycle.observe?.({ type: "session.step.ended", data: { sessionID: "ses_1", finish: "stop" } })
+    mini.lifecycle.observe?.({ type: row.type, data: row.data })
+    await Bun.sleep(100)
+    expect({ type: row.type, asks: mini.asked.length }).toEqual({ type: row.type, asks: row.asks })
+  }
+})
+
 // The reference asks only at the end of a model turn, so a busy period with no model reply, such as a /compact or a
 // redo's wake, asks nothing.
 test("a busy period in which the model wrote no reply asks nothing, as after /compact or a redo", async () => {

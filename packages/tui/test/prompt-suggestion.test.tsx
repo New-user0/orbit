@@ -187,10 +187,10 @@ async function mount(
         | "session.execution.failed"
         | "session.execution.interrupted",
       id = sessionID,
-      /** For a busy period that ends well, whether the model finished a step in it first, as a turn's does. */
+      /** For a busy period that ends, whether the model finished a step in it first, as a turn's does. */
       reply = true,
     ) {
-      if (type === "session.execution.succeeded" && reply) {
+      if (type !== "session.execution.started" && reply) {
         seq++
         setup.events.emit({
           id: `evt_step_${seq}`,
@@ -359,6 +359,7 @@ test("a session whose folder is not trusted is never asked", async () => {
 
 test("only a succeeded turn of the session in view asks", async () => {
   const rows = [
+    // A failed or interrupted turn in which the model had already finished a step asks nothing either.
     { name: "failed", type: "session.execution.failed" as const, id: sessionID, count: 0 },
     { name: "interrupted", type: "session.execution.interrupted" as const, id: sessionID, count: 0 },
     { name: "another session", type: "session.execution.succeeded" as const, id: "ses_other", count: 0 },
