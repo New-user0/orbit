@@ -432,6 +432,16 @@ class Chat implements vscode.WebviewViewProvider {
         view.entries.map((entry) => [uri(entry.label), uri(entry.left), uri(entry.right)]),
       ),
     close: closeTabs,
+    // Opening the same two sides again in the tab's own group brings that tab forward instead of adding another.
+    reveal: async (title) => {
+      const group = vscode.window.tabGroups.all.find((entry) => entry.tabs.some((tab) => tab.label === title))
+      const input = group?.tabs.find((tab) => tab.label === title)?.input
+      if (!group || !(input instanceof vscode.TabInputTextDiff)) return
+      await vscode.commands.executeCommand("vscode.diff", input.original, input.modified, title, {
+        viewColumn: group.viewColumn,
+        preview: false,
+      })
+    },
     note: (text, tone) => void this.controller?.then((controller) => controller?.note(text, tone)),
     warn: (text) => void vscode.window.showWarningMessage(text),
   })

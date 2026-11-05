@@ -60,6 +60,8 @@ export interface Host {
   changes(view: Changes): PromiseLike<unknown>
   /** Closes the tabs with these titles. The review forgets them first, so their close events answer nothing. */
   close(titles: ReadonlyArray<string>): PromiseLike<unknown>
+  /** Brings the open tab with this title to the front where it is, and opens nothing new. */
+  reveal(title: string): PromiseLike<unknown>
   note(text: string, tone: "muted" | "error"): void
   warn(text: string): void
 }
@@ -97,6 +99,9 @@ export class Review {
   private readonly texts = new Map<string, string>()
   // Review sides whose next write is an auto save that VS Code announced.
   private readonly automatic = new Set<string>()
+  // Opens still reading folders or the file. An answer to their question, a new prompt or the window closing marks them,
+  // and a marked open shows nothing, so no tab appears for a question that is no longer waiting.
+  private readonly opening = new Set<{ readonly request: string; dropped: boolean }>()
   private disposed = false
 
   constructor(
@@ -154,8 +159,14 @@ export class Review {
     if (this.disposed || item.files.length === 0) return false
     const mode = modeOf(item)
     if (!click && mode !== "review") return false
+    // One review tab per question: "Open diff" on a question already open for review shows that tab again.
+    const shown = this.reviewing(item.id)
+    if (shown) return this.host.reveal(shown.title).then(() => true)
+    const open = { request: item.id, dropped: false }
+    this.opening.add(open)
     const folders = await this.host.folders(item.sessionID)
     if ("refused" in folders) {
+      this.opening.delete(open)
       if (click)
         this.host.note(
           folders.refused === "untrusted"
@@ -165,7 +176,10 @@ export class Review {
         )
       return false
     }
-    const opened = await Promise.all(item.files.map((file) => this.file(item, file, mode, folders.folders, click)))
+    const opened = await Promise.all(
+      item.files.map((file) => this.file(item, file, mode, folders.folders, click, open)),
+    )
+    this.opening.delete(open)
     return opened.some((shown) => shown === "review")
   }
 
@@ -193,11 +207,17 @@ export class Review {
 
   /** The question was answered elsewhere (the card, the terminal, another client): its tabs close and answer nothing. */
   settled(requestID: string) {
+    this.opening.forEach((open) => {
+      if (open.request === requestID) open.dropped = true
+    })
     this.close([...this.entries.values()].filter((entry) => entry.request === requestID && !entry.closing))
   }
 
   /** A new prompt: every Orbit tab closes, and none of those closes answers. */
   closeAll() {
+    this.opening.forEach((open) => {
+      open.dropped = true
+    })
     this.close([...this.entries.values()].filter((entry) => !entry.closing))
   }
 
@@ -232,7 +252,14 @@ export class Review {
     await this.host.changes({ title, entries })
   }
 
-  private async file(item: Permission, change: FileChange, mode: "review" | "preview", folders: ReadonlyArray<string>, click: boolean) {
+  private async file(
+    item: Permission,
+    change: FileChange,
+    mode: "review" | "preview",
+    folders: ReadonlyArray<string>,
+    click: boolean,
+    open: { readonly dropped: boolean },
+  ) {
     const where = { session: folders, window: this.host.workspace() }
     const place = await contained(change.place, where, this.reader)
     // A move is read from where it came from, which is checked the same way.
@@ -258,6 +285,14 @@ export class Review {
       this.host.note(changedNotice, "muted")
       return undefined
     }
+    // Checked after the last read, with no wait between it and recording the tab.
+    if (open.dropped) return undefined
+    // The click and the open on its own may race: the one that gets here second shows the first one's tab.
+    const shown = this.reviewing(item.id)
+    if (shown) {
+      await this.host.reveal(shown.title)
+      return mode
+    }
     const title = tabTitle(change.place ?? change.file)
     const key = `/${item.id}/${title.slice(-7, -1)}`
     const name = sideName(place)
@@ -275,6 +310,13 @@ export class Review {
     })
     await this.host.show({ title, mode, left, right })
     return mode
+  }
+
+  // The question's open review tab, if there is one.
+  private reviewing(requestID: string) {
+    return [...this.entries.values()].find(
+      (entry) => entry.request === requestID && entry.mode === "review" && !entry.closing,
+    )
   }
 
   private editable(file: string) {

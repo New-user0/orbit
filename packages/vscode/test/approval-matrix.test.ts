@@ -168,6 +168,7 @@ for (const row of reviewRows)
       show: async (tab: { title: string }) => void tabs.push(tab),
       changes: async () => {},
       close: async () => {},
+      reveal: async () => {},
       note: () => {},
       warn: () => {},
     }
