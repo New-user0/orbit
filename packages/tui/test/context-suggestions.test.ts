@@ -205,3 +205,20 @@ test("each piece of advice is Orbit's own wording", () => {
   // The phrasings that the first rewrite still shared with the reference's sentences stay out.
   for (const text of advice) expect(text).not.toMatch(/Pipe|head, tail or grep|summary is close|run long|line ranges/)
 })
+
+test("each suggestion's title is Orbit's own wording", () => {
+  const title = (input: Parameters<typeof info>[0]) => contextSuggestions(info(input)).map((item) => item.title)
+  expect([
+    ...title({ window: 100_000, percentage: 80, auto: true }),
+    ...title({ window: 100_000, percentage: 50, auto: false }),
+    ...title({ window: 100_000, tools: [tool("Bash", 5_000, 15_000)] }),
+    ...title({ window: 200_000, tools: [tool("Read", 0, 10_000)] }),
+    ...title({ window: 100_000, files: [1_000, 2_000, 1_500, 500] }),
+  ]).toEqual([
+    "80% of the window is in use",
+    "Auto-compaction is switched off",
+    "Bash uses 20.0K tokens across its calls and results (20%)",
+    "What Read returned holds 10.0K tokens (5%)",
+    "Instructions hold 5.0K tokens (5%)",
+  ])
+})
