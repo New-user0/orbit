@@ -113,6 +113,18 @@ import fs from "fs/promises"
 import path from "path"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
 import { CodeModeInstructions } from "@orbit/core/codemode/instructions"
+import { Environment } from "@orbit/core/environment/index"
+import { FileAccess } from "@orbit/core/file-access"
+import { Mcp } from "@orbit/core/mcp/index"
+import { McpClient } from "@orbit/core/mcp/client"
+import { Ripgrep } from "@orbit/core/ripgrep"
+import { McpTool } from "@orbit/core/tool/mcp"
+import { GrepTool } from "@orbit/core/tool/plugin/grep"
+import { ConfigMCP } from "@orbit/schema/config/mcp"
+import { hostEnvironmentLayer } from "./fixture/environment"
+import { location } from "./fixture/location"
+import { tmpdirScoped } from "./fixture/tmpdir"
+import { registerToolPlugin } from "./lib/tool"
 
 const emptyCodeMode = `${CodeModeInstructions.render({ total: 0, shown: 0, namespaces: [] })}\n\n`
 type ToolBarrier = {
@@ -11540,6 +11552,138 @@ describe("SessionRunnerLLM saved tool results", () => {
     )
     yield* s.resume
     expect(seen).toEqual([60_000])
+  })
+
+  // The wrapper the next request carries in place of a saved result, read back into its parts.
+  const unwrap = (value: unknown) => {
+    const lines = String(value).split("\n")
+    const header = /^Output too large to include \(([0-9.]+KB)\)\. The full output is saved at: (.+)$/.exec(lines[1] ?? "")
+    return { opening: lines[0], size: header?.[1], file: header?.[2], rest: lines.slice(2) }
+  }
+  const dataOf = (s: Scenario) =>
+    Effect.gen(function* () {
+      const scratchpad = (yield* SessionScratchpad.Service).path(yield* s.session.get(sessionID))
+      if (scratchpad === undefined) return yield* Effect.die(new Error("Expected the session to have a scratchpad"))
+      return path.join(path.dirname(path.dirname(path.dirname(scratchpad))), "data")
+    })
+  const storedContent = (s: Scenario, callID: string) =>
+    s.messages.pipe(
+      Effect.map((messages) =>
+        messages
+          .flatMap((message) => (message.type === "assistant" ? message.content : []))
+          .flatMap((part) =>
+            part.type === "tool" && part.id === callID && part.state.status === "completed" ? part.state.content : [],
+          )
+          .map((part) => (part.type === "text" ? part.text : "")),
+      ),
+    )
+
+  // The real Grep tool, on a folder of its own, with its 20,000-character limit on the way to the step. Its result
+  // here is about 26,000 characters, below the 50,000 ceiling, so only Grep's own declared limit saves it.
+  savedScenario("saves a Grep result over 20,000 characters and sends the wrapper in the next request", function* (s) {
+    const data = yield* dataOf(s)
+    const folder = (yield* tmpdirScoped()).path
+    yield* Effect.promise(() =>
+      fs.writeFile(
+        path.join(folder, "notes.txt"),
+        Array.from({ length: 100 }, (_, index) => `needle ${String(index).padStart(3, "0")} ${"n".repeat(240)}`).join("\n"),
+      ),
+    )
+    const registry = yield* Tool.Service
+    yield* Layer.build(
+      AppNodeBuilder.build(
+        makeLocationNode({
+          name: "test/session-runner-grep",
+          layer: Layer.effectDiscard(registerToolPlugin(GrepTool.Plugin)),
+          deps: [Tool.node, Environment.node, Ripgrep.node, Location.node, FileAccess.node, Permission.node],
+        }),
+        [
+          Tool.node.replace(Layer.succeed(Tool.Service, registry)),
+          Location.node.replace(
+            Layer.succeed(
+              Location.Service,
+              Location.Service.of(location(Location.Ref.make({ directory: AbsolutePath.make(folder) }))),
+            ),
+          ),
+          Permission.node.replace(permission),
+        ],
+      ),
+    )
+    yield* s.admit("Find the needles")
+    yield* s.llm.push(
+      TestLLM.tool("call_grep", "Grep", { pattern: "needle", path: path.join(folder, "notes.txt") }),
+      TestLLM.text("Found them", "done-grep"),
+    )
+    yield* s.resume
+
+    const [content] = yield* storedContent(s, "call_grep")
+    if (content === undefined) return yield* Effect.die(new Error("Expected the Grep call to complete"))
+    expect(content.startsWith("Found 100 matches\n")).toBe(true)
+    expect(content.length).toBeGreaterThan(20_000)
+    expect(content.length).toBeLessThan(50_000)
+    const [result] = toolResults(s.requests[1])
+    if (result?.result.type !== "text") return yield* Effect.die(new Error("Expected a text tool result"))
+    const wrapped = unwrap(result.result.value)
+    expect(wrapped.opening).toBe("<saved-output>")
+    expect(wrapped.size).toBe(`${(content.length / 1024).toFixed(1)}KB`)
+    if (wrapped.file === undefined) return yield* Effect.die(new Error(`Expected the saved path, got ${result.result.value}`))
+    expect(path.dirname(wrapped.file)).toBe(path.join(data, "tool-output", sessionID))
+    expect(yield* Effect.promise(() => fs.readFile(wrapped.file!, "utf8"))).toBe(content)
+    expect(wrapped.rest.slice(0, 3)).toEqual(["", "Preview of the first 2,000 characters:", "Found 100 matches"])
+    expect(wrapped.rest.at(-1)).toBe("</saved-output>")
+    expect(String(result.result.value)).not.toContain("needle 099")
+  })
+
+  // A real MCP server over stdio. An MCP tool declares 100,000 characters, so the 50,000 ceiling is what saves it.
+  savedScenario("saves an MCP result over 50,000 characters and sends the wrapper in the next request", function* (s) {
+    const data = yield* dataOf(s)
+    const server = Mcp.ServerName.make("traits")
+    const connection = yield* McpClient.connect(
+      "traits",
+      new ConfigMCP.Local({
+        type: "local",
+        command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-traits.ts")],
+      }),
+      import.meta.dir,
+    ).pipe(Effect.provide(hostEnvironmentLayer))
+    const tools = (yield* connection.tools()).map((entry) => ({ ...entry, server, codemode: false }) satisfies Mcp.Tool)
+    const registry = yield* Tool.Service
+    // A fresh layer: the graph has built McpTool already, on a service with no servers.
+    const registration = yield* Layer.build(
+      Layer.fresh(McpTool.layer).pipe(
+        Layer.provide(
+          Layer.mock(Mcp.Service, {
+            tools: () => Effect.succeed(tools),
+            callTool: (input) =>
+              connection.callTool({ name: input.name, args: input.args }).pipe(
+                Effect.map((result) => ({ ...result, server, tool: input.name })),
+                Effect.orDie,
+              ),
+          }),
+        ),
+        Layer.provide(permission),
+        Layer.provide(Layer.succeed(Tool.Service, registry)),
+      ),
+    )
+    yield* Context.get(registration, McpTool.Service).flush
+    yield* s.admit("Look it up")
+    yield* s.llm.push(
+      TestLLM.tool("call_mcp", "traits_lookup", { chars: 60_000 }),
+      TestLLM.text("Looked up", "done-mcp"),
+    )
+    yield* s.resume
+
+    expect(yield* storedContent(s, "call_mcp")).toEqual(["x".repeat(60_000)])
+    const [result] = toolResults(s.requests[1])
+    if (result?.result.type !== "text") return yield* Effect.die(new Error("Expected a text tool result"))
+    const wrapped = unwrap(result.result.value)
+    expect(wrapped.opening).toBe("<saved-output>")
+    expect(wrapped.size).toBe("58.6KB")
+    if (wrapped.file === undefined) return yield* Effect.die(new Error(`Expected the saved path, got ${result.result.value}`))
+    expect(path.dirname(wrapped.file)).toBe(path.join(data, "tool-output", sessionID))
+    expect(path.basename(wrapped.file)).toMatch(/^msg_[A-Za-z0-9]{1,64}-call_mcp-[0-9a-f]{8}\.txt$/)
+    expect(yield* Effect.promise(() => fs.readFile(wrapped.file!, "utf8"))).toBe("x".repeat(60_000))
+    expect(wrapped.rest).toEqual(["", "Preview of the first 2,000 characters:", "x".repeat(2_000), "...", "</saved-output>"])
   })
 })
 
