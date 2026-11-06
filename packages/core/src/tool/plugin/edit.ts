@@ -357,7 +357,7 @@ export const Plugin = {
                 output: edited.output,
                 // A revised edit is not the replacement the model asked for, so the model is told the person changed it.
                 content: edited.revised
-                  ? `Edited ${edited.output.files[0]?.file}, though not as you proposed: the person revised the change before approving it`
+                  ? `Edited ${edited.output.files[0]?.file} with a version the person adjusted while approving it, which differs from your proposal`
                   : `Edited ${edited.output.files[0]?.file} (${edited.output.replacements} replacement${edited.output.replacements === 1 ? "" : "s"})`,
                 metadata: { files: edited.output.files },
               })),

@@ -360,7 +360,7 @@ it.live(
         const own = { messageID: batch.messageID, toolCallIDs: [batch.toolCallID] }
 
         llm.script.other = () => ({ text: "   " })
-        expect((await ask(batch.id, own)).body).toEqual({ data: { label: null, reason: "empty" } })
+        expect((await ask(batch.id, own)).body).toEqual({ data: { label: null, reason: "no_text" } })
         llm.script.other = () => ({ status: 400 })
         expect((await ask(batch.id, own)).body).toEqual({ data: { label: null, reason: "unavailable" } })
         llm.script.other = () => ({ text: "Read the notes" })
@@ -396,7 +396,7 @@ it.live(
 // A call still waiting for its approval has not finished, and a call the interruption ended is not labelled, as in the
 // reference; the model is not asked for either. The finished batches above are the control.
 it.live(
-  "a label is null for a call that has not finished (unsettled) and for one an interruption ended (aborted)",
+  "a label is null for a call that has not finished (unsettled) and for one an interruption ended (interrupted)",
   () =>
     Effect.gen(function* () {
       const { folders, llm } = yield* layout
@@ -437,7 +437,7 @@ it.live(
         const ended = await call()
         expect(ended.status).toBe("error")
         expect((await label(server, id, { messageID: ended.messageID, toolCallIDs: ended.toolCallIDs })).body).toEqual({
-          data: { label: null, reason: "aborted" },
+          data: { label: null, reason: "interrupted" },
         })
         expect(llm.requests.length).toBe(asked)
       })
@@ -569,7 +569,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "the session is in Plan mode",
-    reason: "plan_mode",
+    reason: "planning",
     setup: async ({ server, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -683,7 +683,7 @@ for (const row of suppressions)
 // the reference.
 const words = (count: number) => Array.from({ length: count }, (_, index) => `step${index}`).join(" ")
 const filters: ReadonlyArray<readonly [string, string | undefined]> = [
-  ["   ", "empty"],
+  ["   ", "no_text"],
   ["done", "just_done"],
   ["nothing to suggest right now", "self_reference"],
   ["I would stay silent here", "self_reference"],
@@ -899,7 +899,7 @@ it.live(
             .status,
         ).toBe(200)
 
-        expect((await pending).body?.data).toEqual({ suggestion: null, reason: "aborted" })
+        expect((await pending).body?.data).toEqual({ suggestion: null, reason: "cancelled" })
         expect(Date.now() - started).toBeLessThan(8_000)
       })
     }),
@@ -928,7 +928,7 @@ it.live(
         const second = await suggestion(server, id)
 
         expect(second.body?.data).toEqual({ suggestion: "fresh suggestion here" })
-        expect((await first).body?.data).toEqual({ suggestion: null, reason: "aborted" })
+        expect((await first).body?.data).toEqual({ suggestion: null, reason: "cancelled" })
       })
     }),
   60_000,

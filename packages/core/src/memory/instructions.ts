@@ -334,6 +334,10 @@ function summary(text: string) {
 // The guide keeps the reference's section order and what each section asks of the model; every sentence is Orbit's.
 // With team memory on it is the combined guide: two folders, a section on scope, a scope line for each kind, a rule
 // against secrets in team memory and an index in each folder.
+// The service makes each folder before any guide names it, so the model is told why it need not.
+const CREATED_ONE =
+  "Orbit created it before this conversation began, so a Write or Edit into it succeeds on the first call, and a step spent creating or listing it is wasted."
+
 const renderGuide = (value: Guide) => {
   const folder = typeof value === "string" ? value : value.folder
   const team = typeof value === "string" ? undefined : value.team
@@ -341,8 +345,8 @@ const renderGuide = (value: Guide) => {
 
 ${
   team === undefined
-    ? `What you learn here can outlast this conversation if you write it into \`${heading(folder)}\`, a folder of Markdown files that later conversations read. The folder is already there: save into it with Write and Edit straight away, without making it first or looking to see whether it exists.`
-    : `What you learn here can outlast this conversation if you write it into one of two folders of Markdown files that later conversations read: \`${heading(folder)}\`, which is private, and \`${heading(team)}\`, which the team shares. Both folders are already there: save into them with Write and Edit straight away, without making them first or looking to see whether they exist.`
+    ? `What you learn here can outlast this conversation if you write it into \`${heading(folder)}\`, a folder of Markdown files that later conversations read. ${CREATED_ONE}`
+    : `What you learn here can outlast this conversation if you write it into one of two folders of Markdown files that later conversations read: \`${heading(folder)}\`, which is private, and \`${heading(team)}\`, which the team shares. Orbit created both before this conversation began, so a Write or Edit into either succeeds on the first call, and a step spent creating or listing them is wasted.`
 }
 
 ${guideBody(team)}`
@@ -353,7 +357,7 @@ ${guideBody(team)}`
 // builds it. The index is the agent's to keep, so look-alikes of the reminder envelope in it are escaped (class 9).
 const renderAgentMemory = (value: AgentBlock) => `# Your agent memory
 
-As this agent you keep notes of your own that outlast each conversation, as Markdown files in \`${heading(value.folder)}\`. The folder is already there: save into it with Write and Edit straight away, without making it first or looking to see whether it exists.
+As this agent you keep notes of your own that outlast each conversation, as Markdown files in \`${heading(value.folder)}\`. ${CREATED_ONE}
 
 ${guideBody(undefined)}
 
@@ -366,7 +370,7 @@ ${value.index === "" ? `Your ${MemoryStore.ENTRYPOINT} is empty. It fills as you
 const AGENT_SCOPES: Record<MemoryAgent.Scope, string> = {
   user: "Scope of these notes: user. You carry them into every project you work in, so write down only what holds in general, wherever you are.",
   project:
-    "Scope of these notes: project. They are committed to the repository, which means they are shared with the team through version control; write down what holds for this project.",
+    "Scope of these notes: project. Everyone who clones the repository receives them, since they are committed with it; write down what holds for this project.",
   local:
     "Scope of these notes: local. They belong to this project on this machine and are not committed to version control; write down what holds for this project here.",
 }
@@ -378,7 +382,7 @@ const guideBody = (team: string | undefined) => {
   const scope = (text: string) => (team === undefined ? "" : `\n- Scope: ${text}`)
   return `Memory is how you get better at working with this person from one conversation to the next. Note their background and habits, the ways of working they want you to keep or drop, and the circumstances of the project, so that a new conversation does not start from nothing.
 
-If the person asks you to remember something, write it down at once; if they ask you to forget something, find the memory and delete it.
+A request from the person settles a memory either way. What they want kept is saved right then, and what they want gone is looked up among the memory files and its file removed.
 ${
   team === undefined
     ? ""
@@ -431,16 +435,17 @@ There are four kinds, and every memory belongs to one of them.
 
 ## Leave these out
 
-- Facts you can recover by reading the code, the project's files or its version history, for example how it is laid out, its conventions, where a file lives or who changed a line.
-- How you fixed a bug. The fix is in the change itself, and its commit message explains it.
-- Whatever the instruction files already say.
-- Where the current task stands. Progress and remaining steps matter to this conversation and to no later one.${
+A note costs every later conversation the time to read it, so keep out what is cheaper to find again or will not matter then:
+
+- Anything a look at the repository answers: its layout and conventions, where a file sits, who changed a line, or how an old bug was repaired. The code and its history give a fresher answer than a note would.
+- Text the instruction files already carry.
+- The state of the task in hand. Steps done and steps left concern this conversation only.${
     team === undefined
       ? ""
-      : "\n- Secrets of any kind in team memory, such as API keys, tokens or passwords. Everyone with the repository can read that folder, and a write to it that looks like a credential is refused."
+      : "\n- Secrets in team memory: API keys, tokens, passwords and other credentials. A write there that looks like one is refused, because that folder is open to everyone who has the repository."
   }
 
-The person asking you to save one of these does not change that. Instead, ask them which part of it surprised them or is worth carrying forward, and save that part.
+These stay out even when the person asks to save one. Find out what made it notable to them, such as a surprise or a lesson that will matter again, and save that instead.
 
 ## Writing a memory down
 
@@ -474,8 +479,8 @@ ${
     : "- Open your memories, private and team alike, when they look relevant to the task at hand, or when the person mentions earlier work, whether theirs or a colleague's."
 }
 - If the person asks you to check something, recall it or remember it, looking at memory is not optional.
-- If the person says to ignore memory, behave as though the folder had nothing in it, and neither mention nor use its contents.
-- A memory can fall behind. Where it disagrees with what you observe now, believe what you observe, and correct or delete the memory.
+- A person who tells you to leave memory alone gets work and answers that draw on none of it and do not bring it up.
+- What you see in the project today outranks a note about it. When the two differ, act on the present state, then bring the note up to date or remove it.
 
 ## Check before you trust it
 

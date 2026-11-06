@@ -18,9 +18,10 @@ const RECENT_MESSAGES = 30
 
 // One terse paragraph, sent as the last user message with no system prompt. Session notes go before it once they exist.
 const INSTRUCTION =
-  "The person stepped away from this conversation and is now back. In three short sentences at most, remind them " +
-  "where it stands. Start with what the work as a whole is for, in plain terms (what is being built, or which fault " +
-  "is being hunted), leaving implementation details out, and end with the next thing to do. Skip finished steps and commits."
+  "Reply with a recap of no more than three short sentences, for a reader who has lost track of this conversation. " +
+  "Its final sentence names what should happen next. Before that, say in everyday words what the whole effort is " +
+  "meant to achieve, such as the feature under construction or the fault under investigation, with implementation " +
+  "details left out. Work that is already done or committed needs no mention."
 
 export interface Interface {
   /**

@@ -902,7 +902,7 @@ it.live(
         )
         yield* executeTool(registry, call({ command: floodCommand, run_in_background: true }))
         const notice = Array.from(yield* Fiber.join(delivered).pipe(Effect.timeout(Duration.seconds(30))))[0] ?? ""
-        expect(notice).toContain("Stopped the background command: its output file grew past")
+        expect(notice).toContain("to its output file, so Orbit ended it.")
       }),
     ).pipe(
       Effect.provide(

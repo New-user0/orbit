@@ -28,7 +28,7 @@ The <handoff> block holds these nine sections, in this order:
 6. The person's messages: every message the person wrote, leaving out tool results. Read in order, they show how the goals and the feedback shifted.
 7. Still to do: the tasks the person explicitly asked for that remain unfinished.
 8. Where things stand: a precise account of the work underway at the moment this handoff was requested, drawn from the latest messages on both sides. Name the files and quote the code that matters.
-9. What comes next: the action you would take next, if any. It has to carry on the work in section 8 and serve the person's latest explicit request. If that work was complete, name a next action only when the person clearly asked for one, and never resume a side request or an older, finished one without asking the person first. When you do name one, include the latest exchange word for word, so that there is no doubt about which task was in hand and where it paused.
+9. What comes next: a single step that continues the work of section 8 for the person's most recent explicit request, together with a verbatim quote of the latest exchange that pins down the task and the point it reached. Leave this section empty when the work of section 8 is done and the person has asked for nothing further. A side request, or an older one already finished, comes back only after the person agrees to it.
 
 Lay your reply out like this sample:
 
@@ -77,9 +77,7 @@ Lay your reply out like this sample:
 </handoff>
 </example>
 
-Now write the handoff for everything above in that layout, accurately and without gaps.
-
-Instruction files and other context above may say how this summary should be written, for instance in a section set aside for it. When they do, do as they say. Such a section could read:
+Some projects describe the summary they want, in an instruction file or elsewhere in the context above, usually under a heading of its own like the two below. Directions of that kind take precedence over the defaults here.
 <example>
 ## Compaction instructions
 Record which test suites passed and the commands that ran them.
@@ -89,3 +87,5 @@ Record which test suites passed and the commands that ran them.
 # Compaction instructions
 Spend the detail on the API redesign; the README edits need one line.
 </example>
+
+With all of that in mind, turn the whole conversation above into a handoff laid out as the sample shows, accurate and complete.

@@ -45,8 +45,8 @@ export function contextSuggestions(
       severity: "warning",
       title: `${percentage}% of the window is in use`,
       detail: info.auto
-        ? "The automatic summary is close; run /compact yourself to pick the moment."
-        : "With automatic compaction off, nothing summarizes for you: run /compact before the window is full, or switch it back on.",
+        ? "Automatic compaction will start soon. Running /compact now lets you choose when it happens."
+        : "Automatic compaction is off, so a full window stays full. Before that happens, run /compact or turn automatic compaction back on.",
     })
 
   const large = new Set<string>()
@@ -75,7 +75,7 @@ export function contextSuggestions(
     found.push({
       severity: "info",
       title: `What Read returned holds ${Locale.number(read.results)} tokens (${share(read.results)}%)`,
-      detail: "Ask for line ranges, with an offset and a limit, rather than whole files.",
+      detail: "Read a long file in pieces by giving an offset and a limit.",
       savings: Math.floor(read.results * SAVINGS.read),
     })
 
@@ -112,25 +112,25 @@ function toolAdvice(name: string) {
     return {
       severity: "warning" as const,
       savings: SAVINGS.shell,
-      detail: "Pipe long command output through head, tail or grep, so that less of it lands in the conversation.",
+      detail: "Commands that print a lot fill the conversation. Cut their output down in the command itself, for example to the first or last lines or to the lines that match.",
     }
   if (name === "Read")
     return {
       severity: "info" as const,
       savings: SAVINGS.read,
-      detail: "Ask for line ranges, with an offset and a limit, rather than whole files.",
+      detail: "Read a long file in pieces by giving an offset and a limit.",
     }
   if (name === "Grep")
     return {
       severity: "info" as const,
       savings: SAVINGS.grep,
-      detail: "Use a tighter pattern, or search one folder or file type instead of everything.",
+      detail: "Narrow what each search covers: a more exact pattern, a single folder or one file type.",
     }
   if (name === "WebFetch")
     return {
       severity: "info" as const,
       savings: SAVINGS.fetch,
-      detail: "Fetched pages run long; ask only for the section you need.",
+      detail: "Whole web pages cost many tokens. Name the part of the page you are after in the request.",
     }
   return undefined
 }

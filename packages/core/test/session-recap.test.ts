@@ -340,9 +340,10 @@ it.effect(
       expect(instruction.trim().length).toBeGreaterThan(0)
       expect(instruction).not.toContain("\n\n")
       expect(instruction.length).toBeLessThan(600)
-      // It opens with the purpose of the work and closes with the next step, and leaves finished steps out.
-      expect(instruction).toContain("Start with what the work as a whole is for")
-      expect(instruction).toContain("end with the next thing to do. Skip finished steps and commits.")
+      // It closes with the next step, puts the purpose of the work before it, and leaves finished work out.
+      expect(instruction).toContain("Its final sentence names what should happen next.")
+      expect(instruction).toContain("Before that, say in everyday words what the whole effort is meant to achieve")
+      expect(instruction).toContain("Work that is already done or committed needs no mention.")
 
       // One durable fact, projected as a recap message after the last user message.
       expect(yield* recordedRecaps(db)).toHaveLength(1)

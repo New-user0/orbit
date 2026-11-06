@@ -179,3 +179,29 @@ test("instruction files are named by the path the view shows, escaped", () => {
     "/repo/file-0.md",
   )
 })
+
+test("each piece of advice is Orbit's own wording", () => {
+  const detail = (input: Parameters<typeof info>[0]) => contextSuggestions(info(input)).map((item) => item.detail)
+  const advice = [
+    ...detail({ window: 100_000, percentage: 80, auto: true }),
+    ...detail({ window: 100_000, percentage: 80, auto: false }),
+    ...detail({ window: 100_000, percentage: 50, auto: false }),
+    ...["Bash", "Read", "Grep", "WebFetch", "Search"].flatMap((name) =>
+      detail({ window: 100_000, tools: [tool(name, 5_000, 15_000)] }),
+    ),
+    ...detail({ window: 200_000, tools: [tool("Read", 0, 10_000)] }),
+  ]
+  expect(advice).toEqual([
+    "Automatic compaction will start soon. Running /compact now lets you choose when it happens.",
+    "Automatic compaction is off, so a full window stays full. Before that happens, run /compact or turn automatic compaction back on.",
+    "A full window will not be summarized for you, so run /compact before it fills.",
+    "Commands that print a lot fill the conversation. Cut their output down in the command itself, for example to the first or last lines or to the lines that match.",
+    "Read a long file in pieces by giving an offset and a limit.",
+    "Narrow what each search covers: a more exact pattern, a single folder or one file type.",
+    "Whole web pages cost many tokens. Name the part of the page you are after in the request.",
+    "Call Search with tighter inputs, or have each call return less.",
+    "Read a long file in pieces by giving an offset and a limit.",
+  ])
+  // The phrasings that the first rewrite still shared with the reference's sentences stay out.
+  for (const text of advice) expect(text).not.toMatch(/Pipe|head, tail or grep|summary is close|run long|line ranges/)
+})

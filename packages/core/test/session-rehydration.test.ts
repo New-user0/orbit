@@ -819,7 +819,7 @@ describe("rehydration after a compaction", () => {
       expect(h.restored(unknown)).toEqual([first, second, small])
       expect(unknown.text).toContain("TINY-SKILL")
       // The skills block says that what the skills asked for still holds.
-      expect(unknown.text).toContain("Their guidance has not expired, so go on applying it.")
+      expect(unknown.text).toContain("The guidance of each skill below holds for the rest of this session")
 
       // About 6,000 tokens of room: the second file does not fit, the smaller third still does, and the skill gets
       // only what the files left.
@@ -1979,9 +1979,9 @@ describe("rehydration after a compaction", () => {
       yield* h.job.start({ id: "job_live", type: "test", run: Effect.never })
       expect(yield* h.compact()).toEqual({ status: "completed" })
       const note = sectionsOf((yield* h.row()).text).find((section) => section.harness.includes("live one"))!
-      expect(note.harness).toContain("is still at work")
+      expect(note.harness).toContain("once it is done, and until then the Agent tool")
       // A running subagent is waited for, never started a second time.
-      expect(note.harness).toContain("Wait for it, and do not launch another subagent for the same task")
+      expect(note.harness).toContain("Let it run: a second subagent for this task would only redo work that is under way.")
       expect(note.harness).not.toContain("finished")
       yield* h.job.cancel("job_live")
     }),

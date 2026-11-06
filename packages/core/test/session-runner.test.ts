@@ -3822,7 +3822,7 @@ describe("SessionRunnerLLM", () => {
     expect(userTexts(s.requests[0])).toContain("Recent exact request ".repeat(180))
     expect(userTexts(s.requests[1])).toHaveLength(1)
     expect(userTexts(s.requests[1])[0]).toContain("## Objective\n- Preserve the task")
-    expect(userTexts(s.requests[1])[0]).toContain("Pick the interrupted task back up")
+    expect(userTexts(s.requests[1])[0]).toContain("Your next message should already be work on the interrupted task")
 
     const context = yield* store.context(sessionID)
     expect(context.map((message) => message.type)).toEqual(["compaction", "assistant"])

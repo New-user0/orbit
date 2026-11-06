@@ -48,7 +48,7 @@ export function sizeNotice(limit: number) {
       : limit >= 1024 ** 2
         ? [limit / 1024 ** 2, "MB"]
         : [limit / 1024, "KB"]
-  return `Stopped the background command: its output file grew past ${Number(value.toFixed(1))} ${unit}.`
+  return `The background command wrote more than ${Number(value.toFixed(1))} ${unit} to its output file, so Orbit ended it.`
 }
 
 /** The line of a notice that names the file holding output that did not fit. Holds only a path. */

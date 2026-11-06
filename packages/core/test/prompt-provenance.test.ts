@@ -255,7 +255,7 @@ describe("retired wording in the source texts", () => {
       "tool/plugin/question.ts",
       /learn preferences|User has answered|answers in mind|free-form reply|It fits when an instruction is ambiguous|cannot see until then|never asked this way/,
     ],
-    ["tool/plugin/edit.ts", /No changes to apply|preserve the exact indentation|Multiple matches FAIL|such as renaming a variable|Add more surrounding context/],
+    ["tool/plugin/edit.ts", /No changes to apply|preserve the exact indentation|Multiple matches FAIL|such as renaming a variable|Add more surrounding context|not as you proposed/],
     ["tool/plugin/write.ts", /local filesystem|file to write to/],
     ["tool/plugin/glob.ts", /more specific path|are truncated/],
     ["tool/plugin/grep.ts", /more specific path|Consider using|More efficient than/],
@@ -273,6 +273,18 @@ describe("retired wording in the source texts", () => {
     ["plan/reminders.ts", /Plan mode remains on|full rules are earlier|You are in plan mode\. Edit nothing|Give a complete answer|single AskUserQuestion call at the start|Either way the file is updated|Finish each turn with/],
     ["session/verification.ts", /has just been marked done, and none of its items/],
     ["agent/instructions.ts", /putting multiple calls in a single message/],
+    // The M5 provenance pass (m5-provenance): the phrasings its first rewrite still shared with the reference's frames.
+    ["session/recap.ts", /stepped away|is now back|Skip finished steps/],
+    [
+      "memory/instructions.ts",
+      /forget something|The fix is in|behave as though|believe what you observe|without making (it|them) first|looking to see whether|shared with the team through|surprised them/,
+    ],
+    ["file-access.ts", /Remove the secret|appears to contain a secret/],
+    ["session/rehydration.ts", /you invoked the skills|is still at work|do not launch another/],
+    ["session/assist.ts", /Lead with a verb|beats|go-ahead|"go ahead"|cannot be read from what they wrote|"plan_mode"/],
+    ["session/runner/prompt/compaction.txt", /Now write the handoff|Such a section could read|so that there is no doubt/],
+    ["session/runner/to-llm-message.ts", /Pick the interrupted task back up/],
+    ["shell/result.ts", /Stopped the background command|Background command killed/],
   ]
 
   test.each(sources)("%s keeps the retired wording out", async (file, pattern) => {

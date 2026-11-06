@@ -142,7 +142,7 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
     const known = window()
     return known === undefined ? "" : ` (${((tokens / known) * 100).toFixed(1)}%)`
   }
-  // Counted categories take the theme's series colours in their order; free space and the buffers are muted.
+  // Counted categories take the theme's series colours in their order; Room left and the two reserves are muted.
   const colors = createMemo(() => {
     const counted = props.info.categories.filter(
       (item) => item.kind !== "free" && item.kind !== "auto-buffer" && item.kind !== "compact-buffer" && !DEFERRED.has(item.kind),
@@ -162,7 +162,7 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
       (item) => item.tokens > 0 && item.kind !== "free" && item.kind !== "auto-buffer" && !DEFERRED.has(item.kind),
     ),
   )
-  // Free space, then the autocompact buffer, as the reference lists them under the categories.
+  // Room left, then the Auto-compaction reserve, listed under the categories in the reference's order.
   const tail = createMemo(() =>
     (["free", "auto-buffer"] as const).flatMap((kind) =>
       props.info.categories.filter((item) => item.kind === kind && item.tokens > 0),
@@ -349,7 +349,7 @@ const rank = (scope: string) => {
 /**
  * The reference's grid: 10 by 10 squares, 20 by 10 for a window of a million tokens or more, and 5 by 5 or 5 by 10
  * below 80 columns. Each counted category takes its share of the squares and one at least, in order; the square its
- * share ends in is drawn lighter when it is less than 70% full. Free space fills the middle, and the reserve (either
+ * share ends in is drawn lighter when it is less than 70% full. Room left fills the middle, and the reserve (either
  * buffer) the end. Deferred categories are in no sum, so they take no square.
  */
 export function grid(categories: ReadonlyArray<SessionContextUsage.Category>, window: number, narrow: boolean) {

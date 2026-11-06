@@ -367,6 +367,11 @@ describe("the memory guide source", () => {
       expect(at).toEqual([...at].sort((a, b) => a - b))
       // The model is told the folder exists, so it never spends a step creating it.
       expect(yield* exists(l.memory)).toBe(true)
+      expect(out.text).toContain("Orbit created it before this conversation began")
+      // A request settles a memory both ways; a request to leave memory alone keeps it out; the present state outranks it.
+      expect(out.text).toContain("What they want kept is saved right then, and what they want gone is looked up")
+      expect(out.text).toContain("draw on none of it and do not bring it up")
+      expect(out.text).toContain("act on the present state, then bring the note up to date or remove it")
       // The removed tool is not named.
       expect(out.text).not.toMatch(/\bMemory tool\b|Memory read/)
       // A request to check, recall or remember something makes reading memory a must.

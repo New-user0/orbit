@@ -222,7 +222,7 @@ describe("the agent memory block", () => {
         const [user, project, local] = tails as [string, string, string]
         expect(user).toContain("general")
         expect(project).toContain("committed")
-        expect(project).toContain("shared with the team")
+        expect(project).toContain("Everyone who clones the repository receives them")
         expect(project).not.toContain("not committed")
         expect(local).toContain("not committed")
         expect(local).toContain("this machine")

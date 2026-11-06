@@ -340,7 +340,7 @@ export type SessionGenerateResponse = { data: { text: string } }
 
 export type SessionRecapResponse = { recorded: boolean }
 
-export type SessionAssistLabelSkip = "subagent" | "not_found" | "unsettled" | "aborted" | "empty" | "unavailable"
+export type SessionAssistLabelSkip = "subagent" | "not_found" | "unsettled" | "interrupted" | "no_text" | "unavailable"
 
 export type SessionAssistSuggestionSkip =
   | "subagent"
@@ -349,11 +349,11 @@ export type SessionAssistSuggestionSkip =
   | "cache_expired"
   | "awaiting_approval"
   | "awaiting_form"
-  | "plan_mode"
+  | "planning"
   | "busy"
-  | "aborted"
+  | "cancelled"
   | "unavailable"
-  | "empty"
+  | "no_text"
   | "just_done"
   | "self_reference"
   | "bracketed"

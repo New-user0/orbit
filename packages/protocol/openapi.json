@@ -21174,7 +21174,7 @@
       },
       "Session.Assist.LabelSkip": {
         "type": "string",
-        "enum": ["subagent", "not_found", "unsettled", "aborted", "empty", "unavailable"],
+        "enum": ["subagent", "not_found", "unsettled", "interrupted", "no_text", "unavailable"],
         "description": "Why there is no label: the session is a subagent's, the calls are not in the message, a call has not finished, the calls were interrupted, the model answered nothing, or the model could not be asked."
       },
       "Session.Assist.Suggestion": {
@@ -21214,11 +21214,11 @@
           "cache_expired",
           "awaiting_approval",
           "awaiting_form",
-          "plan_mode",
+          "planning",
           "busy",
-          "aborted",
+          "cancelled",
           "unavailable",
-          "empty",
+          "no_text",
           "just_done",
           "self_reference",
           "bracketed",

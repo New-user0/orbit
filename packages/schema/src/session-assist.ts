@@ -6,8 +6,8 @@ export const LabelSkip = Schema.Literals([
   "subagent",
   "not_found",
   "unsettled",
-  "aborted",
-  "empty",
+  "interrupted",
+  "no_text",
   "unavailable",
 ]).annotate({
   identifier: "Session.Assist.LabelSkip",
@@ -28,7 +28,7 @@ export type Label = typeof Label.Type
 
 /** The checks a suggestion's text must pass, in the order they run; each names the text it drops. */
 export const SuggestionFilter = Schema.Literals([
-  "empty",
+  "no_text",
   "just_done",
   "self_reference",
   "bracketed",
@@ -52,9 +52,9 @@ export const SuggestionSkip = Schema.Union([
     "cache_expired",
     "awaiting_approval",
     "awaiting_form",
-    "plan_mode",
+    "planning",
     "busy",
-    "aborted",
+    "cancelled",
     "unavailable",
   ]),
   SuggestionFilter,

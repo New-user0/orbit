@@ -748,7 +748,7 @@ export type SessionAssistLabelOutput =
   | { readonly label: string }
   | {
       readonly label: null
-      readonly reason: "subagent" | "not_found" | "unsettled" | "aborted" | "empty" | "unavailable"
+      readonly reason: "subagent" | "not_found" | "unsettled" | "interrupted" | "no_text" | "unavailable"
     }
 export type SessionAssistLabelOperation<E = never> = (
   input: SessionAssistLabelInput,
@@ -766,11 +766,11 @@ export type SessionAssistSuggestionOutput =
         | "cache_expired"
         | "awaiting_approval"
         | "awaiting_form"
-        | "plan_mode"
+        | "planning"
         | "busy"
-        | "aborted"
+        | "cancelled"
         | "unavailable"
-        | "empty"
+        | "no_text"
         | "just_done"
         | "self_reference"
         | "bracketed"

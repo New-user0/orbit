@@ -69,15 +69,15 @@ export const layer = Layer.effect(
         Effect.map((nested) => [sessionID, ...nested.flat()]),
       )
 
-    // The trimmed text a side query answered, or why there is none: a blank answer is empty, and a model that could not
+    // The trimmed text a side query answered, or why there is none: a blank answer has no text, and a model that could not
     // be asked is unavailable, which the client only sees as no text, so it is logged here (class 7).
     const ask = (input: SideQuery.TextInput) =>
       sideQuery.text(input).pipe(
         Effect.map((result) => ({ text: result.text.trim() })),
         Effect.catch(
-          (error): Effect.Effect<{ readonly reason: "empty" | "unavailable" }> =>
+          (error): Effect.Effect<{ readonly reason: "no_text" | "unavailable" }> =>
             error._tag === "SideQuery.InvalidOutputError"
-              ? Effect.succeed({ reason: "empty" as const })
+              ? Effect.succeed({ reason: "no_text" as const })
               : Effect.logWarning("assist side query unavailable", {
                   purpose: input.purpose,
                   message: error.message,
@@ -102,7 +102,7 @@ export const layer = Layer.effect(
       )
       if (settled.length < calls.length) return labelSkip("unsettled")
       if (settled.some((call) => call.state.status === "error" && call.state.error.type === "aborted"))
-        return labelSkip("aborted")
+        return labelSkip("interrupted")
       const intent = message?.content.findLast((part) => part.type === "text")?.text.slice(0, INTENT_LENGTH)
       const answer = yield* ask({
         sessionID: session.id,
@@ -132,7 +132,7 @@ export const layer = Layer.effect(
       }).pipe(instances.provide(session))
       if (asks.permissions.some((request) => members.has(request.sessionID))) return "awaiting_approval" as const
       if (asks.forms.some((form) => members.has(form.sessionID))) return "awaiting_form" as const
-      if (session.agent === PlanMode.agent) return "plan_mode" as const
+      if (session.agent === PlanMode.agent) return "planning" as const
       if ((yield* execution.isActive(session.id)) || (yield* inbox.list(session.id)).length > 0) return "busy" as const
       return undefined
     })
@@ -168,7 +168,7 @@ export const layer = Layer.effect(
       )
       return yield* Effect.raceFirst(
         write(session),
-        Effect.raceFirst(Deferred.await(cancel), admitted).pipe(Effect.as(suggestionSkip("aborted"))),
+        Effect.raceFirst(Deferred.await(cancel), admitted).pipe(Effect.as(suggestionSkip("cancelled"))),
       ).pipe(
         Effect.ensuring(
           Effect.sync(() => {
@@ -227,7 +227,7 @@ const labelPrompt = (calls: ReadonlyArray<Settled>, intent: string | undefined) 
 
 const LABEL_SYSTEM = [
   "Name the outcome of the tool calls below in a few words. The label fills a single line of a coding assistant's interface, and whatever runs past about 30 characters is hidden, so write it the way a terse changelog entry reads rather than as a full sentence.",
-  "Lead with a verb in the past tense and keep the word that sets this batch apart from others. When room runs short, cut small words and long file paths first.",
+  "Someone skimming a column of these labels has to tell one batch from the next, so the detail that singles this one out, often a file, a symbol or a package, matters more than grammar: drop articles and shorten a path to its file name before you lose it. Each label reads as something already done, opening on its verb.",
   [
     "Examples:",
     "- Listed the migrations folder",
@@ -247,11 +247,11 @@ const SUGGESTION_PROMPT = [
     '- They wanted a refactor and a changelog entry, and the refactor is in: "now the changelog"',
     '- A script was just written: "run it on the sample data"',
     "- You laid out options: the one they seem to lean towards",
-    '- You asked for the go-ahead: "go ahead"',
+    '- You mentioned a second file with the same bug: "fix that one too"',
     '- Everything is finished and the follow-up is plain: "open a PR"',
     "- The last step errored, or you misread them: leave it empty",
   ].join("\n"),
-  'Prefer the concrete: "rerun the date parser tests" beats "check it".',
+  'A guess that names its object, such as "rerun the date parser tests", helps the person; a vague "check it" does not.',
   [
     "Leave out:",
     '- approval or thanks ("nice", "perfect")',
@@ -260,8 +260,7 @@ const SUGGESTION_PROMPT = [
     "- topics the person has not brought up",
     "- a second sentence",
   ].join("\n"),
-  "If their next move cannot be read from what they wrote, leave it empty.",
-  "Length: between two and twelve words, in the person's own register, or empty. Answer with the guess on its own, with no quotes and no comment.",
+  "Answer with the guess alone, two to twelve words in the person's own register, with no quotes and no comment. An empty answer is right whenever what they wrote points to no particular next move.",
 ].join("\n\n")
 
 // Lone words a person does send as a whole message, so the one-word rule keeps them.

@@ -206,7 +206,7 @@ test("a batch is asked about once its step ended and every call settled, a faile
     // A second batch whose answer has no label writes nothing.
     batch("msg_b", "call_3").forEach((event) => h.emit(event))
     await waitFor(() => h.state.labels.length === 2)
-    h.state.labels[1].answer({ label: null, reason: "empty" })
+    h.state.labels[1].answer({ label: null, reason: "no_text" })
   })
   await finish(h)
 
