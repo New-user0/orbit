@@ -186,6 +186,8 @@ type Options = {
   early?: Frame
   folders?: "ok" | "fail" | "hang" | "slow"
   WebSocketImpl?: typeof WebSocket
+  /** The session that asks is a subagent's, under this parent. */
+  parent?: string
   reply?: (body: Frame) => Response | Promise<Response> | undefined
 }
 
@@ -200,7 +202,8 @@ async function mount(options: Options = {}) {
   const reads: string[] = []
   const logs: Array<{ level: LogLevel; message: string }> = []
   const calls = createFetch(async (url, init) => {
-    if (url.pathname === `/api/session/${session.id}`) return json({ data: session })
+    if (url.pathname === `/api/session/${session.id}`)
+      return json({ data: options.parent ? { ...session, parentID: options.parent } : session })
     if (url.pathname === `/api/session/${session.id}/message`) return json({ data: [message], cursor: {} })
     if (url.pathname === `/api/session/${session.id}/permission`) return json({ data: [request] })
     if (url.pathname === `/api/session/${session.id}/permission/${request.id}/reply`) {
@@ -502,6 +505,25 @@ test("answering in the terminal sends the reply and closes the tab", async () =>
   expect(setup.toast()?.message).toBe("Refused here")
 })
 
+// Esc in the short prompt rejects, as the full dialog's Esc does; a subagent's question asks for a word first.
+test("Esc in the compact prompt rejects and closes the tab, and asks a subagent's reject for a word first", async () => {
+  {
+    await using setup = await mount()
+    await setup.until(compact, "the compact prompt")
+    setup.app.mockInput.pressEscape()
+    await setup.until(() => setup.replies.length === 1, "the reply")
+    expect(setup.replies).toEqual([{ decision: "reject" }])
+    await setup.until(() => setup.peer!.of("diff.close").length === 1, "the close")
+    expect(setup.peer!.of("diff.close")).toEqual([{ type: "diff.close", id: "per_diff1" }])
+  }
+  await using setup = await mount({ parent: "ses_parent" })
+  await setup.until(compact, "the compact prompt")
+  setup.app.mockInput.pressEscape()
+  await setup.until((frame) => frame.includes("Tell Orbit what to do differently"), "the reject stage")
+  await Bun.sleep(300)
+  expect(setup.replies).toEqual([])
+})
+
 // An answer goes away with its request: while the reply is on its way the short prompt stays up, and the full dialog,
 // with its diff and live options, is never drawn, neither then nor once the server takes the reply.
 test("an answer on its way keeps the short prompt, and the full dialog is never drawn", async () => {
@@ -594,7 +616,11 @@ test("an answer from a window linked later is not taken for a review opened in t
       () => setup.warnings().some((line) => line.message.includes("a review that is not open")),
       "the dropped answer",
     )
-    await Bun.sleep(1_200)
+    // When the first window's link closes, its review goes with it: the question comes back to the terminal.
+    await setup.until(full, "the full dialog after the first link closed")
+    await Bun.sleep(300)
+    expect(full(await setup.frame())).toBe(true)
+    expect(setup.warnings().filter((line) => line.message.includes("the link to the editor went away"))).toHaveLength(1)
     expect(setup.replies).toEqual([])
   } finally {
     await other.stop()

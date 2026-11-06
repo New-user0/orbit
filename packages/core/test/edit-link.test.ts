@@ -191,6 +191,25 @@ const rows: Array<{
     outside: true,
   },
   { name: "none", make: async (_, project) => ({ spelled: "b.txt", real: path.join(project, "b.txt") }) },
+  {
+    // A file outside the project, reached through a link in a folder outside that leads elsewhere outside: the external
+    // question is answered, and the request still names where the link leads.
+    name: "outside-through-link",
+    make: async (root) => {
+      await fs.mkdir(path.join(root, "elsewhere"), { recursive: true })
+      const made = await link(path.join(root, "farther"), path.join(root, "elsewhere", "alias"), "junction")
+      return made ?? { spelled: path.join(root, "elsewhere", "alias", "b.txt"), real: path.join(root, "farther", "b.txt") }
+    },
+    outside: true,
+  },
+  {
+    // The control: a plain file outside the project, with no link on its way, names none.
+    name: "outside-plain",
+    make: async (root) => {
+      await fs.mkdir(path.join(root, "elsewhere"), { recursive: true })
+      return { spelled: path.join(root, "elsewhere", "b.txt"), real: path.join(root, "elsewhere", "b.txt") }
+    },
+  },
 ]
 
 // A link of the kind asked for, or "skip" where this system will not make one (a symbolic link on Windows needs
