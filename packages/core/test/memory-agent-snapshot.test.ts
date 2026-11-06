@@ -594,6 +594,8 @@ describe("agent memory snapshots", () => {
         }).pipe(provide(l, { files: linksListedAsFiles }), Effect.provide(logged(logs)))
         expect(yield* listed(path.join(l.user, "reviewer"))).toEqual([".snapshot-synced.json", "MEMORY.md"])
         expect(logs.filter((line) => line.includes("swapped.md"))).toHaveLength(1)
+        // The file that was not copied is not counted.
+        expect(logs.filter((line) => line.includes("files copied"))).toEqual(["agent memory snapshot of reviewer: 1 files copied"])
       }),
     )
 
@@ -719,6 +721,41 @@ describe("agent memory snapshots", () => {
       expect(logs.filter((line) => line.includes(".snapshot-synced.json not written"))).toHaveLength(1)
       expect(logs.filter((line) => line.includes("files copied"))).toEqual(["agent memory snapshot of reviewer: 3 files copied"])
       expect(logs.filter((line) => line.includes("reviewer not copied"))).toEqual([])
+    }),
+  )
+
+  // Class 7: the same for an agent whose folder is not there yet, where the marker is written into the new folder
+  // before it is moved into place: a marker write that fails costs only the marker, and the files still arrive.
+  it.live("keeps a marker that cannot be written into a new folder from failing the agent's copy", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const folder = path.join(l.user, "reviewer")
+      yield* snapshotAt(path.join(l.snapshots, "reviewer"), files)
+      // The real file system, except that writing the marker fails.
+      const markerFails = Layer.effect(
+        FSUtil.Service,
+        Effect.gen(function* () {
+          const real = yield* FSUtil.Service
+          return FSUtil.Service.of({
+            ...real,
+            writeFileString: (file, data, options) =>
+              path.basename(file) === ".snapshot-synced.json"
+                ? real.writeFileString(path.join(l.outside, "missing", "marker"), data, options)
+                : real.writeFileString(file, data, options),
+          })
+        }),
+      ).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
+      const logs: string[] = []
+      yield* Effect.gen(function* () {
+        yield* define(reviewer)
+        yield* sync
+      }).pipe(provide(l, { files: markerFails }), Effect.provide(logged(logs)))
+      expect(yield* listed(folder)).toEqual(Object.keys(files).toSorted())
+      for (const [name, body] of Object.entries(files)) expect(yield* text(path.join(folder, name))).toBe(body)
+      expect(logs.filter((line) => line.includes(".snapshot-synced.json not written"))).toHaveLength(1)
+      expect(logs.filter((line) => line.includes("files copied"))).toEqual(["agent memory snapshot of reviewer: 3 files copied"])
+      expect(logs.filter((line) => line.includes("reviewer not copied"))).toEqual([])
+      expect(yield* listed(l.user)).toEqual(["reviewer"])
     }),
   )
 
