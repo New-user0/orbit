@@ -5304,14 +5304,15 @@ screen shows, is unchanged; only the wording, some names and one line format mov
   for a tool that returned nothing (`(<tool> ran and produced nothing)`). The compaction failure for a conversation too
   long to summarize now reads "This conversation no longer fits in a compaction request. Rewind a few messages, then
   compact again." (`session-compaction.test.ts`, "prompt-too-long").
-- **Suggestion reasons (API).** `POST …/assist/suggestion` answers with new reason names. The filters: `done` is now
-  `just_done`, `meta_text` `self_reference`, `meta_wrapped` `bracketed`, `error_message` `error_text`, `prefixed_label`
-  `labelled`, `too_few_words` `one_word`, `too_many_words` `over_twelve_words`, `too_long` `too_many_characters`,
-  `multiple_sentences` `several_sentences`, `has_formatting` `markup`, `evaluative` `verdict` and `assistant_voice`
-  `assistant_phrasing` (`empty` stays). The session states: `early_conversation` is now `too_early`,
-  `last_response_error` `reply_failed`, `cache_cold` `cache_expired`, `pending_permission` `awaiting_approval` and
-  `elicitation_active` `awaiting_form` (`subagent`, `plan_mode`, `busy`, `aborted` and `unavailable` stay)
-  (`packages/server/test/session-assist.test.ts`).
+- **Suggestion and label reasons (API).** `POST …/assist/suggestion` answers with new reason names. The filters: `empty`
+  is now `no_text`, `done` `just_done`, `meta_text` `self_reference`, `meta_wrapped` `bracketed`, `error_message`
+  `error_text`, `prefixed_label` `labelled`, `too_few_words` `one_word`, `too_many_words` `over_twelve_words`, `too_long`
+  `too_many_characters`, `multiple_sentences` `several_sentences`, `has_formatting` `markup`, `evaluative` `verdict` and
+  `assistant_voice` `assistant_phrasing`. The session states: `early_conversation` is now `too_early`,
+  `last_response_error` `reply_failed`, `cache_cold` `cache_expired`, `pending_permission` `awaiting_approval`,
+  `elicitation_active` `awaiting_form`, `plan_mode` `planning` and `aborted` `cancelled` (`subagent`, `busy` and
+  `unavailable` stay). `POST …/assist/label` answers `no_text` where it answered `empty`, and `interrupted` where it
+  answered `aborted` (`packages/server/test/session-assist.test.ts`).
 - **`/context`.** The categories are Base prompt, Built-in tools, MCP tool schemas, Agent definitions, Instructions, Skill
   listings, Conversation, Auto-compaction reserve, Compaction headroom and Room left, and a tool loaded on demand is
   marked `(on demand)`. The report opens with `## Context window` and `**In use:**`, and its tables are Breakdown, MCP
