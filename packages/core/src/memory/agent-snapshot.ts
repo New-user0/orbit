@@ -81,22 +81,30 @@ const layer = Layer.effect(
       const held = (yield* fs.isDir(target.real)) ? yield* fs.readDirectoryEntries(target.real) : []
       // A Markdown file in the folder means the person's memory, which is kept as it is.
       if (held.some((entry) => entry.type === "file" && entry.name.endsWith(".md"))) return
-      yield* fs.makeDirectory(target.real, { recursive: true })
-      const copied = yield* Effect.forEach(
-        entries.filter((entry) => entry.type === "file" && entry.name !== META),
-        (entry) =>
-          copyFile(fs, source.real, target.real, entry.name).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning(`agent memory snapshot of ${id}: ${entry.name} not copied`, { cause }).pipe(
-                Effect.as(false),
+      // Once the first Markdown file is in, the folder counts as the person's and is never copied into again, so an
+      // interruption waits for the files and the marker (class 7).
+      const copied = yield* fs.makeDirectory(target.real, { recursive: true }).pipe(
+        Effect.andThen(
+          Effect.forEach(
+            entries.filter((entry) => entry.type === "file" && entry.name !== META),
+            (entry) =>
+              copyFile(fs, source.real, target.real, entry.name).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning(`agent memory snapshot of ${id}: ${entry.name} not copied`, { cause }).pipe(
+                    Effect.as(false),
+                  ),
+                ),
               ),
+          ),
+        ),
+        Effect.tap(() =>
+          write(fs, path.join(target.real, SYNCED), JSON.stringify({ syncedFrom: updatedAt })).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(`agent memory snapshot of ${id}: ${SYNCED} not written`, { cause }),
             ),
           ),
-      )
-      yield* write(fs, path.join(target.real, SYNCED), JSON.stringify({ syncedFrom: updatedAt })).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning(`agent memory snapshot of ${id}: ${SYNCED} not written`, { cause }),
         ),
+        Effect.uninterruptible,
       )
       yield* Effect.logInfo(`agent memory snapshot of ${id}: ${copied.filter(Boolean).length} files copied`)
     })

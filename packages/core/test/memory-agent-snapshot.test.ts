@@ -731,7 +731,7 @@ describe("agent memory snapshots", () => {
       const folder = path.join(l.user, "reviewer")
       // Enough files that the copy is still running when the first one shows up.
       const many = Object.fromEntries(
-        Array.from({ length: 300 }, (_, index) => [`note-${String(index).padStart(3, "0")}.md`, `NOTE-${index}\n`]),
+        Array.from({ length: 500 }, (_, index) => [`note-${String(index).padStart(3, "0")}.md`, `NOTE-${index}\n`]),
       )
       yield* snapshotAt(path.join(l.snapshots, "reviewer"), many)
       const expected = [".snapshot-synced.json", ...Object.keys(many)].toSorted()
