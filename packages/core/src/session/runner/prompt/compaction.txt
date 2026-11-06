@@ -15,7 +15,7 @@ Use the <analysis> block as scratch space before the handoff, so that nothing sl
    - the decisions made and the ideas they rest on
    - specifics such as file names, function signatures and edits, with whole code where a fragment would mislead
    - each error, and what fixed it
-   - what the person said about your work, above all any time they asked for a change of approach
+   - what the person said about your work; when they redirected you, the handoff has to carry that, or the next stage repeats what they rejected
 2. Read your notes back against the conversation, correct what is wrong and fill in what is missing.
 
 The <handoff> block holds these nine sections, in this order:
@@ -23,11 +23,11 @@ The <handoff> block holds these nine sections, in this order:
 1. Goal: every explicit request the person made and what they are trying to achieve, in full.
 2. Technical ground: the concepts, languages, libraries and frameworks the work relies on.
 3. Code touched: each file or piece of code that was read, created or changed, with why it matters and what happened to it. Lean towards what happened last, and copy in full the code a successor would need.
-4. Errors and corrections: each failure you met and how it was resolved, together with what the person said about it, especially a request to work differently.
-5. Reasoning so far: the problems already solved, and any line of investigation that is still open.
+4. Errors and corrections: each failure you met and the fix that ended it. Where the person pushed back, put their words here too: a correction that drops out of the handoff gets made a second time.
+5. Reasoning so far: which questions are settled and which you were still chasing, so that a successor neither works the first kind out again nor forgets the second.
 6. The person's messages: every message the person wrote, leaving out tool results. Read in order, they show how the goals and the feedback shifted.
 7. Still to do: the tasks the person explicitly asked for that remain unfinished.
-8. Where things stand: a precise account of the work underway at the moment this handoff was requested, drawn from the latest messages on both sides. Name the files and quote the code that matters.
+8. Where things stand: the file and the code that the last exchange was about, and what had just happened to them. A successor turns here first to find their place, so give each path and quote the lines themselves.
 9. What comes next: a single step that continues the work of section 8 for the person's most recent explicit request, together with a verbatim quote of the latest exchange that pins down the task and the point it reached. Leave this section empty when the work of section 8 is done and the person has asked for nothing further. A side request, or an older one already finished, comes back only after the person agrees to it.
 
 Lay your reply out like this sample:
@@ -59,7 +59,7 @@ Lay your reply out like this sample:
    - [...]
 
 5. Reasoning so far:
-   [Settled problems and open investigations]
+   [What is settled, and what you were still finding out]
 
 6. The person's messages:
    - [A message that is not a tool result]

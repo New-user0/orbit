@@ -285,11 +285,11 @@ describe("retired wording in the source texts", () => {
     ["session/rehydration.ts", /you invoked the skills|is still at work|do not launch another/],
     [
       "session/assist.ts",
-      /Lead with a verb|beats|go-ahead|"go ahead"|cannot be read from what they wrote|"plan_mode"|about to type exactly that|not recommending the step|guessing their own words|Next-message guess|terse changelog entry|single line of a coding assistant/,
+      /Lead with a verb|beats|go-ahead|"go ahead"|cannot be read from what they wrote|"plan_mode"|about to type exactly that|not recommending the step|guessing their own words|Next-message guess|terse changelog entry|single line of a coding assistant|from the assistant's last message/,
     ],
     [
       "session/runner/prompt/compaction.txt",
-      /Now write the handoff|Such a section could read|so that there is no doubt|explicit requests and your own actions|costly to find again|Precise account of the current work/,
+      /Now write the handoff|Such a section could read|so that there is no doubt|explicit requests and your own actions|costly to find again|Precise account of the current work|a precise account of the work underway|especially a request to work differently|line of investigation that is still open|asked for a change of approach|Settled problems and open investigations/,
     ],
     ["session/runner/to-llm-message.ts", /Pick the interrupted task back up/],
     ["shell/result.ts", /Stopped the background command|Background command killed/],

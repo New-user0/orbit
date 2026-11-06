@@ -187,6 +187,21 @@ test("compaction prompt asks for the files, the work in progress and the next st
   expect(prompt).toContain("9. What comes next")
   // The sample's placeholder for section 8 asks for the files and code in hand, as the section's rule does.
   expect(prompt).toMatch(/8\. Where things stand:\s+\[The files and code in hand when the handoff was asked for\]/)
+  // Section 8 asks for the place the last exchange reached, with its paths and lines; sections 4 and 5, and the
+  // analysis notes, keep a correction the person made and the questions still open.
+  expect(prompt).toContain(
+    "8. Where things stand: the file and the code that the last exchange was about, and what had just happened to them. A successor turns here first to find their place, so give each path and quote the lines themselves.",
+  )
+  expect(prompt).toContain(
+    "4. Errors and corrections: each failure you met and the fix that ended it. Where the person pushed back, put their words here too: a correction that drops out of the handoff gets made a second time.",
+  )
+  expect(prompt).toContain(
+    "5. Reasoning so far: which questions are settled and which you were still chasing, so that a successor neither works the first kind out again nor forgets the second.",
+  )
+  expect(prompt).toContain(
+    "   - what the person said about your work; when they redirected you, the handoff has to carry that, or the next stage repeats what they rejected",
+  )
+  expect(prompt).toMatch(/5\. Reasoning so far:\s+\[What is settled, and what you were still finding out\]/)
 })
 
 test("compaction prompt prohibits tool calls at both ends", () => {

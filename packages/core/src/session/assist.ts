@@ -213,7 +213,7 @@ type Settled = {
 
 const labelPrompt = (calls: ReadonlyArray<Settled>, intent: string | undefined) =>
   [
-    ...(intent?.trim() ? [`What the person wants, from the assistant's last message: ${intent}`, ""] : []),
+    ...(intent?.trim() ? [`Before running them, the assistant wrote: ${intent}`, ""] : []),
     "The tools that finished:",
     "",
     calls

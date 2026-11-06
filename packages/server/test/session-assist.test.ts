@@ -342,7 +342,7 @@ it.live(
           .find((line) => line.startsWith("Output: "))
           ?.slice("Output: ".length)
         expect({ length: output?.length, dots: output?.endsWith("...") }).toEqual({ length: 300, dots: true })
-        expect(text).toContain(`${"I".repeat(150)}INTENT-MARK${"J".repeat(39)}`)
+        expect(text).toContain(`Before running them, the assistant wrote: ${"I".repeat(150)}INTENT-MARK${"J".repeat(39)}`)
         expect(text).not.toContain("J".repeat(40))
         // No history: the person's message is not sent.
         expect(JSON.stringify(asked[0].body.messages)).not.toContain("read the notes")
