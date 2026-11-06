@@ -668,6 +668,28 @@ describe("agent memory snapshots", () => {
       expect(yield* text(path.join(folder, "style.md"))).toBe("STYLE-TEXT\n")
       expect(JSON.parse(yield* text(path.join(folder, ".snapshot-synced.json")))).toEqual({ syncedFrom: UPDATED })
       expect(logs.filter((line) => line.includes("notes.txt"))).toHaveLength(1)
+      // The file that was not written is not counted as copied.
+      expect(logs.filter((line) => line.includes("files copied"))).toEqual(["agent memory snapshot of reviewer: 2 files copied"])
+    }),
+  )
+
+  // Class 7: a marker that cannot be written (its name is taken by a folder) costs only itself, with one line in the
+  // log; the files it would have named stay copied and the copy is reported as done, not as a failed agent.
+  it.live("keeps a marker that cannot be written from failing the agent's copy", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const folder = path.join(l.user, "reviewer")
+      yield* Effect.promise(() => fs.mkdir(path.join(folder, ".snapshot-synced.json"), { recursive: true }))
+      yield* snapshotAt(path.join(l.snapshots, "reviewer"), files)
+      const logs: string[] = []
+      yield* Effect.gen(function* () {
+        yield* define(reviewer)
+        yield* sync
+      }).pipe(provide(l), Effect.provide(logged(logs)))
+      for (const [name, body] of Object.entries(files)) expect(yield* text(path.join(folder, name))).toBe(body)
+      expect(logs.filter((line) => line.includes(".snapshot-synced.json not written"))).toHaveLength(1)
+      expect(logs.filter((line) => line.includes("files copied"))).toEqual(["agent memory snapshot of reviewer: 3 files copied"])
+      expect(logs.filter((line) => line.includes("reviewer not copied"))).toEqual([])
     }),
   )
 
