@@ -3831,6 +3831,20 @@ describe("ShellTool timeouts", () => {
         return yield* Effect.fail(new Error("The command printed nothing"))
       })
 
+    // Output that grows after the watcher's first check starts its quiet count again, and the clock moves only where a
+    // test moves it, so a test whose command writes in parts waits for the last part before it moves the clock.
+    const untilPrompt = (shellID: string) =>
+      Effect.gen(function* () {
+        const shell = yield* Shell.Service
+        for (let attempt = 0; attempt < 500; attempt++) {
+          const size = (yield* shell.output(ID.make(shellID), { cursor: Number.MAX_SAFE_INTEGER })).size
+          const tail = (yield* shell.output(ID.make(shellID), { cursor: Math.max(0, size - 64) })).output
+          if (tail.includes("Continue? [y/N]")) return
+          yield* realWait(20)
+        }
+        return yield* Effect.fail(new Error("The command did not print its prompt"))
+      })
+
     /** Moves the test clock in 5 second checks, letting the watcher and the notification run after each. */
     const advance = (seconds: number) =>
       Effect.forEach(Array.from({ length: seconds / 5 }), () =>
@@ -4009,7 +4023,7 @@ describe("ShellTool timeouts", () => {
             const seen = yield* collect
             const shell = yield* Shell.Service
             // The command writes the start, pauses, then writes the rest, as a loaded runner wrote the earlier one-line
-            // form; `start` returns once the first part is there.
+            // form; `start` returns once the first part is there, so the test waits for the prompt.
             const shellID = yield* start(
               registry,
               isWindows
@@ -4017,6 +4031,7 @@ describe("ShellTool timeouts", () => {
                 : "printf HEAD; printf MARKER; sleep 1; head -c 3000 /dev/zero | tr '\\0' x; printf '\\nContinue? [y/N] '; sleep 600",
               "call-long",
             )
+            yield* untilPrompt(shellID)
             yield* advance(50)
             yield* settle(seen, 1)
             expect(seen[0]?.text).toContain("Continue? [y/N]")
