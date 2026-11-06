@@ -861,6 +861,7 @@ const scenarioOn =
   (
     name: string,
     body: (s: Scenario) => Effect.gen.Return<void, unknown, Layer.Success<typeof layer> | Scope.Scope>,
+    timeout?: number,
   ) =>
     on.effect(
       name,
@@ -868,6 +869,7 @@ const scenarioOn =
         const s = yield* setup
         return yield* body(s)
       }),
+      timeout,
     )
 const scenario = scenarioOn(it)
 const limitScenarios = [
@@ -11632,9 +11634,10 @@ describe("SessionRunnerLLM saved tool results", () => {
     expect(wrapped.rest.slice(0, 3)).toEqual(["", "Its opening 2,000 characters:", "Found 100 matches"])
     expect(wrapped.rest.at(-1)).toBe("</saved-output>")
     expect(String(result.result.value)).not.toContain("needle 099")
-  })
+  }, 30_000)
 
   // A real MCP server over stdio. An MCP tool declares 100,000 characters, so the 50,000 ceiling is what saves it.
+  // Starting the server is a process start, which a loaded Windows runner does not finish within the default 5 s.
   savedScenario("saves an MCP result over 50,000 characters and sends the wrapper in the next request", function* (s) {
     const data = yield* dataOf(s)
     const server = Mcp.ServerName.make("traits")
@@ -11684,7 +11687,7 @@ describe("SessionRunnerLLM saved tool results", () => {
     expect(path.basename(wrapped.file)).toMatch(/^msg_[A-Za-z0-9]{1,64}-call_mcp-[0-9a-f]{8}\.txt$/)
     expect(yield* Effect.promise(() => fs.readFile(wrapped.file!, "utf8"))).toBe("x".repeat(60_000))
     expect(wrapped.rest).toEqual(["", "Its opening 2,000 characters:", "x".repeat(2_000), "...", "</saved-output>"])
-  })
+  }, 30_000)
 })
 
 // tool-runtime-9 end to end: the message budget. Before each request the runner looks at the newest step's tool results
