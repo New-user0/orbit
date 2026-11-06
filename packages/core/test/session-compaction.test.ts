@@ -191,7 +191,15 @@ test("compaction prompt prohibits tool calls at both ends", () => {
   const prompt = SessionCompaction.buildPrompt()
 
   expect(prompt.startsWith("This reply must be plain text, and it must not call any tool.")).toBe(true)
-  expect(prompt).toEndWith("A tool call is refused, and then no handoff is saved.")
+  expect(prompt).toEndWith(
+    "Once more: write plain text, the <analysis> block and then the <handoff> block, with no tool call. A tool call is refused, and then no handoff is saved.",
+  )
+})
+
+test("compaction prompt asks for names, choices and patterns copied exactly, and says why", () => {
+  expect(SessionCompaction.buildPrompt()).toContain(
+    "Copy names, design choices and code patterns into it exactly as they appeared: once the conversation is gone, the handoff is the only place they survive.",
+  )
 })
 
 it.effect("auto compaction estimates current content against the threshold below the effective window", () =>

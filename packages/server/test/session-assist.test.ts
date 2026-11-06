@@ -323,6 +323,10 @@ it.live(
         expect(asked[0].kind).toBe("other")
         expect(asked[0].body.model).toBe("small-model")
         expect(asked[0].body.messages.map((message) => message.role)).toEqual(["system", "user"])
+        // The system message carries the label's limits: the room it has and the verb it opens on.
+        const system = JSON.stringify(asked[0].body.messages[0].content)
+        expect(system).toContain("It has room for roughly 30 characters, and anything past that is cut off.")
+        expect(system).toContain("Each label reads as something already done, opening on its verb.")
         const text = JSON.stringify(asked[0].body.messages[1].content)
         expect(text).toContain("Read")
         expect(text).toContain("notes.txt")
@@ -472,6 +476,13 @@ it.live(
         const last = asked[0].body.messages.at(-1)
         expect(last?.role).toBe("user")
         expect(JSON.stringify(last?.content)).not.toContain("SECOND-USER-LINE")
+        // The instruction carries the draft's limits: sendable as it stands, no question, two to twelve words, bare.
+        const rules = [
+          "Keep a draft only if the person could send it unchanged.",
+          "- anything phrased as a question",
+          "two to twelve words in the person's own register, with no quotes and no comment.",
+        ]
+        rules.forEach((rule) => expect(JSON.stringify(last?.content)).toContain(rule))
         // Nothing the request did reached the session's history.
         expect(await assistants(server, id)).toHaveLength(2)
       })
