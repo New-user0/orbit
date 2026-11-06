@@ -66,7 +66,7 @@ test("/memory opens the memory dialog with what the server lists", async () => {
   await using state = await tmpdir()
   await using setup = await render(state.path)
   await command(setup, "/memory")
-  await setup.waitForFrame((frame) => frame.includes("Auto memory: off"))
+  await setup.waitForFrame((frame) => frame.includes("Memory saving: off"))
 })
 
 test("/todos on the home route says there is no session", async () => {

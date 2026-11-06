@@ -82,19 +82,19 @@ function tables(text: string) {
 test("the report has the reference's sections in order, every one for everyone", () => {
   const auto = contextMarkdown(fixture({ auto: true, window: 200_000 }))
   const order = [
-    "## Context usage",
+    "## Context window",
     "**Model:** provider/model",
-    "**Tokens:** 50,000 / 200,000 (25%)",
-    "### Usage by category",
-    "### MCP tools",
-    "### System tools",
-    "### System prompt sections",
-    "### Custom agents",
-    "### Instruction files",
-    "### Skills",
-    "### Message breakdown",
-    "### Top tools",
-    "### Top attachments",
+    "**In use:** 50,000 of 200,000 (25%)",
+    "### Breakdown",
+    "### MCP tool schemas",
+    "### Built-in tools",
+    "### Base prompt parts",
+    "### Agent definitions",
+    "### Instructions",
+    "### Skill listings",
+    "### Conversation by kind",
+    "### Heaviest tools",
+    "### Heaviest attachments",
   ].map((line) => at(auto, line))
   expect(order.every((index) => index >= 0)).toBe(true)
   expect(order).toEqual(order.toSorted((a, b) => a - b))
@@ -104,39 +104,39 @@ test("the report has the reference's sections in order, every one for everyone",
   // buffer.
   const categories = tables(auto)[0]!.slice(2)
   expect(categories.map((row) => row.split("|")[1]!.trim())).toEqual([
-    "System prompt",
-    "System tools",
-    "MCP tools",
-    "MCP tools (deferred)",
-    "System tools (deferred)",
-    "Custom agents",
-    "Instruction files",
-    "Skills",
-    "Messages",
-    "Free space",
-    "Autocompact buffer",
+    "Base prompt",
+    "Built-in tools",
+    "MCP tool schemas",
+    "MCP tool schemas (on demand)",
+    "Built-in tools (on demand)",
+    "Agent definitions",
+    "Instructions",
+    "Skill listings",
+    "Conversation",
+    "Room left",
+    "Auto-compaction reserve",
   ])
-  expect(categories[3]).toBe("| MCP tools (deferred) | 1,500 | 0.8% |")
-  expect(categories[8]).toBe("| Messages | 27,400 | 13.7% |")
+  expect(categories[3]).toBe("| MCP tool schemas (on demand) | 1,500 | 0.8% |")
+  expect(categories[8]).toBe("| Conversation | 27,400 | 13.7% |")
 
   // With automatic compaction off the reserve is a category like the others, before free space.
   const manual = tables(contextMarkdown(fixture({ auto: false, window: 200_000 })))[0]!.slice(2)
-  expect(manual.map((row) => row.split("|")[1]!.trim()).slice(-2)).toEqual(["Compact buffer", "Free space"])
+  expect(manual.map((row) => row.split("|")[1]!.trim()).slice(-2)).toEqual(["Compaction headroom", "Room left"])
 
   // Each section's rows.
   expect(auto).toContain("| docs_search | docs | 2,000 |")
-  expect(auto).toContain("| docs_fetch | docs | 1,500 (deferred) |")
+  expect(auto).toContain("| docs_fetch | docs | 1,500 (on demand) |")
   expect(auto).toContain("| Read | 12,000 |")
-  expect(auto).toContain("| lsp.hover | 900 (deferred) |")
+  expect(auto).toContain("| lsp.hover | 900 (on demand) |")
   expect(auto).toContain("| Environment | 4,000 |")
   expect(auto).toContain("| reviewer | project | 600 |")
   expect(auto).toContain("| file | /repo/ORBIT.md | 3,400 |")
   expect(auto).toContain("| release | 700 |")
-  expect(auto).toContain("| Tool calls | 3,000 |")
-  expect(auto).toContain("| Tool results | 15,000 |")
-  expect(auto).toContain("| Attachments | 2,000 |")
-  expect(auto).toContain("| Assistant text | 4,000 |")
-  expect(auto).toContain("| User text | 3,300 |")
+  expect(auto).toContain("| Calls to tools | 3,000 |")
+  expect(auto).toContain("| What tools returned | 15,000 |")
+  expect(auto).toContain("| Attached files | 2,000 |")
+  expect(auto).toContain("| Replies | 4,000 |")
+  expect(auto).toContain("| Prompts | 3,300 |")
   expect(auto).toContain("| Bash | 2,000 | 10,000 |")
   expect(auto).toContain("| todo | 2,000 |")
 })
@@ -165,16 +165,16 @@ test("an unknown window prints no percentage", () => {
   const text = contextMarkdown(fixture({ auto: true }))
 
   expect(text).not.toContain("%")
-  expect(text).toContain("**Tokens:** 50,000\n")
-  expect(text).not.toContain("Free space")
-  expect(text).not.toContain("Autocompact buffer")
-  expect(tables(text)[0]![0]).toBe("| Category | Tokens |")
+  expect(text).toContain("**In use:** 50,000\n")
+  expect(text).not.toContain("Room left")
+  expect(text).not.toContain("Auto-compaction reserve")
+  expect(tables(text)[0]![0]).toBe("| Part | Tokens |")
 
   // A window of 0 is as unknown as no window: nothing is a share of it (D9).
   const zero = contextMarkdown({ ...fixture({ auto: true }), window: 0 })
   expect(zero).not.toContain("%")
-  expect(zero).toContain("**Tokens:** 50,000\n")
-  expect(tables(zero)[0]![0]).toBe("| Category | Tokens |")
+  expect(zero).toContain("**In use:** 50,000\n")
+  expect(tables(zero)[0]![0]).toBe("| Part | Tokens |")
 })
 
 // CR4, class 9: the JSON line keeps every string as it came, and holds no raw control or line separator character.

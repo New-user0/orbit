@@ -272,7 +272,7 @@ test.each([
   await openFromTimeline(setup, "Quick question")
 
   if (!row.shortcut) {
-    const frame = await setup.waitForFrame((frame) => frame.includes("Never mind"))
+    const frame = await setup.waitForFrame((frame) => frame.includes("Do nothing"))
     expect(frame).toContain(row.filesChanged.length ? "Code and conversation" : "Conversation only")
     expect(frame).toContain("Quick question")
     expect(setup.actions()).toEqual([])
@@ -322,9 +322,9 @@ test.each([
   await setup.waitForFrame((frame) => linesWith(frame, "Quick question") === 2, { maxPasses: 200 })
 })
 
-// Opened from the message dialog, the picker has no list to go back to: Never mind closes it, as Esc does. The newest
+// Opened from the message dialog, the picker has no list to go back to: Do nothing closes it, as Esc does. The newest
 // prompt is the timeline's first row, so it is chosen without a filter.
-test("Never mind on a picker opened from the message dialog closes it", async () => {
+test("Do nothing on a picker opened from the message dialog closes it", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path })
   await setup.waitForFrame(loaded)
@@ -333,7 +333,7 @@ test("Never mind on a picker opened from the message dialog closes it", async ()
   expect(setup.dryRunsSent()).toEqual(["msg_0005"])
   for (let index = 0; index < 3; index++) setup.mockInput.pressArrow("down")
   setup.mockInput.pressEnter()
-  const closed = await setup.waitForFrame((frame) => !frame.includes("Never mind"))
+  const closed = await setup.waitForFrame((frame) => !frame.includes("Do nothing"))
   expect(closed).not.toContain(listHeading)
   expect(closed).not.toContain("Checking files")
   expect(setup.actions()).toEqual([])
@@ -533,7 +533,7 @@ test("a click on a prompt opens the message dialog, whose Rewind opens step 2 fo
   await setup.waitForFrame((frame) => frame.includes("Message Actions"))
   await Bun.sleep(50)
   await setup.mockInput.typeText("Rewind")
-  await setup.waitForFrame((frame) => frame.includes("code and/or conversation"))
+  await setup.waitForFrame((frame) => frame.includes("roll back to just before this prompt"))
   setup.mockInput.pressEnter()
   const confirm = await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
   expect(confirm).toContain("Rewind to just before this prompt:")
@@ -653,7 +653,7 @@ test("the message dialog's Rewind on a prompt that left the conversation while t
   await setup.waitForFrame((frame) => !frame.includes("Fixed the title."), { maxPasses: 200 })
   await Bun.sleep(50)
   await setup.mockInput.typeText("Rewind")
-  await setup.waitForFrame((frame) => frame.includes("code and/or conversation"))
+  await setup.waitForFrame((frame) => frame.includes("roll back to just before this prompt"))
   setup.mockInput.pressEnter()
   await Bun.sleep(300)
   await setup.renderOnce()
@@ -1409,7 +1409,7 @@ test.each(matrix)("$entry on $row", async (cell) => {
     return
   }
   if (cell.expect === "step 2") {
-    const frame = await setup.waitForFrame((frame) => frame.includes("Never mind"))
+    const frame = await setup.waitForFrame((frame) => frame.includes("Do nothing"))
     expect(frame).toContain("just before this prompt:")
     expect(frame).toContain("Conversation only")
     expect(frame).toContain(cell.target!)
@@ -1422,7 +1422,7 @@ test.each(matrix)("$entry on $row", async (cell) => {
       `stage ${JSON.stringify({ messageID: "msg_0007", files: false })}`,
     ])
     const frame = await setup.waitForFrame((frame) => linesWith(frame, "Quick question") === 2, { maxPasses: 200 })
-    expect(frame).not.toContain("Never mind")
+    expect(frame).not.toContain("Do nothing")
     return
   }
   await Bun.sleep(500)
@@ -1431,7 +1431,7 @@ test.each(matrix)("$entry on $row", async (cell) => {
   expect(frame).not.toContain(listHeading)
   expect(frame).not.toContain("Nothing to rewind yet.")
   expect(frame).not.toContain("Checking files")
-  expect(frame).not.toContain("Never mind")
+  expect(frame).not.toContain("Do nothing")
   expect(setup.dryRunsSent()).toEqual([])
   expect(setup.actions()).toEqual(cell.actions ?? [])
 })

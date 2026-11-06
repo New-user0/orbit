@@ -92,7 +92,7 @@ test("readContextUsage decodes the payload, and names an unreadable answer, an o
 test("the text formats print the report, and nothing goes to the model", async () => {
   const run = await capture({ format: "default" })
   expect(run.exitCode).toBe(0)
-  expect(run.stdout).toContain("## Context usage")
+  expect(run.stdout).toContain("## Context window")
   expect(run.stdout).toContain("/repo/ORBIT.md")
   expect(run.stdout.trimEnd().split("\n").some((line) => line.startsWith("{"))).toBe(false)
 
@@ -101,7 +101,7 @@ test("the text formats print the report, and nothing goes to the model", async (
   expect(stream.exitCode).toBe(0)
   const line = JSON.parse(stream.stdout)
   expect(line).toMatchObject({ type: "result", sessionID: SESSION, is_error: false, subtype: "success", steps: 0 })
-  expect(line.result).toContain("## Context usage")
+  expect(line.result).toContain("## Context window")
 })
 
 test("the JSON formats print one context_usage line with the payload", async () => {
@@ -116,9 +116,9 @@ test("the JSON formats print one context_usage line with the payload", async () 
 test("an entry the client cannot read costs only itself: the report is printed and one line names it", async () => {
   const run = await capture({ format: "default", session: "ses_newer" })
   expect(run.exitCode).toBe(0)
-  expect(run.stdout).toContain("## Context usage")
-  expect(run.stdout).toContain("| System prompt | 4,000 | 4.0% |")
-  expect(run.stdout).toContain("| Messages | 16,000 | 16.0% |")
+  expect(run.stdout).toContain("## Context window")
+  expect(run.stdout).toContain("| Base prompt | 4,000 | 4.0% |")
+  expect(run.stdout).toContain("| Conversation | 16,000 | 16.0% |")
   expect(run.stderr.trimEnd().split("\n")).toEqual([
     "Left out context usage entries this client could not read: categories[1]",
   ])
@@ -155,7 +155,7 @@ test("--format result prints one result line whose result is the report", async 
   const line = JSON.parse(run.stdout)
   expect(line).toMatchObject({ type: "result", sessionID: SESSION, is_error: false, subtype: "success" })
   expect(line.usage).toEqual({ steps: 0, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } })
-  expect(line.result).toContain("## Context usage")
+  expect(line.result).toContain("## Context window")
 })
 
 // Stream input answers `/context` through its own control request (clients-ux-47), so the positional `/context` of a
@@ -166,7 +166,7 @@ test("stream input leaves /context to the stream and does not ask the route", as
   const run = await capture({ format: "stream-json", envelope: true, stream: true })
   unexpected.length = 0
   expect(asked).toEqual([])
-  expect(run.stdout).not.toContain("## Context usage")
+  expect(run.stdout).not.toContain("## Context window")
   expect(run.stdout).not.toContain('"context_usage"')
 })
 

@@ -74,9 +74,9 @@ test('orb run "/context" prints the report and sends nothing to the model', asyn
   const result = await orb(["run", "--standalone", "--model", model, "/context"])
 
   expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" })
-  expect(result.stdout).toContain("## Context usage")
-  expect(result.stdout).toContain("### Usage by category")
-  expect(result.stdout).toContain("| Category | Tokens | Percentage |")
+  expect(result.stdout).toContain("## Context window")
+  expect(result.stdout).toContain("### Breakdown")
+  expect(result.stdout).toContain("| Part | Tokens | Share |")
   expect(result.stdout).toContain(`| file | ${marker} |`)
   expect(chats).toEqual([])
 }, 300_000)
@@ -94,7 +94,7 @@ test('orb -p "/context" with --format result prints one result line whose result
     expect(lines.length).toBe(1)
     const line = JSON.parse(lines[0]!)
     expect(line).toMatchObject({ type: "result", is_error: false, subtype: "success" })
-    expect(line.result).toContain("## Context usage")
+    expect(line.result).toContain("## Context window")
     expect(line.result).toContain(marker)
   }
 
@@ -118,7 +118,7 @@ test("an untrusted folder refuses /context before any request, and --trust runs 
   expect(refused.stderr).toContain("--trust")
   expect(refused.stdout + refused.stderr).not.toContain(MARKER)
   expect(refused.stdout + refused.stderr).not.toContain("ORBIT.md")
-  expect(refused.stdout).not.toContain("## Context usage")
+  expect(refused.stdout).not.toContain("## Context window")
 
   const trusted = await orb(["run", "--trust", "--model", model, "/context"], { ORBIT_TRUST_PROJECT: undefined })
   expect(trusted.code).toBe(0)
@@ -132,7 +132,7 @@ test("/context with --file is refused", async () => {
   const text = await orb(["run", "--standalone", "--model", model, "--file", "notes.txt", "/context"])
   expect(text.code).toBe(1)
   expect(text.stderr).toContain("--file")
-  expect(text.stdout).not.toContain("## Context usage")
+  expect(text.stdout).not.toContain("## Context window")
 
   const json = await orb(["run", "--standalone", "--format", "json", "--model", model, "--file", "notes.txt", "/context"])
   expect(json.code).toBe(1)
@@ -158,12 +158,12 @@ test("a child session named with --session, and an unknown one, exit 1 with the 
   expect(refused.code).toBe(1)
   expect(refused.stderr).toContain(parent!.id)
   expect(refused.stderr).toContain("main session")
-  expect(refused.stdout).not.toContain("## Context usage")
+  expect(refused.stdout).not.toContain("## Context window")
 
   const missing = await orb(["run", "--standalone", "--resume", "ses_context_missing", "/context"])
   expect(missing.code).toBe(1)
   expect(missing.stderr.toLowerCase()).toContain("not found")
-  expect(missing.stdout).not.toContain("## Context usage")
+  expect(missing.stdout).not.toContain("## Context window")
   expect(chats).toEqual([])
 }, 300_000)
 

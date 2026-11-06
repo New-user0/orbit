@@ -2,7 +2,7 @@ import type { ModelInfo } from "@orbit/client"
 import type { OrbitClient } from "@orbit/client/promise"
 import { SessionCost } from "@orbit/schema/session-cost"
 import { jsonLine, plain } from "@orbit/flow/plain"
-import { costSummary, money, NO_USAGE, price } from "@orbit/tui/util/cost"
+import { costSummary, lineChanges, money, NO_USAGE, price, usageLine } from "@orbit/tui/util/cost"
 import { Locale } from "@orbit/tui/util/locale"
 import { errorMessage } from "../util/error"
 import { UI } from "./ui"
@@ -12,8 +12,6 @@ import { UI } from "./ui"
 // stored rows, so the figures do not depend on how
 // much history the run loaded. Every model name comes from a record or a provider, so each goes through `plain` (class 9).
 
-const lines = (value: number) => `${value} ${value === 1 ? "line" : "lines"}`
-
 /**
  * The block `orb run "/cost"` prints. With the session's catalog, a response that recorded $0 for a model the catalog
  * lists without a price reads as unknown, as in the dialog; without one, only a response with no recorded cost does.
@@ -21,30 +19,21 @@ const lines = (value: number) => `${value} ${value === 1 ? "line" : "lines"}`
 export function costText(info: SessionCost.Info, models?: ReadonlyArray<ModelInfo>) {
   const summary = costSummary(info, models)
   const span = (value: number | undefined) => (value === undefined ? "-" : Locale.duration(value))
-  const usage = summary.models.map((row) => {
-    const name = `${plain(row.providerID)}/${plain(row.modelID)}`
-    const tokens = [
-      `${Locale.number(row.tokens.input)} input`,
-      `${Locale.number(row.tokens.output)} output`,
-      `${Locale.number(row.tokens.cache.read)} cache read`,
-      `${Locale.number(row.tokens.cache.write)} cache write`,
-      ...(row.tokens.reasoning > 0 ? [`${Locale.number(row.tokens.reasoning)} reasoning`] : []),
-    ].join(", ")
-    return `  ${name}:  ${tokens} (${price(row.cost, row.unpriced > 0)})`
-  })
-  const row = (label: string, value: string) => `${label.padEnd(22)} ${value}`
+  const usage = summary.models.map(
+    (row) =>
+      `  ${plain(row.providerID)}/${plain(row.modelID)} (${price(row.cost, row.unpriced > 0)}): ${usageLine(row.tokens)}`,
+  )
+  const row = (label: string, value: string) => `${label.padEnd(16)} ${value}`
   return [
-    row("Total cost:", price(summary.cost, summary.partial)),
+    row("Spent:", price(summary.cost, summary.partial)),
     ...(summary.subagents === undefined ? [] : [row("Subagents:", `${money(summary.subagents)} (included above)`)]),
-    row("Total API duration:", span(summary.api)),
-    row("Total wall duration:", span(summary.wall)),
-    ...(summary.lines === undefined
-      ? []
-      : [row("Total code changes:", `${lines(summary.lines.added)} added, ${lines(summary.lines.removed)} removed`)]),
+    row("Model time:", span(summary.api)),
+    row("Elapsed:", span(summary.wall)),
+    ...(summary.lines === undefined ? [] : [row("Lines changed:", lineChanges(summary.lines))]),
     ...(summary.other === undefined
       ? []
       : [row("Other:", `${money(summary.other)} (undone responses, older usage)`)]),
-    ...(usage.length > 0 ? ["Usage by model:", ...usage] : [row("Usage:", NO_USAGE)]),
+    ...(usage.length > 0 ? ["Per model:", ...usage] : [row("Tokens:", NO_USAGE)]),
   ].join("\n")
 }
 
