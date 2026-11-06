@@ -989,7 +989,7 @@ describe("lowering", () => {
     const history = [checkpoint(1), user(2, "kept"), checkpoint(3), user(4, "P")]
     const out = roles(history, [{ after: "start", text: "INS" }])
 
-    expect(out.map((text) => (text.includes("replaced by the summary") ? "CP" : text))).toEqual([
+    expect(out.map((text) => (text.includes("now lives in the summary") ? "CP" : text))).toEqual([
       "CP",
       "INS",
       "CP",

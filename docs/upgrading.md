@@ -5079,8 +5079,8 @@ window less the summary's room instead of the whole window; lower it if compacti
   lines collapse to one. A handoff that quotes an `<analysis>` tag is stored whole, with its later sections. A summary that a `compaction` hook supplies is formatted the same way, on a native-compaction model too, and one with nothing left outside the analysis fails as "Compaction produced no summary". A reply that is only an
   unfinished analysis fails as "Compaction produced no summary". A reply that stopped at the output limit is stored as
   it is, where it used to fail (`session-compaction.test.ts`, "analysis never stored").
-- **The next request.** A summary checkpoint reaches the model as one user message that says earlier messages
-  were replaced by the summary because the conversation outgrew the context window, followed by the summary. An automatic compaction adds a line telling the
+- **The next request.** A summary checkpoint reaches the model as one user message that says the conversation
+  grew past the context window and its earlier part now lives in the summary, followed by the summary. An automatic compaction adds a line telling the
   model to carry on without asking the user anything; a manual one does not
   (`session-runner-message.test.ts`).
 - **A reply with no text gets one more request.** The first request shares the main request's system prompt, tools and
