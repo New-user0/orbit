@@ -17,7 +17,7 @@ import { createSignal, onMount, Show } from "solid-js"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
 import { DataProvider, useData } from "../src/context/data"
-import { EditorContextProvider, useEditorContext } from "../src/context/editor"
+import { EditorContextProvider, useEditorContext, type EditorDiffEvent } from "../src/context/editor"
 import { ExitProvider } from "../src/context/exit"
 import { InteractivityProvider } from "../src/context/interactivity"
 import { Keymap } from "../src/context/keymap"
@@ -349,6 +349,17 @@ test("the diff the TUI opens is the request's place and patch, never the tool in
   expect(setup.peer!.of("hello")[0]).toMatchObject({ type: "hello", version: 1, features: ["diff"] })
 })
 
+// A Write of a new file opens as an added file, which the editor shows against an empty left side without reading it.
+test("a new file opens as added, with the request's status", async () => {
+  await using setup = await mount({
+    request: { action: "Write", metadata: { paths: [place], files: [{ ...entry, status: "added" }] } },
+  })
+  await opened(setup)
+  expect(setup.peer!.of("diff.open")).toEqual([
+    { type: "diff.open", id: "per_diff1", place, patch, status: "added", roots: [sessionFolder, projectFolder] },
+  ])
+})
+
 test("while the diff is open the prompt says where it opened and asks about the file by name", async () => {
   await using setup = await mount()
   const frame = await setup.until(compact, "the compact prompt")
@@ -361,6 +372,17 @@ test("while the diff is open the prompt says where it opened and asks about the 
   expect(frame).not.toContain("DECOY")
   // The dialog names the file by name for a screen reader too.
   expect(dialogs(setup.app.renderer.root)).toEqual(["Permission required: Edit a.ts"])
+})
+
+// A Windows place is named by its last part as well, whichever separator the server wrote.
+test("the prompt names a file of a Windows place by its own name", async () => {
+  const windows = "C:\\work\\session-folder\\src\\b.ts"
+  await using setup = await mount({
+    request: { metadata: { paths: [windows], files: [{ ...entry, file: "src\\b.ts", place: windows }] } },
+  })
+  const frame = await setup.until(compact, "the compact prompt")
+  expect(frame).toContain("Make this change to b.ts?")
+  expect(setup.peer!.of("diff.open")[0]).toMatchObject({ place: windows })
 })
 
 // The grant Always allow makes reaches past this one file, so the short prompt names it while that option is focused,
@@ -627,6 +649,31 @@ test("an answer from a window linked later is not taken for a review opened in t
   }
 })
 
+// The first window's link closing takes only its own reviews: one opened over the window linked later stays open and
+// still hears that window's answer.
+test("a review opened in the window linked later stays open when the window before closes", async () => {
+  await using setup = await mount({ WebSocketImpl: SlowClose })
+  await opened(setup)
+  await setup.until(compact, "the compact prompt")
+  const other = await editor(setup.state)
+  try {
+    expect(await setup.editor().connect(other.port)).toBe("connected")
+    const heard: EditorDiffEvent[] = []
+    const review = { id: "per_later1", place, patch, status: "modified" as const, roots: [sessionFolder] }
+    expect(setup.editor().diff.open(review, (event) => void heard.push(event))).toBe(true)
+    await setup.until(() => other.of("diff.open").length === 1, "the later window's open")
+    // The first window's link closes, and its review is lost; the later one is not.
+    await setup.until(full, "the full dialog after the first link closed")
+    await Bun.sleep(300)
+    expect(heard).toEqual([])
+    other.answer({ id: "per_later1", answer: "closed" })
+    await setup.until(() => heard.length === 1, "the later window's answer")
+    expect(heard).toEqual([{ type: "diff.answer", id: "per_later1", answer: "closed" }])
+  } finally {
+    await other.stop()
+  }
+})
+
 test("an odd answer, a dismissed tab, a lost bridge or a bridge without diffs keeps the terminal dialog, with one log line", async () => {
   const rows: Array<{
     name: string
@@ -707,6 +754,9 @@ test("no diff opens unless the request is a revisable one-file Edit or Write, th
     { name: "ipynb", options: { request: file({ place: `${sessionFolder}/N.IPYNB` }) }, opens: false },
     { name: "no-place", options: { request: file({ place: undefined }) }, opens: false },
     { name: "relative-place", options: { request: file({ place: "src/a.ts" }) }, opens: false },
+    // A drive with no separator after it names a folder relative to that drive's current one, not an absolute place.
+    { name: "drive-relative-place", options: { request: file({ place: "C:src\\a.ts" }) }, opens: false },
+    { name: "drive-place", options: { request: file({ place: "C:\\work\\session-folder\\src\\a.ts" }) }, opens: true },
     { name: "deleted-status", options: { request: file({ status: "deleted" }) }, opens: false },
     { name: "terminal-setting", options: { tool: "terminal" }, opens: false },
     { name: "untrusted", options: { trusted: false }, opens: false },
@@ -787,6 +837,23 @@ test("the link warning comes from the request: through a link, and outside the s
     {
       name: "outside not a boolean, full",
       options: linked({ place: "/elsewhere/secrets/a.ts", outside: "true" }, "terminal"),
+    },
+    // A place that is not a string has no shape either.
+    { name: "place not a string, compact", options: linked({ place: 7 as never, outside: true }) },
+    // The link is the one file's: a request of two files names none, even when its first file carries one.
+    {
+      name: "two files, full",
+      options: {
+        request: {
+          metadata: {
+            paths: [place],
+            files: [
+              { ...entry, link: { place: "/elsewhere/secrets/a.ts", outside: true } },
+              { ...entry, file: "src/b.ts", place: `${sessionFolder}/src/b.ts` },
+            ],
+          },
+        },
+      },
     },
   ]
   for (const row of rows) {

@@ -105,6 +105,40 @@ test("the /config dialog lists Diff tool only while linked to an editor", async 
   }
 })
 
+// An opener that does not say whether an editor is linked gets the settings of an unlinked terminal UI.
+test("the /config dialog opened without a link state does not list Diff tool", async () => {
+  function Fixture() {
+    const dialog = useDialog()
+    onMount(() => dialog.replace(() => <DialogConfig current="diffs.view" />))
+    return null
+  }
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
+          <Keymap.Provider>
+            <ThemeProvider mode="dark" source={emptyThemeSource}>
+              <ToastProvider>
+                <DialogProvider>
+                  <Fixture />
+                </DialogProvider>
+              </ToastProvider>
+            </ThemeProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 100, height: 80 },
+  )
+  app.renderer.start()
+  try {
+    const frame = await app.waitForFrame((frame) => frame.includes("Wrapping"))
+    expect(frame).not.toContain("Diff tool")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("validates the explicit diff source defaults", () => {
   for (const source of ["branch", "committed", "working", "turn"] as const) {
     expect(decodeInfo({ diffs: { source } })).toEqual({ diffs: { source } })

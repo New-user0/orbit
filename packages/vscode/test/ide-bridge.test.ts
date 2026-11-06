@@ -471,6 +471,8 @@ function tabs(options: { fail?: number; hold?: Promise<void> } = {}) {
   const closed: string[] = []
   const replies: unknown[] = []
   const warnings: string[] = []
+  // The chat's cards told to stop saying "answer in the editor".
+  const unmarked: string[] = []
   const holder: { review?: Review } = {}
   // The first `fail` tabs fail to open, as `vscode.diff` can, once `hold` lets them.
   const failing = { left: options.fail ?? 0 }
@@ -496,9 +498,9 @@ function tabs(options: { fail?: number; hold?: Promise<void> } = {}) {
     reveal: async () => {},
     note: () => {},
     warn: (text) => void warnings.push(text),
-    unmark: () => {},
+    unmark: (id) => void unmarked.push(id),
   }
-  return { host, shown, attempts, closed, replies, warnings, holder }
+  return { host, shown, attempts, closed, replies, warnings, unmarked, holder }
 }
 
 const features = { type: "hello", version: 1, pid: 4242, features: ["diff"] }
@@ -816,6 +818,7 @@ describe("a frame with a malformed id, place, patch or roots answers unavailable
     { name: "id-traversal", fields: () => ({ id: "per_../x" }) },
     { name: "id-long", fields: () => ({ id: `per_${"a".repeat(65)}` }) },
     { name: "id-control", fields: () => ({ id: "per_a\u001b[31m" }) },
+    { name: "id-prefix-only", fields: () => ({ id: "per_" }) },
     { name: "id-missing", fields: () => ({ id: undefined }) },
     { name: "no-roots", fields: () => ({ roots: [] }), reason: "invalid" },
     { name: "three-roots", fields: () => ({ roots: [world.project, world.project, world.project] }), reason: "invalid" },
@@ -1044,9 +1047,14 @@ test("frames that are not JSON, a close with a malformed id, and diff frames to 
   client.socket.send("not json")
   client.socket.send(JSON.stringify(["diff.closeAll"]))
   client.socket.send(JSON.stringify({ type: "diff.close", id: "per_a1/../x" }))
+  // A close without an id, or with one that is not a string, names no question: it never closes them all.
+  client.socket.send(JSON.stringify({ type: "diff.close" }))
+  client.socket.send(JSON.stringify({ type: "diff.close", id: 7 }))
   client.socket.send(JSON.stringify({ type: "diff.later", id: "per_a1" }))
   await Bun.sleep(50)
   expect(editor.closed).toEqual([])
+  // A type from a later version is ignored, not taken for a malformed open: nothing is answered.
+  expect(answers(client)).toEqual([])
   expect(client.socket.readyState).toBe(WebSocket.OPEN)
   // A bridge started without the review service takes a diff frame after hello and does nothing with it.
   const bare = await start(await folder())
@@ -1141,6 +1149,10 @@ test("a terminal UI's close of one question leaves its other reviews open", asyn
   await Bun.sleep(50)
   expect(editor.closed).toEqual([one.title])
   expect(answers(client)).toEqual([])
+  // A terminal UI's tab is not the chat's: its close leaves the chat's card of the same question as it was.
+  client.socket.send(JSON.stringify({ type: "diff.closeAll" }))
+  await until(() => editor.closed.length === 2, "the close-all")
+  expect(editor.unmarked).toEqual([])
 })
 
 // The chat hearing a question answered closes only the chat's tabs of it, so a terminal UI's review of the same question
@@ -1187,6 +1199,26 @@ describe("a review closed while its file is still being read opens nothing", () 
       expect(editor.shown).toEqual([])
       expect(answers(client)).toEqual(row.dismissed ? [{ type: "diff.answer", id: "per_a1", answer: "dismissed" }] : [])
     })
+})
+
+// The window closing marks a review still being read as a close-all does, but a closing window answers nothing: the
+// terminal UI hears of it when its link goes.
+test("a review the window closes while its file is still being read opens nothing and answers nothing", async () => {
+  const disk = held()
+  const editor = tabs()
+  const review = new Review(editor.host, disk.reader)
+  editor.holder.review = review
+  const { bridge } = await start(await folder(), { folders: [world.root], diff: review.bridge })
+  await Bun.sleep(60)
+  const client = await connect(bridge, (await lock(bridge)).authToken, features)
+  await until(() => client.frames.length >= 2, "the hello and the selection")
+  ask(client)
+  await Bun.sleep(50)
+  review.dispose()
+  disk.release()
+  await Bun.sleep(100)
+  expect(editor.shown).toEqual([])
+  expect(answers(client)).toEqual([])
 })
 
 test("a client that goes away takes its reviews with it, and nothing is answered", async () => {

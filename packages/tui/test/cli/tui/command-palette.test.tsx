@@ -93,14 +93,15 @@ test("searches settings globally and opens the matching setting", async () => {
 // clients-ux-15 part 3: the setting of where an edit approval's diff shows needs a linked editor, so the palette finds it
 // only while one is linked, and the settings dialog it opens lists it too.
 test("the palette finds Diff tool only while linked to an editor, and the settings it opens list it", async () => {
-  for (const linked of [true, false]) {
-    const { app, state } = await palette(() => linked)
+  // `undefined`: an opener that does not say, which gets the palette of an unlinked terminal UI.
+  for (const linked of [true, false, undefined]) {
+    const { app, state } = await palette(linked === undefined ? undefined : () => linked)
     try {
       for (const key of "diff tool") app.mockInput.pressKey(key)
       // Typing narrows the list to what matches; "Diff tool" is among it only while linked.
       await app.waitForFrame((frame) => !frame.includes("New session"))
       await Bun.sleep(100)
-      expect([linked, app.captureCharFrame().includes("Diff tool")]).toEqual([linked, linked])
+      expect([linked, app.captureCharFrame().includes("Diff tool")]).toEqual([linked, linked === true])
       if (!linked) continue
       app.mockInput.pressEnter()
       await app.waitForFrame((frame) => frame.includes("Settings") && frame.includes("Diff tool"))
