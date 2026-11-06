@@ -281,8 +281,14 @@ describe("retired wording in the source texts", () => {
     ],
     ["file-access.ts", /Remove the secret|appears to contain a secret/],
     ["session/rehydration.ts", /you invoked the skills|is still at work|do not launch another/],
-    ["session/assist.ts", /Lead with a verb|beats|go-ahead|"go ahead"|cannot be read from what they wrote|"plan_mode"/],
-    ["session/runner/prompt/compaction.txt", /Now write the handoff|Such a section could read|so that there is no doubt/],
+    [
+      "session/assist.ts",
+      /Lead with a verb|beats|go-ahead|"go ahead"|cannot be read from what they wrote|"plan_mode"|about to type exactly that|not recommending the step|guessing their own words|Next-message guess|terse changelog entry|single line of a coding assistant/,
+    ],
+    [
+      "session/runner/prompt/compaction.txt",
+      /Now write the handoff|Such a section could read|so that there is no doubt|explicit requests and your own actions|costly to find again/,
+    ],
     ["session/runner/to-llm-message.ts", /Pick the interrupted task back up/],
     ["shell/result.ts", /Stopped the background command|Background command killed/],
   ]

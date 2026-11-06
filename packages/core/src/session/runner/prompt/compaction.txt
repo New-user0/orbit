@@ -5,7 +5,7 @@ This reply must be plain text, and it must not call any tool.
 - You get exactly one message. If it holds a tool call, the call is refused and no handoff gets saved.
 - The message is made of two blocks of text: <analysis> first, <handoff> second.
 
-The conversation above is about to leave the context, and your <handoff> takes its place. Whoever carries on, most likely you, must be able to resume the work from the handoff alone. Put the person's explicit requests and your own actions at its centre, and keep the exact names, design choices, code patterns and other technical detail that would be costly to find again.
+The conversation above is about to leave the context, and your <handoff> takes its place. Whoever carries on, most likely you, must be able to resume the work from the handoff alone. Copy names, design choices and code patterns into it exactly as they appeared: once the conversation is gone, the handoff is the only place they survive. Above all, it should show what the person asked for and what you did about it.
 
 Use the <analysis> block as scratch space before the handoff, so that nothing slips through. In it:
 

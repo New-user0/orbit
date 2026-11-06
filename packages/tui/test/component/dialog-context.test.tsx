@@ -348,9 +348,9 @@ test("the instruction files suggestion names each file by its path in the sessio
     done: (frame) => frame.includes("Ways to free room"),
   })
   await using _ = result.setup
-  const detail = result.frame.split("\n").find((line) => line.includes("Biggest:"))
+  const detail = result.frame.split("\n").find((line) => line.includes("Most of it sits in"))
 
-  expect(detail).toContain("Biggest: ORBIT.md (4.0K)")
+  expect(detail).toContain("Most of it sits in ORBIT.md (4.0K)")
   expect(detail).not.toContain(directory)
 })
 

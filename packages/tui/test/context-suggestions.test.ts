@@ -190,10 +190,11 @@ test("each piece of advice is Orbit's own wording", () => {
       detail({ window: 100_000, tools: [tool(name, 5_000, 15_000)] }),
     ),
     ...detail({ window: 200_000, tools: [tool("Read", 0, 10_000)] }),
+    ...detail({ window: 100_000, files: [1_000, 2_000, 1_500, 500] }),
   ]
   expect(advice).toEqual([
-    "Automatic compaction will start soon. Running /compact now lets you choose when it happens.",
-    "Automatic compaction is off, so a full window stays full. Before that happens, run /compact or turn automatic compaction back on.",
+    "/compact runs it at a moment you pick; left alone, Orbit compacts the conversation by itself shortly.",
+    "Turning automatic compaction back on, or running /compact yourself, keeps the window from filling up, since with the setting off nothing summarizes the conversation for you.",
     "A full window will not be summarized for you, so run /compact before it fills.",
     "Commands that print a lot fill the conversation. Cut their output down in the command itself, for example to the first or last lines or to the lines that match.",
     "Read a long file in pieces by giving an offset and a limit.",
@@ -201,9 +202,13 @@ test("each piece of advice is Orbit's own wording", () => {
     "Whole web pages cost many tokens. Name the part of the page you are after in the request.",
     "Call Search with tighter inputs, or have each call return less.",
     "Read a long file in pieces by giving an offset and a limit.",
+    "Most of it sits in /repo/file-1.md (2.0K), /repo/file-2.md (1.5K), /repo/file-0.md (1.0K), which /memory opens for trimming.",
   ])
-  // The phrasings that the first rewrite still shared with the reference's sentences stay out.
-  for (const text of advice) expect(text).not.toMatch(/Pipe|head, tail or grep|summary is close|run long|line ranges/)
+  // The phrasings that the earlier rewrites still shared with the reference's sentences stay out.
+  for (const text of advice)
+    expect(text).not.toMatch(
+      /Pipe|head, tail or grep|summary is close|run long|line ranges|Biggest:|will start soon|lets you choose when|Shorten them|is off, so a full window/,
+    )
 })
 
 test("each suggestion's title is Orbit's own wording", () => {

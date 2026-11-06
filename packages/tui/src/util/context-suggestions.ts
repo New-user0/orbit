@@ -45,8 +45,8 @@ export function contextSuggestions(
       severity: "warning",
       title: `${percentage}% of the window is in use`,
       detail: info.auto
-        ? "Automatic compaction will start soon. Running /compact now lets you choose when it happens."
-        : "Automatic compaction is off, so a full window stays full. Before that happens, run /compact or turn automatic compaction back on.",
+        ? "/compact runs it at a moment you pick; left alone, Orbit compacts the conversation by itself shortly."
+        : "Turning automatic compaction back on, or running /compact yourself, keeps the window from filling up, since with the setting off nothing summarizes the conversation for you.",
     })
 
   const large = new Set<string>()
@@ -88,7 +88,7 @@ export function contextSuggestions(
     found.push({
       severity: "info",
       title: `Instructions hold ${Locale.number(files)} tokens (${share(files)}%)`,
-      detail: `Biggest: ${largest.join(", ")}. Shorten them through /memory.`,
+      detail: `Most of it sits in ${largest.join(", ")}, which /memory opens for trimming.`,
       savings: Math.floor(files * SAVINGS.files),
     })
   }

@@ -226,7 +226,7 @@ const labelPrompt = (calls: ReadonlyArray<Settled>, intent: string | undefined) 
   ].join("\n")
 
 const LABEL_SYSTEM = [
-  "Name the outcome of the tool calls below in a few words. The label fills a single line of a coding assistant's interface, and whatever runs past about 30 characters is hidden, so write it the way a terse changelog entry reads rather than as a full sentence.",
+  "Write a label for the tool calls below. Whoever reads it did not watch the calls run and sees only the label in their place, so it has to say at a glance what got done. It has room for roughly 30 characters, and anything past that is cut off.",
   "Someone skimming a column of these labels has to tell one batch from the next, so the detail that singles this one out, often a file, a symbol or a package, matters more than grammar: drop articles and shorten a path to its file name before you lose it. Each label reads as something already done, opening on its verb.",
   [
     "Examples:",
@@ -239,9 +239,9 @@ const LABEL_SYSTEM = [
 ].join("\n\n")
 
 const SUGGESTION_PROMPT = [
-  "[Next-message guess: give the words the person is most likely to send Orbit now.]",
-  "Work from what the person has written, their latest messages and the request that started the work, before anything else. You are guessing their own words, not recommending the step you think best.",
-  'Hold each candidate to one test: on reading it, would the person think "yes, I was about to type exactly that"?',
+  "Draft the next message the person will probably send to Orbit, so they can send it without typing it.",
+  "Base the draft on what the person has written, above all their latest messages and the request that started the work. It speaks for them, so it carries on with their plan as they see it.",
+  "Keep a draft only if the person could send it unchanged.",
   [
     "For instance:",
     '- They wanted a refactor and a changelog entry, and the refactor is in: "now the changelog"',
@@ -251,7 +251,7 @@ const SUGGESTION_PROMPT = [
     '- Everything is finished and the follow-up is plain: "open a PR"',
     "- The last step errored, or you misread them: leave it empty",
   ].join("\n"),
-  'A guess that names its object, such as "rerun the date parser tests", helps the person; a vague "check it" does not.',
+  'A draft that names its object, such as "rerun the date parser tests", helps the person; a vague "check it" does not.',
   [
     "Leave out:",
     '- approval or thanks ("nice", "perfect")',
@@ -260,7 +260,7 @@ const SUGGESTION_PROMPT = [
     "- topics the person has not brought up",
     "- a second sentence",
   ].join("\n"),
-  "Answer with the guess alone, two to twelve words in the person's own register, with no quotes and no comment. An empty answer is right whenever what they wrote points to no particular next move.",
+  "Answer with the draft alone, two to twelve words in the person's own register, with no quotes and no comment. An empty answer is right whenever what they wrote points to no particular next move.",
 ].join("\n\n")
 
 // Lone words a person does send as a whole message, so the one-word rule keeps them.
