@@ -382,6 +382,8 @@ test("the prompt names a file of a Windows place by its own name", async () => {
   })
   const frame = await setup.until(compact, "the compact prompt")
   expect(frame).toContain("Make this change to b.ts?")
+  // The prompt is drawn once the frame is sent; the window reads it a moment later.
+  await opened(setup)
   expect(setup.peer!.of("diff.open")[0]).toMatchObject({ place: windows })
 })
 
