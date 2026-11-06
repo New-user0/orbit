@@ -10,7 +10,7 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Fiber, Layer, Logger, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Logger, Schema } from "effect"
 import { Document, Info, type Entry } from "@orbit/schema/config"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
@@ -187,6 +187,27 @@ const listed = (folder: string) =>
   Effect.promise(() => fs.readdir(folder).then((names) => names.toSorted(), () => undefined))
 
 const text = (file: string) => Effect.promise(() => fs.readFile(file, "utf8"))
+
+// `count` Markdown files named in order, each with `pad` after its own line.
+const notes = (count: number, pad: string) =>
+  Object.fromEntries(
+    Array.from({ length: count }, (_, index) => [`note-${String(index).padStart(4, "0")}.md`, `NOTE-${index}\n${pad}`]),
+  )
+
+// Waits until a Markdown file shows up in a folder just below `root` (an agent's folder, or the one its copy is made in
+// beside it) and returns how many entries that folder held then.
+const firstCopied = (root: string) =>
+  Effect.promise(async () => {
+    for (let attempt = 0; attempt < 10_000; attempt++) {
+      const folders = await fs.readdir(root).catch(() => [])
+      for (const name of folders) {
+        const inside = await fs.readdir(path.join(root, name)).catch(() => [])
+        if (inside.some((entry) => entry.endsWith(".md"))) return inside.length
+      }
+      await Bun.sleep(1)
+    }
+    return 0
+  })
 
 describe("agent memory snapshots", () => {
   // The reference's copy: every plain file but `snapshot.json`, whatever its extension, as text, then the marker that
@@ -606,6 +627,12 @@ describe("agent memory snapshots", () => {
       expect(yield* text(path.join(l.outside, "memory.md"))).toBe("OUTSIDE-INDEX\n")
       expect(yield* text(path.join(l.outside, "marker.json"))).toBe("OUTSIDE-MARKER\n")
       expect(yield* exists(path.join(l.outside, "missing.txt"))).toBe(false)
+      // The links themselves stay where they are: nothing is moved over them either.
+      for (const name of ["MEMORY.md", ".snapshot-synced.json", "notes.txt"])
+        expect({ name, link: (yield* Effect.promise(() => fs.lstat(path.join(folder, name)))).isSymbolicLink() }).toEqual({
+          name,
+          link: true,
+        })
     }),
   )
 
@@ -745,40 +772,94 @@ describe("agent memory snapshots", () => {
 
   // Class 7, carried from the review of #180: a folder that holds a Markdown file is the person's memory and is never
   // copied into again, so a copy that stops after its first file would leave part of a snapshot for good. The sync is
-  // interrupted, as a fiber, once the first file is in the folder; the copy still finishes with its marker, and the next
-  // load finds it whole.
-  it.live("finishes an agent's copy that is interrupted after its first file, so the next load finds it whole", () =>
+  // interrupted, as a fiber, once the first file has been copied anywhere under the user root; nothing of the snapshot
+  // is left behind, neither in the agent's folder nor beside it, and the next load copies it whole.
+  it.live("leaves nothing of an agent's copy that is interrupted after its first file, and the next load copies it whole", () =>
     Effect.gen(function* () {
       const l = yield* layout
       const folder = path.join(l.user, "reviewer")
       // Enough files that the copy is still running when the first one shows up.
-      const many = Object.fromEntries(
-        Array.from({ length: 500 }, (_, index) => [`note-${String(index).padStart(3, "0")}.md`, `NOTE-${index}\n`]),
-      )
+      const many = notes(500, "")
       yield* snapshotAt(path.join(l.snapshots, "reviewer"), many)
       const expected = [".snapshot-synced.json", ...Object.keys(many)].toSorted()
       const out = yield* Effect.gen(function* () {
         yield* define(reviewer)
         const fiber = yield* Effect.forkChild(sync)
-        const first = yield* Effect.promise(async () => {
-          for (let attempt = 0; attempt < 5_000; attempt++) {
-            const names = await fs.readdir(folder).catch(() => [])
-            if (names.some((name) => name.endsWith(".md"))) return names.length
-            await Bun.sleep(1)
-          }
-          return 0
-        })
+        const first = yield* firstCopied(l.user)
         yield* Fiber.interrupt(fiber)
-        const interrupted = yield* listed(folder)
+        const interrupted = { folder: yield* listed(folder), user: yield* listed(l.user) }
         yield* sync
         return { first, interrupted, next: yield* listed(folder) }
       }).pipe(provide(l))
-      // The interrupt came while the copy was still running.
+      // The interrupt came once a file had been copied and while the copy was still running.
       expect(out.first).toBeGreaterThan(0)
       expect(out.first).toBeLessThan(expected.length)
-      expect(out.interrupted).toEqual(expected)
+      expect(out.interrupted).toEqual({ folder: undefined, user: [] })
       expect(out.next).toEqual(expected)
       expect(JSON.parse(yield* text(path.join(folder, ".snapshot-synced.json")))).toEqual({ syncedFrom: UPDATED })
+    }),
+  )
+
+  // Class 7: stopping a session must not wait for a large snapshot to be copied. The interrupt returns in well under the
+  // time the whole copy takes (the next load's copy measures that) and leaves no part of it.
+  it.live("returns at once from an interrupt during a large copy and leaves no part of it", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const folder = path.join(l.user, "reviewer")
+      yield* snapshotAt(path.join(l.snapshots, "reviewer"), notes(1_000, "x".repeat(16_384)))
+      const out = yield* Effect.gen(function* () {
+        yield* define(reviewer)
+        const fiber = yield* Effect.forkChild(sync)
+        yield* firstCopied(l.user)
+        const stopping = Date.now()
+        yield* Fiber.interrupt(fiber)
+        const stopped = Date.now() - stopping
+        const interrupted = { folder: yield* listed(folder), user: yield* listed(l.user) }
+        const starting = Date.now()
+        yield* sync
+        return { stopped, whole: Date.now() - starting, interrupted, next: (yield* listed(folder))?.length }
+      }).pipe(provide(l))
+      expect(out.interrupted).toEqual({ folder: undefined, user: [] })
+      expect(out.next).toBe(1_001)
+      expect(out.stopped).toBeLessThan(out.whole / 2)
+    }),
+  )
+
+  // Class 7: into a folder that is already there (it holds no Markdown file yet) the files are moved one by one, and
+  // that move is the one step an interrupt waits for. Here the interrupt lands just after the first file is moved in;
+  // every file and the marker still arrive, so the folder never holds part of the snapshot.
+  it.live("finishes moving the files into an existing folder once the first is in, however it is interrupted", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const folder = path.join(l.user, "reviewer")
+      yield* write(path.join(folder, "keep.txt"), "KEEP\n")
+      yield* snapshotAt(path.join(l.snapshots, "reviewer"), files)
+      const moved = yield* Deferred.make<void>()
+      // The real file system, except that each rename is followed by a short pause, so the interrupt below arrives while
+      // the rest are still to be moved.
+      const slowMoves = Layer.effect(
+        FSUtil.Service,
+        Effect.gen(function* () {
+          const real = yield* FSUtil.Service
+          return FSUtil.Service.of({
+            ...real,
+            rename: (from, to) =>
+              real
+                .rename(from, to)
+                .pipe(Effect.andThen(Deferred.succeed(moved, undefined)), Effect.andThen(Effect.sleep("50 millis"))),
+          })
+        }),
+      ).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
+      yield* Effect.gen(function* () {
+        yield* define(reviewer)
+        const fiber = yield* Effect.forkChild(sync)
+        yield* Deferred.await(moved)
+        yield* Fiber.interrupt(fiber)
+      }).pipe(provide(l, { files: slowMoves }))
+      expect(yield* listed(folder)).toEqual([".snapshot-synced.json", ...Object.keys(files), "keep.txt"].toSorted())
+      for (const [name, body] of Object.entries(files)) expect(yield* text(path.join(folder, name))).toBe(body)
+      expect(yield* text(path.join(folder, "keep.txt"))).toBe("KEEP\n")
+      expect(yield* listed(l.user)).toEqual(["reviewer"])
     }),
   )
 })
