@@ -486,7 +486,7 @@ describe("empty results", () => {
       Effect.gen(function* () {
         const run = yield* runStep({ calls: [{ id: "call_empty", name: "Probe" }], execute: returns(content) })
         expect(run.types).toContain("session.tool.success.2")
-        expect(run.settled("call_empty")?.content).toEqual([text("(Probe finished and returned no output)")])
+        expect(run.settled("call_empty")?.content).toEqual([text("(Probe ran and produced nothing)")])
       }),
     )
 

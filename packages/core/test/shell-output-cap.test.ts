@@ -272,8 +272,8 @@ it.live("watches a moved command at 5 GB every five seconds by default", () =>
   Effect.sync(() => {
     expect(Shell.BACKGROUND_LIMIT).toBe(5 * 1024 ** 3)
     expect(Duration.toMillis(Shell.WATCH_INTERVAL)).toBe(5_000)
-    expect(ShellResult.sizeNotice(Shell.BACKGROUND_LIMIT)).toBe("Background command killed: output file exceeded 5 GB.")
-    expect(ShellResult.sizeNotice(256 * 1024)).toBe("Background command killed: output file exceeded 256 KB.")
+    expect(ShellResult.sizeNotice(Shell.BACKGROUND_LIMIT)).toBe("Stopped the background command: its output file grew past 5 GB.")
+    expect(ShellResult.sizeNotice(256 * 1024)).toBe("Stopped the background command: its output file grew past 256 KB.")
   }),
 )
 

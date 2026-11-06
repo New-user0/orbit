@@ -61,10 +61,10 @@ const CONCURRENCY = 8
 const DIFF_TIMEOUT_MS = 5_000
 
 const TEXT =
-  "A file you worked with earlier in this session has since been changed outside the conversation, by the user or by a tool such as a linter. " +
-  "The change is intended, so take it into account from now on and do not undo it unless the user asks you to. " +
-  "The user already knows about it, so do not mention it to them. " +
-  "The lines of the file that changed follow, numbered as the Read tool numbers them."
+  "Since you last worked with the file named below, something outside this conversation has edited it: the person, perhaps, or a formatter or another tool. " +
+  "Its changed lines follow, with the line numbers the Read tool would give them. " +
+  "Treat the edit as deliberate: build on it from here on, and leave it in place unless the person asks you to revert it. " +
+  "There is no need to bring it up with the person, who already knows."
 
 export interface Services {
   readonly ledger: FileLedger.Interface

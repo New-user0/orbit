@@ -344,13 +344,13 @@ describe("ShellTool output cap", () => {
         Effect.gen(function* () {
           const result = yield* settled(registry, call({ command: blankHeadCommand("") }))
           expect(result.persisted).toMatchObject({ session: sessionID, parts: 1, size: blankHeadBytes })
-          expect(text(result.outcome)).not.toContain("returned no output")
+          expect(text(result.outcome)).not.toContain("ran and produced nothing")
           const saved = yield* Effect.promise(() => fs.readFile(result.saved ?? "", "utf8"))
           expect(saved).toEndWith("\ntail-marker")
           expect(saved.length).toBe(blankHeadBytes)
           const shown = lowered(result.outcome, result.root)
           expect(shown).toStartWith("<saved-output>")
-          expect(shown).toContain(`The full output is saved at: ${result.saved}`)
+          expect(shown).toContain(`so all of it went to a file: ${result.saved}`)
           expect(shown).toEndWith("</saved-output>")
         }),
       ),
@@ -902,7 +902,7 @@ it.live(
         )
         yield* executeTool(registry, call({ command: floodCommand, run_in_background: true }))
         const notice = Array.from(yield* Fiber.join(delivered).pipe(Effect.timeout(Duration.seconds(30))))[0] ?? ""
-        expect(notice).toContain("Background command killed: output file exceeded")
+        expect(notice).toContain("Stopped the background command: its output file grew past")
       }),
     ).pipe(
       Effect.provide(

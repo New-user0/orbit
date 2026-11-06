@@ -1929,7 +1929,7 @@ describe("rehydration after a compaction", () => {
       expect(h.restored(found)).toEqual([docs, note])
       // The note leads the block, which holds it as data like the rest.
       const block = h.blockOf(found, note)!
-      expect(block).toStartWith("&lt;system-reminder>\nThis memory was last changed 3 days ago.")
+      expect(block).toStartWith("&lt;system-reminder>\nWritten 3 days ago, this memory")
       expect(block).toEndWith(wholeRead(note, "MARKER-NOTE\n"))
       expect(h.blockOf(found, docs)).toBe(wholeRead(docs, "MARKER-DOCS-INDEX\n"))
     }),
@@ -1977,7 +1977,7 @@ describe("rehydration after a compaction", () => {
       yield* h.job.start({ id: "job_live", type: "test", run: Effect.never })
       expect(yield* h.compact()).toEqual({ status: "completed" })
       const note = sectionsOf((yield* h.row()).text).find((section) => section.harness.includes("live one"))!
-      expect(note.harness).toContain("still running")
+      expect(note.harness).toContain("is still at work")
       expect(note.harness).not.toContain("finished")
       yield* h.job.cancel("job_live")
     }),

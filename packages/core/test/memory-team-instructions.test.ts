@@ -43,14 +43,14 @@ const linkType = process.platform === "win32" ? "junction" : "dir"
 // The headings of today's guide, in the reference's section order, in Orbit's words; the combined guide adds the scope
 // section before the kinds.
 const HEADINGS = [
-  "## Kinds of memory",
-  "## What not to save",
-  "## How to save a memory",
-  "## When to use memory",
-  "## Before acting on a memory",
-  "## Memory, plans and tasks",
+  "## What a memory can be about",
+  "## Leave these out",
+  "## Writing a memory down",
+  "## Reading memory",
+  "## Check before you trust it",
+  "## What memory is not for",
 ]
-const SCOPE = "## Private and team memory"
+const SCOPE = "## Two folders"
 
 const configured = (scope: Scope, memory: Record<string, unknown>) =>
   new Document({
@@ -329,14 +329,14 @@ describe("the guide with team memory on", () => {
         expect(headings(on.text)).toEqual([SCOPE, ...HEADINGS])
         expect(scopeLines(on.text)).toHaveLength(4)
         const notToSave = on.text.slice(
-          on.text.indexOf("## What not to save"),
-          on.text.indexOf("## How to save a memory"),
+          on.text.indexOf("## Leave these out"),
+          on.text.indexOf("## Writing a memory down"),
         )
         expect(notToSave.toLowerCase()).toContain("team memory")
         expect(notToSave.toLowerCase()).toContain("secret")
         const howToSave = on.text.slice(
-          on.text.indexOf("## How to save a memory"),
-          on.text.indexOf("## When to use memory"),
+          on.text.indexOf("## Writing a memory down"),
+          on.text.indexOf("## Reading memory"),
         )
         expect(howToSave).toContain("MEMORY.md")
         expect(howToSave.toLowerCase()).toContain("team")

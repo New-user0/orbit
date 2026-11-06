@@ -182,16 +182,16 @@ lean.effect("a minimal instance's summary request carries neither the hint nor t
 test("compaction prompt asks for the files, the work in progress and the next step", () => {
   const prompt = SessionCompaction.buildPrompt()
 
-  expect(prompt).toContain("3. Files and code")
-  expect(prompt).toContain("8. Work in progress")
-  expect(prompt).toContain("9. Next step")
+  expect(prompt).toContain("3. Code touched")
+  expect(prompt).toContain("8. Where things stand")
+  expect(prompt).toContain("9. What comes next")
 })
 
 test("compaction prompt prohibits tool calls at both ends", () => {
   const prompt = SessionCompaction.buildPrompt()
 
-  expect(prompt.startsWith("IMPORTANT: Reply with text only. No tool calls.")).toBe(true)
-  expect(prompt).toEndWith("Any tool call is turned down and the handoff is lost.")
+  expect(prompt.startsWith("This reply must be plain text, and it must not call any tool.")).toBe(true)
+  expect(prompt).toEndWith("A tool call is refused, and then no handoff is saved.")
 })
 
 it.effect("auto compaction estimates current content against the threshold below the effective window", () =>
@@ -585,7 +585,7 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     yield* hooks.register("session", "compaction", (event) =>
       Effect.sync(() => {
         hooked = event.messages.length
-        expect(JSON.stringify(event.messages)).not.toContain("IMPORTANT: Reply with text only")
+        expect(JSON.stringify(event.messages)).not.toContain("This reply must be plain text")
       }),
     )
     const messages = [
@@ -631,7 +631,7 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     expect(JSON.stringify(requests[0]?.messages)).toContain("agent named below")
     expect(JSON.stringify(requests[0]?.messages)).toContain("open-file.ts")
     expect(requests[0]?.messages).toHaveLength(hooked + 1)
-    expect(JSON.stringify(requests[0]?.messages.at(-1))).toContain("IMPORTANT: Reply with text only")
+    expect(JSON.stringify(requests[0]?.messages.at(-1))).toContain("This reply must be plain text")
     expect(JSON.stringify(requests[0]?.messages)).not.toContain("display-only-output")
     // The compaction message carries its own request usage so clients can show what compacting cost.
     expect(yield* store.context(sessionID)).toMatchObject([
@@ -995,18 +995,18 @@ it.effect("a summary request for an unknown window is sent whole, with nothing s
 // retry. The section headings, the error texts and the placeholder are the spec's (ref-specs/context-memory-2.md).
 
 const SECTIONS = [
-  "Requests and intent",
-  "Technical context",
-  "Files and code",
-  "Problems and fixes",
-  "Problems worked through",
-  "User messages",
-  "Open tasks",
-  "Work in progress",
-  "Next step",
+  "Goal",
+  "Technical ground",
+  "Code touched",
+  "Errors and corrections",
+  "Reasoning so far",
+  "The person's messages",
+  "Still to do",
+  "Where things stand",
+  "What comes next",
 ]
 const NO_SUMMARY = "Compaction produced no summary"
-const TOO_LONG = "The conversation is too long to compact. Go back a few messages and try again."
+const TOO_LONG = "This conversation no longer fits in a compaction request. Rewind a few messages, then compact again."
 
 const usage = {
   inputTokens: 15,

@@ -3536,8 +3536,8 @@ describe("ShellTool timeouts", () => {
         Effect.sync(() => {
           expect(configured.input.properties.timeout.maximum).toBe(300_000)
           expect(configured.input.properties.timeout.description).toContain("300000")
-          expect(configured.tool?.description).toContain("up to 300000 ms (5 minutes)")
-          expect(configured.tool?.description).toContain("waits 90000 ms (1.5 minutes)")
+          expect(configured.tool?.description).toContain("no timeout may be longer than 300000 ms (5 minutes)")
+          expect(configured.tool?.description).toContain("command gets 90000 ms (1.5 minutes)")
         }),
       ),
     ),
@@ -3548,8 +3548,8 @@ describe("ShellTool timeouts", () => {
       Effect.tap((defaults) =>
         Effect.sync(() => {
           expect(defaults.input.properties.timeout.maximum).toBe(600_000)
-          expect(defaults.tool?.description).toContain("up to 600000 ms (10 minutes)")
-          expect(defaults.tool?.description).toContain("waits 120000 ms (2 minutes)")
+          expect(defaults.tool?.description).toContain("no timeout may be longer than 600000 ms (10 minutes)")
+          expect(defaults.tool?.description).toContain("command gets 120000 ms (2 minutes)")
           expect(shared.properties.timeout).not.toHaveProperty("maximum")
         }),
       ),

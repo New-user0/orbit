@@ -42,12 +42,12 @@ const INDEX = "core/memory-index"
 
 // The headings of the guide, in the reference's section order, in Orbit's words.
 const HEADINGS = [
-  "## Kinds of memory",
-  "## What not to save",
-  "## How to save a memory",
-  "## When to use memory",
-  "## Before acting on a memory",
-  "## Memory, plans and tasks",
+  "## What a memory can be about",
+  "## Leave these out",
+  "## Writing a memory down",
+  "## Reading memory",
+  "## Check before you trust it",
+  "## What memory is not for",
 ]
 
 const configured = (scope: Scope, memory: Record<string, unknown>) =>

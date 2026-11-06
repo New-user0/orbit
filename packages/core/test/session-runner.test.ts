@@ -1972,7 +1972,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.resume
     const prompt = userTexts(s.requests.at(-1)!).at(-1) ?? ""
     expect(prompt).toContain("Additional instructions for this handoff:\nfocus on tests")
-    expect(prompt.indexOf("Additional instructions for this handoff:")).toBeLessThan(prompt.lastIndexOf("Last word:"))
+    expect(prompt.indexOf("Additional instructions for this handoff:")).toBeLessThan(prompt.lastIndexOf("Once more:"))
     expect(yield* s.inbox).toEqual([])
 
     // Control: a bare /compact adds no block.
@@ -2898,7 +2898,7 @@ describe("SessionRunnerLLM", () => {
       expect((yield* s.messages).some((message) => message.type === "compaction")).toBe(false)
       yield* active.finish
 
-      expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
+      expect(userTexts(s.requests[1]).at(-1)).toContain("This reply must be plain text")
       expect(s.requests).toHaveLength(3)
       expect(userTexts(s.requests[1])).not.toContain("STEER_A")
       expect(userTexts(s.requests[1])).not.toContain("STEER_B")
@@ -2937,7 +2937,7 @@ describe("SessionRunnerLLM", () => {
     yield* Fiber.join(run)
 
     expect(s.requests).toHaveLength(3)
-    expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("This reply must be plain text")
     expect(s.requests[1].messages.some((message) => message.role === "tool")).toBe(true)
     expect(userTexts(s.requests[2]).slice(-2)).toEqual(["STEER_A", "STEER_B"])
     expect(yield* s.inbox).toEqual([])
@@ -2960,7 +2960,7 @@ describe("SessionRunnerLLM", () => {
     yield* Deferred.succeed(release, undefined)
     yield* Fiber.join(run)
     expect(s.requests).toHaveLength(3)
-    expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("This reply must be plain text")
     expect(userTexts(s.requests[2]).slice(-2)).toEqual(["STEER_A", "STEER_B"])
     expect(yield* s.inbox).toEqual([])
   })
@@ -2984,7 +2984,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(s.requests).toHaveLength(outcome === "cancelled" ? 2 : 4)
       if (outcome === "failed") {
-        expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
+        expect(userTexts(s.requests[1]).at(-1)).toContain("This reply must be plain text")
         expect((yield* s.messages).find((message) => message.id === compact.id)).toMatchObject({
           status: "failed",
           error: { type: "provider.error", message: "summary unavailable" },
@@ -3009,7 +3009,7 @@ describe("SessionRunnerLLM", () => {
     const summary = yield* s.llm.gate
     const compact = yield* s.session.compact({ sessionID })
     yield* summary.started
-    expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("This reply must be plain text")
     expect((yield* s.inbox).map((item) => item.id)).toEqual([first.id, second.id])
     yield* s.session.interrupt(sessionID)
     yield* s.session.wait(sessionID)
@@ -3049,7 +3049,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.resume
     expect(s.requests).toHaveLength(3)
     expect(userTexts(s.requests[0])).toEqual(["STEER_A"])
-    expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("This reply must be plain text")
     expect(userTexts(s.requests[2]).at(-1)).toBe("STEER_B")
     expect(
       (yield* recordedEventTypes(sessionID)).filter(
@@ -3651,7 +3651,7 @@ describe("SessionRunnerLLM", () => {
     expect(size(6)).toBeLessThan(size(4))
     expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({
       status: "failed",
-      error: { type: "compaction.failed", message: expect.stringContaining("Go back a few messages") },
+      error: { type: "compaction.failed", message: expect.stringContaining("Rewind a few messages") },
     })
     yield* s.llm.push(TestLLM.text("Continued", "continued"))
     yield* s.runPrompt("Continue")
@@ -3822,7 +3822,7 @@ describe("SessionRunnerLLM", () => {
     expect(userTexts(s.requests[0])).toContain("Recent exact request ".repeat(180))
     expect(userTexts(s.requests[1])).toHaveLength(1)
     expect(userTexts(s.requests[1])[0]).toContain("## Objective\n- Preserve the task")
-    expect(userTexts(s.requests[1])[0]).toContain("Keep working without checking in with the user")
+    expect(userTexts(s.requests[1])[0]).toContain("Pick the interrupted task back up")
 
     const context = yield* store.context(sessionID)
     expect(context.map((message) => message.type)).toEqual(["compaction", "assistant"])
@@ -11464,7 +11464,7 @@ describe("SessionRunnerLLM saved tool results", () => {
     if (result?.result.type !== "text") return yield* Effect.die(new Error("Expected a text tool result"))
     const lines = String(result.result.value).split("\n")
     expect(lines[0]).toBe("<saved-output>")
-    const saved = /^Output too large to include \(58\.6KB\)\. The full output is saved at: (.+)$/.exec(
+    const saved = /^This result is 58\.6KB, too much to send here, so all of it went to a file: (.+)$/.exec(
       lines[1] ?? "",
     )?.[1]
     if (saved === undefined) return yield* Effect.die(new Error(`Expected the saved path, got ${lines[1]}`))
@@ -11474,7 +11474,7 @@ describe("SessionRunnerLLM saved tool results", () => {
     expect(yield* Effect.promise(() => fs.readFile(saved, "utf8"))).toBe("r".repeat(60_000))
     expect(lines.slice(2)).toEqual([
       "",
-      "Preview of the first 2,000 characters:",
+      "Its opening 2,000 characters:",
       "r".repeat(2_000),
       "...",
       "</saved-output>",
@@ -11525,8 +11525,8 @@ describe("SessionRunnerLLM saved tool results", () => {
     yield* s.resume
 
     expect(toolResults(s.requests[1])).toEqual([
-      { id: "call_silent", result: { type: "text", value: "(silent finished and returned no output)" } },
-      { id: "call_nulled", result: { type: "text", value: "(nulled finished and returned no output)" } },
+      { id: "call_silent", result: { type: "text", value: "(silent ran and produced nothing)" } },
+      { id: "call_nulled", result: { type: "text", value: "(nulled ran and produced nothing)" } },
     ])
   })
 
@@ -11557,7 +11557,7 @@ describe("SessionRunnerLLM saved tool results", () => {
   // The wrapper the next request carries in place of a saved result, read back into its parts.
   const unwrap = (value: unknown) => {
     const lines = String(value).split("\n")
-    const header = /^Output too large to include \(([0-9.]+KB)\)\. The full output is saved at: (.+)$/.exec(lines[1] ?? "")
+    const header = /^This result is ([0-9.]+KB), too much to send here, so all of it went to a file: (.+)$/.exec(lines[1] ?? "")
     return { opening: lines[0], size: header?.[1], file: header?.[2], rest: lines.slice(2) }
   }
   const dataOf = (s: Scenario) =>
@@ -11629,7 +11629,7 @@ describe("SessionRunnerLLM saved tool results", () => {
     if (wrapped.file === undefined) return yield* Effect.die(new Error(`Expected the saved path, got ${result.result.value}`))
     expect(path.dirname(wrapped.file)).toBe(path.join(data, "tool-output", sessionID))
     expect(yield* Effect.promise(() => fs.readFile(wrapped.file!, "utf8"))).toBe(content)
-    expect(wrapped.rest.slice(0, 3)).toEqual(["", "Preview of the first 2,000 characters:", "Found 100 matches"])
+    expect(wrapped.rest.slice(0, 3)).toEqual(["", "Its opening 2,000 characters:", "Found 100 matches"])
     expect(wrapped.rest.at(-1)).toBe("</saved-output>")
     expect(String(result.result.value)).not.toContain("needle 099")
   })
@@ -11683,7 +11683,7 @@ describe("SessionRunnerLLM saved tool results", () => {
     expect(path.dirname(wrapped.file)).toBe(path.join(data, "tool-output", sessionID))
     expect(path.basename(wrapped.file)).toMatch(/^msg_[A-Za-z0-9]{1,64}-call_mcp-[0-9a-f]{8}\.txt$/)
     expect(yield* Effect.promise(() => fs.readFile(wrapped.file!, "utf8"))).toBe("x".repeat(60_000))
-    expect(wrapped.rest).toEqual(["", "Preview of the first 2,000 characters:", "x".repeat(2_000), "...", "</saved-output>"])
+    expect(wrapped.rest).toEqual(["", "Its opening 2,000 characters:", "x".repeat(2_000), "...", "</saved-output>"])
   })
 })
 
@@ -11770,7 +11770,7 @@ describe("SessionRunnerLLM message budget", () => {
       [41_000, 42_000, 43_000, 44_000].map((count, index) => ({ type: "text", value: letters[index]!.repeat(count) })),
     )
     const lines = String(results[4]!.result.value).split("\n")
-    const saved = /^Output too large to include \(47\.9KB\)\. The full output is saved at: (.+)$/.exec(
+    const saved = /^This result is 47\.9KB, too much to send here, so all of it went to a file: (.+)$/.exec(
       lines[1] ?? "",
     )?.[1]
     if (saved === undefined) return yield* Effect.die(new Error(`Expected the saved path, got ${lines[1]}`))
@@ -11780,7 +11780,7 @@ describe("SessionRunnerLLM message budget", () => {
     expect(yield* Effect.promise(() => fs.readFile(saved, "utf8"))).toBe("e".repeat(49_000))
     expect(lines.slice(2)).toEqual([
       "",
-      "Preview of the first 2,000 characters:",
+      "Its opening 2,000 characters:",
       "e".repeat(2_000),
       "...",
       "</saved-output>",
@@ -11918,7 +11918,7 @@ describe("SessionRunnerLLM message budget", () => {
 
     expect(wrapped(s.requests[1])).toEqual(["call_1"])
     const value = String(toolResults(s.requests[1])[0]?.result.value)
-    expect(value.split("\n").slice(3, 5)).toEqual(["Preview of the first 2,000 characters:", "&lt;saved-output>"])
+    expect(value.split("\n").slice(3, 5)).toEqual(["Its opening 2,000 characters:", "&lt;saved-output>"])
   })
 
   budgetScenario(
@@ -12025,7 +12025,7 @@ describe("SessionRunnerLLM message budget", () => {
     const lines = String(toolResults(request)[0]?.result.value).split("\n")
     expect(lines.slice(0, 2)).toEqual([
       "<saved-output>",
-      `Output too large to include (29.3KB). The full output is saved at: ${file}`,
+      `This result is 29.3KB, too much to send here, so all of it went to a file: ${file}`,
     ])
   })
 

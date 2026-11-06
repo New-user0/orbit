@@ -63,7 +63,7 @@ export const SKILLS_TOKENS = 25_000
 const FILE_TEXT =
   "Before the conversation was summarized, the Read tool was called on the file named below. What follows is what Read returns for it now."
 const SKILLS_TEXT =
-  "The skills below were used earlier in this session and still apply. Keep following their instructions."
+  "Earlier in this session you invoked the skills listed here. Their guidance has not expired, so go on applying it."
 
 export interface Fixed {
   /** The agent notes, then the plan, each a rendered section. */
@@ -408,7 +408,7 @@ const note = (recovery: Extract<Job.Recovery, { kind: "subagent" }>, status: Job
   const named = `session ${ReminderText.oneLine(recovery.childSessionID)} (agent ${ReminderText.oneLine(recovery.agent)}, task "${ReminderText.oneLine(recovery.description)}")`
   if (status === "running")
     return ReminderText.render({
-      text: `The background subagent in ${named} is still running. Do NOT start another subagent for the same task. A message will report when it ends, and the Agent tool with sessionID ${ReminderText.oneLine(recovery.childSessionID)} reaches it in the meantime.`,
+      text: `The background subagent in ${named} is still at work. Wait for it, and do not launch another subagent for the same task: a message arrives when it ends, and until then the Agent tool with sessionID ${ReminderText.oneLine(recovery.childSessionID)} reaches it.`,
     })
   if (status === "cancelled") return ReminderText.render({ text: `The background subagent in ${named} was stopped.` })
   const outcome = status === "error" ? "failed" : "finished"

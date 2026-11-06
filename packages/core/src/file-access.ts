@@ -552,7 +552,7 @@ const layer = Layer.effect(
       )
       if (!inTeam) return
       return yield* new ToolFailure({
-        message: `Nothing was written: the content looks like it holds a secret (${found.map((match) => match.label).join(", ")}). Team memory is shared with everyone who works in this repository, so a secret must never go into it. Take the secret out of the content and try again.`,
+        message: `The write was refused because the content appears to contain a secret (${found.map((match) => match.label).join(", ")}). Anyone with access to this repository can read team memory, so a credential has no place in it. Remove the secret and write again.`,
       })
     })
 
