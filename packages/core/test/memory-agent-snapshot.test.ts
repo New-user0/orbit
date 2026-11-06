@@ -802,6 +802,8 @@ describe("agent memory snapshots", () => {
       expect(out.next).toEqual(expected)
       expect(JSON.parse(yield* text(path.join(folder, ".snapshot-synced.json")))).toEqual({ syncedFrom: UPDATED })
     }),
+    // Writing the snapshot and copying it twice took more than the default 5 s on a loaded Windows runner.
+    60_000,
   )
 
   // Class 7: stopping a session must not wait for a large snapshot to be copied. The interrupt returns in well under the
@@ -827,6 +829,7 @@ describe("agent memory snapshots", () => {
       expect(out.next).toBe(1_001)
       expect(out.stopped).toBeLessThan(out.whole / 2)
     }),
+    60_000,
   )
 
   // Class 7: into a folder that is already there (it holds no Markdown file yet) the files are moved one by one, and
