@@ -343,6 +343,10 @@ describe("the guide with team memory on", () => {
         // With two folders, the first write goes to the one its scope picks; with one folder there is nothing to pick.
         expect(howToSave).toContain("in the folder that its scope selects")
         expect(off.text).not.toContain("in the folder that its scope selects")
+        // Each folder's index is cut at the same line, and reading memory covers both folders.
+        expect(howToSave).toContain("nothing from line 201 onward in either is ever seen")
+        expect(on.text).toContain("Two signals send you to memory, and both folders count")
+        expect(off.text).toContain("nothing from line 201 onward is ever seen, so an entry placed late is an entry lost")
         // Off, the guide is today's.
         expect(headings(off.text)).toEqual(HEADINGS)
         expect(scopeLines(off.text)).toEqual([])

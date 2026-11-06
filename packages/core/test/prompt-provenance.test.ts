@@ -277,8 +277,10 @@ describe("retired wording in the source texts", () => {
     ["session/recap.ts", /stepped away|is now back|Skip finished steps/],
     [
       "memory/instructions.ts",
-      /forget something|The fix is in|behave as though|believe what you observe|without making (it|them) first|looking to see whether|shared with the team through|surprised them/,
+      /forget something|The fix is in|behave as though|believe what you observe|without making (it|them) first|looking to see whether|shared with the team through|surprised them|Group memories by subject|These stay out even when|looking at memory is not optional|never need to say it again|Keep each file's name|anything after line 200|Open your memories|see why a request was made|Write any date as a calendar date|the rule first, then|"Reason:" line and an|keep (it|them) brief/,
     ],
+    ["memory/store.ts", /present it as fact|Compare it with the code|describes things as they stood/],
+    ["session/context-usage.ts", /Custom agents/],
     ["file-access.ts", /Remove the secret|appears to contain a secret/],
     ["session/rehydration.ts", /you invoked the skills|is still at work|do not launch another/],
     [
@@ -287,7 +289,7 @@ describe("retired wording in the source texts", () => {
     ],
     [
       "session/runner/prompt/compaction.txt",
-      /Now write the handoff|Such a section could read|so that there is no doubt|explicit requests and your own actions|costly to find again/,
+      /Now write the handoff|Such a section could read|so that there is no doubt|explicit requests and your own actions|costly to find again|Precise account of the current work/,
     ],
     ["session/runner/to-llm-message.ts", /Pick the interrupted task back up/],
     ["shell/result.ts", /Stopped the background command|Background command killed/],

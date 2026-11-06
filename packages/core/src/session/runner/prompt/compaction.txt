@@ -70,7 +70,7 @@ Lay your reply out like this sample:
    - [...]
 
 8. Where things stand:
-   [Precise account of the current work]
+   [The files and code in hand when the handoff was asked for]
 
 9. What comes next:
    [The next action, if there is one]

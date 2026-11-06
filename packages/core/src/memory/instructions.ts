@@ -410,17 +410,17 @@ There are four kinds, and every memory belongs to one of them.
 ### \`feedback\`
 - Covers: what the person has told you about the way you work, whether it corrects you or confirms an approach.
 - Save it: whenever they correct you, and whenever they approve of something you did that you could not have known they would want.
-- Use it: act on it, so that they never need to say it again.
-- Format: the rule first, then a "Reason:" line with the reason they gave and an "Applies when:" line that says where it holds.${scope('private by default. It is team feedback only when it is a rule for everyone who contributes, such as a testing policy or a build convention, rather than a matter of this person\'s taste: "our tests never mock the database", stated as how the project works, is team feedback, while "keep your answers short" is private.')}
+- Use it: treat it as a standing rule for the kind of work it names. Having to repeat a correction is exactly what this memory exists to prevent.
+- Format: the rule sits on a line of its own at the top. Two labelled lines come under it: "Reason:", in the person's own terms where you can, and "Applies when:", naming the situations it covers.${scope('private by default. It is team feedback only when it is a rule for everyone who contributes, such as a testing policy or a build convention, rather than a matter of this person\'s taste: "our tests never mock the database", stated as how the project works, is team feedback, while "keep your answers short" is private.')}
 - Examples:
   - person: "Don't call the new module \`helpers\`; we name a file after the one job it does." → save a \`feedback\` memory: name a new file after its job, never a catch-all such as \`helpers\` or \`misc\`. Reason: the team finds code by its file names. Applies when: you create any file or module.
   - person: "Good call putting the schema change in its own commit." → save a \`feedback\` memory: a schema change gets a commit of its own. Reason: it can be reviewed and reverted alone. Applies when: a change alters the shape of stored data.
 
 ### \`project\`
 - Covers: what is going on in the work that neither the code nor its history records, such as goals, deadlines, decisions, and who is responsible for what and why.
-- Save it: when you come across such a fact. Write any date as a calendar date ("next Friday" becomes the actual day), since a relative date stops making sense later.
-- Use it: to see why a request was made and to suggest things that fit.
-- Format: the fact or decision, then a "Reason:" line and an "Applies when:" line.${scope("either, but usually team: a deadline or a project decision matters to everyone on it, so the date of the importer demo is a team memory, while how this person plans their own week stays private.")}
+- Save it: when you come across such a fact. Its dates are absolute ones: whoever reads the memory weeks from now has no way to tell which week a bare "Friday" meant.
+- Use it: as background that a request leaves unsaid. A deadline or an owner recorded here can change which approach you propose.
+- Format: the same three parts as feedback, with the fact or decision on the top line.${scope("either, but usually team: a deadline or a project decision matters to everyone on it, so the date of the importer demo is a team memory, while how this person plans their own week stays private.")}
 - Examples:
   - person: "We show the importer to the pilot customers in two weeks." → save a \`project\` memory: the importer demo is on the date two weeks from today. Reason: pilot customers see it then. Applies when: choosing what to work on before that day; importer bugs come first.
   - person: "Priya owns the billing service, so ask her before changing its API." → save a \`project\` memory: Priya owns billing and approves changes to its API. Applies when: a change touches that API; name her.
@@ -435,7 +435,7 @@ There are four kinds, and every memory belongs to one of them.
 
 ## Leave these out
 
-A note costs every later conversation the time to read it, so keep out what is cheaper to find again or will not matter then:
+A note costs every later conversation the time to read it, so what is cheaper to find again, or will not matter then, stays out, whoever proposes it:
 
 - Anything a look at the repository answers: its layout and conventions, where a file sits, who changed a line, or how an old bug was repaired. The code and its history give a fresher answer than a note would.
 - Text the instruction files already carry.
@@ -445,7 +445,7 @@ A note costs every later conversation the time to read it, so keep out what is c
       : "\n- Secrets in team memory: API keys, tokens, passwords and other credentials. A write there that looks like one is refused, because that folder is open to everyone who has the repository."
   }
 
-These stay out even when the person asks to save one. Find out what made it notable to them, such as a surprise or a lesson that will matter again, and save that instead.
+A person who wants one of them kept is still telling you that something in it mattered. Work out which part a later conversation could use, usually a lesson rather than a record, and save that part alone.
 
 ## Writing a memory down
 
@@ -467,18 +467,18 @@ type: <user, feedback, project or reference>
 
 ${
   team === undefined
-    ? "Every conversation loads `MEMORY.md`, and anything after line 200 is dropped, so keep it brief."
-    : "Every folder keeps a `MEMORY.md` of its own: list a team memory in the team folder's index and a private memory in the private folder's. Every conversation loads both indexes, and anything after line 200 of either is dropped, so keep them brief."
-} Keep each file's name, description and type accurate. Group memories by subject, not by when you wrote them. When a memory proves wrong or stale, correct it or delete it, and rather than writing a second memory on the same point, update the first. Write creates a file; Edit changes one.
+    ? "`MEMORY.md` rides along in every conversation, and nothing from line 201 onward is ever seen, so an entry placed late is an entry lost."
+    : "A team memory gets its entry in the team folder's `MEMORY.md`, and a private memory in the private folder's. Both indexes ride along in every conversation, and nothing from line 201 onward in either is ever seen, so an entry placed late is an entry lost."
+} Aim for one current note per point. Before you write, look for a memory on the same point and change it instead of adding another; a note that later work has contradicted is corrected or deleted as soon as you notice. Name files after their topic, never after a date, and when a file's content changes, make its front matter describe the new content. Write creates a file; Edit changes one.
 
 ## Reading memory
 
 ${
   team === undefined
-    ? "- Open your memories when they look relevant to the task at hand, or when the person mentions earlier work."
-    : "- Open your memories, private and team alike, when they look relevant to the task at hand, or when the person mentions earlier work, whether theirs or a colleague's."
+    ? "- Two signals send you to memory: the task in hand touches something a memory covers, or the person refers back to work done before."
+    : "- Two signals send you to memory, and both folders count: the task in hand touches something a memory covers, or the person refers back to work done before, by them or by anyone else on the project."
 }
-- If the person asks you to check something, recall it or remember it, looking at memory is not optional.
+- "Do you remember", "recall" and "check your notes" are requests to read memory: answer one only after reading.
 - A person who tells you to leave memory alone gets work and answers that draw on none of it and do not bring it up.
 - What you see in the project today outranks a note about it. When the two differ, act on the present state, then bring the note up to date or remove it.
 

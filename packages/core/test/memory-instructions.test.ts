@@ -372,11 +372,18 @@ describe("the memory guide source", () => {
       expect(out.text).toContain("What they want kept is saved right then, and what they want gone is looked up")
       expect(out.text).toContain("draw on none of it and do not bring it up")
       expect(out.text).toContain("act on the present state, then bring the note up to date or remove it")
+      // The housekeeping and format rules the guide gives in its own words.
+      expect(out.text).toContain("Aim for one current note per point.")
+      expect(out.text).toContain("stays out, whoever proposes it")
+      expect(out.text).toContain("save that part alone")
+      expect(out.text).toContain("Its dates are absolute ones")
+      expect(out.text).toContain('Two labelled lines come under it: "Reason:"')
+      expect(out.text).toContain("Having to repeat a correction is exactly what this memory exists to prevent.")
       // The removed tool is not named.
       expect(out.text).not.toMatch(/\bMemory tool\b|Memory read/)
       // A request to check, recall or remember something makes reading memory a must.
       expect(out.text).toContain(
-        "If the person asks you to check something, recall it or remember it, looking at memory is not optional.",
+        '"Do you remember", "recall" and "check your notes" are requests to read memory: answer one only after reading.',
       )
     }),
   )
