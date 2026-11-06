@@ -4008,11 +4008,13 @@ describe("ShellTool timeouts", () => {
           Effect.gen(function* () {
             const seen = yield* collect
             const shell = yield* Shell.Service
+            // The command writes the start, pauses, then writes the rest, as a loaded runner wrote the earlier one-line
+            // form; `start` returns once the first part is there.
             const shellID = yield* start(
               registry,
               isWindows
-                ? "[Console]::Out.Write('HEAD' + 'MARKER' + ('x' * 3000) + \"`nContinue? [y/N] \"); Start-Sleep -Seconds 600"
-                : "printf HEAD; printf MARKER; head -c 3000 /dev/zero | tr '\\0' x; printf '\\nContinue? [y/N] '; sleep 600",
+                ? "[Console]::Out.Write('HEAD' + 'MARKER'); [Console]::Out.Flush(); Start-Sleep -Seconds 1; [Console]::Out.Write(('x' * 3000) + \"`nContinue? [y/N] \"); Start-Sleep -Seconds 600"
+                : "printf HEAD; printf MARKER; sleep 1; head -c 3000 /dev/zero | tr '\\0' x; printf '\\nContinue? [y/N] '; sleep 600",
               "call-long",
             )
             yield* advance(50)
