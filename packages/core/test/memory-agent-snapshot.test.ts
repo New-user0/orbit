@@ -195,18 +195,18 @@ const notes = (count: number, pad: string) =>
   )
 
 // Waits until a Markdown file shows up in a folder just below `root` (an agent's folder, or the one its copy is made in
-// beside it) and returns how many entries that folder held then.
+// beside it) and returns that folder's name and how many entries it held then.
 const firstCopied = (root: string) =>
   Effect.promise(async () => {
     for (let attempt = 0; attempt < 10_000; attempt++) {
       const folders = await fs.readdir(root).catch(() => [])
       for (const name of folders) {
         const inside = await fs.readdir(path.join(root, name)).catch(() => [])
-        if (inside.some((entry) => entry.endsWith(".md"))) return inside.length
+        if (inside.some((entry) => entry.endsWith(".md"))) return { name, count: inside.length }
       }
       await Bun.sleep(1)
     }
-    return 0
+    return { name: "", count: 0 }
   })
 
 describe("agent memory snapshots", () => {
@@ -571,6 +571,8 @@ describe("agent memory snapshots", () => {
       expect(yield* text(path.join(l.user, "reviewer", "ok.md"))).toBe("OK\n")
       expect(logs.filter((line) => line.includes("not a plain name"))).toHaveLength(refused.length)
       expect(logs.filter((line) => line.includes("link.md") || line.includes("dir-link") || line.includes("sub"))).toEqual([])
+      // Only the two files that were copied are counted.
+      expect(logs.filter((line) => line.includes("files copied"))).toEqual(["agent memory snapshot of reviewer: 2 files copied"])
     }),
   )
 
@@ -791,9 +793,11 @@ describe("agent memory snapshots", () => {
         yield* sync
         return { first, interrupted, next: yield* listed(folder) }
       }).pipe(provide(l))
-      // The interrupt came once a file had been copied and while the copy was still running.
-      expect(out.first).toBeGreaterThan(0)
-      expect(out.first).toBeLessThan(expected.length)
+      // The interrupt came once a file had been copied, beside the agent's folder under a hidden name, and while the copy
+      // was still running.
+      expect(out.first.name).toStartWith(".reviewer.snapshot-")
+      expect(out.first.count).toBeGreaterThan(0)
+      expect(out.first.count).toBeLessThan(expected.length)
       expect(out.interrupted).toEqual({ folder: undefined, user: [] })
       expect(out.next).toEqual(expected)
       expect(JSON.parse(yield* text(path.join(folder, ".snapshot-synced.json")))).toEqual({ syncedFrom: UPDATED })
