@@ -293,7 +293,7 @@ it.live("an unknown session is a typed not-found on either route; a known one is
 
       expect((await label(server, known, call)).body).toEqual({ data: { label: null, reason: "not_found" } })
       expect((await suggestion(server, known)).body).toEqual({
-        data: { suggestion: null, reason: "early_conversation" },
+        data: { suggestion: null, reason: "too_early" },
       })
       for (const answered of [await label(server, missing, call), await suggestion(server, missing)])
         expect(answered).toEqual({ status: 404, body: expect.objectContaining({ _tag: "SessionNotFoundError" }) })
@@ -492,7 +492,7 @@ const suppressions: ReadonlyArray<{
 }> = [
   {
     name: "one assistant message",
-    reason: "early_conversation",
+    reason: "too_early",
     setup: async ({ server, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -502,7 +502,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "the last response failed",
-    reason: "last_response_error",
+    reason: "reply_failed",
     setup: async ({ server, llm, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -516,7 +516,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "the last response wrote 10,001 uncached tokens",
-    reason: "cache_cold",
+    reason: "cache_expired",
     setup: async ({ server, llm, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -540,7 +540,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "a permission request is waiting",
-    reason: "pending_permission",
+    reason: "awaiting_approval",
     setup: async ({ server, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -555,7 +555,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "a form is waiting",
-    reason: "elicitation_active",
+    reason: "awaiting_form",
     setup: async ({ server, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -598,7 +598,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "a subagent's permission request is waiting",
-    reason: "pending_permission",
+    reason: "awaiting_approval",
     setup: async ({ server, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -614,7 +614,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "a subagent's form is waiting",
-    reason: "elicitation_active",
+    reason: "awaiting_form",
     setup: async ({ server, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -684,31 +684,31 @@ for (const row of suppressions)
 const words = (count: number) => Array.from({ length: count }, (_, index) => `step${index}`).join(" ")
 const filters: ReadonlyArray<readonly [string, string | undefined]> = [
   ["   ", "empty"],
-  ["done", "done"],
-  ["nothing to suggest right now", "meta_text"],
-  ["I would stay silent here", "meta_text"],
-  ["...silence...", "meta_text"],
-  ["Nothing found.", "meta_text"],
-  ["No suggestion this time", "meta_text"],
-  ["[no suggestion]", "meta_wrapped"],
-  ["(waiting for the user)", "meta_wrapped"],
-  ["API Error: 500 upstream", "error_message"],
-  ["Prompt is too long for this", "error_message"],
-  ["Suggestion: run the tests", "prefixed_label"],
-  ["refactor", "too_few_words"],
+  ["done", "just_done"],
+  ["nothing to suggest right now", "self_reference"],
+  ["I would stay silent here", "self_reference"],
+  ["...silence...", "self_reference"],
+  ["Nothing found.", "self_reference"],
+  ["No suggestion this time", "self_reference"],
+  ["[no suggestion]", "bracketed"],
+  ["(waiting for the user)", "bracketed"],
+  ["API Error: 500 upstream", "error_text"],
+  ["Prompt is too long for this", "error_text"],
+  ["Suggestion: run the tests", "labelled"],
+  ["refactor", "one_word"],
   ["yes", undefined],
   ["/commit", undefined],
-  [words(13), "too_many_words"],
+  [words(13), "over_twelve_words"],
   [words(12), undefined],
-  [`${"b".repeat(20)} ${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)}`, "too_long"],
+  [`${"b".repeat(20)} ${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)}`, "too_many_characters"],
   [`${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)}`, undefined],
-  ["Run the tests. Then commit", "multiple_sentences"],
-  ["run the **tests** now", "has_formatting"],
-  ["run the\ntests now", "has_formatting"],
-  ["that works for me", "evaluative"],
-  ["thanks, run them", "evaluative"],
-  ["Let me run the tests", "assistant_voice"],
-  ["I'll commit this", "assistant_voice"],
+  ["Run the tests. Then commit", "several_sentences"],
+  ["run the **tests** now", "markup"],
+  ["run the\ntests now", "markup"],
+  ["that works for me", "verdict"],
+  ["thanks, run them", "verdict"],
+  ["Let me run the tests", "assistant_phrasing"],
+  ["I'll commit this", "assistant_phrasing"],
   ["run the tests", undefined],
 ]
 
@@ -739,10 +739,10 @@ it.live(
 // it read. A provider decides which kinds it reports, so each row imports a copy of a finished session whose last
 // response reports one kind; the cache-read row is the control.
 const spends: ReadonlyArray<readonly [string, Message["tokens"], string | undefined]> = [
-  ["input", { input: 10_001, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, "cache_cold"],
-  ["output", { input: 0, output: 10_001, reasoning: 0, cache: { read: 0, write: 0 } }, "cache_cold"],
-  ["reasoning", { input: 0, output: 0, reasoning: 10_001, cache: { read: 0, write: 0 } }, "cache_cold"],
-  ["cache write", { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 10_001 } }, "cache_cold"],
+  ["input", { input: 10_001, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, "cache_expired"],
+  ["output", { input: 0, output: 10_001, reasoning: 0, cache: { read: 0, write: 0 } }, "cache_expired"],
+  ["reasoning", { input: 0, output: 0, reasoning: 10_001, cache: { read: 0, write: 0 } }, "cache_expired"],
+  ["cache write", { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 10_001 } }, "cache_expired"],
   ["cache read", { input: 0, output: 0, reasoning: 0, cache: { read: 50_000, write: 0 } }, undefined],
 ]
 

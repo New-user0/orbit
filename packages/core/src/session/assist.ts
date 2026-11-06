@@ -119,19 +119,19 @@ export const layer = Layer.effect(
       const [last, previous] = yield* store
         .messages({ sessionID: session.id, type: "assistant", order: "desc", limit: 2 })
         .pipe(Effect.orDie)
-      if (!previous || last?.type !== "assistant") return "early_conversation" as const
-      if (last.error) return "last_response_error" as const
+      if (!previous || last?.type !== "assistant") return "too_early" as const
+      if (last.error) return "reply_failed" as const
       const tokens = last.tokens
       if (tokens && tokens.input + tokens.cache.write + tokens.output + tokens.reasoning > COLD_CACHE_TOKENS)
-        return "cache_cold" as const
+        return "cache_expired" as const
       const members = new Set<string>(yield* family(session.id))
       const asks = yield* Effect.gen(function* () {
         const permission = yield* Permission.Service
         const form = yield* Form.Service
         return { permissions: yield* permission.list(), forms: yield* form.list() }
       }).pipe(instances.provide(session))
-      if (asks.permissions.some((request) => members.has(request.sessionID))) return "pending_permission" as const
-      if (asks.forms.some((form) => members.has(form.sessionID))) return "elicitation_active" as const
+      if (asks.permissions.some((request) => members.has(request.sessionID))) return "awaiting_approval" as const
+      if (asks.forms.some((form) => members.has(form.sessionID))) return "awaiting_form" as const
       if (session.agent === PlanMode.agent) return "plan_mode" as const
       if ((yield* execution.isActive(session.id)) || (yield* inbox.list(session.id)).length > 0) return "busy" as const
       return undefined
@@ -226,131 +226,132 @@ const labelPrompt = (calls: ReadonlyArray<Settled>, intent: string | undefined) 
   ].join("\n")
 
 const LABEL_SYSTEM = [
-  "Write one short label that says what a batch of tool calls achieved. A coding assistant shows it as a single row that is cut off near 30 characters, so make it read like the subject line of a commit, not like a sentence.",
-  "Keep a past-tense verb and the noun that tells this batch apart. Drop articles, linking words and long paths before anything else.",
+  "Name the outcome of the tool calls below in a few words. The label fills a single line of a coding assistant's interface, and whatever runs past about 30 characters is hidden, so write it the way a terse changelog entry reads rather than as a full sentence.",
+  "Lead with a verb in the past tense and keep the word that sets this batch apart from others. When room runs short, cut small words and long file paths first.",
   [
     "Examples:",
-    "- Searched lib/billing for retries",
-    "- Fixed null check in TokenStore",
-    "- Added /status route",
-    "- Read vite.config.ts",
-    "- Ran the failing sync tests",
+    "- Listed the migrations folder",
+    "- Patched retry delay in queue.ts",
+    "- Renamed userId to accountId",
+    "- Checked CI logs for timeouts",
+    "- Installed zod",
   ].join("\n"),
 ].join("\n\n")
 
 const SUGGESTION_PROMPT = [
-  "[Suggestion mode: write what the person would most naturally type to Orbit next.]",
-  "Read the person's own recent messages and what they first asked for before anything else. The task is to predict the words they would type, not to propose what you think is best.",
-  'Check: if they saw the suggestion, would they think "that is what I was about to write"?',
+  "[Next-message guess: give the words the person is most likely to send Orbit now.]",
+  "Work from what the person has written, their latest messages and the request that started the work, before anything else. You are guessing their own words, not recommending the step you think best.",
+  'Hold each candidate to one test: on reading it, would the person think "yes, I was about to type exactly that"?',
   [
-    "Examples:",
-    '- They asked for a fix and for tests, and the fix is done: "run the tests"',
-    '- New code was just written: "try it out"',
-    "- You offered choices: the one they would most likely pick",
-    '- You asked whether to go on: "yes"',
-    '- The work is done and the next step is plain: "commit this" or "push it"',
-    "- Something just failed, or you misread them: write nothing",
+    "For instance:",
+    '- They wanted a refactor and a changelog entry, and the refactor is in: "now the changelog"',
+    '- A script was just written: "run it on the sample data"',
+    "- You laid out options: the one they seem to lean towards",
+    '- You asked for the go-ahead: "go ahead"',
+    '- Everything is finished and the follow-up is plain: "open a PR"',
+    "- The last step errored, or you misread them: leave it empty",
   ].join("\n"),
-  'Be specific rather than general: "run the parser tests" is better than "test it".',
+  'Prefer the concrete: "rerun the date parser tests" beats "check it".',
   [
-    "Never write:",
-    '- praise or a verdict ("looks good", "thanks")',
-    "- a question",
-    '- your own voice ("Let me", "I\'ll")',
-    "- an idea they have not raised",
-    "- more than one sentence",
+    "Leave out:",
+    '- approval or thanks ("nice", "perfect")',
+    "- anything phrased as a question",
+    '- wording only the assistant would use ("I will", "Let me")',
+    "- topics the person has not brought up",
+    "- a second sentence",
   ].join("\n"),
-  "When the next step is not clear from what they wrote, write nothing.",
-  "Format: 2 to 12 words in the person's own style, or nothing at all. Reply with the suggestion alone, without quotes or explanation.",
+  "If their next move cannot be read from what they wrote, leave it empty.",
+  "Length: between two and twelve words, in the person's own register, or empty. Answer with the guess on its own, with no quotes and no comment.",
 ].join("\n\n")
 
-const AFFIRMATIONS = new Set([
-  "yes",
-  "yeah",
-  "yep",
-  "yea",
-  "yup",
-  "sure",
-  "ok",
-  "okay",
-  "push",
+// Lone words a person does send as a whole message, so the one-word rule keeps them.
+const SHORT_REPLIES = new Set([
   "commit",
+  "push",
   "deploy",
-  "stop",
   "continue",
   "check",
+  "stop",
   "exit",
   "quit",
+  "yes",
   "no",
+  "ok",
+  "okay",
+  "sure",
+  "yeah",
+  "yea",
+  "yep",
+  "yup",
 ])
 // Text about the suggestion rather than a suggestion, matched against the lower-cased text.
-const META_TEXT = [
-  /^nothing found\.?$/,
-  /^nothing to suggest/,
-  /^no suggestion/,
-  /\bsilence is\b|\bstay(s|ing)? silent\b/,
+const SELF_REFERENCE = [
   /^\W*silence\W*$/,
+  /\bsilence is\b|\bstay(s|ing)? silent\b/,
+  /^no suggestion/,
+  /^nothing to suggest/,
+  /^nothing found\.?$/,
 ]
 const ERROR_OPENINGS = [
-  "api error:",
-  "prompt is too long",
-  "request timed out",
   "invalid api key",
+  "request timed out",
+  "prompt is too long",
   "image was too large",
+  "api error:",
 ]
-const EVALUATIVE = [
-  "thanks",
-  "thank you",
+const VERDICTS = [
+  "awesome",
+  "excellent",
+  "great",
+  "nice",
+  "perfect",
   "looks good",
   "sounds good",
+  "makes sense",
   "that works",
   "that worked",
   "that's all",
-  "nice",
-  "great",
-  "perfect",
-  "makes sense",
-  "awesome",
-  "excellent",
+  "thank you",
+  "thanks",
 ]
 const ASSISTANT_OPENINGS = [
-  "let me",
-  "i'll",
-  "i've",
-  "i'm",
+  "certainly",
+  "of course",
+  "sure,",
+  "here are",
+  "here is",
+  "here's",
   "i can",
-  "i would",
   "i think",
   "i notice",
-  "here's",
-  "here is",
-  "here are",
+  "i would",
+  "i'll",
+  "i'm",
+  "i've",
+  "let me",
   "that's",
   "this is",
   "this will",
   "you can",
-  "you should",
   "you could",
-  "sure,",
-  "of course",
-  "certainly",
+  "you should",
 ]
 
 /** The first rule, in the reference's order, that drops a suggestion's trimmed text; undefined keeps it. */
 function filter(text: string): SessionAssist.SuggestionFilter | undefined {
   const lower = text.toLowerCase()
   const words = text.split(/\s+/).filter(Boolean)
-  if (lower === "done") return "done"
-  if (META_TEXT.some((pattern) => pattern.test(lower))) return "meta_text"
-  if (/^\(.*\)$|^\[.*\]$/s.test(text)) return "meta_wrapped"
-  if (ERROR_OPENINGS.some((opening) => lower.startsWith(opening))) return "error_message"
-  if (/^\w+:\s/.test(text)) return "prefixed_label"
-  if (words.length < 2 && !text.startsWith("/") && !AFFIRMATIONS.has(lower)) return "too_few_words"
-  if (words.length > 12) return "too_many_words"
-  if (text.length >= 100) return "too_long"
-  if (/[.!?]\s+[A-Z]/.test(text)) return "multiple_sentences"
-  if (/[\n*]/.test(text)) return "has_formatting"
-  if (EVALUATIVE.some((phrase) => lower.includes(phrase))) return "evaluative"
-  if (ASSISTANT_OPENINGS.some((opening) => lower.startsWith(opening))) return "assistant_voice"
+  if (lower === "done") return "just_done"
+  if (SELF_REFERENCE.some((pattern) => pattern.test(lower))) return "self_reference"
+  if (/^\(.*\)$|^\[.*\]$/s.test(text)) return "bracketed"
+  if (ERROR_OPENINGS.some((opening) => lower.startsWith(opening))) return "error_text"
+  if (/^\w+:\s/.test(text)) return "labelled"
+  if (words.length < 2 && !text.startsWith("/") && !SHORT_REPLIES.has(lower)) return "one_word"
+  if (words.length > 12) return "over_twelve_words"
+  if (text.length >= 100) return "too_many_characters"
+  if (/[.!?]\s+[A-Z]/.test(text)) return "several_sentences"
+  if (/[\n*]/.test(text)) return "markup"
+  if (VERDICTS.some((phrase) => lower.includes(phrase))) return "verdict"
+  if (ASSISTANT_OPENINGS.some((opening) => lower.startsWith(opening))) return "assistant_phrasing"
   return undefined
 }

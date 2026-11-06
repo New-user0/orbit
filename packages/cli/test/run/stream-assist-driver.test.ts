@@ -112,7 +112,7 @@ test("a result the person interrupted asks for no suggestion; a finished one doe
 
   await period(h, "two", "succeeded")
   await waitFor(() => h.state.suggestions.length === 1)
-  h.state.suggestions[0].answer({ suggestion: null, reason: "early_conversation" })
+  h.state.suggestions[0].answer({ suggestion: null, reason: "too_early" })
   await finish(h)
 
   expect(suggestions(h)).toEqual([])
