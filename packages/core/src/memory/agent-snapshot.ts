@@ -110,7 +110,8 @@ const layer = Layer.effect(
         const marker = JSON.stringify({ syncedFrom: updatedAt })
         const unwritten = (cause: Cause.Cause<unknown>) =>
           Effect.logWarning(`agent memory snapshot of ${id}: ${SYNCED} not written`, { cause })
-        // A folder that is not there yet gets the whole copy, marker included, in one rename.
+        // A folder that is not there yet gets the whole copy, marker included, in one rename. An interrupt waits for
+        // it, or the removal below would race the rename still running over the same folder.
         if (!present)
           return yield* fs
             .writeFileString(path.join(staging, SYNCED), marker)
@@ -118,6 +119,7 @@ const layer = Layer.effect(
               Effect.catchCause(unwritten),
               Effect.andThen(fs.rename(staging, target.real)),
               Effect.as(names.length),
+              Effect.uninterruptible,
             )
         return yield* Effect.forEach(names, (name) =>
           unlinked(

@@ -906,4 +906,50 @@ describe("agent memory snapshots", () => {
       expect(yield* listed(l.user)).toEqual(["reviewer"])
     }),
   )
+
+  // Class 7, from the third review of #187: a folder that is not there yet gets the copy in one rename of the hidden
+  // folder, and an interrupt waits for that rename too. Here the rename signals and then runs the real rename 100 ms
+  // later from a callback, as an operating system rename still in flight would; the interrupt lands in between. Without
+  // the wait, the cleanup removes the hidden folder under the rename and the agent ends up with nothing.
+  it.live("finishes moving a new folder into place when it is interrupted during the move", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const folder = path.join(l.user, "reviewer")
+      yield* snapshotAt(path.join(l.snapshots, "reviewer"), files)
+      const moving = yield* Deferred.make<void>()
+      const lateMoves = Layer.effect(
+        FSUtil.Service,
+        Effect.gen(function* () {
+          const real = yield* FSUtil.Service
+          return FSUtil.Service.of({
+            ...real,
+            rename: (from, to) =>
+              Deferred.succeed(moving, undefined).pipe(
+                Effect.andThen(
+                  Effect.callback<void>((resume) => {
+                    setTimeout(
+                      () =>
+                        fs.rename(from, to).then(
+                          () => resume(Effect.void),
+                          (error) => resume(Effect.die(error)),
+                        ),
+                      100,
+                    )
+                  }),
+                ),
+              ),
+          })
+        }),
+      ).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
+      yield* Effect.gen(function* () {
+        yield* define(reviewer)
+        const fiber = yield* Effect.forkChild(sync)
+        yield* Deferred.await(moving)
+        yield* Fiber.interrupt(fiber)
+      }).pipe(provide(l, { files: lateMoves }))
+      expect(yield* listed(folder)).toEqual([".snapshot-synced.json", ...Object.keys(files)].toSorted())
+      for (const [name, body] of Object.entries(files)) expect(yield* text(path.join(folder, name))).toBe(body)
+      expect(yield* listed(l.user)).toEqual(["reviewer"])
+    }),
+  )
 })
