@@ -1047,8 +1047,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   carve-out never covers this root (`current` leaves it out). `snapshot.json` is read at its real path inside the
   snapshot folder (`MemoryStore.locate`) and decoded with `Schema.decodeUnknownOption`; missing logs nothing, anything
   else that fails logs one line and takes no snapshot (class 7). Only a listing entry of type `file` is copied, its name
-  must pass `ConfigAgent.isName` (class 5, one line), it is read at its real path inside the snapshot folder, and no
-  target name that is a link (one that leads nowhere included) is written through (class 4); the target is the one
+  must pass `ConfigAgent.isName` (class 5, one line), it is read at its real path inside the snapshot folder and
+  written into a new hidden folder beside the target (`makeTempDirectory`), and no target name that is a link (one
+  that leads nowhere included) is written through or moved over (class 4). The copy stays interruptible: an interrupt
+  removes that folder, so nothing of the snapshot reaches the target, and only the move into place waits, one rename of
+  the whole folder when the target is not there (a file at its name is left alone and costs the agent one line) or one
+  per file and the marker when it is (class 7); the target is the one
   `{ folder, real }` of `MemoryAgent.folder` that the block, the make and the carve-out use (class 3). A failing file or
   agent costs only itself with one line (class 7); `updatedAt` reaches only the marker, as JSON, and no log message
   (class 9). There is no size or count cap, as in the reference (a cap is a follow-up). Proof:
@@ -1058,7 +1062,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   place of the user folder, `.orbit` or the root linked out, onto the project, `.orbit`, `.git` or `src`, dangling or
   in a loop, agent snapshot folders linked out or dangling, links, folders and names that are not plain in the source,
   links at target names and a user folder linked out, a share with the recorded file system, a file that cannot be
-  written, a worktree's Location, once per agent list and again after a change), `test/memory-agent.test.ts` (the
+  written, a worktree's Location, once per agent list and again after a change, an interrupt after the first copied
+  file, an interrupt during a copy of 1,000 files that returns in under half the whole copy's time, and an interrupt
+  after the first file moved into a folder that is there), `test/memory-agent.test.ts` (the
   snapshot folder after trust and for plain ids only), `test/memory-agent-instructions.test.ts` (the snapshot's index
   in the first block from the one resolved folder, with the carve-out, through a linked Location),
   `test/memory-listing.test.ts` (`/memory` listing and make before any session) and
