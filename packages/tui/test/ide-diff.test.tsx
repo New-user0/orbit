@@ -387,6 +387,25 @@ test("while Always allow is focused the prompt says what it grants", async () =>
   }
 })
 
+// As in the full dialog, Always allow is offered only for a request that has a pattern to save.
+test("the short prompt offers Always allow only for a request that can be saved", async () => {
+  await using setup = await mount({ request: { save: [] } })
+  const frame = await setup.until(compact, "the compact prompt")
+  expect(frame).toContain("Allow once")
+  expect(frame).toContain("Reject")
+  expect(frame).not.toContain("Always allow")
+})
+
+// A window whose hello names no diff feature is never sent a diff frame: not a close, not a close-all.
+test("a bridge without diffs is sent no diff frame", async () => {
+  await using setup = await mount({ features: null })
+  await setup.until(full, "the full dialog")
+  setup.editor().diff.close("per_diff1")
+  setup.editor().diff.closeAll()
+  await Bun.sleep(200)
+  expect(setup.peer!.frames.filter((frame) => String(frame.type).startsWith("diff."))).toEqual([])
+})
+
 test("the save hint shows only in the editor's own terminal", async () => {
   for (const program of ["vscode", undefined]) {
     if (program === undefined) delete process.env.TERM_PROGRAM
@@ -463,6 +482,13 @@ test("answering in the terminal sends the reply and closes the tab", async () =>
     expect(setup.replies).toEqual([row.reply])
     await setup.until(() => setup.peer!.of("diff.close").length === 1, "the close")
     expect(setup.peer!.of("diff.close")).toEqual([{ type: "diff.close", id: "per_diff1" }])
+    // The review closed with its tab: a save the editor sends after it names nothing open, and is not replied.
+    setup.peer!.answer({ id: "per_diff1", answer: "saved", content: "LATE-TEXT\n" })
+    await setup.until(
+      () => setup.warnings().some((line) => line.message.includes("a review that is not open")),
+      "the late answer dropped",
+    )
+    expect(setup.replies).toEqual([row.reply])
   }
   // A terminal answer the server refuses still closes the tab: the question is asked here again, in the full dialog.
   await using setup = await mount({
@@ -605,6 +631,7 @@ test("an odd answer, a dismissed tab, a lost bridge or a bridge without diffs ke
       lines: 0,
     },
     { name: "no-feature", options: { features: null }, dialog: "full", lines: 0 },
+    { name: "other-feature", options: { features: ["selection"] }, dialog: "full", lines: 0 },
     { name: "no-folders", options: { folders: "fail" }, dialog: "full", lines: 1 },
   ]
   for (const row of rows) {
@@ -654,6 +681,7 @@ test("no diff opens unless the request is a revisable one-file Edit or Write, th
     { name: "ipynb", options: { request: file({ place: `${sessionFolder}/N.IPYNB` }) }, opens: false },
     { name: "no-place", options: { request: file({ place: undefined }) }, opens: false },
     { name: "relative-place", options: { request: file({ place: "src/a.ts" }) }, opens: false },
+    { name: "deleted-status", options: { request: file({ status: "deleted" }) }, opens: false },
     { name: "terminal-setting", options: { tool: "terminal" }, opens: false },
     { name: "untrusted", options: { trusted: false }, opens: false },
     { name: "not-linked", options: { linked: false }, opens: false },
@@ -695,7 +723,8 @@ test("a refused reply shows the server's reason and brings back the dialog", asy
 })
 
 test("the link warning comes from the request: through a link, and outside the session's folder", async () => {
-  const linked = (link: { place: string; outside: boolean } | undefined, tool?: "terminal") => ({
+  // `outside` may be a string, for a link without its shape.
+  const linked = (link: { place: string; outside: boolean | string } | undefined, tool?: "terminal") => ({
     tool,
     request: { metadata: { paths: [place], files: [{ ...entry, ...(link && { link }) }] } },
   })
@@ -727,6 +756,12 @@ test("the link warning comes from the request: through a link, and outside the s
     // The tool's input names a link too, and the request does not: nothing is said.
     { name: "decoy, compact", options: linked(undefined) },
     { name: "decoy, full", options: linked(undefined, "terminal") },
+    // A link without its shape says nothing either (class 7).
+    { name: "outside not a boolean, compact", options: linked({ place: "/elsewhere/secrets/a.ts", outside: "true" }) },
+    {
+      name: "outside not a boolean, full",
+      options: linked({ place: "/elsewhere/secrets/a.ts", outside: "true" }, "terminal"),
+    },
   ]
   for (const row of rows) {
     await using setup = await mount(row.options)

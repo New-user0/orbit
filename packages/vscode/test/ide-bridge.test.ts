@@ -572,6 +572,23 @@ test("takes a diff frame up to the frame cap after hello, and still closes a lar
   expect((await early.closed).code).toBe(1009)
 })
 
+// Nothing a client sends before its hello counts: a diff to open is not opened and not answered, and once the client says
+// hello the next one opens.
+test("a diff to open that a client sends before its hello opens nothing and answers nothing", async () => {
+  const { bridge, editor, logs } = await reviewing()
+  const client = await connect(bridge, (await lock(bridge)).authToken, null)
+  ask(client, { id: "per_early" })
+  client.socket.send(JSON.stringify(features))
+  await until(() => client.frames.length >= 2, "the hello and the selection")
+  ask(client, { id: "per_late" })
+  await until(() => editor.shown.length === 1, "the tab")
+  await Bun.sleep(50)
+  expect(editor.shown).toHaveLength(1)
+  expect(editor.shown[0]!.right.path).toContain("/per_late/")
+  expect(answers(client)).toEqual([])
+  expect(logs.filter((line) => line.includes("diff"))).toEqual([])
+})
+
 describe("opens a diff the terminal UI asks for from the request's place and patch, with an Orbit title", () => {
   const short = () => {
     const result = Bun.spawnSync(
@@ -770,6 +787,16 @@ describe("a share or device spelling in an open diff is refused before the disk 
       await fs.rm(link, { force: true, recursive: true })
     }
   })
+
+  // `C:x`, with no separator after the drive, is read from that drive's current folder: refused by its spelling alone.
+  test.skipIf(process.platform !== "win32")("drive-relative", async () => {
+    const { client, editor, seen } = await reviewing()
+    ask(client, { place: `${world.inside.slice(0, 2)}${world.inside.slice(3)}` })
+    await until(() => answers(client).length === 1, "the answer")
+    expect(answers(client)[0]).toMatchObject({ answer: "unavailable", reason: "outside" })
+    expect(seen.log).toEqual([])
+    expect(editor.shown).toEqual([])
+  })
 })
 
 test("the file a bridge review reads is the real path that was checked", async () => {
@@ -798,6 +825,8 @@ describe("a frame with a malformed id, place, patch or roots answers unavailable
     { name: "empty-place", fields: () => ({ place: "" }), reason: "invalid" },
     { name: "patch", fields: () => ({ patch: null }), reason: "invalid" },
     { name: "notebook", fields: () => ({ place: path.join(world.project, "n.ipynb") }), reason: "invalid" },
+    { name: "notebook-capitals", fields: () => ({ place: path.join(world.project, "N.IPYNB") }), reason: "invalid" },
+    { name: "root-not-a-string", fields: () => ({ roots: [7] }), reason: "invalid" },
   ]
   for (const row of rows)
     test(row.name, async () => {
@@ -1075,6 +1104,44 @@ function held() {
   }
   return { reader, release: gate.resolve }
 }
+
+// A question is busy from the moment its open is taken, not only once its tab is shown: a second open while the file is
+// still being read answers busy, and the first still opens.
+test("a second open of a question whose file is still being read answers busy", async () => {
+  const disk = held()
+  const editor = tabs()
+  const review = new Review(editor.host, disk.reader)
+  editor.holder.review = review
+  const { bridge } = await start(await folder(), { folders: [world.root], diff: review.bridge })
+  cleanup.push(() => review.dispose())
+  await Bun.sleep(60)
+  const client = await connect(bridge, (await lock(bridge)).authToken, features)
+  await until(() => client.frames.length >= 2, "the hello and the selection")
+  ask(client)
+  await Bun.sleep(50)
+  ask(client)
+  await until(() => answers(client).length === 1, "the answer")
+  expect(answers(client)).toEqual([{ type: "diff.answer", id: "per_a1", answer: "unavailable", reason: "busy" }])
+  disk.release()
+  await until(() => editor.shown.length === 1, "the tab")
+  await Bun.sleep(50)
+  expect(editor.attempts).toHaveLength(1)
+  expect(answers(client)).toHaveLength(1)
+})
+
+// A terminal UI closes its reviews one question at a time: its close of one leaves its others open.
+test("a terminal UI's close of one question leaves its other reviews open", async () => {
+  const { client, editor } = await reviewing()
+  ask(client, { id: "per_one" })
+  ask(client, { id: "per_two" })
+  await until(() => editor.shown.length === 2, "both tabs")
+  const one = editor.shown.find((tab) => tab.right.path.includes("/per_one/"))!
+  client.socket.send(JSON.stringify({ type: "diff.close", id: "per_one" }))
+  await until(() => editor.closed.length === 1, "the close")
+  await Bun.sleep(50)
+  expect(editor.closed).toEqual([one.title])
+  expect(answers(client)).toEqual([])
+})
 
 // The chat hearing a question answered closes only the chat's tabs of it, so a terminal UI's review of the same question
 // that is still being read opens once the read ends: that terminal UI closes it when its own prompt goes.
