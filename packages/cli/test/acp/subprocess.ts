@@ -143,22 +143,18 @@ export async function createAcpFixture(
   }
 }
 
-export function initialize(acp: AcpProcess) {
+export function initialize(
+  acp: AcpProcess,
+  params: unknown = {
+    protocolVersion: 1,
+    clientCapabilities: { _meta: { "terminal-auth": true } },
+    clientInfo: { name: "orbit-local-acp", version: "0.1.0" },
+  },
+) {
   // The first answer is the process's readiness signal. Its deadline starts when the start gate admits this process, so a
-  // runner that is busy starting other children delays the start without failing it.
-  return startSlot(() =>
-    acp
-      .request<InitializeResponse>(
-        "initialize",
-        {
-          protocolVersion: 1,
-          clientCapabilities: { _meta: { "terminal-auth": true } },
-          clientInfo: { name: "orbit-local-acp", version: "0.1.0" },
-        },
-        60_000,
-      )
-      .then(expectOk),
-  )
+  // runner that is busy starting other children delays the start without failing it. Every first request goes through
+  // here: one sent with `request`'s 20 s default timed out while a loaded Windows runner was still starting the process.
+  return startSlot(() => acp.request<InitializeResponse>("initialize", params, 60_000).then(expectOk))
 }
 
 export function newSession(acp: AcpProcess, cwd: string) {

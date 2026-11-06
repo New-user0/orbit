@@ -1,7 +1,7 @@
 export * as MemoryAgentSnapshot from "./agent-snapshot.js"
 
 import path from "path"
-import { Context, Effect, Layer, Option, Schema, Semaphore } from "effect"
+import { Cause, Context, Effect, Layer, Option, Schema, Semaphore } from "effect"
 import { ConfigAgent } from "@orbit/schema/config/agent"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -78,27 +78,73 @@ const layer = Layer.effect(
         return yield* Effect.logWarning(`agent memory snapshot of ${id} not read: its ${META} is not valid`)
       const target = yield* memoryAgent.folder(id, "user")
       if (target === undefined) return
-      const held = (yield* fs.isDir(target.real)) ? yield* fs.readDirectoryEntries(target.real) : []
+      const present = yield* fs.isDir(target.real)
+      const held = present ? yield* fs.readDirectoryEntries(target.real) : []
       // A Markdown file in the folder means the person's memory, which is kept as it is.
       if (held.some((entry) => entry.type === "file" && entry.name.endsWith(".md"))) return
-      yield* fs.makeDirectory(target.real, { recursive: true })
-      const copied = yield* Effect.forEach(
-        entries.filter((entry) => entry.type === "file" && entry.name !== META),
-        (entry) =>
-          copyFile(fs, source.real, target.real, entry.name).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning(`agent memory snapshot of ${id}: ${entry.name} not copied`, { cause }).pipe(
-                Effect.as(false),
+      // On Windows a folder renamed onto a file replaces it, so whatever else holds the folder's name stays as it is.
+      if (!present && (yield* fs.exists(target.real))) return yield* Effect.fail("its folder's name is taken")
+      // Once the first Markdown file is in, the folder counts as the person's and is never copied into again. So the
+      // files are copied into a new folder beside it, where a sync that is stopped leaves nothing but that folder, which
+      // is removed; only the move into place, a rename for each file or one for the whole folder, waits (class 7).
+      const parent = path.dirname(target.real)
+      yield* fs.makeDirectory(parent, { recursive: true })
+      const staging = yield* fs.makeTempDirectory({
+        directory: parent,
+        prefix: `.${path.basename(target.real)}.snapshot-`,
+      })
+      const copied = yield* Effect.gen(function* () {
+        const staged = yield* Effect.forEach(
+          entries.filter((entry) => entry.type === "file" && entry.name !== META),
+          (entry) =>
+            copyFile(fs, source.real, staging, entry.name).pipe(
+              Effect.map((done) => (done ? entry.name : undefined)),
+              Effect.catchCause((cause) =>
+                Effect.logWarning(`agent memory snapshot of ${id}: ${entry.name} not copied`, { cause }).pipe(
+                  Effect.as(undefined),
+                ),
               ),
             ),
+        )
+        const names = staged.filter((name) => name !== undefined)
+        const marker = JSON.stringify({ syncedFrom: updatedAt })
+        const unwritten = (cause: Cause.Cause<unknown>) =>
+          Effect.logWarning(`agent memory snapshot of ${id}: ${SYNCED} not written`, { cause })
+        // A folder that is not there yet gets the whole copy, marker included, in one rename. An interrupt waits for
+        // it, or the removal below would race the rename still running over the same folder.
+        if (!present)
+          return yield* fs
+            .writeFileString(path.join(staging, SYNCED), marker)
+            .pipe(
+              Effect.catchCause(unwritten),
+              Effect.andThen(fs.rename(staging, target.real)),
+              Effect.as(names.length),
+              Effect.uninterruptible,
+            )
+        return yield* Effect.forEach(names, (name) =>
+          unlinked(
+            fs,
+            path.join(target.real, name),
+            fs.rename(path.join(staging, name), path.join(target.real, name)),
+          ).pipe(
+            Effect.as(true),
+            Effect.catchCause((cause) =>
+              Effect.logWarning(`agent memory snapshot of ${id}: ${name} not copied`, { cause }).pipe(Effect.as(false)),
+            ),
           ),
-      )
-      yield* write(fs, path.join(target.real, SYNCED), JSON.stringify({ syncedFrom: updatedAt })).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning(`agent memory snapshot of ${id}: ${SYNCED} not written`, { cause }),
-        ),
-      )
-      yield* Effect.logInfo(`agent memory snapshot of ${id}: ${copied.filter(Boolean).length} files copied`)
+        ).pipe(
+          Effect.tap(() =>
+            unlinked(
+              fs,
+              path.join(target.real, SYNCED),
+              fs.writeFileString(path.join(target.real, SYNCED), marker),
+            ).pipe(Effect.catchCause(unwritten)),
+          ),
+          Effect.map((moved) => moved.filter(Boolean).length),
+          Effect.uninterruptible,
+        )
+      }).pipe(Effect.ensuring(fs.remove(staging, { recursive: true, force: true }).pipe(Effect.ignore)))
+      yield* Effect.logInfo(`agent memory snapshot of ${id}: ${copied} files copied`)
     })
 
     const run = Effect.gen(function* () {
@@ -151,8 +197,8 @@ const readMeta = (fs: FSUtil.Interface, folder: string) =>
     return Option.getOrUndefined(decodeMeta(text))?.updatedAt
   })
 
-// Copies one file of the snapshot: a plain name (class 5), read at its real path inside the snapshot folder and never
-// written through a link at its name in the target (class 4). True when it was copied.
+// Copies one file of the snapshot into the new folder: a plain name (class 5), read at its real path inside the snapshot
+// folder (class 4). True when it was copied.
 const copyFile = (fs: FSUtil.Interface, from: string, to: string, name: string) =>
   Effect.gen(function* () {
     if (!ConfigAgent.isName(name)) {
@@ -161,16 +207,16 @@ const copyFile = (fs: FSUtil.Interface, from: string, to: string, name: string) 
     }
     const real = yield* MemoryStore.locate(fs, from, path.join(from, name))
     if (real === undefined) return yield* Effect.fail("it is not a file in the snapshot folder")
-    const text = yield* fs.readFileString(real)
-    yield* write(fs, path.join(to, name), text)
+    yield* fs.writeFileString(path.join(to, name), yield* fs.readFileString(real))
     return true
   })
 
-// Writes `file` unless a link of any kind is at its name, one that leads nowhere included (class 4).
-const write = (fs: FSUtil.Interface, file: string, text: string) =>
+// Puts `file` in place unless a link of any kind is at its name, one that leads nowhere included, so nothing is written
+// through it (class 4).
+const unlinked = <E>(fs: FSUtil.Interface, file: string, put: Effect.Effect<void, E>) =>
   Effect.gen(function* () {
     if (yield* Effect.isSuccess(fs.readLink(file))) return yield* Effect.fail("a link is at its name")
-    yield* fs.writeFileString(file, text)
+    yield* put
   })
 
 export const node = makeLocationNode({

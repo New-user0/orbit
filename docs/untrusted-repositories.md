@@ -261,9 +261,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     trusted control that runs the driver or reaches the host), and "Snapshot reaches no share, and starts no git, in an
     untrusted folder that holds a .git entry naming one" (four spellings of the entry; four negations, each beside a
     file named `[s]ub`, and also `*` and `s*` outside Windows; a `.git` file below a top-level folder `git~2`, and on
-    Linux below `.GIT`, `git~1` and `.git.`; on Windows a watcher polls the DNS cache for the whole run, and a plain open
-    of a second unique name is the control that it sees such lookups; the trusted controls capture and restore, and on
-    Windows git then looks the share up). Also `test/snapshot-trust.test.ts` (each key of `test/fixture/git-keys.ts`:
+    Linux below `.GIT`, `git~1` and `.git.`; on Windows every host is one label, which Windows also looks up by LLMNR
+    and mDNS, and a watcher joins both multicast groups, which needs no elevation, and polls the DNS cache, which recent
+    builds show only to an administrator, for the whole run; a plain open of a second unique name is the control that it
+    sees such lookups; the trusted controls capture and restore, and on Windows git then looks the share up). Also `test/snapshot-trust.test.ts` (each key of `test/fixture/git-keys.ts`:
     no snapshot, no git, no program) and `test/snapshot-trust-transition.test.ts` (a grant partway through a session).
     Mutations: letting the capture go on while the folder is not trusted fails every untrusted capture row; taking the
     trust check out of the comparison and the restore fails their row; dropping the log line fails the rows that count
@@ -283,7 +284,7 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
     capture records no large `sub` beside it, a capture that leaves it out because it is large keeps a recorded `sub`,
     and a session started in a folder of that name records and restores only that folder's files. On Windows, where
     `[s]ub` stands for no file inside `sub`, a session started in `[s]ub` does not walk a folder `sub` whose `.git` names
-    a share (DNS cache). Outside Windows a file named `:memo`, `:(top)memo`, `:(icase)memo` or `:!memo`, with no `memo`
+    a share (the same lookup watch). Outside Windows a file named `:memo`, `:(top)memo`, `:(icase)memo` or `:!memo`, with no `memo`
     beside it, is captured, listed and restored, and so are the first two when the folder ignores `memo`; on every
     platform `check-ignore` answers for each of those four spellings as a name. Mutations: the flag removed from the
     restore's `checkout`, from the comparison's `diff`, from the `add` or from the `rm` fails the matching rows, and
@@ -1046,8 +1047,12 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   carve-out never covers this root (`current` leaves it out). `snapshot.json` is read at its real path inside the
   snapshot folder (`MemoryStore.locate`) and decoded with `Schema.decodeUnknownOption`; missing logs nothing, anything
   else that fails logs one line and takes no snapshot (class 7). Only a listing entry of type `file` is copied, its name
-  must pass `ConfigAgent.isName` (class 5, one line), it is read at its real path inside the snapshot folder, and no
-  target name that is a link (one that leads nowhere included) is written through (class 4); the target is the one
+  must pass `ConfigAgent.isName` (class 5, one line), it is read at its real path inside the snapshot folder and
+  written into a new hidden folder beside the target (`makeTempDirectory`), and no target name that is a link (one
+  that leads nowhere included) is written through or moved over (class 4). The copy stays interruptible: an interrupt
+  removes that folder, so nothing of the snapshot reaches the target, and only the move into place waits, one rename of
+  the whole folder when the target is not there (a file at its name is left alone and costs the agent one line) or one
+  per file and the marker when it is (class 7); the target is the one
   `{ folder, real }` of `MemoryAgent.folder` that the block, the make and the carve-out use (class 3). A failing file or
   agent costs only itself with one line (class 7); `updatedAt` reaches only the marker, as JSON, and no log message
   (class 9). There is no size or count cap, as in the reference (a cap is a follow-up). Proof:
@@ -1057,7 +1062,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   place of the user folder, `.orbit` or the root linked out, onto the project, `.orbit`, `.git` or `src`, dangling or
   in a loop, agent snapshot folders linked out or dangling, links, folders and names that are not plain in the source,
   links at target names and a user folder linked out, a share with the recorded file system, a file that cannot be
-  written, a worktree's Location, once per agent list and again after a change), `test/memory-agent.test.ts` (the
+  written, a worktree's Location, once per agent list and again after a change, an interrupt after the first copied
+  file, an interrupt during a copy of 1,000 files that returns in under half the whole copy's time, and an interrupt
+  after the first file moved into a folder that is there), `test/memory-agent.test.ts` (the
   snapshot folder after trust and for plain ids only), `test/memory-agent-instructions.test.ts` (the snapshot's index
   in the first block from the one resolved folder, with the carve-out, through a linked Location),
   `test/memory-listing.test.ts` (`/memory` listing and make before any session) and

@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import dgram from "dgram"
 import fs from "fs/promises"
 import path from "path"
 import { Effect, Layer, Logger } from "effect"
@@ -22,8 +23,8 @@ import { testEffect } from "./lib/effect"
 // `.gitattributes` picks) and files or shares to open (`include.path`, alternates, a `.git` file naming `\\host\share`).
 // Each narrower guard of the earlier rounds left another spelling open, so while a folder is not trusted the undo snapshot
 // starts no git at all: its steps get no snapshot, comparing and restoring fail, and one log line says why. The oracle is
-// git's own trace of every process it starts (`GIT_TRACE2`), a marker program for each key, and on Windows the DNS client
-// cache for a share. Each describe has a trusted control in which the same calls do start git and the planted thing is
+// git's own trace of every process it starts (`GIT_TRACE2`), a marker program for each key, and on Windows a watch on the
+// name lookups that opening a share makes. Each describe has a trusted control in which the same calls do start git and the planted thing is
 // reached.
 // Mutations: letting `Snapshot.capture` go on while the folder is not trusted fails every untrusted capture row; taking the
 // trust check out of the comparison and the restore fails "fails to compare or restore ..."; dropping the log line fails
@@ -407,36 +408,90 @@ describe("Snapshot runs no attribute driver of the person's config for an untrus
 // did not hold: a `.gitignore` negation named it back (round 4), a file beside it whose name git read as a pattern for it
 // (`[s]ub`) led `add` there again (round 5), and a scan for such entries left out top-level folders that git does walk,
 // such as `git~2`, and outside Windows `.GIT`, `git~1` and `.git.` (round 6). Each row plants one of these shapes. The
-// oracle is git's trace, and on Windows also the DNS client cache: a name that something tried to open is cached, but only
-// for a few seconds, so a watcher polls the cache for the whole run, and a plain open of a second unique name by this
-// process is the control that it sees such lookups.
-const unique = (prefix: string) => `${prefix}${Math.random().toString(36).slice(2, 12)}.example.com`
+// oracle is git's trace, and on Windows also a watch on name lookups: opening `\\host\share` makes Windows look `host` up,
+// and a plain open of a second unique name by this process at the end of the run is the control that the watch sees such
+// lookups.
+//
+// Every name is a single label that starts with `prefix`. Windows looks such a name up by LLMNR (224.0.0.252, port 5355)
+// and by mDNS as `<name>.local` (224.0.0.251, port 5353), and by DNS when the machine has a search suffix. The watch joins
+// both multicast groups, which needs no elevation, and also polls the DNS client cache. The cache alone missed lookups:
+// recent Windows builds show it only to an administrator (`ipconfig /displaydns` asks for elevation and
+// `Get-DnsClientCache` returns nothing), and on a loaded runner the first poll could still be starting when the run ended.
+// A name that the multicast queries carried, or that the cache held at any poll, counts as looked up.
+const prefix = "orbitsnap"
+const unique = (kind: string) => `${prefix}${kind}${Math.random().toString(36).slice(2, 10)}`
+const tokens = (text: string) => text.toLowerCase().match(new RegExp(`${prefix}[a-z0-9]+`, "g")) ?? []
 
-/** Names under example.com that the DNS client cache held at any moment between `watch()` and `stop()`. */
-const watch = async () => {
-  const child = Bun.spawn(
-    [
-      "powershell",
-      "-NoProfile",
-      "-Command",
-      "while ($true) { Get-DnsClientCache | Where-Object { $_.Entry -like '*.example.com' } | ForEach-Object { $_.Entry }; [Console]::Out.Flush() }",
-    ],
-    { stdout: "pipe", stderr: "ignore", stdin: "ignore" },
-  )
-  const chunks: string[] = []
-  const reading = (async () => {
-    const decoder = new TextDecoder()
-    for await (const chunk of child.stdout) chunks.push(decoder.decode(chunk))
-  })()
-  // Let the first poll finish, so that the run starts under watch.
-  await Bun.sleep(2500)
-  return async () => {
-    await Bun.sleep(1500)
-    child.kill()
-    await reading
-    return new Set(chunks.join("").split(/\r?\n/).filter(Boolean))
-  }
+const until = async (done: () => boolean, ms: number) => {
+  const end = Date.now() + ms
+  while (!done() && Date.now() < end) await Bun.sleep(50)
 }
+
+/**
+ * Starts the watch. `stop(control)` opens `\\<control>\share`, waits until the watch has seen that lookup and the cache has
+ * been read again since, and returns every name looked up since the start. The scope's end closes the watch.
+ */
+const watch = Effect.acquireRelease(
+  Effect.promise(async () => {
+    const names = new Set<string>()
+    const sockets = await Promise.all(
+      [
+        [5353, "224.0.0.251"],
+        [5355, "224.0.0.252"],
+      ].map(
+        ([port, group]) =>
+          new Promise<dgram.Socket | undefined>((resolve) => {
+            const socket = dgram.createSocket({ type: "udp4", reuseAddr: true })
+            // A port that another program holds alone leaves the watch to the other source; the control shows whether
+            // anything still sees lookups.
+            socket.once("error", () => resolve(undefined))
+            socket.on("message", (message) => tokens(message.toString("latin1")).forEach((name) => names.add(name)))
+            socket.bind(Number(port), () => {
+              socket.addMembership(String(group))
+              resolve(socket)
+            })
+          }),
+      ),
+    )
+    const marker = "-- polled --"
+    const child = Bun.spawn(
+      [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        `while ($true) { Get-DnsClientCache | Where-Object { $_.Entry -like '${prefix}*' } | ForEach-Object { $_.Entry }; '${marker}'; [Console]::Out.Flush() }`,
+      ],
+      { stdout: "pipe", stderr: "ignore", stdin: "ignore" },
+    )
+    const polls = { count: 0 }
+    const reading = (async () => {
+      const decoder = new TextDecoder()
+      for await (const chunk of child.stdout) {
+        const text = decoder.decode(chunk)
+        tokens(text).forEach((name) => names.add(name))
+        polls.count += text.split(marker).length - 1
+      }
+    })()
+    // The run starts once the cache has been read once, so that a lookup at its start is still cached at the next poll.
+    await until(() => polls.count > 0, 30_000)
+    return {
+      stop: async (control: string) => {
+        const from = polls.count
+        // A name that resolves to nothing takes seconds to fail by LLMNR, but its queries go out at once, so the watch
+        // waits for them, not for the open.
+        void fs.stat(`\\\\${control}\\share\\x`).catch(() => undefined)
+        await until(() => names.has(control) && polls.count >= from + 2, 30_000)
+        return new Set(names)
+      },
+      close: async () => {
+        sockets.forEach((socket) => socket?.close())
+        child.kill()
+        await reading
+      },
+    }
+  }),
+  (watching) => Effect.promise(watching.close),
+)
 
 describe("Snapshot reaches no share, and starts no git, in an untrusted folder that holds a .git entry naming one", () => {
   const pointer = (name: string) => async (folder: string, host: string) => {
@@ -511,7 +566,7 @@ describe("Snapshot reaches no share, and starts no git, in an untrusted folder t
         if (row.glob) await Bun.write(path.join(path.dirname(folder), row.glob), "glob\n")
       })
       const data = (yield* tmpdirScoped()).path
-      const stop = windows ? yield* Effect.promise(watch) : undefined
+      const watching = windows ? yield* watch : undefined
       const result = yield* steps({
         root,
         data,
@@ -523,8 +578,7 @@ describe("Snapshot reaches no share, and starts no git, in an untrusted folder t
         },
         file: "top.txt",
       })
-      if (stop) yield* Effect.promise(() => fs.stat(`\\\\${control}\\share\\x`).catch(() => undefined))
-      const names = stop ? yield* Effect.promise(stop) : undefined
+      const names = watching ? yield* Effect.promise(() => watching.stop(control)) : undefined
       return {
         ...result,
         names,
@@ -831,7 +885,7 @@ describe("Snapshot reads a file name that git would take for a pattern as a name
 
   // Windows allows only `[s]ub` of these names, and that pattern stands for no file inside `sub`, so the row above records
   // the same either way there. Git still walks into a folder that the pattern matches, to see whether it is a repository
-  // of its own, and reads its `.git`: one that names a share shows the walk in the DNS cache. The trusted control of the
+  // of its own, and reads its `.git`: one that names a share shows the walk in the lookup watch. The trusted control of the
   // share rows above shows that a walk into such a folder does look the host up.
   ;(windows ? it.live : it.live.skip)(
     "walks no folder sub for a session started in the folder named [s]ub",
@@ -849,7 +903,7 @@ describe("Snapshot reads a file name that git would take for a pattern as a name
           await Bun.write(path.join(root, "sub", ".git"), `gitdir: \\\\${host}\\share\\repo\n`)
         })
         const data = (yield* tmpdirScoped()).path
-        const stop = yield* Effect.promise(watch)
+        const watching = yield* watch
         const files = yield* Effect.gen(function* () {
           const snapshot = yield* Snapshot.Service
           const first = yield* snapshot.capture()
@@ -858,8 +912,7 @@ describe("Snapshot reads a file name that git would take for a pattern as a name
           if (!first || !second) return expect.unreachable("capture is disabled")
           return (yield* snapshot.files({ from: first, to: second })).map(String)
         }).pipe(Effect.provide(layerFor(path.join(root, "[s]ub"), data, true)))
-        yield* Effect.promise(() => fs.stat(`\\\\${control}\\share\\x`).catch(() => undefined))
-        const names = yield* Effect.promise(stop)
+        const names = yield* Effect.promise(() => watching.stop(control))
 
         expect(files).toEqual(["[s]ub/a.txt"])
         expect(names.has(control)).toBe(true)

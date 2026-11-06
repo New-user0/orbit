@@ -4208,6 +4208,22 @@ session or `/memory` needs memory in the folder, and again after the agents chan
 
 **What to do:** Nothing. To keep a snapshot out of an agent's memory, put any Markdown file in its folder first.
 
+### An interrupted agent memory snapshot copy leaves nothing behind
+
+Stopping a session while it copied an agent memory snapshot could leave only some of the snapshot's files in the agent's
+folder and no `.snapshot-synced.json`. Because that folder then held a Markdown file, later sessions kept it as your
+memory and never finished the copy. The files are now copied into a hidden folder beside the agent's folder
+(`.<agent id>.snapshot-` and a few random characters) and moved into place once all of them are there. A stop during the
+copy takes effect at once, however large the snapshot, removes that folder and leaves the agent's folder as it was, so
+the next session copies the snapshot whole; only the move into place, which is quick, finishes first
+(`memory-agent-snapshot.test.ts`).
+
+**Affects:** people whose projects ship agent memory snapshots.
+
+**What to do:** Nothing. A folder that an earlier build left part-copied stays as it is; delete its files to have the
+next session copy the snapshot again. A hidden `.<agent id>.snapshot-` folder that a crash leaves in
+`<data>/memory/agents` can be deleted.
+
 ## Files and web tools
 
 Changes to the file tools and the web tools.
