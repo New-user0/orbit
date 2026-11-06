@@ -319,6 +319,8 @@ describe("MemoryStore.freshnessNote", () => {
     expect(note.startsWith("<system-reminder>\n")).toBe(true)
     expect(note.endsWith("</system-reminder>\n")).toBe(true)
     expect(note).toContain("47 days")
+    // The note asks for the memory to be checked against the code before it is relied on.
+    expect(note).toContain("Compare it with the code as it is now before you rely on it or present it as fact.")
     expect(MemoryStore.freshnessNote(now - 2 * day, now)).toContain("2 days")
   })
 })

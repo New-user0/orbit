@@ -369,6 +369,10 @@ describe("the memory guide source", () => {
       expect(yield* exists(l.memory)).toBe(true)
       // The removed tool is not named.
       expect(out.text).not.toMatch(/\bMemory tool\b|Memory read/)
+      // A request to check, recall or remember something makes reading memory a must.
+      expect(out.text).toContain(
+        "If the person asks you to check something, recall it or remember it, looking at memory is not optional.",
+      )
     }),
   )
 

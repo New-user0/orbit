@@ -340,6 +340,9 @@ describe("the guide with team memory on", () => {
         )
         expect(howToSave).toContain("MEMORY.md")
         expect(howToSave.toLowerCase()).toContain("team")
+        // With two folders, the first write goes to the one its scope picks; with one folder there is nothing to pick.
+        expect(howToSave).toContain("in the folder that its scope selects")
+        expect(off.text).not.toContain("in the folder that its scope selects")
         // Off, the guide is today's.
         expect(headings(off.text)).toEqual(HEADINGS)
         expect(scopeLines(off.text)).toEqual([])
