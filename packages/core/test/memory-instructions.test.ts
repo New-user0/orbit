@@ -379,6 +379,17 @@ describe("the memory guide source", () => {
       expect(out.text).toContain("Its dates are absolute ones")
       expect(out.text).toContain('Two labelled lines come under it: "Reason:"')
       expect(out.text).toContain("Having to repeat a correction is exactly what this memory exists to prevent.")
+      expect(out.text).toContain("- Use it: treat it as a standing rule for the kind of work it names.")
+      expect(out.text).toContain('and "Applies when:", naming the situations it covers.')
+      expect(out.text).toContain("- Format: the same three parts as feedback, with the fact or decision on the top line.")
+      expect(out.text).toContain("A deadline or an owner recorded here can change which approach you propose.")
+      // One note per point: an existing note is changed rather than joined by another, files carry their topic, and
+      // the front matter follows the content.
+      expect(out.text).toContain(
+        "Before you write, look for a memory on the same point and change it instead of adding another;",
+      )
+      expect(out.text).toContain("Name files after their topic, never after a date")
+      expect(out.text).toContain("when a file's content changes, make its front matter describe the new content.")
       // The removed tool is not named.
       expect(out.text).not.toMatch(/\bMemory tool\b|Memory read/)
       // A request to check, recall or remember something makes reading memory a must.

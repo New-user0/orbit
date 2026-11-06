@@ -346,6 +346,10 @@ describe("the guide with team memory on", () => {
         // Each folder's index is cut at the same line, and reading memory covers both folders.
         expect(howToSave).toContain("nothing from line 201 onward in either is ever seen")
         expect(on.text).toContain("Two signals send you to memory, and both folders count")
+        expect(on.text).toContain("refers back to work done before, by them or by anyone else on the project.")
+        expect(howToSave).toContain(
+          "A team memory gets its entry in the team folder's `MEMORY.md`, and a private memory in the private folder's. Both indexes ride along in every conversation",
+        )
         expect(off.text).toContain("nothing from line 201 onward is ever seen, so an entry placed late is an entry lost")
         // Off, the guide is today's.
         expect(headings(off.text)).toEqual(HEADINGS)

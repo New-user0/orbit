@@ -185,6 +185,8 @@ test("compaction prompt asks for the files, the work in progress and the next st
   expect(prompt).toContain("3. Code touched")
   expect(prompt).toContain("8. Where things stand")
   expect(prompt).toContain("9. What comes next")
+  // The sample's placeholder for section 8 asks for the files and code in hand, as the section's rule does.
+  expect(prompt).toMatch(/8\. Where things stand:\s+\[The files and code in hand when the handoff was asked for\]/)
 })
 
 test("compaction prompt prohibits tool calls at both ends", () => {
