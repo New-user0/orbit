@@ -550,9 +550,13 @@ async function real(file: string, disk: Disk): Promise<string | undefined> {
   // Something is there but leads nowhere: a dangling link. It is refused, never taken for a file still to be added.
   if (await disk.lstat(file).then(() => true, () => false)) return undefined
   const parent = path.dirname(file)
-  if (parent === file) return undefined
+  const name = path.basename(file)
+  // The path is rebuilt by its names from here, and a `..` would collapse a part the system walks as written: it
+  // fails on a missing `missing/..`, so `missing/../link/x` would be checked as `link/x` while a read follows the link
+  // out (class 4). Such a path is refused, never rebuilt.
+  if (parent === file || name === "..") return undefined
   const above = await real(parent, disk)
-  return above === undefined ? undefined : path.join(above, path.basename(file))
+  return above === undefined ? undefined : path.join(above, name)
 }
 
 /**

@@ -675,6 +675,30 @@ describe("an open diff outside the window's folders or the session's folders is 
     },
     { name: "root-relative", fields: () => ({ place: world.inside.slice(2) }), windows: true },
     { name: "relative", fields: () => ({ place: "a.txt" }) },
+    // A part that is not there followed by `..`: Linux and macOS walk `missing` and fail, so a check that rebuilt the
+    // path by its names would take it for `link/...` inside the project while a read follows the link out. Written
+    // without `path.join`, which would collapse it.
+    {
+      name: "missing-dot-dot-link",
+      fields: () => ({ place: [world.project, "missing", "..", "link", "marker.txt"].join(path.sep) }),
+    },
+    {
+      name: "added-missing-dot-dot-link",
+      fields: () => ({
+        place: [world.project, "missing", "..", "link", "new.txt"].join(path.sep),
+        patch: added,
+        status: "added",
+      }),
+    },
+    // An added file below two parts that are not there and a `..`: the rebuild by names is refused on every system.
+    {
+      name: "added-missing-dot-dot",
+      fields: () => ({
+        place: [world.project, "none1", "none2", "..", "new.txt"].join(path.sep),
+        patch: added,
+        status: "added",
+      }),
+    },
     { name: "stream", fields: () => ({ place: `${world.inside}::$DATA` }), windows: true },
     { name: "trailing-dot", fields: () => ({ place: `${world.inside}.` }), windows: true },
     { name: "trailing-space", fields: () => ({ place: `${world.inside} ` }), windows: true },

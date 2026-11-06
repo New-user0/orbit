@@ -351,6 +351,31 @@ describe("a path that is not really inside the session's folder is shown as text
     },
     { name: "root-relative", file: { file: "a.txt", place: inside.slice(2), patch }, platform: "win32", spelling: true },
     { name: "relative", file: { file: "a.txt", place: "a.txt", patch }, spelling: true },
+    // A part that is not there followed by `..`: Linux and macOS walk `missing` and fail, so a check that rebuilt the
+    // path by its names would take it for `link/...` inside the project while a read follows the link out.
+    {
+      name: "missing-dot-dot-link",
+      file: { file: "link/marker.txt", place: [project, "missing", "..", "link", "marker.txt"].join(path.sep), patch },
+    },
+    {
+      name: "added-missing-dot-dot-link",
+      file: {
+        file: "link/new.txt",
+        place: [project, "missing", "..", "link", "new.txt"].join(path.sep),
+        patch: added,
+        status: "added",
+      },
+    },
+    // An added file below two parts that are not there and a `..`: the rebuild by names is refused on every system.
+    {
+      name: "added-missing-dot-dot",
+      file: {
+        file: "new.txt",
+        place: [project, "none1", "none2", "..", "new.txt"].join(path.sep),
+        patch: added,
+        status: "added",
+      },
+    },
     { name: "relative, no place", file: { file: "a.txt", patch }, spelling: true },
     { name: "move-from-outside", file: { file: "moved.txt", place: path.join(project, "moved.txt"), from: marker, patch } },
   ]

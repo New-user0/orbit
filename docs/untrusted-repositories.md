@@ -1539,8 +1539,9 @@ every other extension):
   is refused by its spelling before the disk is touched (not absolute, on Windows not a drive path, or a share or
   device spelling, `LinkShare.isShare`), then when a link on the way leads to a share (`LinkShare.ofSync`, which reads
   links part by part and opens none); then its real path is taken (`realpath`, or for a file not there yet the real
-  path of its nearest folder plus the names below it, and a part that is there but leads nowhere is refused). The real
-  path must be inside a server folder and inside a `file:` window folder, both real, by `FSUtil.contains` (class 4), and
+  path of its nearest folder plus the names below it, and a part that is there but leads nowhere is refused; a `..`
+  below a part that is not there is refused, because Linux and macOS walk that part and fail while a rebuild by names
+  would collapse it). The real path must be inside a server folder and inside a `file:` window folder, both real, by `FSUtil.contains` (class 4), and
   that real path is the one read. The editor is shown the text read, as a virtual document, and never the file's own
   URI. A file outside is shown on the card only, with a note that names it written out. Save, close and Reject answer
   through the server's reply route (`content` with a `once` reply). Only the person's own answers count: a tab the
