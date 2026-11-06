@@ -201,7 +201,7 @@ for (const row of rows.filter((item, index) => index % 4 === 0 || !item.id.start
 
 // The terminal UI's short prompt while an Edit or Write is reviewed in the linked editor (clients-ux-15 part 3): it names
 // the file of the request's place, and where a link leads, from the request alone. Drawn as the real component.
-async function drawCompact(row: Row, editor = "Test Editor") {
+async function drawCompact(row: Row, editor = "Test Editor", focusAlways = false) {
   const { EditorDiffPrompt } = await import("../src/routes/session/permission")
   const { ConfigProvider } = await import("../src/config")
   const { ClientProvider } = await import("../src/context/client")
@@ -248,11 +248,30 @@ async function drawCompact(row: Row, editor = "Test Editor") {
     await app.renderOnce()
     await Bun.sleep(0)
     await app.renderOnce()
+    if (focusAlways) {
+      app.mockInput.pressArrow("down")
+      await Bun.sleep(0)
+      await app.renderOnce()
+    }
     return app.captureCharFrame()
   } finally {
     app.renderer.destroy()
   }
 }
+
+// With Always allow focused, the short prompt says what the grant covers, as the full dialog does: for an Edit or Write
+// that is every edit in the project, not this one file. The question and the link warning stay on screen.
+for (const row of rows.filter((item) => item.tool === "Edit" || item.tool === "Write"))
+  test(`the terminal UI's compact prompt for ${row.id} says what Always allow grants while it is focused`, async () => {
+    const before = (await drawCompact(row)).replace(/\s+/g, "")
+    expect(before).not.toContain("Thiswillalwaysallow")
+    const flat = (await drawCompact(row, "Test Editor", true)).replace(/\s+/g, "")
+    expect(flat).toContain(`Thiswillalwaysallow${row.request.action}forthisproject.`)
+    expect(flat).toContain("ReviewinginTestEditor")
+    const file = ((row.request.metadata?.files ?? []) as { place?: string; link?: { outside: boolean } }[])[0]
+    expect(flat).toContain(`Makethischangeto${path.basename(file!.place!)}?`)
+    if (file?.link) expect(flat).toContain(file.link.outside ? "outsidethesession'sfolder,throughalink" : "Thelinkleadsto")
+  })
 
 for (const row of rows.filter((item) => item.tool === "Edit" || item.tool === "Write"))
   test(`the terminal UI's compact prompt for ${row.id} names the request's place and no decoy`, async () => {

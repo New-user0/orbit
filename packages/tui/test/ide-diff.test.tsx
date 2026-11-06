@@ -360,6 +360,33 @@ test("while the diff is open the prompt says where it opened and asks about the 
   expect(dialogs(setup.app.renderer.root)).toEqual(["Permission required: Edit a.ts"])
 })
 
+// The grant Always allow makes reaches past this one file, so the short prompt names it while that option is focused,
+// as the full dialog does, and keeps the question and the link warning on screen.
+test("while Always allow is focused the prompt says what it grants", async () => {
+  for (const row of [
+    { save: ["*"], lines: ["This will always allow Edit for this project."] },
+    { save: ["src/*"], lines: ["This will always allow the following patterns for this project.", "- src/*"] },
+  ]) {
+    await using setup = await mount({
+      request: {
+        save: row.save,
+        metadata: { paths: [place], files: [{ ...entry, link: { place: "/work/elsewhere/a.ts", outside: true } }] },
+      },
+    })
+    const before = await setup.until(compact, "the compact prompt")
+    expect([row.save, before.includes("This will always allow")]).toEqual([row.save, false])
+    setup.app.mockInput.pressArrow("down")
+    const frame = await setup.until((value) => value.includes("This will always allow"), "the grant")
+    for (const line of row.lines) expect(frame).toContain(line)
+    expect(frame).toContain("Reviewing in Test Editor")
+    expect(frame).toContain("Make this change to a.ts?")
+    expect(frame.replace(/\s+/g, "")).toContain("outsidethesession'sfolder,throughalink")
+    // Another option focused again hides it.
+    setup.app.mockInput.pressArrow("down")
+    await setup.until((value) => compact(value) && !value.includes("This will always allow"), "the grant hidden")
+  }
+})
+
 test("the save hint shows only in the editor's own terminal", async () => {
   for (const program of ["vscode", undefined]) {
     if (program === undefined) delete process.env.TERM_PROGRAM

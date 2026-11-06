@@ -475,15 +475,22 @@ export function EditorDiffPrompt(props: {
           <text fg={theme.text.base} flexShrink={1}>{`Reviewing in ${plain(props.editor)}`}</text>
         </box>
       }
-      body={
+      // While Always allow is focused the prompt says what it grants, as the full dialog does, so the short prompt never
+      // hides that the grant reaches past this one file.
+      body={(option) => (
         <box paddingLeft={1} flexDirection="column" flexShrink={0}>
           <Show when={warning()}>{(line) => <text fg={theme.text.feedback.warning.base}>{line()}</text>}</Show>
           <Show when={process.env.TERM_PROGRAM === "vscode"}>
             <text fg={theme.text.muted}>Save in the editor to answer</text>
           </Show>
           <text fg={theme.text.base}>{`Make this change to ${name()}?`}</text>
+          <Show when={option === "always"}>
+            <For each={permissionAlwaysLines(props.request)}>
+              {(line, index) => <text fg={index() === 0 ? theme.text.muted : theme.text.base}>{line}</text>}
+            </For>
+          </Show>
         </box>
-      }
+      )}
       options={
         props.request.save?.length
           ? {
