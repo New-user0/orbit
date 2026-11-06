@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, beforeEach, expect, mock, test } from "bun:test"
+import { IdeLock } from "@orbit/util/ide-lock"
 import { createTwoFilesPatch } from "diff"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import WebSocket from "ws"
 import { permissionItem } from "../src/controller"
 import type { FormRequest, FromView, Item } from "../src/protocol"
 
@@ -38,7 +40,10 @@ const providers = new Map<string, unknown>()
 // What the next modal question is answered with: the button the person picks, by its title.
 const answer: { title?: string } = {}
 const picks: unknown[][] = []
-const program: { path?: string } = {}
+const program: { path?: string; bridge?: boolean } = {}
+const configured: Array<(event: { affectsConfiguration(key: string): boolean }) => void> = []
+// The terminals' environment the extension sets: the bridge's port.
+const environment = new Map<string, string>()
 const workspaceFolders = [
   { uri: { scheme: "file", fsPath: folder } },
   { uri: { scheme: "vscode-remote", fsPath: "/x" } },
@@ -143,12 +148,19 @@ const vscode = stub({
       contents.set(scheme, provider)
       return stub()
     },
-    // The person's own `orbit.executable`, once a test sets one; every other setting is off.
+    // The person's own `orbit.executable`, once a test sets one, and the bridge once a test turns it on; every other
+    // setting is off.
     getConfiguration: () =>
       stub({
-        inspect: (key: string) => ({ globalValue: key === "executable" ? program.path : false }),
+        inspect: (key: string) => ({
+          globalValue: key === "executable" ? program.path : key === "ideBridge.enabled" ? program.bridge : false,
+        }),
         get: (_: string, fallback: unknown) => fallback,
       }),
+    onDidChangeConfiguration: (listener: (typeof configured)[number]) => {
+      configured.push(listener)
+      return stub()
+    },
   }),
 })
 
@@ -189,7 +201,15 @@ beforeAll(async () => {
   await Bun.write(file, "one\n")
   mock.module("vscode", () => ({ default: vscode }))
   extension = await import("../src/extension")
-  extension.activate(stub({ subscriptions: [] }) as Parameters<Extension["activate"]>[0])
+  extension.activate(
+    stub({
+      subscriptions: [],
+      environmentVariableCollection: {
+        replace: (key: string, value: string) => void environment.set(key, value),
+        delete: (key: string) => void environment.delete(key),
+      },
+    }) as Parameters<Extension["activate"]>[0],
+  )
   // The chat tab is open already, and its controller is the stand-in.
   chat().panel = { reveal() {}, webview: { postMessage: async () => true } }
   chat().controller = Promise.resolve({
@@ -558,6 +578,60 @@ test("closing Orbit tabs saves the unsaved edits of a review's own side and of n
   document.isDirty = false
   await fire(title)
   expect(replies).toEqual([])
+})
+
+test("the bridge gets the review service, and a bridge review's tab opens with the request's sides", async () => {
+  // The person turns the bridge on: it listens and hands the terminals its port.
+  program.bridge = true
+  for (const listener of configured) listener({ affectsConfiguration: (key) => key === "orbit.ideBridge.enabled" })
+  const deadline = Date.now() + 5_000
+  while (!environment.has("ORBIT_EDITOR_SSE_PORT") && Date.now() < deadline) await Bun.sleep(10)
+  const port = Number(environment.get("ORBIT_EDITOR_SSE_PORT"))
+  const lock = JSON.parse(await fs.readFile(IdeLock.file(IdeLock.directory(), port), "utf8")) as IdeLock.Lock
+  const frames: Array<Record<string, unknown>> = []
+  const socket = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { [IdeLock.header]: lock.authToken } })
+  socket.on("message", (data) => frames.push(JSON.parse(data.toString())))
+  await new Promise((resolve) => socket.once("open", resolve))
+  const until = async (condition: () => boolean) => {
+    const end = Date.now() + 5_000
+    while (!condition() && Date.now() < end) await Bun.sleep(10)
+  }
+  try {
+    socket.send(JSON.stringify({ type: "hello", version: 1, pid: 4242, features: ["diff"] }))
+    await until(() => frames.length >= 1)
+    expect(frames[0]).toMatchObject({ type: "hello", features: ["diff"] })
+    const before = executed.length
+    socket.send(
+      JSON.stringify({ type: "diff.open", id: "per_bridge", place: file, patch, status: "modified", roots: [folder] }),
+    )
+    await until(() => executed.slice(before).some((call) => call[0] === "vscode.diff"))
+    const [, left, right, title] = lastDiff()
+    expect(left.scheme).toBe("orbit-proposed")
+    expect(right.scheme).toBe("orbit-review")
+    expect(title).toMatch(/^Orbit: glue\.txt \([a-z0-9]{6}\)$/)
+    expect(contents.get("orbit-proposed")!.provideTextDocumentContent(left)).toBe("one\n")
+    expect(new TextDecoder().decode(system().readFile(right) as Uint8Array)).toBe("two\n")
+    // The person closes the tab: the answer goes to the terminal UI, and the chat's controller hears nothing.
+    await fire(title)
+    const answers = () => frames.filter((frame) => frame.type === "diff.answer")
+    await until(() => answers().length === 1)
+    expect(answers()).toEqual([{ type: "diff.answer", id: "per_bridge", answer: "closed" }])
+    // A prompt from the chat closes the bridge's tabs too, and their owner is told.
+    const second = executed.length
+    socket.send(
+      JSON.stringify({ type: "diff.open", id: "per_bridge2", place: file, patch, status: "modified", roots: [folder] }),
+    )
+    await until(() => executed.slice(second).some((call) => call[0] === "vscode.diff"))
+    await chat().send("after the bridge")
+    await until(() => answers().length === 2)
+    expect(answers()[1]).toEqual({ type: "diff.answer", id: "per_bridge2", answer: "dismissed" })
+    expect(replies).toEqual([])
+  } finally {
+    socket.close()
+    program.bridge = false
+    for (const listener of configured) listener({ affectsConfiguration: (key) => key === "orbit.ideBridge.enabled" })
+  }
+  expect(environment.has("ORBIT_EDITOR_SSE_PORT")).toBe(false)
 })
 
 // Last of the review rows: the review is disposed from here on.

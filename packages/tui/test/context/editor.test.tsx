@@ -313,7 +313,8 @@ test("sends hello with version 1 and its pid, and counts as connected only after
     await wait(() => editor.frames.length > 0, 3_000, "the hello")
     await Bun.sleep(100)
 
-    expect(editor.frames[0]).toEqual({ type: "hello", version: 1, pid: process.pid })
+    // The features name what this terminal UI can do beyond version 1's messages (clients-ux-15 part 3).
+    expect(editor.frames[0]).toEqual({ type: "hello", version: 1, pid: process.pid, features: ["diff"] })
     expect(setup.editor.connected()).toBe(false)
 
     editor.send({ type: "hello", version: 1, editor: "Test Editor" })

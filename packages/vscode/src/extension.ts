@@ -34,8 +34,9 @@ export function activate(context: vscode.ExtensionContext) {
   const chat = new Chat(context, editor)
   active = chat.diffs
   new RunsView(executable, () => directory(editor), chat.log).register(context)
-  ideBridge(context, editor, chat.log)
   const review = chat.diffs
+  // The terminal UIs linked through the bridge review in the same tabs, so a prompt from the chat closes theirs too.
+  ideBridge(context, editor, chat.log, review)
   // The editable side of a review. Saving it hands the text to the review, which answers the question through the
   // server; nothing is written to disk here.
   const changed = new vscode.EventEmitter<vscode.FileChangeEvent[]>()
@@ -196,7 +197,7 @@ async function closeTabs(titles: ReadonlyArray<string>) {
  * so. It starts no program, makes no outbound connection and does not wait for the service: it listens on the loopback
  * interface, writes a private lock file and hands the terminals of this window the port, and nothing else.
  */
-function ideBridge(context: vscode.ExtensionContext, editor: EditorState, log: vscode.OutputChannel) {
+function ideBridge(context: vscode.ExtensionContext, editor: EditorState, log: vscode.OutputChannel, review: Review) {
   let bridge: Bridge | undefined
   let starting = false
   const folders = () =>
@@ -216,6 +217,7 @@ function ideBridge(context: vscode.ExtensionContext, editor: EditorState, log: v
       folders: folders(),
       ideName: vscode.env.appName,
       log: (line) => log.appendLine(line),
+      diff: review.bridge,
       // Not persistent: a terminal of a reloaded window gets the new port and never a stale one.
       environment: (port) => {
         const variables = context.environmentVariableCollection

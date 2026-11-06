@@ -89,13 +89,15 @@ export const Plugin = {
                 const shown = FileAccess.shownName(target)
                 const status = current ? "modified" : "added"
                 const preview = fileDiff(shown, current?.text ?? "", Bom.split(input.content).text, status)
+                const link = access.link(target)
                 const revision = yield* permission.assert({
                   action: "Edit",
                   resources: [target.resource],
                   save: ["*"],
                   ...FileAccess.leadsOf([target]),
-                  // `paths` and each file's `place` are where the write lands as resolved here, absolute, for a client to show.
-                  metadata: { paths: [target.place], files: [{ ...preview, place: target.place }] },
+                  // `paths` and each file's `place` are where the write lands as resolved here, absolute, for a client to show,
+                  // and `link` where a link on the way really leads, for a client to warn about.
+                  metadata: { paths: [target.place], files: [{ ...preview, place: target.place, ...(link && { link }) }] },
                   // The person may approve their own version of the file instead; it is written at this same target.
                   original: { file: shown, place: target.place, text: current?.text ?? "", status },
                   sessionID: context.sessionID,

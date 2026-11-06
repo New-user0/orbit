@@ -750,7 +750,7 @@ function App() {
         category: "System",
         palette: undefined,
         run: () => {
-          dialog.replace(() => <CommandPaletteDialog />)
+          dialog.replace(() => <CommandPaletteDialog linked={editorContext.connected} />)
         },
       },
       {
@@ -1093,7 +1093,7 @@ function App() {
         suggested: true,
         slash: { name: "settings", aliases: ["config"] },
         run: () => {
-          dialog.replace(() => <DialogConfig />)
+          dialog.replace(() => <DialogConfig linked={editorContext.connected} />)
         },
         category: "System",
       },

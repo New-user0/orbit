@@ -2,23 +2,142 @@
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { Schema } from "effect"
-import { writeFile } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
+import { IdeLock } from "@orbit/util/ide-lock"
 import { read, resolve, ConfigProvider, Info, useConfig, type Interface, type Resolved } from "../src/config"
 import { DialogConfig, settings } from "../src/component/dialog-config"
+import { onMount } from "solid-js"
+import { TuiKeybind } from "../src/config/keybind"
+import { KeybindingsFile } from "../src/config/keybindings-file"
+import { CommandMap, Definitions } from "../src/config/v1/keybind"
+import { EditorContextProvider, useEditorContext } from "../src/context/editor"
 import { Keymap } from "../src/context/keymap"
 import { ThemeProvider } from "../src/context/theme"
 import { DialogProvider, useDialog } from "../src/ui/dialog"
 import { ToastProvider } from "../src/ui/toast"
-import { onMount } from "solid-js"
+import { emptyThemeSource, tmpdir } from "./fixture/fixture"
 import { TestTuiContexts } from "./fixture/tui-environment"
-import { emptyThemeSource } from "./fixture/fixture"
-import { TuiKeybind } from "../src/config/keybind"
-import { KeybindingsFile } from "../src/config/keybindings-file"
-import { CommandMap, Definitions } from "../src/config/v1/keybind"
-import { tmpdir } from "./fixture/fixture"
+import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
 const decodeInfo = Schema.decodeUnknownSync(Info)
+
+test("diffs.tool defaults to auto and takes terminal", () => {
+  expect(decodeInfo({ diffs: { tool: "terminal" } })).toEqual({ diffs: { tool: "terminal" } })
+  expect(decodeInfo({ diffs: { tool: "auto" } })).toEqual({ diffs: { tool: "auto" } })
+  expect(() => decodeInfo({ diffs: { tool: "vscode" } })).toThrow()
+  expect(settings.find((setting) => setting.path.join(".") === "diffs.tool")).toMatchObject({
+    title: "Diff tool",
+    category: "Diffs",
+    default: "auto",
+    values: ["auto", "terminal"],
+  })
+})
+
+test("the /config dialog lists Diff tool only while linked to an editor", async () => {
+  // A dialog is drawn outside the editor's context, so its opener says whether an editor is linked, as the app does.
+  function Settings() {
+    const editor = useEditorContext()
+    return <DialogConfig current="diffs.view" linked={editor.connected} />
+  }
+  const port = process.env.ORBIT_EDITOR_SSE_PORT
+  for (const linked of [true, false]) {
+    await using state = await tmpdir()
+    const token = IdeLock.token()
+    const server = Bun.serve({
+      port: 0,
+      fetch: (request, server) =>
+        request.headers.get(IdeLock.header) === token && server.upgrade(request) ? undefined : new Response("no", { status: 401 }),
+      websocket: {
+        message: (socket) => {
+          socket.send(JSON.stringify({ type: "hello", version: 1, editor: "Test Editor", features: ["diff"] }))
+        },
+      },
+    })
+    // Not linked: no window's lock and no port, so there is nothing to connect to.
+    if (linked) {
+      await mkdir(path.join(state.path, "ide"), { recursive: true })
+      await writeFile(
+        path.join(state.path, "ide", `${server.port}.lock`),
+        JSON.stringify({ version: 1, pid: process.pid, port: server.port, workspaceFolders: [], ideName: "x", authToken: token }),
+      )
+      process.env.ORBIT_EDITOR_SSE_PORT = String(server.port)
+    } else delete process.env.ORBIT_EDITOR_SSE_PORT
+    const app = await testRender(
+      () => (
+        <TestTuiContexts paths={{ state: state.path }}>
+          <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
+            <Keymap.Provider>
+              <ThemeProvider mode="dark" source={emptyThemeSource}>
+                <ToastProvider>
+                  <DialogProvider>
+                    <EditorContextProvider compat={() => false}>
+                      <Settings />
+                    </EditorContextProvider>
+                  </DialogProvider>
+                </ToastProvider>
+              </ThemeProvider>
+            </Keymap.Provider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 100, height: 80 },
+    )
+    try {
+      app.renderer.start()
+      const started = Date.now()
+      // Linked, the entry appears once the editor says hello; not linked, the dialog is drawn without it.
+      while (Date.now() - started < (linked ? 5_000 : 600)) {
+        await app.renderOnce()
+        if (app.captureCharFrame().includes("Diff tool")) break
+        await Bun.sleep(20)
+      }
+      await app.renderOnce()
+      const frame = app.captureCharFrame()
+      expect(frame).toContain("Wrapping")
+      expect([linked, frame.includes("Diff tool")]).toEqual([linked, linked])
+    } finally {
+      app.renderer.destroy()
+      await server.stop(true)
+      if (port === undefined) delete process.env.ORBIT_EDITOR_SSE_PORT
+      else process.env.ORBIT_EDITOR_SSE_PORT = port
+    }
+  }
+})
+
+// An opener that does not say whether an editor is linked gets the settings of an unlinked terminal UI.
+test("the /config dialog opened without a link state does not list Diff tool", async () => {
+  function Fixture() {
+    const dialog = useDialog()
+    onMount(() => dialog.replace(() => <DialogConfig current="diffs.view" />))
+    return null
+  }
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
+          <Keymap.Provider>
+            <ThemeProvider mode="dark" source={emptyThemeSource}>
+              <ToastProvider>
+                <DialogProvider>
+                  <Fixture />
+                </DialogProvider>
+              </ToastProvider>
+            </ThemeProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 100, height: 80 },
+  )
+  app.renderer.start()
+  try {
+    const frame = await app.waitForFrame((frame) => frame.includes("Wrapping"))
+    expect(frame).not.toContain("Diff tool")
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 test("validates the explicit diff source defaults", () => {
   for (const source of ["branch", "committed", "working", "turn"] as const) {

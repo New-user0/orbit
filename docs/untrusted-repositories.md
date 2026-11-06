@@ -1366,6 +1366,20 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   drawn footer and prompt). The token goes into the `x-orbit-ide-token` header and nowhere else. Proof: `test/editor.test.ts` (the
   discovery rows), `test/context/editor.test.tsx` (a real server: header, hello, ignored frames, reconnect that reads the
   lock again, no connection without the port, `TERM_PROGRAM=vscode` or `autoConnect`).
+- The editor review of an approval (`PermissionPrompt`, `src/routes/session/permission.tsx`, clients-ux-15 part 3):
+  only while the folder the terminal UI started in is trusted (`trust.startup.trusted()`, class 1), `diffs.tool` in
+  `cli.json` is `auto`, the bridge's hello named `diff`, and the request is a revisable Edit or Write of one file with
+  an absolute place that is not a notebook. The prompt reads the session's folders fresh with `location.get` for the
+  session's own location (two seconds at most) and sends `diff.open` with the request's own `id`, `place`, `patch` and
+  `status` and those folders as `roots`, never anything of the tool's input (classes 3 and 8); a frame larger than
+  `IdeLock.frameCap` is not sent. A saved answer becomes a `once` reply with `content`, a closed tab a `once` reply and
+  Reject a `reject` reply, each through the server's reply route (class 12). A refused reply shows the server's sentence
+  and brings the full dialog back; a 404 is dropped. An answer that does not decode or names no open review is dropped
+  with one log line; dismissed, unavailable, a lost link, a failed or late folder read and a frame too large keep the
+  question in the terminal with one log line (class 7). The compact prompt writes out the file's base name, the
+  editor's name and the link's place (class 9). A prompt or a command for the model sends `diff.closeAll`; a `!`
+  command does not. Proof: `test/ide-diff.test.tsx`, the compact-prompt rows of `test/approval-matrix.test.tsx` and
+  the Diff tool rows of `test/config-v2.test.tsx`.
 
 - Custom themes (`discoverThemes` over `themeDirectories`, called by the terminal UI's theme provider and by Mini): a
   JSON file per theme. The user's own folders (the global config folder and `.orbit` in the home directory) are read when
@@ -1486,7 +1500,8 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
 every other extension):
 
 - The IDE bridge (`src/ide-bridge.ts`): a WebSocket server on `127.0.0.1` (the literal, never a name), port 0, with a
-  4 KiB frame limit, that accepts an upgrade only with the token in the `x-orbit-ide-token` header (constant-time compare,
+  4 KiB frame limit before a client's hello (`IdeLock.helloCap`) and `IdeLock.frameCap` after it, so that a diff to open
+  fits, that accepts an upgrade only with the token in the `x-orbit-ide-token` header (constant-time compare,
   answer 401, one log line that never holds a token; the token is never read from the URL). The token lives in a lock file
   written with mode 0600 in a 0700 folder, by temporary file and rename (retried on EPERM, EBUSY and EACCES while a reader
   holds the lock; the temporary file is removed when it still fails), and is never put in the environment (only the
@@ -1494,6 +1509,26 @@ every other extension):
   machine scope and is read from the user's own settings only, and the extension stays off in an untrusted VS Code
   workspace. At start it removes only version 1 locks whose pid is gone. Proof: `test/ide-bridge.test.ts` and
   `test/manifest.test.ts` (the setting's decision row, the command's gate row, the scan of the doors).
+- The bridge's diff review (clients-ux-15 part 3): a terminal UI whose hello names the `diff` feature may send
+  `diff.open` with a request's `id`, `place`, `patch`, `status` and the session's folders (`roots`). The bridge checks
+  each field's shape where the frame enters: the `id` must be `per_` and up to 64 letters or digits before it becomes
+  part of a tab's URI or a key (class 5), `roots` holds one or two non-empty strings, and a notebook is refused; a frame
+  that fails gets `unavailable` with `invalid` (or nothing, when its `id` failed) and one log line, and costs only
+  itself (class 7). The review service is part 2's `Review`, through the same door: the share, device, stream and
+  trailing-dot or trailing-space spellings are refused before the disk is touched, then links to a share, then the real
+  path must be inside a real root and inside a real `file:` folder of the window (class 3, the stricter answer; class
+  4), and that real path is the one read. A file outside, or a patch that no longer applies or cannot be read, opens
+  nothing and answers `unavailable`. Save, close and Reject answer the terminal UI that asked, never a server, and
+  nothing writes a file (class 12): the terminal UI replies to its own server. A review belongs to its client: another
+  client cannot close it, a close-all or a chat prompt closes it and tells its owner `dismissed`, and a client that goes
+  away, the bridge stopping and the window closing close its reviews and answer nothing; the bridge stopping drops each
+  client's reviews before it closes that client's socket, whose close event may come a round trip later. A tab the
+  editor fails to open is forgotten and answers `unavailable` with `failed`, with one log line, so the terminal UI asks
+  there (class 7). A save or an Accept whose answer would not fit in a frame sends nothing, says so in a fixed sentence
+  (the save fails with it, Accept shows it as a warning), and the tab stays. Proof: the part 3 rows of
+  `test/ide-bridge.test.ts` (the door table with an outside marker, a trusted control, Windows case and short names and
+  a linked worktree, the share table with an empty disk recorder, the malformed-frame table, the answers, Orbit's own
+  closes, the frame caps) and the bridge row of `test/extension-review.test.ts`.
 - The diff review of an Edit or Write approval, and the read-only preview of any other question with files
   (`src/review.ts`, clients-ux-15 part 2). It reads the request's own `place`, or `from` for a move, and nothing the
   tool's input names (class 8). Before each review it reads trust fresh for the chat's folder, then the session
@@ -1504,8 +1539,9 @@ every other extension):
   is refused by its spelling before the disk is touched (not absolute, on Windows not a drive path, or a share or
   device spelling, `LinkShare.isShare`), then when a link on the way leads to a share (`LinkShare.ofSync`, which reads
   links part by part and opens none); then its real path is taken (`realpath`, or for a file not there yet the real
-  path of its nearest folder plus the names below it, and a part that is there but leads nowhere is refused). The real
-  path must be inside a server folder and inside a `file:` window folder, both real, by `FSUtil.contains` (class 4), and
+  path of its nearest folder plus the names below it, and a part that is there but leads nowhere is refused; a `..`
+  below a part that is not there is refused, because Linux and macOS walk that part and fail while a rebuild by names
+  would collapse it). The real path must be inside a server folder and inside a `file:` window folder, both real, by `FSUtil.contains` (class 4), and
   that real path is the one read. The editor is shown the text read, as a virtual document, and never the file's own
   URI. A file outside is shown on the card only, with a note that names it written out. Save, close and Reject answer
   through the server's reply route (`content` with a `once` reply). Only the person's own answers count: a tab the
@@ -2442,6 +2478,16 @@ runs" is a permission.
   `content` field, and `PluginHost` refuses a reply that carries one with `Permission.RevisionError`, because the
   promise adapter decodes a plugin's reply against the route's payload, which has the field (classes 7, 12 and 13;
   `packages/sdk/test/permission-revise.test.ts`, whose `@ts-expect-error` also pins the type).
+- An Edit or Write reached through a link says so on its request: the file entry carries `link: { place, outside }`,
+  where `place` is where the link really leads (`FileAccess.realPlace`) and `outside` says whether that is outside the
+  Location's folder and the project's folder, both by real path (`FileAccess.link`, `FSUtil.contains` on real paths, so a
+  sibling folder whose name starts with the project's is outside; class 4). A file below a project folder that is itself
+  reached through a system link names no link. The terminal UI draws its warning from this value alone, in the full
+  dialog and in the compact prompt of an editor review, with the place through the path formatter and `plain`, and never
+  from the tool's input (classes 8 and 9). Proof: `packages/core/test/edit-link.test.ts` (link inside, link and junction
+  out, a sibling with the project's name as its prefix, no link; for Edit and Write), the link rows of
+  `approval-matrix.json` and the T row "the link warning comes from the request" (a decoy link in the tool's input draws
+  nothing). Patch, NotebookEdit, Mini, ACP and the VS Code card do not show it yet.
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob

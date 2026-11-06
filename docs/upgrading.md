@@ -2183,6 +2183,34 @@ title. Run `orb service restart` after upgrading so that the service is the new 
 **What to do:** Nothing. To keep using only the card, close the review tab with the card's buttons instead: closing the
 tab itself approves the proposal.
 
+### The terminal UI opens Edit and Write approvals in VS Code's diff
+
+When the terminal UI is linked to VS Code through Orbit's bridge, an Edit or Write approval of one file now opens its
+diff in the editor, beside the file you work in, and the terminal shows a short prompt instead of the diff: which editor
+it opened in, the file's name and the usual options. While Always allow is focused, the short prompt says what it
+grants, as the full dialog does. Saving the right-hand side approves your version once, closing the
+tab approves the proposal as it stands, and the tab's Reject button declines. Answering in the terminal still works and
+closes the tab. Once you answer, the short prompt stays until the server takes the answer; when the server refuses it,
+the full dialog comes back with the server's reason. In VS Code's own terminal the prompt also asks you to save in the editor to answer. When VS Code cannot
+open the diff (the file is not inside the session's folder and one of the window's folders, it changed since the agent
+read it, it is too large to send, or VS Code fails to open the tab), when Orbit closes the tab itself, or when the link
+drops, the full dialog comes back in the terminal. Sending a prompt or a command closes every Orbit diff tab in the
+window; a `!` command does not. Before, the diff was shown only in the terminal.
+
+It does not open for a Patch, a notebook, several files, a folder that is not trusted, or a VS Code extension or
+terminal UI from before this release; those keep the full dialog. To keep every diff in the terminal, set
+`"diffs": { "tool": "terminal" }` in `cli.json`, or choose Diff tool in `/config`, which lists it while an editor is
+linked.
+
+The approval of an Edit or Write whose file is reached through a link now says where the link leads, and says when
+that is outside the session's folder, in the full dialog and in the short prompt.
+
+**Affects:** terminal UI users running in a VS Code window with the Orbit extension, and scripts that read Edit and
+Write permission requests (a file entry may now carry `link`).
+
+**What to do:** Nothing. Update the VS Code extension and the terminal UI together to get the editor review; either one
+alone keeps working as before.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.

@@ -2,7 +2,7 @@ import { createMemo } from "solid-js"
 import { DialogSelect, type DialogSelectRef } from "../ui/dialog-select"
 import { type DialogContext } from "../ui/dialog"
 import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "../context/keymap"
-import { DialogConfig, settingID, settings } from "./dialog-config"
+import { DialogConfig, settingID, settings, settingShown } from "./dialog-config"
 
 function isSuggestedPaletteCommand(command: KeymapCommand) {
   const suggested = command.suggested
@@ -11,7 +11,8 @@ function isSuggestedPaletteCommand(command: KeymapCommand) {
   return false
 }
 
-export function CommandPaletteDialog() {
+/** `linked` says whether the terminal UI is linked to an editor, for the settings that need one. */
+export function CommandPaletteDialog(props: { linked?: () => boolean }) {
   const commands = Keymap.useCommands()
   const shortcuts = Keymap.useShortcuts()
   const options = createMemo(() =>
@@ -34,16 +35,18 @@ export function CommandPaletteDialog() {
       }
     }),
   )
-  const settingOptions = settings.map((setting) => ({
-    title: setting.title,
-    category: setting.category,
-    searchText: setting.keywords?.join(" "),
-    searchFooter: `Settings · ${setting.category}`,
-    value: `setting:${settingID(setting)}`,
-    onSelect: (dialog: DialogContext) => {
-      dialog.replace(() => <DialogConfig current={settingID(setting)} />)
-    },
-  }))
+  const settingOptions = settings
+    .filter((setting) => settingShown(setting, props.linked?.() === true))
+    .map((setting) => ({
+      title: setting.title,
+      category: setting.category,
+      searchText: setting.keywords?.join(" "),
+      searchFooter: `Settings · ${setting.category}`,
+      value: `setting:${settingID(setting)}`,
+      onSelect: (dialog: DialogContext) => {
+        dialog.replace(() => <DialogConfig current={settingID(setting)} linked={props.linked} />)
+      },
+    }))
 
   let ref: DialogSelectRef<string>
   const list = () => {

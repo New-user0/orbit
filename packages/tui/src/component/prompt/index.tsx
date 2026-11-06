@@ -1611,6 +1611,8 @@ export function Prompt(props: PromptProps) {
       void (newSession ? newSession.gate.then(send).catch(newSession.recover) : send())
       setStore("mode", "normal")
     } else if (slashHead && isCommand) {
+      // New work for the model: every diff tab in the editor closes, as for a prompt. A `!` command above does not.
+      editor.diff.closeAll()
       const send = async () => {
         // Commands inherit the composer selection; command-specific overrides
         // remain server-owned and run after this preparation.
@@ -1630,6 +1632,8 @@ export function Prompt(props: PromptProps) {
       )
     } else {
       move.startSubmit()
+      // A prompt for the model closes every diff tab in the editor, as the reference does.
+      editor.diff.closeAll()
       if (!(await attempt("Failed to prepare session", prepareAgent))) return true
       // Revert must settle before optimistic admission: its committed echo
       // splices every local row at or after the boundary, which would include

@@ -351,6 +351,31 @@ describe("a path that is not really inside the session's folder is shown as text
     },
     { name: "root-relative", file: { file: "a.txt", place: inside.slice(2), patch }, platform: "win32", spelling: true },
     { name: "relative", file: { file: "a.txt", place: "a.txt", patch }, spelling: true },
+    // A part that is not there followed by `..`: Linux and macOS walk `missing` and fail, so a check that rebuilt the
+    // path by its names would take it for `link/...` inside the project while a read follows the link out.
+    {
+      name: "missing-dot-dot-link",
+      file: { file: "link/marker.txt", place: [project, "missing", "..", "link", "marker.txt"].join(path.sep), patch },
+    },
+    {
+      name: "added-missing-dot-dot-link",
+      file: {
+        file: "link/new.txt",
+        place: [project, "missing", "..", "link", "new.txt"].join(path.sep),
+        patch: added,
+        status: "added",
+      },
+    },
+    // An added file below two parts that are not there and a `..`: the rebuild by names is refused on every system.
+    {
+      name: "added-missing-dot-dot",
+      file: {
+        file: "new.txt",
+        place: [project, "none1", "none2", "..", "new.txt"].join(path.sep),
+        patch: added,
+        status: "added",
+      },
+    },
     { name: "relative, no place", file: { file: "a.txt", patch }, spelling: true },
     { name: "move-from-outside", file: { file: "moved.txt", place: path.join(project, "moved.txt"), from: marker, patch } },
   ]
@@ -1078,6 +1103,17 @@ test("an auto save keeps the draft and answers nothing; Accept sends the draft, 
   await review.provider.writeFile(later.tab.right.path, encode("mine\n"))
   expect(shown.replies.at(-1)).toEqual([later.id, "once", "mine\n"])
   expect(shown.replies).toHaveLength(4)
+})
+
+test("Accept that the server refuses is said on the card alone, with no editor warning", async () => {
+  // The chat notes a refusal on the question's card (`Controller.reply`); a warning would say it twice.
+  const shown = editor({ folders: [project], window: [project], reply: async () => ({ refused: "Refused." }) })
+  const review = new Review(shown.host)
+  await review.open(item([{ file: "a.txt", place: inside, patch }]), false)
+  await review.accept(shown.tabs[0]!.right.path)
+  expect(shown.replies).toHaveLength(1)
+  expect(shown.warnings).toEqual([])
+  expect(shown.closed).toEqual([])
 })
 
 test("a side the extension closes stays readable until VS Code reports its tab closed", async () => {
