@@ -25,6 +25,9 @@ export interface PermissionHooks {
   readonly evaluate: PermissionEvaluation
 }
 
-export type PermissionDomain = Pick<PermissionApi, "list" | "get" | "reply"> & {
+export type PermissionDomain = Pick<PermissionApi, "list" | "get"> & {
+  // A plugin answers a question with the proposal or a reject. Revised content is a person's answer and comes only
+  // through a client's reply route, so the plugin reply has no field for it and the host refuses one (class 12).
+  readonly reply: (input: Omit<Parameters<PermissionApi["reply"]>[0], "content">) => ReturnType<PermissionApi["reply"]>
   readonly hook: Hooks<PermissionHooks>
 }

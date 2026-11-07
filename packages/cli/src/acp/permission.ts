@@ -6,7 +6,7 @@ import { Cause, Effect } from "effect"
 import { resolve } from "node:path"
 import type { ACPConnection } from "./connection"
 import { ACPPromise } from "./promise"
-import { declaredFields, pendingToolCall, resourcePath, stringValue, type ToolInput } from "./tool"
+import { declaredFields, patchSides, pendingToolCall, resourcePath, stringValue, type ToolInput } from "./tool"
 
 type PermissionEvent = Extract<EventSubscribeOutput, { type: "permission.asked" }>
 type Tool = { readonly name: string; readonly input: ToolInput }
@@ -108,28 +108,11 @@ const isEditFamily = (name: string) =>
  * client's copy of old_string does not), and a model-added key in the calling input adds none.
  */
 function servedPreviews(view: PermissionView.View, cwd: string): ToolCallContent[] {
-  return view.files.map((file) => {
-    const before: string[] = []
-    const after: string[] = []
-    let hunks = 0
-    file.patch.split("\n").forEach((line) => {
-      if (line.startsWith("@@")) {
-        if (hunks++ === 0) return
-        before.push("...")
-        after.push("...")
-        return
-      }
-      if (hunks === 0 || line.startsWith("\\")) return
-      const text = line.slice(1)
-      if (line.startsWith("-")) before.push(text)
-      else if (line.startsWith("+")) after.push(text)
-      else if (line.startsWith(" ")) {
-        before.push(text)
-        after.push(text)
-      }
-    })
-    return diff(resourcePath(file.place ?? file.file, cwd), before.join("\n"), after.join("\n"))
-  })
+  return view.files.map((file) => ({
+    type: "diff",
+    path: resourcePath(file.place ?? file.file, cwd),
+    ...patchSides(file.patch),
+  }))
 }
 
 /** The arguments of an MCP call as the server sends them, which its caller (Code Mode's Execute) does not show. */
@@ -137,10 +120,6 @@ function argumentsContent(view: PermissionView.View): ToolCallContent[] {
   return view.arguments === undefined
     ? []
     : [{ type: "content", content: { type: "text", text: `Arguments: ${view.arguments}` } }]
-}
-
-function diff(path: string, oldText: string, newText: string): ToolCallContent {
-  return { type: "diff", path, oldText, newText }
 }
 
 function permissionTitle(

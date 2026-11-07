@@ -33,6 +33,7 @@ import { Snapshot } from "@orbit/core/snapshot"
 import { Skill } from "@orbit/core/skill"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
+import { trustedProject } from "./fixture/project-trust"
 
 const executionCalls: Session.ID[] = []
 const interruptCalls: Session.ID[] = []
@@ -89,6 +90,8 @@ const locations = makeGlobalNode({
               restore: () => Effect.void,
             }),
             Layer.mock(Plugin.Service, { awaitActivation: Effect.void }),
+            // A drain starts only in a trusted folder (trust-first).
+            trustedProject,
           ).pipe(Layer.fresh) as unknown as Layer.Layer<LocationServices>,
       )
     }),
@@ -347,6 +350,28 @@ describe("Session.prompt", () => {
       yield* session.revert.commit(sessionID)
 
       expect(yield* SessionInbox.find(db, completion.id)).toBeUndefined()
+    }),
+  )
+
+  // Only a person's item settles a staged revert when it is delivered; a notice is not new work, so /redo stays.
+  it.effect("delivers a waiting notice over a staged revert and keeps the revert staged", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+      const boundary = yield* session.prompt({ sessionID, text: "boundary", resume: false })
+      yield* SessionInbox.promote(db, bus, sessionID, "steer")
+      yield* bus.publish(SessionEvent.RevertEvent.Staged, {
+        sessionID,
+        revert: { messageID: boundary.id, files: [] },
+      })
+      const completion = yield* session.synthetic({ sessionID, text: "stale completion" })
+
+      expect(yield* SessionInbox.promote(db, bus, sessionID, "steer")).toBe(1)
+
+      expect(yield* SessionInbox.find(db, completion.id)).toBeUndefined()
+      expect((yield* session.get(sessionID)).revert?.messageID).toBe(boundary.id)
     }),
   )
 

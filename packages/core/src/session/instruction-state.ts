@@ -173,6 +173,24 @@ export const initial = Effect.fn("InstructionState.initial")(function* (
   return Instructions.renderInitial(instructions, dereference(state.initial_values, blobs))
 })
 
+/**
+ * The values the epoch baseline is rendered from: the stored initial values, or, for a session that has no state yet,
+ * what its sources observe now. It stores nothing, and it reads no source for a session that has a state.
+ */
+export const baseline = Effect.fn("InstructionState.baseline")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  instructions: Instructions.List,
+) {
+  const state = yield* find(db, sessionID)
+  if (state) return dereference(state.initial_values, yield* loadBlobs(db, Object.values(state.initial_values)))
+  const observed = yield* observeAgainst(yield* Instructions.read(instructions))
+  return dereference(
+    observed.current,
+    new Map(Object.entries(observed.blobs).map(([hash, value]) => [Instructions.Hash.make(hash), value])),
+  )
+})
+
 /** The current instruction values, used to seed a fork's baseline. */
 export const current = Effect.fn("InstructionState.current")(function* (
   db: DatabaseService,

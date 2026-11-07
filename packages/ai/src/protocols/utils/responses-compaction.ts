@@ -120,6 +120,7 @@ export const make = (
       ProviderShared.jsonPost({ url: parts.url, body: parts.bodyText, headers: parts.headers }),
       options?.http,
     )
+    options?.onResponse?.()
     const text = yield* RequestExecutor.responseStream(response).pipe(
       Stream.decodeText(),
       Stream.runFold(

@@ -3,3 +3,19 @@ afa57acfda894e0ebf3c637dd710310b705c0a2f:packages/http-recorder/test/record-repl
 afa57acfda894e0ebf3c637dd710310b705c0a2f:packages/http-recorder/test/record-replay.test.ts:generic-api-key:92
 afa57acfda894e0ebf3c637dd710310b705c0a2f:packages/http-recorder/test/record-replay.test.ts:generic-api-key:146
 afa57acfda894e0ebf3c637dd710310b705c0a2f:packages/http-recorder/test/record-replay.test.ts:gcp-api-key:71
+# Test fixtures: placeholder strings in cli tests, fake keys in http-recorder redaction tests, TLS fixture keys, and
+# recorded signed-URL JWTs that expired on 2026-09-24. Nothing here needs rotating.
+40b3407bf49480993a25fc0fe8d69e3d9bdd6c71:packages/cli/test/trust.test.ts:generic-api-key:2848
+f20d59f3cf5bb72f8595a2461b791a1b4f77c1bd:packages/cli/test/acp/permission-files.subprocess.test.ts:generic-api-key:285
+22d9d0c6bcc109e521f354d7bcadcffc82aa1bfe:packages/util/test/fixture/tls/client-only.key:private-key:1
+7845c97566c7da670953229b9fc30e0a3b758712:packages/http-recorder/test/redaction.test.ts:gcp-api-key:80
+7845c97566c7da670953229b9fc30e0a3b758712:packages/http-recorder/test/redaction.test.ts:generic-api-key:77
+7845c97566c7da670953229b9fc30e0a3b758712:packages/http-recorder/test/redaction.test.ts:generic-api-key:102
+7845c97566c7da670953229b9fc30e0a3b758712:packages/http-recorder/test/http.test.ts:generic-api-key:100
+7845c97566c7da670953229b9fc30e0a3b758712:packages/tui/test/config.test.tsx:generic-api-key:133
+7845c97566c7da670953229b9fc30e0a3b758712:packages/tui/test/config-v2.test.tsx:generic-api-key:162
+7845c97566c7da670953229b9fc30e0a3b758712:packages/util/test/fixture/tls/client.key:private-key:1
+7845c97566c7da670953229b9fc30e0a3b758712:packages/util/test/fixture/tls/server.key:private-key:1
+7845c97566c7da670953229b9fc30e0a3b758712:packages/ai/test/fixtures/recordings/runway-video/generates-a-video.json:jwt:172
+7845c97566c7da670953229b9fc30e0a3b758712:packages/ai/test/fixtures/recordings/runway-video/generates-a-video.json:jwt:188
+7845c97566c7da670953229b9fc30e0a3b758712:packages/ai/test/fixtures/recordings/runway-video/generates-a-video.json:jwt:195

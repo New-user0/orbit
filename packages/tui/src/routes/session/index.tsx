@@ -39,6 +39,7 @@ import type {
 import { useLocal } from "../../context/local"
 import { AssistantFooter } from "./assistant-footer"
 import { Locale } from "../../util/locale"
+import { createCompactionProgress } from "./compaction-progress"
 import { bodyText, outputText } from "../../util/renderer"
 import { FilePath } from "../../ui/file-path"
 import { PlanDock } from "./plan-dock"
@@ -54,6 +55,7 @@ import {
   primitiveInputSummary,
   toolDisplayContent,
   toolDisplayMetadata,
+  writtenFile,
   type ExecuteCall,
 } from "../../util/tool-display"
 import { DialogExecute } from "./dialog-execute"
@@ -77,7 +79,9 @@ import { useToast } from "../../ui/toast"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
 import { projectedPromptInput } from "../../prompt/codec"
-import { appendPrompt } from "../../prompt/history"
+import { appendPrompt, usePromptHistory } from "../../prompt/history"
+import { useLog } from "../../context/log"
+import { DialogRewind, REWIND_GONE, rewindPrompts, type RewindDryRun, type RewindOption } from "./dialog-rewind"
 import { deduplicateVisibleImages } from "../../prompt/attachment"
 import { useEpilogue } from "../../context/epilogue"
 import { normalizePath } from "../../util/path"
@@ -94,7 +98,7 @@ import { collapseShellOutput, collapseToolOutput } from "../../util/collapse-too
 import { Keymap, type KeymapCommand } from "../../context/keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { useLocation } from "../../context/location"
-import { useTrustPrompt } from "../../context/trust"
+import { useTrust, useTrustPrompt } from "../../context/trust"
 import { Slot } from "../../plugin/render"
 import { usePlugin } from "../../plugin/context"
 import {
@@ -172,6 +176,8 @@ export function Session(props: {
   const config = configState.data
   const theme = useTheme()
   const promptRef = usePromptRef()
+  const promptHistory = usePromptHistory()
+  const log = useLog({ component: "session" })
   const session = createMemo(() => data.session.get(route.sessionID))
   const messages = () => data.session.message.list(route.sessionID)
   const messageIndexes = createMemo(() => new Map(messages().map((message, index) => [message.id, index])))
@@ -193,6 +199,17 @@ export function Session(props: {
 
   createEffect(() => currentLocation.set(location()))
   useTrustPrompt()
+  const trust = useTrust()
+  // Sends --prompt once everything submit needs is ready, the folder's trust among it; it runs once. An effect first
+  // runs after the component's body, so `prompt`, `synced` and `sent`, declared below, are set by then.
+  createEffect(() => {
+    const current = prompt()
+    if (sent || !current || !synced() || !trust.typing() || !local.model.ready || !local.model.catalogReady) return
+    if (!local.agent.current() || !local.model.current()) return
+    if (!args.prompt || route.prompt?.text !== args.prompt || current.current.text !== args.prompt) return
+    sent = true
+    current.submit()
+  })
 
   createEffect(() => {
     const title = Locale.truncate(session()?.title ?? "", 50)
@@ -611,14 +628,6 @@ export function Session(props: {
     restore()
   }
 
-  createEffect(() => {
-    const current = prompt()
-    if (sent || !current || !synced() || !local.model.ready || !local.model.catalogReady) return
-    if (!local.agent.current() || !local.model.current()) return
-    if (!args.prompt || route.prompt?.text !== args.prompt || current.current.text !== args.prompt) return
-    sent = true
-    current.submit()
-  })
   const dialog = useDialog()
   const renderer = useRenderer()
   const runPendingAction = createSingleFlight<string>()
@@ -690,6 +699,121 @@ export function Session(props: {
         footerHints={[{ title: "steer", label: "enter" }]}
       />
     ))
+  // The rewind picker (/rewind, /checkpoint, Esc twice, the message dialog). It sends only this session's ID and a
+  // message ID read from its own message list; the server resolves the folder and decides trust when it acts.
+  // The conversation the picker works on: what comes before a staged revert, without the prompts still waiting in the
+  // inbox. The client draws those in the transcript, but they are no messages yet, so they are no rows and do not count
+  // as something after a prompt.
+  const rewindable = () => messagesBeforeRevert().filter((message) => !pendingDeliveries().has(message.id))
+  const rewindStats = (messageID: string) =>
+    client.api.session
+      .diff({ sessionID: route.sessionID, from: messageID, scope: "prompt", context: 0 })
+      .catch((error) => {
+        log.warn("rewind stats failed", { messageID, error: errorMessage(error) })
+        throw error
+      })
+  const stopSession = async (sessionID: string) => {
+    await client.api.session.interrupt({ sessionID })
+    await client.api.session.wait({ sessionID })
+  }
+  // The server refuses a dry run while the session runs (409), so a running session is stopped before it is asked;
+  // otherwise a picker opened during a run could never offer the code options.
+  const rewindDryRun = (messageID: string) => {
+    const sessionID = route.sessionID
+    return (data.session.status(sessionID) === "running" ? stopSession(sessionID) : Promise.resolve())
+      .then(() => client.api.session.revert.files({ sessionID, messageID, dryRun: true }))
+      .catch((error) => {
+        log.warn("rewind dry run failed", { messageID, error: errorMessage(error) })
+        return undefined
+      })
+  }
+  const refill = (messageID: string) => {
+    const message = data.session.message.get(route.sessionID, messageID)
+    if (message?.type === "shell") {
+      prompt()?.set({ text: message.command, pasted: [] })
+      prompt()?.setMode("shell")
+      return
+    }
+    if (message?.type !== "user") return
+    prompt()?.set({ ...projectedPromptInput(message), pasted: [] })
+    return message
+  }
+  const rewind = async (option: RewindOption, messageID: string) => {
+    const sessionID = route.sessionID
+    await stopSession(sessionID)
+    if (option === "code") {
+      await client.api.session.revert.files({ sessionID, messageID })
+      return
+    }
+    await client.api.session.revert.stage({
+      sessionID,
+      messageID,
+      files: option === "conversation" ? false : undefined,
+    })
+    refill(messageID)
+  }
+  const openRewind = (preselected?: string, checked?: Promise<RewindDryRun | undefined>, key?: symbol) =>
+    dialog.replace(
+      () => (
+        <DialogRewind
+          prompts={rewindPrompts(rewindable())}
+          stats={rewindStats}
+          dryRun={(messageID) => (checked && messageID === preselected ? checked : rewindDryRun(messageID))}
+          act={rewind}
+          onClose={() => dialog.clear()}
+          preselected={preselected}
+          connected={client.connection.status() === "connected"}
+        />
+      ),
+      undefined,
+      { key },
+    )
+  /** Whether nothing a person would miss follows the prompt: no prompt, and no reply with text, a tool or an error. */
+  const onlyEmptyAfter = (messageID: string) => {
+    const list = rewindable()
+    const index = list.findIndex((message) => message.id === messageID)
+    return index !== -1 && !list.slice(index + 1).some(meaningful)
+  }
+  // The message dialog's Rewind: a prompt followed only by empty replies, whose code rewind would change no file, goes
+  // straight back into the input; any other opens the picker on its confirm step. A prompt that is no row of the picker
+  // (still in the inbox, or taken back by a staged revert) is not in `rewindable()`, so it opens the picker, which
+  // closes at once without a dry run: nothing is interrupted, asked or changed.
+  // The picker replaces the message dialog at once and shows `Checking files…` while a running session stops and the
+  // dry run answers, so the dialog cannot be chosen twice. It goes on to step 2 when a file would change, or when the
+  // prompt is no longer followed only by empty replies once the dry run answers; otherwise the clear below removes it
+  // first, unless the person closed it already: this await resumes on the dry run's answer before the picker's own
+  // continuation, which waits one more step behind its `.catch`.
+  const rewindMessage = async (messageID: string) => {
+    if (!onlyEmptyAfter(messageID)) return openRewind(messageID)
+    const checked = rewindDryRun(messageID)
+    const key = Symbol("rewind")
+    openRewind(messageID, checked, key)
+    if (changesFiles(await checked) || dialog.key !== key) return
+    // The conversation can change while the dry run runs, and while a running session stops before it. Staging at a
+    // prompt another client's revert took back would move that revert and put back what it hid, so nothing is sent and
+    // the refusal is shown (class 13). A reply that gained something leaves the picker to go on to step 2.
+    if (!rewindable().some((message) => message.id === messageID)) {
+      dialog.clear()
+      toast.show({ message: REWIND_GONE, variant: "error", duration: 5000 })
+      return
+    }
+    if (!onlyEmptyAfter(messageID)) return
+    dialog.clear()
+    await rewind("conversation", messageID).catch((error) =>
+      toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }),
+    )
+  }
+  // An interrupt of the newest prompt before its reply held anything puts that prompt back in the input, when nothing
+  // was typed or waits in the inbox. Files are never part of it.
+  const rewindInterrupted = async () => {
+    const sessionID = route.sessionID
+    await client.api.session.wait({ sessionID })
+    if (prompt()?.current.text || pendingUsers().length) return
+    const last = messagesBeforeRevert().findLast((message) => message.type === "user")
+    if (!last || !onlyEmptyAfter(last.id)) return
+    await client.api.session.revert.stage({ sessionID, messageID: last.id, files: false })
+    if (refill(last.id)) promptHistory.forget(last.id)
+  }
   const unavailable = (feature: string) => {
     toast.show({ message: `${feature} is not implemented for V2 sessions yet`, variant: "error", duration: 5000 })
     dialog.clear()
@@ -934,11 +1058,7 @@ export function Session(props: {
       slash: { name: "timeline" },
       run: () => {
         dialog.replace(() => (
-          <DialogTimeline
-            sessionID={route.sessionID}
-            onMove={jumpToMessage}
-            setPrompt={(value) => promptRef.current?.set(value)}
-          />
+          <DialogTimeline sessionID={route.sessionID} onMove={jumpToMessage} onRewind={rewindMessage} />
         ))
       },
     },
@@ -963,14 +1083,13 @@ export function Session(props: {
       title: "Compact session",
       id: "session.compact",
       group: "Session",
-      slash: {
-        name: "compact",
-      },
-      run: () => {
+      slash: { name: "compact", arguments: "optional" as const },
+      run: (input?: string) => {
         const selection = local.model.current()
         void data.session
           .compact({
             sessionID: route.sessionID,
+            instructions: input || undefined,
             model: selection
               ? {
                   providerID: selection.providerID,
@@ -1022,6 +1141,13 @@ export function Session(props: {
         })().catch((error) => toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }))
         dialog.clear()
       },
+    },
+    {
+      title: "Rewind",
+      id: "session.rewind",
+      group: "Session",
+      slash: { name: "rewind", aliases: ["checkpoint"] },
+      run: () => openRewind(),
     },
     {
       title: "Redo",
@@ -1388,6 +1514,7 @@ export function Session(props: {
         config,
         mutatePending,
         pendingDelivery: (inboxID) => pendingDeliveries().get(inboxID),
+        rewind: rewindMessage,
       }}
     >
       <box flexDirection="row" flexGrow={1} minHeight={0}>
@@ -1529,6 +1656,14 @@ export function Session(props: {
                       if (!next) return false
                       return mutatePending("steer", next.id)
                     }}
+                    rewind={{
+                      ready: () => pendingUsers().length === 0 && messagesBeforeRevert().length > 0,
+                      open: () => openRewind(),
+                      interrupted: () =>
+                        void rewindInterrupted().catch((error) =>
+                          toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }),
+                        ),
+                    }}
                     sessionID={route.sessionID}
                   />
                 </Match>
@@ -1539,6 +1674,23 @@ export function Session(props: {
       </box>
     </context.Provider>
   )
+}
+
+/**
+ * Whether a message is one a person would miss after a rewind: a prompt, shell command or skill, or a reply holding
+ * text, a tool call or the error it failed with. Notices, switches, idle markers, compaction checkpoints and replies
+ * with nothing in them are not; neither is a reply that only shows it was interrupted (its error is `aborted`).
+ */
+function meaningful(message: SessionMessageInfo) {
+  if (message.type === "user" || message.type === "shell" || message.type === "skill") return true
+  if (message.type !== "assistant") return false
+  if (message.error && message.error.type !== "aborted") return true
+  return message.content.some((part) => part.type === "tool" || (part.type === "text" && part.text.trim() !== ""))
+}
+
+/** Whether a dry run says a code rewind would change at least one file, as the picker reads it for its code options. */
+function changesFiles(result: RewindDryRun | undefined) {
+  return !!result?.canRewind && Array.isArray(result.filesChanged) && result.filesChanged.length > 0
 }
 
 type SessionRowViewProps = {
@@ -1830,7 +1982,26 @@ function SessionMessageView(props: { message: SessionMessageInfo }) {
       <Match when={props.message.type === "compaction"}>
         <CompactionMessage message={props.message as Extract<SessionMessageInfo, { type: "compaction" }>} />
       </Match>
+      <Match when={props.message.type === "recap"}>
+        <RecapMessage message={props.message as Extract<SessionMessageInfo, { type: "recap" }>} />
+      </Match>
     </Switch>
+  )
+}
+
+// The away summary: a reference mark in a two-column gutter, indented as the transcript's notices are, then the
+// recap. Both are muted, as the recap is a reminder for the person and not part of the conversation.
+function RecapMessage(props: { message: Extract<SessionMessageInfo, { type: "recap" }> }) {
+  const theme = useTheme()
+  return (
+    <box flexDirection="row" paddingLeft={3} paddingRight={1} flexShrink={0}>
+      <box width={2} flexShrink={0}>
+        <text fg={theme.text.muted}>※</text>
+      </box>
+      <text fg={theme.text.muted} wrapMode="word" flexGrow={1} minWidth={0}>
+        {bodyText(props.message.text)}
+      </text>
+    </box>
   )
 }
 
@@ -2021,6 +2192,11 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
   const content = createMemo(() => bodyText(text()).trim())
   const color = () => (status() === "failed" && !cancelled() ? theme.text.feedback.error.base : theme.text.muted)
   // Usage of the compaction request itself; the resulting context size only shows on the next assistant step.
+  const progress = createCompactionProgress({
+    running: () => status() === "running",
+    created: () => props.message.time.created,
+    width: () => ctx.width,
+  })
   const usage = () => {
     if (props.message.status === "running" || !props.message.tokens) return
     const tokens = props.message.tokens
@@ -2055,10 +2231,13 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
           <Show when={usage()}>
             <text fg={color()}>· {usage()}</text>
           </Show>
+          <Show when={progress()}>
+            <text fg={color()}>{progress()}</text>
+          </Show>
         </box>
         <box border={["top"]} borderColor={color()} flexGrow={1} />
       </box>
-      <Show when={content()}>
+      <Show when={props.message.status !== "running" && content()}>
         <box paddingTop={1} paddingLeft={3}>
           <markdown
             syntaxStyle={syntax()}
@@ -2217,7 +2396,6 @@ function UserMessage(props: { message: SessionMessageUser }) {
   const delivery = createMemo(() => ctx.pendingDelivery(props.message.id))
   const dialog = useDialog()
   const renderer = useRenderer()
-  const promptRef = usePromptRef()
 
   const updatePendingSteer = async (action: "queue" | "cancel") => {
     if (await ctx.mutatePending(action, props.message.id)) dialog.clear()
@@ -2252,11 +2430,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
               return
             }
             dialog.replace(() => (
-              <DialogMessage
-                messageID={props.message.id}
-                sessionID={ctx.sessionID}
-                setPrompt={(value) => promptRef.current?.set(value)}
-              />
+              <DialogMessage messageID={props.message.id} sessionID={ctx.sessionID} onRewind={ctx.rewind} />
             ))
           }}
           paddingLeft={1}
@@ -2945,32 +3119,67 @@ function ShellDisplay(props: {
   )
 }
 
-function Write(props: ToolProps) {
+export function Write(props: ToolProps) {
+  const ctx = use()
   const theme = useTheme()
   const { currentSyntax: syntax } = useThemes()
   const pathFormatter = usePathFormatter()
-  const code = createMemo(() => {
-    return stringValue(props.input.content) ?? ""
+  // Drawn from the diff the tool recorded, so a Write approved with the person's own version shows that version; the
+  // model's input names the file only while the call has not finished (class 8).
+  const written = createMemo(() => (props.part.state.status === "completed" ? writtenFile(props.metadata) : undefined))
+  const view = createMemo(() => {
+    const diffView = ctx.config.diffs?.view
+    if (diffView === "unified" || diffView === "split") return diffView
+    return ctx.width > 120 ? "split" : "unified"
   })
 
   return (
     <Switch>
-      <Match when={props.part.state.status === "completed"}>
-        <BlockTool
-          path={{ label: "# Wrote", value: pathFormatter.format(displayValue(props.input.path)) }}
-          part={props.part}
-        >
-          <line_number fg={theme.text.muted} minWidth={3} paddingRight={1}>
-            <code
-              conceal={false}
-              fg={theme.text.base}
-              filetype={filetype(displayValue(props.input.path))}
-              syntaxStyle={syntax()}
-              content={bodyText(code())}
-            />
-          </line_number>
-          <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.path) ?? ""} />
-        </BlockTool>
+      <Match when={written()}>
+        {(item) => (
+          <BlockTool path={{ label: "# Wrote", value: bodyText(pathFormatter.format(item().file)) }} part={props.part}>
+            <Show
+              when={item().text}
+              fallback={
+                <box paddingLeft={1}>
+                  <PatchDiff
+                    diff={bodyText(item().patch)}
+                    hunkFg={theme.diff.text.hunkHeader}
+                    view={view()}
+                    filetype={filetype(item().file)}
+                    syntaxStyle={syntax()}
+                    showLineNumbers={true}
+                    width="100%"
+                    wrapMode={ctx.diffWrapMode()}
+                    fg={theme.text.base}
+                    addedBg={theme.diff.background.added}
+                    removedBg={theme.diff.background.removed}
+                    contextBg={theme.diff.background.context}
+                    addedSignColor={theme.diff.highlight.added}
+                    removedSignColor={theme.diff.highlight.removed}
+                    lineNumberFg={theme.diff.lineNumber.text}
+                    lineNumberBg={theme.diff.background.context}
+                    addedLineNumberBg={theme.diff.lineNumber.background.added}
+                    removedLineNumberBg={theme.diff.lineNumber.background.removed}
+                  />
+                </box>
+              }
+            >
+              {(text) => (
+                <line_number fg={theme.text.muted} minWidth={3} paddingRight={1}>
+                  <code
+                    conceal={false}
+                    fg={theme.text.base}
+                    filetype={filetype(item().file)}
+                    syntaxStyle={syntax()}
+                    content={bodyText(text())}
+                  />
+                </line_number>
+              )}
+            </Show>
+            <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.path) ?? ""} />
+          </BlockTool>
+        )}
       </Match>
       <Match when={true}>
         <InlineTool icon="◇" pending="Preparing write…" complete={displayValue(props.input.path)} part={props.part}>

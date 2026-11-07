@@ -158,6 +158,9 @@ describe("WriteTool", () => {
               existed: false,
             },
             content: [{ type: "text", text: "Created file successfully: src/new.txt" }],
+            metadata: {
+              files: [expect.objectContaining({ file: "src/new.txt", status: "added", additions: 1, deletions: 0 })],
+            },
           })
           expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "src", "new.txt"), "utf8"))).toBe(
             "created",
@@ -702,6 +705,48 @@ describe("WriteTool", () => {
             expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "f.txt"), "utf8"))).toBe("second")
           }),
         ),
+      )
+    }),
+  )
+})
+
+// clients-ux-5: a code restore puts back only what the session's own file tools changed, and learns which files those
+// were from the calls it recorded. Edit, Patch and NotebookEdit name their files in the completed call; Write must too,
+// or a file it created would survive a rewind.
+describe("WriteTool records the file it changed, for code rewind", () => {
+  it.live("names the file in the completed call, by the project's spelling", () =>
+    withTempDir((tmp) =>
+      withTool(tmp.path, makeWriteFixture(), (registry) =>
+        Effect.gen(function* () {
+          const settled = yield* executeTool(registry, call({ file_path: "src/new.txt", content: "created\n" }))
+          expect(settled.status).toBe("completed")
+          expect(settled.metadata?.files).toEqual([
+            expect.objectContaining({ file: "src/new.txt", status: "added", additions: 1, deletions: 0 }),
+          ])
+        }),
+      ),
+    ),
+  )
+
+  // A Write that fails after it wrote (here a formatter leaves something Write cannot read back) still changed the file,
+  // so the failed call names it too, and a rewind puts it back.
+  it.live("names the file in a call that failed after writing", () =>
+    withTempDir((tmp) => {
+      const fixture = makeWriteFixture()
+      fixture.formatFile = (target) =>
+        Effect.promise(async () => {
+          await fs.rm(target)
+          await fs.mkdir(target)
+          return true
+        })
+      return withTool(tmp.path, fixture, (registry) =>
+        Effect.gen(function* () {
+          const failure = yield* registry.snapshot().pipe(
+            Effect.flatMap((tools) => tools.execute(call({ file_path: "src/new.txt", content: "created\n" }))),
+            Effect.flip,
+          )
+          expect(failure.metadata?.files).toEqual([{ file: "src/new.txt" }])
+        }),
       )
     }),
   )

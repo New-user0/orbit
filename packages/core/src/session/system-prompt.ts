@@ -187,12 +187,6 @@ export const GUIDANCE = [
     ],
   },
   {
-    tool: "Memory",
-    lines: [
-      "- Use Memory to save what a future session in this project should know, such as working build and test commands, conventions, and the user's stated preferences. Keep memories short and current.",
-    ],
-  },
-  {
     tool: "AskUserQuestion",
     lines: [
       "- AskUserQuestion is for a blocker that investigation did not remove, or a refusal whose reason is unclear. Give concrete options, the recommended one first.",

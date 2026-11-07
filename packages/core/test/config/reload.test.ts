@@ -88,7 +88,12 @@ describe("config plugin reloads", () => {
               yield* waitUntil(probes.pipe(Effect.map((items) => items.length === 0)))
               yield* Effect.promise(() => Bun.write(skill, probeSkill("Recreated")))
               yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "Recreated")))
-            }).pipe(Effect.provide(liveConfig(project, undefined, { global: input.global })))
+            }).pipe(
+              Effect.provide(
+                // A root in the folder above is read only when that folder is the project's root (D7).
+                liveConfig(project, undefined, { global: input.global }, input.root.startsWith("../") ? tmp.path : project),
+              ),
+            )
           }),
         ),
       ),
@@ -306,7 +311,12 @@ describe("config plugin reloads", () => {
               yield* waitUntil(
                 references.list().pipe(Effect.map((items) => items.length === 1 && items[0]?.name === "next")),
               )
-            }).pipe(Effect.provide(liveConfig(project)))
+            }).pipe(
+              Effect.provide(
+                // A file in the folder above is read only when that folder is the project's root (D7).
+                liveConfig(project, undefined, undefined, input.file.startsWith("../") ? tmp.path : project),
+              ),
+            )
           }),
         ),
       ),
@@ -402,11 +412,24 @@ describe("config plugin reloads", () => {
   )
 })
 
-function liveConfig(directory: string, native?: Watcher.NativeInterface, options: Config.Options = { global: false }) {
+function liveConfig(
+  directory: string,
+  native?: Watcher.NativeInterface,
+  options: Config.Options = { global: false },
+  projectDirectory = directory,
+) {
   return AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, Reference.node, Global.node, Location.node]), [
     Config.node.replace(Config.configured(options)),
     Location.node.replace(
-      Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
+      Layer.succeed(
+        Location.Service,
+        Location.Service.of(
+          location(
+            { directory: AbsolutePath.make(directory) },
+            { projectDirectory: AbsolutePath.make(projectDirectory) },
+          ),
+        ),
+      ),
     ),
     Global.node.replace(
       Global.layerWith({ config: path.join(directory, "global"), home: path.join(directory, "home") }),

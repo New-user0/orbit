@@ -11,6 +11,11 @@ import {
   toToolKind,
 } from "../../src/acp/tool"
 
+// The metadata an Edit records once it has run: the diff of the one line it changed, which a completed call shows.
+const ran = (before: string, after: string) => ({
+  files: [{ file: "file", patch: `--- file\n+++ file\n@@ -1,1 +1,1 @@\n-${before}\n+${after}\n` }],
+})
+
 describe("acp tools", () => {
   test("keeps the pages of a Read in its declared fields and drops keys a model added", () => {
     expect(declaredFields("Read", { file_path: "a.pdf", pages: "1-5", sneaky: "x" })).toEqual({
@@ -176,6 +181,7 @@ describe("acp tools", () => {
           toolName: "Edit",
           input: { file_path: value, old_string: "a", new_string: "b" },
           content: [],
+          metadata: ran("a", "b"),
           cwd,
         }).content,
       ).toEqual([{ type: "diff", path: place, oldText: "a", newText: "b" }])
@@ -220,6 +226,41 @@ describe("acp tools", () => {
     expect(toLocations("patch", {}, "/workspace")).toEqual([])
   })
 
+  test("draws a completed Edit whose recorded diff has two hunks as both sides with a gap between the hunks", () => {
+    const patch = [
+      "--- file",
+      "+++ file",
+      "@@ -1,2 +1,2 @@",
+      " keep",
+      "-one",
+      "+ONE",
+      "@@ -9,2 +9,2 @@",
+      " also",
+      "-two",
+      "\\ No newline at end of file",
+      "+TWO",
+      "\\ No newline at end of file",
+      "",
+    ].join("\n")
+    expect(
+      completedToolUpdate({
+        toolCallId: "call",
+        toolName: "edit",
+        input: { path: "src/b.ts", oldString: "one", newString: "ONE" },
+        content: [],
+        metadata: { files: [{ file: "file", patch }] },
+        cwd: "/workspace",
+      }).content,
+    ).toEqual([
+      {
+        type: "diff",
+        path: resolve("/workspace", "src/b.ts"),
+        oldText: "keep\none\n...\nalso\ntwo",
+        newText: "keep\nONE\n...\nalso\nTWO",
+      },
+    ])
+  })
+
   test("reports resolved locations on completed and failed updates", () => {
     const patchText = ["*** Begin Patch", "*** Add File: src/a.ts", "+a", "*** End Patch"].join("\n")
     expect(
@@ -237,6 +278,7 @@ describe("acp tools", () => {
         toolName: "edit",
         input: { path: "src/b.ts", oldString: "before", newString: "after" },
         content: [],
+        metadata: ran("before", "after"),
         cwd: "/workspace",
       }),
     ).toMatchObject({
@@ -272,7 +314,7 @@ describe("acp tools", () => {
           { type: "file", mime: "image/png", name: "image.png", uri: `data:image/png;base64,${image}` },
           { type: "file", mime: "text/plain", name: "note.txt", uri: "data:text/plain;base64,bm90ZQ==" },
         ],
-        metadata: {},
+        metadata: ran("before", "after"),
       }).content,
     ).toEqual([
       {
@@ -391,7 +433,7 @@ describe("acp tools", () => {
           newString: "after",
         },
         content: [{ type: "text", text: "Edit applied successfully." }],
-        metadata: { output: "Edit applied successfully." },
+        metadata: { output: "Edit applied successfully.", ...ran("before", "after") },
       }),
     ).toEqual({
       toolCallId: "tool-1",
@@ -410,7 +452,7 @@ describe("acp tools", () => {
         },
       ],
       rawOutput: {
-        metadata: { output: "Edit applied successfully." },
+        metadata: { output: "Edit applied successfully.", ...ran("before", "after") },
       },
     })
   })

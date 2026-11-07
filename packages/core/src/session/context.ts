@@ -11,18 +11,21 @@ import { WorkflowTool } from "../tool/plugin/workflow.js"
 import { CodeModeInstructions } from "../codemode/instructions.js"
 import { Database } from "../database/database.js"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
+import { FSUtil } from "@orbit/util/fs-util"
 import { InstructionDiscovery } from "../instruction-discovery.js"
 import { Instructions } from "../instructions/index.js"
 import { InstructionBuiltIns } from "../instructions/builtins.js"
 import { Location } from "../location.js"
 import { PromptConfigPlugin } from "../plugin/prompt-config.js"
 import { McpInstructions } from "../mcp/instructions.js"
+import { MemoryInstructions } from "../memory/instructions.js"
 import { McpTool } from "../tool/mcp.js"
 import { ReferenceInstructions } from "../reference/instructions.js"
 import { SkillInstructions } from "../skill/instructions.js"
 import { VcsInstructions } from "../vcs/instructions.js"
 import { Tool } from "../tool.js"
 import { AgentNotFoundError } from "./error.js"
+import { SessionCompaction } from "./compaction.js"
 import { SessionHistory } from "./history.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { InstructionEntry } from "./instruction-entry.js"
@@ -47,6 +50,11 @@ export interface Loaded {
   readonly initial: string
   readonly messages: ReadonlyArray<SessionMessage.Info>
   readonly tools: Tool.Snapshot
+  /**
+   * Resolves the session model again with the variant that reasons least; nothing when the session selected no
+   * variant. Only a request that must not think, such as the compaction fallback, runs it, so a step pays nothing.
+   */
+  readonly unreasoned?: Effect.Effect<SessionRunnerModel.Resolved | undefined>
   /** The configured `output_token_cap`, when set. */
   readonly outputTokenCap?: number
 }
@@ -62,6 +70,11 @@ export interface Interface {
   readonly select: (sessionID: SessionSchema.ID) => Effect.Effect<Selection, AgentNotFoundError>
   /** Resolves the model and active history for that selection. */
   readonly load: (selection: Selection) => Effect.Effect<Loaded, SessionRunnerModel.Error>
+  /** The session model again without its reasoning variant; nothing when the session selected no variant. */
+  readonly unreasoned: (
+    session: SessionSchema.Info,
+    resolved: SessionRunnerModel.Resolved,
+  ) => Effect.Effect<SessionRunnerModel.Resolved | undefined>
   readonly resolveModel: (
     session: SessionSchema.Info,
   ) => Effect.Effect<SessionRunnerModel.Resolved, SessionRunnerModel.Error>
@@ -69,6 +82,7 @@ export interface Interface {
    * Selects the agent and model for work beside the Session, such as titles and side queries, without instruction or
    * tool preflight. The agent's configured model comes first, then the small model of the primary provider, then the
    * primary model; all three use the variant that reasons least, so `primary` is the Session model without its own variant.
+   * `preferred` is the agent's model or the small model alone, without the fallback to the primary model.
    */
   readonly selectAuxiliary: (
     session: SessionSchema.Info,
@@ -77,6 +91,7 @@ export interface Interface {
     | {
         readonly agent: Agent.Info
         readonly primary: SessionRunnerModel.Resolved | undefined
+        readonly preferred: SessionRunnerModel.Resolved | undefined
         readonly selected: SessionRunnerModel.Resolved
       }
     | undefined
@@ -101,6 +116,7 @@ const layer = Layer.effect(
     const agents = yield* Agent.Service
     const agentInstructions = yield* AgentInstructions.Service
     const builtins = yield* InstructionBuiltIns.Service
+    const compaction = yield* SessionCompaction.Service
     const model = yield* Model.Service
     const db = (yield* Database.Service).db
     const discovery = yield* InstructionDiscovery.Service
@@ -117,8 +133,28 @@ const layer = Layer.effect(
     const vcsInstructions = yield* VcsInstructions.Service
     const registry = yield* Tool.Service
     const config = yield* Config.Service
+    const memory = yield* MemoryInstructions.Service
+    const fs = yield* FSUtil.Service
 
     const resolveModel = (session: SessionSchema.Info) => models.resolve(session, model.available)
+
+    // The Session's own variant is dropped for side work: a thinking variant costs more and rejects a forced tool choice.
+    const leastReasoning = (session: SessionSchema.Info, info: Model.Info | undefined, pinned?: Model.VariantID) =>
+      Effect.gen(function* () {
+        if (!info) return
+        const variant = pinned ?? MINIMAL_REASONING_VARIANTS.find((id) => info.variants.some((item) => item.id === id))
+        return yield* resolveModel({
+          ...session,
+          model: Model.Ref.make({ providerID: info.providerID, id: info.id, ...(variant ? { variant } : {}) }),
+        }).pipe(Effect.orElseSucceed(() => undefined))
+      })
+
+    const unreasonedFor = (session: SessionSchema.Info, resolved: SessionRunnerModel.Resolved) =>
+      resolved.ref.variant && resolved.ref.variant !== "default"
+        ? model
+            .get(resolved.ref.providerID, resolved.ref.id)
+            .pipe(Effect.flatMap((info) => leastReasoning(session, info)))
+        : Effect.succeed(undefined)
 
     const selectAuxiliary = Effect.fn("SessionContext.selectAuxiliary")(function* (
       session: SessionSchema.Info,
@@ -127,25 +163,15 @@ const layer = Layer.effect(
       const agent = yield* agents.get(agentID)
       if (!agent) return
       const sessionModel = yield* resolveModel(session).pipe(Effect.orElseSucceed(() => undefined))
-      // The Session's own variant is dropped for side work: a thinking variant costs more and rejects a forced tool choice.
-      const leastReasoning = (info: Model.Info | undefined, pinned?: Model.VariantID) =>
-        Effect.gen(function* () {
-          if (!info) return
-          const variant = pinned ?? MINIMAL_REASONING_VARIANTS.find((id) => info.variants.some((item) => item.id === id))
-          return yield* resolveModel({
-            ...session,
-            model: Model.Ref.make({ providerID: info.providerID, id: info.id, ...(variant ? { variant } : {}) }),
-          }).pipe(Effect.orElseSucceed(() => undefined))
-        })
       const pinned = agent.model ? yield* model.get(agent.model.providerID, agent.model.id) : undefined
       const small = pinned ?? (sessionModel ? yield* model.small(sessionModel.ref.providerID) : undefined)
-      const preferred = yield* leastReasoning(small, pinned ? agent.model?.variant : undefined)
+      const preferred = yield* leastReasoning(session, small, pinned ? agent.model?.variant : undefined)
       const primary = sessionModel
-        ? ((yield* leastReasoning(yield* model.get(sessionModel.ref.providerID, sessionModel.ref.id))) ?? sessionModel)
+        ? ((yield* leastReasoning(session, yield* model.get(sessionModel.ref.providerID, sessionModel.ref.id))) ?? sessionModel)
         : undefined
       const selected = preferred ?? primary
       if (!selected) return
-      return { agent, primary, selected }
+      return { agent, primary, preferred, selected }
     })
 
     const resolveFallback = Effect.fn("SessionContext.resolveFallback")(function* (
@@ -186,10 +212,21 @@ const layer = Layer.effect(
       const permissions = Permission.merge(agent.info.permissions, session.permissions ?? [])
       const tools = yield* registry.snapshot(permissions)
       const offered = (name: string) => tools.definitions.some((definition) => definition.name === name)
+      const forkSource = session.fork && (yield* store.get(session.fork.sessionID))
+      const main = PromptConfigPlugin.mainThread(session, forkSource || undefined)
+      const withInstructions = agent.info.context?.instructions !== false
+      const info = agent.info
+      // Whether Orbit's own default prompt applies: a subagent has none of it, and an agent whose own prompt, or a system
+      // prompt of the person's, takes its place drops it. The memory guide and the tool-results section go with it, so the
+      // answer is worked out once (one read of `system_prompt_file`).
+      const defaultPrompt =
+        main &&
+        !info.system &&
+        !(yield* PromptConfigPlugin.replaces(fs, location.directory, yield* config.entries(), info))
       const loaded = yield* Effect.all(
         {
           builtins: builtins.load(),
-          discovery: discovery.load({ removed: agent.info.context?.instructions === false }),
+          discovery: discovery.load({ removed: !withInstructions }),
           skills: Effect.gen(function* () {
             // The skill listing is budgeted against the window of the model that runs this request.
             const pinned = session.model && (yield* model.get(session.model.providerID, session.model.id))
@@ -206,14 +243,20 @@ const layer = Layer.effect(
           references: referenceInstructions.load(),
           mcp: mcpInstructions.load(permissions),
           entries: entries.load(sessionID),
+          // The guide is part of Orbit's base prompt on the main thread, so a subagent goes without it, and so does an agent
+          // whose own prompt, or a system prompt of the person's, takes the base's place. The index goes wherever the
+          // instruction files do. The block of an agent with a memory scope goes with the agent wherever it runs.
+          memory: memory.load({
+            sessionID,
+            guide: defaultPrompt,
+            index: withInstructions,
+            agent: { id: info.id, memory: info.memory },
+          }),
         },
         { concurrency: "unbounded" },
       )
       // The reply language is for the main thread: a subagent answers its parent, not the person. A fork follows its source.
-      const forkSource = session.fork && (yield* store.get(session.fork.sessionID))
-      const preferences = PromptConfigPlugin.mainThread(session, forkSource || undefined)
-        ? yield* builtins.preferences()
-        : Instructions.empty
+      const preferences = main ? yield* builtins.preferences() : Instructions.empty
       return {
         session,
         agent: { ...agent, info: agent.info },
@@ -221,7 +264,8 @@ const layer = Layer.effect(
         // prompt-cache prefix: user-level catalog and guidance, then project instructions, then
         // the date and environment, which vary by day and directory, then the git snapshot, which
         // varies by the moment the session began, then the scratchpad, which varies by the session
-        // the lineage goes back to.
+        // the lineage goes back to. The tool-results section follows, in the reference's section order; it is the same text
+        // for every default-prompt main thread with the same setting. The entries of the API come last.
         instructions: Instructions.combine([
           // `core/mcp-guidance` and `core/codemode` carry the MCP and deferred-tool deltas. The native deferred-tool
           // source that file-web-tools adds belongs in this group, before the references.
@@ -232,9 +276,11 @@ const layer = Layer.effect(
           loaded.agents,
           preferences,
           loaded.discovery,
+          loaded.memory,
           loaded.builtins,
           vcsInstructions.source(session, { enabled: agent.info.context?.git_status !== false }),
           scratchpad.source(session),
+          defaultPrompt ? builtins.toolResults(compaction.clearing) : Instructions.empty,
           loaded.entries,
         ]),
         tools,
@@ -253,6 +299,7 @@ const layer = Layer.effect(
         session: selection.session,
         agent: selection.agent,
         model,
+        unreasoned: unreasonedFor(selection.session, model),
         initial: history.initial,
         messages: history.entries.map((entry) => entry.message),
         tools: selection.tools,
@@ -260,7 +307,7 @@ const layer = Layer.effect(
       }
     })
 
-    return Service.of({ select, load, resolveModel, selectAuxiliary, resolveFallback, request })
+    return Service.of({ select, load, resolveModel, unreasoned: unreasonedFor, selectAuxiliary, resolveFallback, request })
   }),
 )
 
@@ -277,14 +324,17 @@ export const node = makeLocationNode({
     Agent.node,
     AgentInstructions.node,
     Config.node,
+    SessionCompaction.node,
     Model.node,
     Database.node,
+    FSUtil.node,
     InstructionBuiltIns.node,
     InstructionDiscovery.node,
     InstructionEntry.node,
     Location.node,
     McpInstructions.node,
     McpTool.node,
+    MemoryInstructions.node,
     ReferenceInstructions.node,
     SessionRunnerModel.node,
     SessionModelRequest.node,

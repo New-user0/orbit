@@ -14,7 +14,8 @@ export const start = Effect.fn("SessionShell.start")(function* (input: { session
     command: input.command,
     cwd: input.session.location.directory,
     timeout: 0,
-    metadata: { sessionID: input.session.id, background: true },
+    // `origin` marks the person's own command, which `Shell.abandon` leaves running when an agent's run ends.
+    metadata: { sessionID: input.session.id, background: true, origin: "user" },
   })
   // Keep completion tied to the original shell even if the Session moves.
   return {

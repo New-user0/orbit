@@ -31,6 +31,7 @@ import { Cause, Effect, Exit, Schema } from "effect"
 import { ConfigMCP } from "@orbit/schema/config/mcp"
 import type { Session } from "@orbit/schema/session"
 import { ConfigEnv } from "../config/env.js"
+import { FileAccess } from "../file-access.js"
 import { McpStdio } from "./stdio.js"
 
 const DEFAULT_STARTUP_TIMEOUT = 30_000
@@ -232,7 +233,9 @@ export const connect = Effect.fnUntraced(function* (
         server,
         command,
         args,
-        cwd: config.cwd ? path.resolve(directory, config.cwd) : directory,
+        // `Mcp` passes a working folder it has already read from the Location's folder and checked, which this leaves as
+        // it is; a caller that passes a relative one has it read from `directory` the same way.
+        cwd: config.cwd ? FileAccess.resolvePath(directory, config.cwd) : directory,
         environment: ConfigEnv.applyTo(
           ConfigEnv.applyTo(ConfigEnv.applyTo({}, settingsEnv), command === "orb" ? { BUN_BE_BUN: "1" } : {}),
           config.environment ?? {},

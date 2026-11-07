@@ -41,6 +41,28 @@ export type InstructionNoteAdded = {
   loaded: boolean
 }
 
+export type InstructionMemoryTargetFile = { type: "file"; path: string }
+
+export type InstructionMemoryTargetScope = { type: "scope"; scope: "user" | "project" | "local" }
+
+export type InstructionMemoryTargetMemory = { type: "memory" }
+
+export type InstructionMemoryTargetTeam = { type: "team" }
+
+export type InstructionMemoryTargetAgent = { type: "agent"; agent: string }
+
+export type InstructionStatusWarning = {
+  path: string
+  type: "size" | "import-untrusted" | "import-external" | "outside"
+  message: string
+  chars?: number | undefined
+  limit?: number | undefined
+  target?: string | undefined
+  directory?: string | undefined
+}
+
+export type InstructionMemoryEnsured = { path: string; created: boolean; type: "file" | "folder" }
+
 export type TrustGrant = { directory: string; time: number; via: string }
 
 export type LocationPublicRef = { directory: string }
@@ -254,11 +276,55 @@ export type SessionMessageIdle = {
   outcome: "succeeded" | "failed" | "interrupted"
 }
 
+export type SessionMessageRecap = {
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  type: "recap"
+  text: string
+}
+
+export type SessionMessageContextClearedTool = { assistantMessageID: string; id: string }
+
 export type SessionActive = { type: "running" }
 
 export type SessionInboxSyntheticPayload = { text: string; description?: string; metadata?: { [x: string]: JsonValue } }
 
-export type SessionInboxCompactionPayload = {}
+export type SessionInboxCompactionPayload = { instructions?: string }
+
+export type SessionRewindFiles = {
+  canRewind: boolean
+  error?: string
+  filesChanged?: Array<string>
+  insertions?: number
+  deletions?: number
+}
+
+export type SessionContextUsageCategoryKind =
+  | "system"
+  | "tools"
+  | "mcp"
+  | "mcp-deferred"
+  | "tools-deferred"
+  | "agents"
+  | "instructions"
+  | "skills"
+  | "messages"
+  | "auto-buffer"
+  | "compact-buffer"
+  | "free"
+
+export type SessionContextUsageFile = { path: string; type: string; tokens: number }
+
+export type SessionContextUsageMcpTool = { name: string; server: string; tokens: number; deferred: boolean }
+
+export type SessionContextUsageAgent = { id: string; scope: string; tokens: number }
+
+export type SessionContextUsageSkill = { id: string; tokens: number }
+
+export type SessionContextUsageNamed = { name: string; tokens: number }
+
+export type SessionCostLines = { added: number; removed: number }
 
 export type InstructionStatusFile = {
   path: string
@@ -268,19 +334,38 @@ export type InstructionStatusFile = {
   paths?: Array<string> | undefined
 }
 
-export type InstructionStatusWarning = {
-  path: string
-  type: "size" | "import-untrusted" | "import-external"
-  message: string
-  chars?: number | undefined
-  limit?: number | undefined
-  target?: string | undefined
-  directory?: string | undefined
-}
-
 export type InstructionEntryKey = string
 
 export type SessionGenerateResponse = { data: { text: string } }
+
+export type SessionRecapResponse = { recorded: boolean }
+
+export type SessionAssistLabelSkip = "subagent" | "not_found" | "unsettled" | "aborted" | "empty" | "unavailable"
+
+export type SessionAssistSuggestionSkip =
+  | "subagent"
+  | "early_conversation"
+  | "last_response_error"
+  | "cache_cold"
+  | "pending_permission"
+  | "elicitation_active"
+  | "plan_mode"
+  | "busy"
+  | "aborted"
+  | "unavailable"
+  | "empty"
+  | "done"
+  | "meta_text"
+  | "meta_wrapped"
+  | "error_message"
+  | "prefixed_label"
+  | "too_few_words"
+  | "too_many_words"
+  | "too_long"
+  | "multiple_sentences"
+  | "has_formatting"
+  | "evaluative"
+  | "assistant_voice"
 
 export type LocationRef = { directory: string; workspaceID?: string }
 
@@ -309,6 +394,8 @@ export type SessionMessageToolStateRunning1 = {
   input: { [x: string]: any }
   metadata: { [x: string]: JsonValue }
 }
+
+export type SessionMessageAssistantToolOverride = { session: string; name: string; format: 1 }
 
 export type EventLogSynced = { type: "log.synced"; aggregateID: string; seq?: number }
 
@@ -554,9 +641,14 @@ export type ConfigEffective = {
 
 export type ConfigShellOption = { path: string; name: string; acceptable: boolean }
 
-export type TrustWithheld = { path: string; kinds: Array<TrustKind>; directory?: string; persistent?: boolean }
+export type TrustWithheld = { path: string; kinds: Array<TrustKind> }
 
-export type TrustChanged = { path: string; kinds: Array<TrustKind> }
+export type InstructionMemoryTarget =
+  | InstructionMemoryTargetFile
+  | InstructionMemoryTargetScope
+  | InstructionMemoryTargetMemory
+  | InstructionMemoryTargetTeam
+  | InstructionMemoryTargetAgent
 
 export type SessionMessageLocationSwitched = {
   id: string
@@ -650,6 +742,16 @@ export type ConfigHooksHook = ConfigHooksCommand | ConfigHooksPrompt | ConfigHoo
 
 export type PluginInfo = { id?: string; source: PluginSource; features: PluginFeatures; state: PluginState }
 
+export type SessionCostRow = {
+  providerID: string
+  modelID: string
+  responses: number
+  tokens: TokenUsageInfo
+  cost: MoneyUSD
+  unrecorded: number
+  zero: number
+}
+
 export type SessionRevert = { messageID: string; partID?: string; snapshot?: string; files?: Array<FileDiffInfo> }
 
 export type SessionStatsTools =
@@ -726,6 +828,15 @@ export type SessionMessageCompactionFailed = {
 
 export type SessionProviderContext = { version: 1; provenance: SessionProviderContextProvenance; messages: JsonValue }
 
+export type SessionMessageContextCleared = {
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  type: "context-cleared"
+  trigger: "idle" | "pressure"
+  tools: [SessionMessageContextClearedTool, ...Array<SessionMessageContextClearedTool>]
+}
+
 export type SessionInboxSynthetic = {
   id: string
   sessionID: string
@@ -744,6 +855,18 @@ export type SessionInboxCompaction = {
   delivery: SessionInboxDelivery
 }
 
+export type SessionContextUsageCategory = { kind: SessionContextUsageCategoryKind; tokens: number }
+
+export type SessionContextUsageBreakdown = {
+  toolCalls: number
+  toolResults: number
+  attachments: number
+  assistant: number
+  user: number
+  tools: Array<{ name: string; calls: number; results: number }>
+  attachmentKinds: Array<SessionContextUsageNamed>
+}
+
 export type InstructionStatus = {
   files: Array<InstructionStatusFile>
   warnings: Array<InstructionStatusWarning>
@@ -753,6 +876,10 @@ export type InstructionStatus = {
 export type InstructionEntryInfo = { key: InstructionEntryKey; value: JsonValue }
 
 export type InstructionEntrySnapshot = Array<{ key: InstructionEntryKey; value: JsonValue; removed: boolean }>
+
+export type SessionAssistLabel = { label: string } | { label: null; reason: SessionAssistLabelSkip }
+
+export type SessionAssistSuggestion = { suggestion: string } | { suggestion: null; reason: SessionAssistSuggestionSkip }
 
 export type SessionAgentSelected = {
   id: string
@@ -894,6 +1021,30 @@ export type SessionSynthetic = {
   data: { sessionID: string; text: string; description?: string; metadata?: { [x: string]: any } }
 }
 
+export type SessionRecapRecorded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.recap.recorded"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; text: string }
+}
+
+export type SessionContextCleared = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.context.cleared"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    trigger: "idle" | "pressure"
+    tools: [SessionMessageContextClearedTool, ...Array<SessionMessageContextClearedTool>]
+  }
+}
+
 export type SessionSkillActivated = {
   id: string
   created: number
@@ -1025,7 +1176,7 @@ export type SessionUsageRecorded = {
   type: "session.usage.recorded"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { sessionID: string; source: "title" | "compaction"; cost: MoneyUSD; tokens: TokenUsageInfo }
+  data: { sessionID: string; source: "title" | "compaction"; model?: ModelRef; cost: MoneyUSD; tokens: TokenUsageInfo }
 }
 
 export type SessionSideQueryRecorded = {
@@ -1035,7 +1186,7 @@ export type SessionSideQueryRecorded = {
   type: "session.side_query.recorded"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { sessionID: string; purpose: string; cost: MoneyUSD; tokens: TokenUsageInfo }
+  data: { sessionID: string; purpose: string; model?: ModelRef; cost: MoneyUSD; tokens: TokenUsageInfo }
 }
 
 export type LocationShutdown = {
@@ -1119,6 +1270,26 @@ export type SessionUsageUpdated = {
   data: { sessionID: string; cost: MoneyUSD; tokens: TokenUsageInfo }
 }
 
+export type SessionContextUpdated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.context.updated"
+  location?: LocationRef
+  data: {
+    sessionID: string
+    used: number
+    window: number
+    threshold: number
+    auto: boolean
+    percentLeft: number
+    state: "ok" | "warning" | "error"
+    blocking?: number
+    paused: boolean
+    stale: boolean
+  }
+}
+
 export type SessionTextDelta = {
   id: string
   created: number
@@ -1161,7 +1332,7 @@ export type SessionCompactionDelta = {
   metadata?: { [x: string]: any }
   type: "session.compaction.delta"
   location?: LocationRef
-  data: { sessionID: string; text: string }
+  data: { sessionID: string; characters: number }
 }
 
 export type FilesystemChanged = {
@@ -1590,6 +1761,16 @@ export type SessionMessageAssistantReasoning1 = {
 
 export type ToolContent1 = ToolTextContent | ToolFileContent1
 
+export type SessionToolOverridden = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.tool.overridden"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; assistantMessageID: string; id: string; override: SessionMessageAssistantToolOverride }
+}
+
 export type FormNumberField = {
   key: string
   title?: string
@@ -1735,6 +1916,7 @@ export type PermissionRequest = {
   metadata?: { [x: string]: JsonValue }
   source?: PermissionSource
   message?: string
+  revisable?: boolean
 }
 
 export type PermissionAsked = {
@@ -1752,6 +1934,7 @@ export type PermissionAsked = {
     metadata?: { [x: string]: any }
     source?: PermissionSource
     message?: string
+    revisable?: boolean
   }
 }
 
@@ -1761,7 +1944,19 @@ export type PermissionReplied = {
   metadata?: { [x: string]: any }
   type: "permission.replied"
   location?: LocationRef
-  data: { sessionID: string; requestID: string; reply: PermissionReply }
+  data: {
+    sessionID: string
+    requestID: string
+    reply: PermissionReply
+    files?: Array<{
+      file: string
+      patch: string
+      additions: number
+      deletions: number
+      status: "added" | "deleted" | "modified"
+      place: string
+    }>
+  }
 }
 
 export type PtyCreated = {
@@ -1890,8 +2085,27 @@ export type TrustStatus = {
   trusted: boolean
   persistent: boolean
   source?: TrustSource
+  granted?: string
   withheld: Array<TrustWithheld>
-  changed?: Array<TrustChanged>
+}
+
+export type InstructionMemoryFile = {
+  path: string
+  kind: "managed" | "user" | "project" | "local"
+  chars: number
+  importedBy?: string | undefined
+  role?: "user" | "project" | undefined
+  exists: boolean
+  target: InstructionMemoryTarget
+}
+
+export type InstructionMemoryFolder = {
+  type: "memory" | "team" | "agent"
+  agent?: string | undefined
+  scope?: "user" | "project" | "local" | undefined
+  path: string
+  exists: boolean
+  target: InstructionMemoryTarget
 }
 
 export type SessionInboxMove = {
@@ -1931,6 +2145,17 @@ export type ProviderInfo = {
 export type PermissionRuleset = Array<PermissionRule>
 
 export type ConfigHooksMatcher = { matcher?: string; hooks: Array<ConfigHooksHook> }
+
+export type SessionCostInfo = {
+  cost: MoneyUSD
+  own: MoneyUSD
+  subagents: MoneyUSD
+  other?: MoneyUSD
+  api?: number
+  wall?: number
+  lines?: SessionCostLines
+  rows: Array<SessionCostRow>
+}
 
 export type SessionRevertStaged = {
   id: string
@@ -2017,6 +2242,7 @@ export type SessionMessageCompactionCompleted = {
   providerState?: SessionMessageProviderState
   summary: string
   recent: string
+  retain?: string
   providerContext?: SessionProviderContext
   cost?: MoneyUSD
   tokens?: TokenUsageInfo
@@ -2037,9 +2263,29 @@ export type SessionCompactionEnded = {
     providerContext?: SessionProviderContext
     text: string
     recent: string
+    retain?: string
     cost?: MoneyUSD
     tokens?: TokenUsageInfo
   }
+}
+
+export type SessionContextUsageInfo = {
+  model: ModelRef
+  window?: number
+  total: number
+  measured: boolean
+  percentage?: number
+  auto: boolean
+  threshold?: number
+  categories: Array<SessionContextUsageCategory>
+  files: Array<SessionContextUsageFile>
+  mcp: Array<SessionContextUsageMcpTool>
+  agents: Array<SessionContextUsageAgent>
+  skills: Array<SessionContextUsageSkill>
+  systemTools: Array<SessionContextUsageNamed>
+  deferredTools: Array<SessionContextUsageNamed>
+  sections: Array<SessionContextUsageNamed>
+  messages: SessionContextUsageBreakdown
 }
 
 export type SessionInstructionsPreview = {
@@ -2065,6 +2311,10 @@ export type SessionForked = {
     instructionEntries?: InstructionEntrySnapshot
   }
 }
+
+export type SessionAssistLabelResponse = { data: SessionAssistLabel }
+
+export type SessionAssistSuggestionResponse = { data: SessionAssistSuggestion }
 
 export type SessionToolSuccess = {
   id: string
@@ -2163,6 +2413,15 @@ export type ReferenceInfo = {
   description?: string
   hidden?: boolean
   source: ReferenceSource
+}
+
+export type InstructionMemoryListing = {
+  files: Array<InstructionMemoryFile>
+  warnings: Array<InstructionStatusWarning>
+  folders: Array<InstructionMemoryFolder>
+  enabled: boolean
+  git: boolean
+  available: boolean
 }
 
 export type ModelInfo = {
@@ -2323,6 +2582,7 @@ export type ConfigEntry =
         system_prompt_file?: string
         append_system_prompt?: string
         update?: "disable" | "notify" | "auto"
+        cleanup_period_days?: number
         share?: "manual" | "auto" | "disabled"
         enterprise?: { url?: string }
         username?: string
@@ -2448,7 +2708,8 @@ export type ConfigEntry =
         attribution?: { commit?: string; pr?: string }
         sandbox?: { enabled?: boolean; network?: boolean; write?: Array<string> }
         shell_tool?: { timeout?: number; max_timeout?: number }
-        tool_output?: { max_lines?: number; max_bytes?: number }
+        background_tasks?: boolean
+        tool_output?: { max_lines?: number; max_bytes?: number; max_result_chars?: number; max_message_chars?: number }
         tool_execution?: { max_concurrency?: number }
         mcp?: {
           timeout?: { startup?: number; catalog?: number; execution?: number }
@@ -2486,7 +2747,8 @@ export type ConfigEntry =
                 }
           }
         }
-        compaction?: { auto?: boolean; keep?: { tokens?: number }; buffer?: number }
+        compaction?: { auto?: boolean; clear?: boolean; keep?: { tokens?: number }; buffer?: number }
+        memory?: { enabled?: boolean; directory?: string; team?: boolean }
         compatibility?: { enabled?: boolean }
         skills?: Array<string>
         commands?: {
@@ -2590,6 +2852,7 @@ export type SessionMessageAssistantTool = {
   executed?: boolean
   providerState?: SessionMessageProviderState
   providerResultState?: SessionMessageProviderState
+  override?: JsonValue
   state:
     | SessionMessageToolStateStreaming
     | SessionMessageToolStateRunning
@@ -2611,6 +2874,7 @@ export type SessionMessageAssistantTool1 = {
   executed?: boolean
   providerState?: SessionMessageProviderState1
   providerResultState?: SessionMessageProviderState1
+  override?: JsonValue
   state:
     | SessionMessageToolStateStreaming
     | SessionMessageToolStateRunning1
@@ -2699,6 +2963,8 @@ export type SessionMessageInfo =
   | SessionMessageAssistant
   | SessionMessageCompaction
   | SessionMessageIdle
+  | SessionMessageRecap
+  | SessionMessageContextCleared
 
 export type SessionMessageContentUpdated = {
   id: string
@@ -2753,6 +3019,8 @@ export type SessionEventDurable =
   | SessionExecutionInterrupted
   | SessionInstructionsUpdated
   | SessionSynthetic
+  | SessionRecapRecorded
+  | SessionContextCleared
   | SessionSkillActivated
   | SessionShellStarted
   | SessionShellEnded
@@ -2779,6 +3047,7 @@ export type SessionEventDurable =
   | SessionUsageRecorded
   | SessionSideQueryRecorded
   | SessionMessageContentUpdated
+  | SessionToolOverridden
 
 export type IntegrationInfo = {
   id: string
@@ -2806,6 +3075,7 @@ export type V2Event =
   | SessionPermissions
   | SessionViewed
   | SessionUsageUpdated
+  | SessionContextUpdated
   | SessionDeleted
   | SessionForked
   | SessionInboxDelivered
@@ -2818,6 +3088,8 @@ export type V2Event =
   | SessionExecutionInterrupted
   | SessionInstructionsUpdated
   | SessionSynthetic
+  | SessionRecapRecorded
+  | SessionContextCleared
   | SessionSkillActivated
   | SessionShellStarted
   | SessionShellEnded
@@ -2908,6 +3180,15 @@ export type ServiceUnavailableError = {
 export const isServiceUnavailableError = (value: unknown): value is ServiceUnavailableError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ServiceUnavailableError"
 
+export type UntrustedFolderError = {
+  readonly _tag: "UntrustedFolderError"
+  readonly directory: string
+  readonly persistent: boolean
+  readonly message: string
+}
+export const isUntrustedFolderError = (value: unknown): value is UntrustedFolderError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "UntrustedFolderError"
+
 export type AgentNotFoundError = {
   readonly _tag: "AgentNotFoundError"
   readonly agentID: string
@@ -2988,6 +3269,25 @@ export type SessionBusyError = {
 }
 export const isSessionBusyError = (value: unknown): value is SessionBusyError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SessionBusyError"
+
+export type RewindFilesError = {
+  readonly _tag: "RewindFilesError"
+  readonly sessionID: string
+  readonly messageID: string
+  readonly reason: "disabled" | "no-checkpoint" | "failed"
+  readonly message: string
+}
+export const isRewindFilesError = (value: unknown): value is RewindFilesError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "RewindFilesError"
+
+export type MainSessionOnlyError = {
+  readonly _tag: "MainSessionOnlyError"
+  readonly sessionID: string
+  readonly parentID: string
+  readonly message: string
+}
+export const isMainSessionOnlyError = (value: unknown): value is MainSessionOnlyError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MainSessionOnlyError"
 
 export type InstructionEntryValueTooLargeError = {
   readonly _tag: "InstructionEntryValueTooLargeError"
@@ -3140,21 +3440,8 @@ export type LocationTrustGetOutput = TrustStatus
 
 export type LocationTrustUpdateInput = {
   readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
-  readonly trust: {
-    readonly trust: boolean
-    readonly persist?: boolean | undefined
-    readonly holder?: string | undefined
-  }["trust"]
-  readonly persist?: {
-    readonly trust: boolean
-    readonly persist?: boolean | undefined
-    readonly holder?: string | undefined
-  }["persist"]
-  readonly holder?: {
-    readonly trust: boolean
-    readonly persist?: boolean | undefined
-    readonly holder?: string | undefined
-  }["holder"]
+  readonly trust: { readonly trust: boolean; readonly persist?: boolean | undefined }["trust"]
+  readonly persist?: { readonly trust: boolean; readonly persist?: boolean | undefined }["persist"]
 }
 
 export type LocationTrustUpdateOutput = TrustStatus
@@ -3172,6 +3459,26 @@ export type LocationInstructionNoteAddInput = {
 }
 
 export type LocationInstructionNoteAddOutput = { data: InstructionNoteAdded }["data"]
+
+export type LocationMemoryListInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+}
+
+export type LocationMemoryListOutput = { data: InstructionMemoryListing }["data"]
+
+export type LocationMemoryEnsureInput = {
+  readonly location?: { readonly location?: { readonly directory?: string | undefined } | undefined }["location"]
+  readonly target: {
+    readonly target:
+      | { readonly type: "file"; readonly path: string }
+      | { readonly type: "scope"; readonly scope: "user" | "project" | "local" }
+      | { readonly type: "memory" }
+      | { readonly type: "team" }
+      | { readonly type: "agent"; readonly agent: string }
+  }["target"]
+}
+
+export type LocationMemoryEnsureOutput = { data: InstructionMemoryEnsured }["data"]
 
 export type LocationTrustListOutput = Array<TrustGrant>
 
@@ -3638,6 +3945,7 @@ export type SessionImportInput = {
                 readonly executed?: boolean
                 readonly providerState?: { readonly [x: string]: JsonValue }
                 readonly providerResultState?: { readonly [x: string]: JsonValue }
+                readonly override?: JsonValue
                 readonly state:
                   | { readonly status: "streaming"; readonly input: string }
                   | {
@@ -3754,6 +4062,7 @@ export type SessionImportInput = {
               readonly providerState?: { readonly [x: string]: JsonValue }
               readonly summary: string
               readonly recent: string
+              readonly retain?: string
               readonly providerContext?: {
                 readonly version: 1
                 readonly provenance: {
@@ -3802,6 +4111,24 @@ export type SessionImportInput = {
           readonly time: { readonly created: number }
           readonly type: "idle"
           readonly outcome: "succeeded" | "failed" | "interrupted"
+        }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "recap"
+          readonly text: string
+        }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "context-cleared"
+          readonly trigger: "idle" | "pressure"
+          readonly tools: readonly [
+            { readonly assistantMessageID: string; readonly id: string },
+            ...Array<{ readonly assistantMessageID: string; readonly id: string }>,
+          ]
         }
     >
     readonly location?: { readonly directory: string } | null
@@ -3989,6 +4316,7 @@ export type SessionImportInput = {
                 readonly executed?: boolean
                 readonly providerState?: { readonly [x: string]: JsonValue }
                 readonly providerResultState?: { readonly [x: string]: JsonValue }
+                readonly override?: JsonValue
                 readonly state:
                   | { readonly status: "streaming"; readonly input: string }
                   | {
@@ -4105,6 +4433,7 @@ export type SessionImportInput = {
               readonly providerState?: { readonly [x: string]: JsonValue }
               readonly summary: string
               readonly recent: string
+              readonly retain?: string
               readonly providerContext?: {
                 readonly version: 1
                 readonly provenance: {
@@ -4153,6 +4482,24 @@ export type SessionImportInput = {
           readonly time: { readonly created: number }
           readonly type: "idle"
           readonly outcome: "succeeded" | "failed" | "interrupted"
+        }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "recap"
+          readonly text: string
+        }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "context-cleared"
+          readonly trigger: "idle" | "pressure"
+          readonly tools: readonly [
+            { readonly assistantMessageID: string; readonly id: string },
+            ...Array<{ readonly assistantMessageID: string; readonly id: string }>,
+          ]
         }
     >
     readonly location?: { readonly directory: string } | null
@@ -4340,6 +4687,7 @@ export type SessionImportInput = {
                 readonly executed?: boolean
                 readonly providerState?: { readonly [x: string]: JsonValue }
                 readonly providerResultState?: { readonly [x: string]: JsonValue }
+                readonly override?: JsonValue
                 readonly state:
                   | { readonly status: "streaming"; readonly input: string }
                   | {
@@ -4456,6 +4804,7 @@ export type SessionImportInput = {
               readonly providerState?: { readonly [x: string]: JsonValue }
               readonly summary: string
               readonly recent: string
+              readonly retain?: string
               readonly providerContext?: {
                 readonly version: 1
                 readonly provenance: {
@@ -4504,6 +4853,24 @@ export type SessionImportInput = {
           readonly time: { readonly created: number }
           readonly type: "idle"
           readonly outcome: "succeeded" | "failed" | "interrupted"
+        }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "recap"
+          readonly text: string
+        }
+      | {
+          readonly id: string
+          readonly metadata?: { readonly [x: string]: JsonValue }
+          readonly time: { readonly created: number }
+          readonly type: "context-cleared"
+          readonly trigger: "idle" | "pressure"
+          readonly tools: readonly [
+            { readonly assistantMessageID: string; readonly id: string },
+            ...Array<{ readonly assistantMessageID: string; readonly id: string }>,
+          ]
         }
     >
     readonly location?: { readonly directory: string } | null
@@ -5152,11 +5519,21 @@ export type SessionShellOutput = void
 
 export type SessionCompactInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly id?: { readonly id?: string | undefined; readonly delivery?: ("steer" | "queue") | undefined }["id"]
+  readonly id?: {
+    readonly id?: string | undefined
+    readonly delivery?: ("steer" | "queue") | undefined
+    readonly instructions?: string | undefined
+  }["id"]
   readonly delivery?: {
     readonly id?: string | undefined
     readonly delivery?: ("steer" | "queue") | undefined
+    readonly instructions?: string | undefined
   }["delivery"]
+  readonly instructions?: {
+    readonly id?: string | undefined
+    readonly delivery?: ("steer" | "queue") | undefined
+    readonly instructions?: string | undefined
+  }["instructions"]
 }
 
 export type SessionCompactOutput = { data: SessionInboxCompaction }["data"]
@@ -5173,6 +5550,14 @@ export type SessionRevertStageInput = {
 
 export type SessionRevertStageOutput = { data: SessionRevert }["data"]
 
+export type SessionRevertFilesInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly messageID: { readonly messageID: string; readonly dryRun?: boolean | undefined }["messageID"]
+  readonly dryRun?: { readonly messageID: string; readonly dryRun?: boolean | undefined }["dryRun"]
+}
+
+export type SessionRevertFilesOutput = { data: SessionRewindFiles }["data"]
+
 export type SessionRevertClearInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionRevertClearOutput = void
@@ -5185,23 +5570,40 @@ export type SessionContextInput = { readonly sessionID: { readonly sessionID: st
 
 export type SessionContextOutput = { data: Array<SessionMessageInfo> }["data"]
 
+export type SessionContextUsageInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionContextUsageOutput = { data: SessionContextUsageInfo }["data"]
+
+export type SessionCostInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionCostOutput = { data: SessionCostInfo }["data"]
+
 export type SessionDiffInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly from?: {
     readonly from?: string | undefined
     readonly to?: string | undefined
     readonly context?: number | undefined
+    readonly scope?: "turn" | "prompt" | undefined
   }["from"]
   readonly to?: {
     readonly from?: string | undefined
     readonly to?: string | undefined
     readonly context?: number | undefined
+    readonly scope?: "turn" | "prompt" | undefined
   }["to"]
   readonly context?: {
     readonly from?: string | undefined
     readonly to?: string | undefined
     readonly context?: number | undefined
+    readonly scope?: "turn" | "prompt" | undefined
   }["context"]
+  readonly scope?: {
+    readonly from?: string | undefined
+    readonly to?: string | undefined
+    readonly context?: number | undefined
+    readonly scope?: "turn" | "prompt" | undefined
+  }["scope"]
 }
 
 export type SessionDiffOutput = { data: Array<FileDiffInfo> }["data"]
@@ -5254,6 +5656,28 @@ export type SessionGenerateInput = {
 }
 
 export type SessionGenerateOutput = SessionGenerateResponse["data"]
+
+export type SessionRecapInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionRecapOutput = SessionRecapResponse
+
+export type SessionAssistLabelInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly messageID: {
+    readonly messageID: string
+    readonly toolCallIDs: readonly [string, ...Array<string>]
+  }["messageID"]
+  readonly toolCallIDs: {
+    readonly messageID: string
+    readonly toolCallIDs: readonly [string, ...Array<string>]
+  }["toolCallIDs"]
+}
+
+export type SessionAssistLabelOutput = SessionAssistLabelResponse["data"]
+
+export type SessionAssistSuggestionInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionAssistSuggestionOutput = SessionAssistSuggestionResponse["data"]
 
 export type SessionLogInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
@@ -6764,11 +7188,18 @@ export type PermissionReplyInput = {
   readonly decision: {
     readonly decision: "once" | "always" | "reject"
     readonly message?: string | undefined
+    readonly content?: string | undefined
   }["decision"]
   readonly message?: {
     readonly decision: "once" | "always" | "reject"
     readonly message?: string | undefined
+    readonly content?: string | undefined
   }["message"]
+  readonly content?: {
+    readonly decision: "once" | "always" | "reject"
+    readonly message?: string | undefined
+    readonly content?: string | undefined
+  }["content"]
 }
 
 export type PermissionReplyOutput = void
@@ -7301,17 +7732,26 @@ export type ConfigUpdateInput = {
     readonly shell?: string | null
     readonly output_style?: string | null
     readonly language?: string | null
+    readonly memory?: { readonly enabled?: boolean | null }
   }["shell"]
   readonly output_style?: {
     readonly shell?: string | null
     readonly output_style?: string | null
     readonly language?: string | null
+    readonly memory?: { readonly enabled?: boolean | null }
   }["output_style"]
   readonly language?: {
     readonly shell?: string | null
     readonly output_style?: string | null
     readonly language?: string | null
+    readonly memory?: { readonly enabled?: boolean | null }
   }["language"]
+  readonly memory?: {
+    readonly shell?: string | null
+    readonly output_style?: string | null
+    readonly language?: string | null
+    readonly memory?: { readonly enabled?: boolean | null }
+  }["memory"]
 }
 
 export type ConfigUpdateOutput = void

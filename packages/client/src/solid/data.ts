@@ -114,7 +114,11 @@ type Store = {
     message: Record<string, SessionMessageInfo[]>
     messageCursor: Record<string, string | undefined>
     messageLoading: Record<string, boolean>
+    // The latest context report of each known session; forgotten whenever it can no longer describe the context.
+    context: Record<string, OrbitEventMap["session.context.updated"]["data"]>
     pending: Record<string, SessionInboxInfo[]>
+    // Reply characters of each session's running compaction. Local to this client: the reply text never travels.
+    compactionCharacters: Record<string, number>
     permission: Record<string, PermissionRequest[]>
     // Pending forms keyed by owner: a session ID or the temporary "global" elicitation sentinel.
     form: Record<string, FormWithLocation[]>
@@ -234,7 +238,9 @@ export function createData(config: CreateDataInput) {
       message: {},
       messageCursor: {},
       messageLoading: {},
+      context: {},
       pending: {},
+      compactionCharacters: {},
       permission: {},
       form: {},
     },
@@ -554,6 +560,7 @@ export function createData(config: CreateDataInput) {
         delete draft.messageCursor[sessionID]
         delete draft.messageLoading[sessionID]
         delete draft.pending[sessionID]
+        delete draft.compactionCharacters[sessionID]
         if (messages.length) draft.message[sessionID] = messages
         if (pending.length) draft.pending[sessionID] = pending
       }),
@@ -578,6 +585,7 @@ export function createData(config: CreateDataInput) {
         delete draft.message[sessionID]
         delete draft.messageCursor[sessionID]
         delete draft.messageLoading[sessionID]
+        delete draft.context[sessionID]
         delete draft.pending[sessionID]
         delete draft.permission[sessionID]
         delete draft.form[sessionID]
@@ -595,6 +603,8 @@ export function createData(config: CreateDataInput) {
       case "server.connected": {
         const updates = new Map<string, DataSessionStatus | undefined>()
         activeUpdates = updates
+        // A report may have been missed while disconnected.
+        setStore("session", "context", reconcile({}))
         refresh(() =>
           api()
             .session.active()
@@ -649,6 +659,9 @@ export function createData(config: CreateDataInput) {
             tokens: event.data.tokens,
           })
         return
+      case "session.context.updated":
+        if (store.session.info[event.data.sessionID]) setStore("session", "context", event.data.sessionID, event.data)
+        return
       case "session.agent.selected": {
         const previous = store.session.info[event.data.sessionID]?.agent
         if (store.session.info[event.data.sessionID])
@@ -663,6 +676,8 @@ export function createData(config: CreateDataInput) {
         return
       }
       case "session.model.selected":
+        // The report's thresholds belong to the previous model.
+        setStore("session", "context", produce((draft) => void delete draft[event.data.sessionID]))
         if (store.session.info[event.data.sessionID])
           setStore("session", "info", event.data.sessionID, "model", event.data.model)
         if (!store.session.message[event.data.sessionID]) return
@@ -709,6 +724,7 @@ export function createData(config: CreateDataInput) {
             projectID: current.projectID,
             subpath: current.subpath,
           }
+          setStore("session", "context", produce((draft) => void delete draft[event.data.sessionID]))
           setStore("session", "info", event.data.sessionID, "location", event.data.location)
           if (event.data.projectID) setStore("session", "info", event.data.sessionID, "projectID", event.data.projectID)
           setStore("session", "info", event.data.sessionID, "subpath", event.data.subpath)
@@ -815,6 +831,14 @@ export function createData(config: CreateDataInput) {
           text: event.data.text,
           description: event.data.description,
           metadata: event.data.metadata,
+          time: { created: event.created },
+        })
+        return
+      case "session.recap.recorded":
+        message.insert(event.data.sessionID, {
+          id: messageIDFromEvent(event.id),
+          type: "recap",
+          text: event.data.text,
           time: { created: event.created },
         })
         return
@@ -1017,6 +1041,7 @@ export function createData(config: CreateDataInput) {
         setSessionActive(event.data.sessionID, "running")
         return
       case "session.compaction.started":
+        setStore("session", "compactionCharacters", event.data.sessionID, 0)
         if (event.data.inputID) removePending(event.data.sessionID, event.data.inputID)
         message.insert(event.data.sessionID, {
           id: event.data.inputID ?? messageIDFromEvent(event.id),
@@ -1081,29 +1106,41 @@ export function createData(config: CreateDataInput) {
           setStore("session", "info", event.data.sessionID, "revert", undefined)
         return
       case "session.revert.committed":
+        setStore("session", "context", produce((draft) => void delete draft[event.data.sessionID]))
         if (store.session.info[event.data.sessionID]) {
           setStore("session", "info", event.data.sessionID, "revert", undefined)
         }
-        // The projector also deletes inbox items enqueued at or after the boundary without a cancel event.
+        // The projector also deletes the notices enqueued at or after the boundary, without a cancel event. A person's
+        // pending items stay, and so do the transcript rows drawn for them.
         setStore(
           "session",
           "pending",
           event.data.sessionID,
-          (store.session.pending[event.data.sessionID] ?? []).filter((item) => item.id < event.data.to),
+          (store.session.pending[event.data.sessionID] ?? []).filter(
+            (item) => item.type !== "synthetic" || item.id < event.data.to,
+          ),
         )
         message.update(event.data.sessionID, (draft, index) => {
           const position = draft.findIndex((item) => item.id >= event.data.to)
           if (position === -1) return
-          for (const item of draft.splice(position)) index.delete(item.id)
+          const pending = new Set(store.session.pending[event.data.sessionID]?.map((item) => item.id))
+          const kept = draft.splice(position).filter((item) => {
+            if (pending.has(item.id)) return true
+            index.delete(item.id)
+            return false
+          })
+          draft.push(...kept)
+          message.reindex(draft, index, position)
         })
         return
       case "session.compaction.delta":
-        message.update(event.data.sessionID, (draft) => {
-          const current = message.compaction(draft)
-          if (current?.status === "running") current.summary += event.data.text
-        })
+        // An older server still sends the text in this event: it carries no count, so it changes nothing.
+        if (!Number.isInteger(event.data.characters) || event.data.characters < 0) return
+        if (!message.compaction(store.session.message[event.data.sessionID] ?? [])) return
+        setStore("session", "compactionCharacters", event.data.sessionID, event.data.characters)
         return
       case "session.compaction.ended":
+        setStore("session", "compactionCharacters", event.data.sessionID, 0)
         message.update(event.data.sessionID, (draft, index) => {
           const position = draft.findLastIndex((item) => item.type === "compaction" && item.status === "running")
           const current = draft[position]
@@ -1138,6 +1175,7 @@ export function createData(config: CreateDataInput) {
         })
         return
       case "session.compaction.failed":
+        setStore("session", "compactionCharacters", event.data.sessionID, 0)
         if (event.data.inputID) removePending(event.data.sessionID, event.data.inputID)
         message.update(event.data.sessionID, (draft, index) => {
           const position = draft.findLastIndex((item) => item.type === "compaction" && item.status === "running")
@@ -1280,6 +1318,16 @@ export function createData(config: CreateDataInput) {
         )
         break
       case "config.updated":
+        // The report carries the automatic-compaction mode from this location's config, so it can no longer be trusted.
+        setStore(
+          "session",
+          "context",
+          produce((draft) => {
+            Object.keys(draft)
+              .filter((id) => locationKey(store.session.info[id].location) === locationKey(location))
+              .forEach((id) => delete draft[id])
+          }),
+        )
         result.location.config.invalidate(location)
         if (result.location.config.list(location) !== undefined || sync.has(`location.config:${locationKey(location)}`))
           refresh(() => result.location.config.sync(location))
@@ -1372,6 +1420,12 @@ export function createData(config: CreateDataInput) {
         batch(() => {
           for (const id of new Set([root, sessionID, ...(store.session.family[root] ?? [])])) evictSession(id)
         })
+      },
+      context(sessionID: string) {
+        return store.session.context[sessionID]
+      },
+      compactionCharacters(sessionID: string) {
+        return store.session.compactionCharacters[sessionID] ?? 0
       },
       cost(sessionID: string) {
         const session = store.session.info[sessionID]
@@ -1500,9 +1554,11 @@ export function createData(config: CreateDataInput) {
         if (fresh) track(creating, id, request)
         return { id, request }
       },
-      compact(input: { sessionID: string; model?: ModelRef }) {
+      compact(input: { sessionID: string; model?: ModelRef; instructions?: string }) {
+        const instructions = input.instructions?.trim() || undefined
         const active = compacting.get(input.sessionID)
-        if (active) return active.request
+        // Instructions are never dropped onto a request in flight: this one is sent after it.
+        if (active && !instructions) return active.request
         // A known pending control ID may be consumed while setup waits. Propose
         // a fresh ID and let the server coalesce, without duplicating its row.
         const id = SessionMessage.ID.create()
@@ -1514,7 +1570,7 @@ export function createData(config: CreateDataInput) {
             time: { created: Date.now() },
             type: "compaction",
             delivery: "steer",
-            payload: {},
+            payload: instructions ? { instructions } : {},
           })
         }
         // Compaction admission can coalesce onto a different ID. Retire the
@@ -1523,7 +1579,7 @@ export function createData(config: CreateDataInput) {
         const observed = new Set<string>()
         const request = sendAdmission(input.sessionID, async () => {
           if (input.model) await api().session.switchModel({ sessionID: input.sessionID, model: input.model })
-          return api().session.compact({ sessionID: input.sessionID, id })
+          return api().session.compact({ sessionID: input.sessionID, id, instructions: input.instructions })
         })
           .then((item) => {
             batch(() => {

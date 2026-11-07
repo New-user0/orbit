@@ -1,10 +1,9 @@
-import type { Attention } from "@orbit/plugin/tui/context"
 import { useRenderer } from "@opentui/solid"
 import { createContext, onCleanup, useContext, type ParentProps } from "solid-js"
-import { createTuiAttention } from "../attention"
+import { createTuiAttention, type AttentionHost } from "../attention"
 import { useConfig } from "../config"
 
-const AttentionContext = createContext<Attention>()
+const AttentionContext = createContext<AttentionHost>()
 
 export function AttentionProvider(props: ParentProps) {
   const config = useConfig()

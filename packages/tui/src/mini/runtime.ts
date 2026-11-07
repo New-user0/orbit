@@ -64,6 +64,8 @@ type RunRuntimeInput = {
   demo?: RunInput["demo"]
   tuiConfig?: RunTuiConfig | Promise<RunTuiConfig>
   config?: Pick<Config.Interface, "update">
+  /** The folder the server decided trust for, which bounds the mini's theme walk (class 3). */
+  root?: string
 }
 
 export type RunDeferredInput = {
@@ -84,6 +86,8 @@ export type RunDeferredInput = {
   demo?: RunInput["demo"]
   tuiConfig?: RunTuiConfig | Promise<RunTuiConfig>
   config?: Pick<Config.Interface, "update">
+  /** The folder the server decided trust for, which bounds the mini's theme walk (class 3). */
+  root?: string
 }
 
 type StreamTransportModule = Pick<
@@ -252,6 +256,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     model: state.model,
     variant: state.activeVariant,
     tuiConfig: tuiConfigTask,
+    root: input.root,
     onMiniSettingChange: config
       ? async (change) => {
           const info = await config.update((draft) => {
@@ -402,6 +407,10 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
       await state.sdk.session.inbox.update({ sessionID: state.sessionID, inboxID, delivery: action })
     },
+    recap: async (signal) => {
+      if (state.sessionID) await state.sdk.session.recap({ sessionID: state.sessionID }, { signal })
+    },
+    suggestion: (sessionID, signal) => state.sdk.session.assist.suggestion({ sessionID }, { signal }),
     onSubagentInterrupt: (sessionID) => {
       log?.write("send.subagent.interrupt", { sessionID })
       void state.sdk.session.interrupt({ sessionID }).catch(() => {})
@@ -807,6 +816,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         footer,
         onCommit: rememberLocal,
         onEvent: (event) => shell.observe?.(event),
+        onActive: (active) => shell.setRunning?.(active),
         onSessionTitle: (title) => {
           state.sessionTitle = title
           shell.setTitle(title)
@@ -926,8 +936,8 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         )
       },
       onAdmissionError: renderPromptError,
-      onCompact: async () => {
-        await state.sdk.session.compact({ sessionID: state.sessionID }, formRequestOptions(state.location))
+      onCompact: async (instructions) => {
+        await state.sdk.session.compact({ sessionID: state.sessionID, instructions }, formRequestOptions(state.location))
       },
       settle: async () => {
         const next = await ensureStream()
@@ -1111,6 +1121,7 @@ export async function runInteractiveDeferredMode(input: RunDeferredInput, deps?:
       demo: input.demo,
       tuiConfig: input.tuiConfig,
       config: input.config,
+      root: input.root,
       reconnect: input.reconnect,
       resolveSession: input.target,
       createSession: input.createSession,

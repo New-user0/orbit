@@ -11,7 +11,7 @@ import type {
   WorkflowAgent,
   Workspace,
 } from "../protocol.js"
-import { approvalCard } from "./approval.js"
+import { answeredLabel, approvalCard } from "./approval.js"
 import { agentsOf, chips, describe, duration, phases, rearms, segments, tokens } from "./present.js"
 import { legacyToolName } from "../tool-name.js"
 
@@ -250,6 +250,16 @@ function build(item: Item): HTMLElement {
     case "user": {
       const node = element("div", "user", item.text)
       if (item.context) node.append(element("div", "context muted", item.context))
+      const messageID = item.messageID
+      if (messageID === undefined) return node
+      // What this prompt changed with the file tools, and putting it back; the host asks before anything changes.
+      const actions = element("div", "user-actions")
+      const changes = element("a", "link", "View changes")
+      changes.addEventListener("click", () => vscode.postMessage({ type: "changes", messageID }))
+      const restore = element("a", "link", "Restore files")
+      restore.addEventListener("click", () => vscode.postMessage({ type: "restore", messageID }))
+      actions.append(changes, restore)
+      node.append(actions)
       return node
     }
     case "text":
@@ -409,10 +419,8 @@ function permission(item: Extract<Item, { type: "permission" }>) {
   // The card draws the request's own values: the places, folder, method, URL, arguments and diffs the server resolved.
   const shown = approvalCard(item)
   const title = shown.title
-  if (item.status !== "pending") {
-    const label = { once: "Allowed", always: "Always allowed", reject: "Rejected" }[item.status]
-    return element("div", item.status === "reject" ? "note error" : "note muted", `${label} · ${title}`)
-  }
+  if (item.status !== "pending")
+    return element("div", item.status === "reject" ? "note error" : "note muted", `${answeredLabel(item)} · ${title}`)
   const card = element("div", "permission")
   const head = element("div", "perm-head")
   head.append(element("span", "grow strong", title))
@@ -426,6 +434,14 @@ function permission(item: Extract<Item, { type: "permission" }>) {
     card.append(diff)
   }
   if (shown.lines.length > 0) card.append(element("pre", "resources", shown.lines.join("\n")))
+  if (item.reviewing)
+    card.append(
+      element(
+        "div",
+        "muted",
+        "Opened in the editor: save to accept your version, close to accept as proposed, or Reject.",
+      ),
+    )
   const actions = element("div", "actions")
   const reply = (decision: "once" | "always" | "reject") => () =>
     vscode.postMessage({ type: "permission", id: item.id, decision })
@@ -534,40 +550,16 @@ function paintTrust(trust: TrustView | undefined) {
   if (!trust) return banner.replaceChildren()
   const head = element("div", "trust-head")
   head.append(
-    element("span", "strong", trust.changed === true ? "⊙ Changed" : "⊙ Untrusted"),
+    element("span", "strong", "⊙ Untrusted"),
     element("span", "muted grow trust-folder", trust.directory),
   )
-  const files = element("details", "trust-files")
-  files.append(
-    element("summary", undefined, `${trust.held.length} ${trust.held.length === 1 ? "file" : "files"} held back`),
-    ...trust.held.map((item) => {
-      const row = element("div", "trust-file")
-      row.append(element("span", "grow", item.name), element("span", "muted", item.kinds))
-      return row
-    }),
-  )
+  // Nothing of a folder that is not trusted is read, so there is no list of what it holds back (trust-first).
   banner.replaceChildren(
     head,
-    element(
-      "div",
-      undefined,
-      trust.changed === true
-        ? `This folder's config changed since you trusted it, and Orbit is leaving out what changed: ${trust.summary}.`
-        : `Orbit is leaving out what could run code or reach the network: ${trust.summary}.`,
-    ),
-    files,
+    element("div", undefined, "Nothing in this folder loads, and no work starts here, until you trust it."),
     ...(trust.opened === undefined
       ? []
       : [element("div", "muted small", `VS Code opened ${trust.opened}. Trust is decided for the project's folder.`)]),
-    ...(trust.above.length === 0
-      ? []
-      : [
-          element(
-            "div",
-            "muted small",
-            `Config in ${trust.above.join(", ")} stays off: each folder is trusted on its own.`,
-          ),
-        ]),
     button("Review and trust…", () => vscode.postMessage({ type: "trust" }), "primary"),
   )
 }

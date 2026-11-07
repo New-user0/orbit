@@ -508,7 +508,139 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
-  test("shows an active compaction boundary before live summary output without history replay", async () => {
+  // clients-ux-27: a recap, recorded by this client or another, is a system row led by the reference mark, from the
+  // replayed history and from the live event, and its text reaches the scrollback only through the body sanitizer.
+  test("renders a replayed and a live recap as sanitized reference-mark rows", async () => {
+    const events = feed()
+    events.push(connected())
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        streams: [events],
+        messages: {
+          ses_1: [
+            { id: "msg_old", type: "user", text: "Fix the build", files: [], agents: [], time: { created: 1 } },
+            { id: "msg_recap", type: "recap", text: "Fixing\u001b]0;pwned\u0007 the build\u202e.", time: { created: 2 } },
+          ] as SessionMessages,
+        },
+      }),
+      sessionID: "ses_1",
+      thinking: false,
+      replay: true,
+      footer: ui.api,
+    })
+
+    const recorded = (id: string, seq: number, text: string) =>
+      ({
+        id,
+        created: seq,
+        type: "session.recap.recorded",
+        durable: durable("ses_1", seq),
+        data: { sessionID: "ses_1", text },
+      }) as RunV2Event
+    // The live event of the replayed recap, the new recap, and that new recap delivered again each draw no second row.
+    events.push(recorded("evt_recap", 2, "Fixing the build."))
+    events.push(recorded("evt_recap_live", 3, "Next: run the tests."))
+    events.push(recorded("evt_recap_live", 3, "Next: run the tests."))
+    events.push(recorded("evt_recap_last", 4, "Done."))
+    const deadline = Date.now() + 3000
+    while (!ui.commits.some((commit) => commit.text.includes("Done.")) && Date.now() < deadline) await Bun.sleep(5)
+
+    const rows = ui.commits.filter((commit) => commit.text.startsWith("※"))
+    expect(rows).toMatchObject([
+      { kind: "system", messageID: "msg_recap" },
+      { kind: "system", text: "※ Next: run the tests." },
+      { kind: "system", text: "※ Done." },
+    ])
+    expect(rows).toHaveLength(3)
+    const replayed = entryBody(rows[0]!)
+    expect(replayed).toMatchObject({ type: "text" })
+    const content = replayed.type === "text" ? replayed.content : ""
+    expect(content).toContain("※ Fixing\\x1b]0;pwned\\x07 the build\\u{202e}.")
+    expect(content).not.toMatch(/[\u001b\u0007\u202e]/)
+    await transport.close()
+  })
+
+  // context-memory-3: the clearing marker is a stored row that only tells the model's request what to leave out. The
+  // scrollback keeps the tool's full output and gets nothing for the marker.
+  test("replays a context-cleared row as nothing", async () => {
+    const replayed = async (withMarker: boolean) => {
+      const events = feed()
+      events.push(connected())
+      const ui = footer()
+      const history = [
+        { id: "msg_old", type: "user", text: "Show notes", files: [], agents: [], time: { created: 1 } },
+        {
+          id: "msg_assistant",
+          type: "assistant",
+          agent: "build",
+          model: { id: "model", providerID: "provider" },
+          content: [
+            canonicalToolPart("Bash", {
+              status: "completed",
+              input: { command: "cat notes.txt" },
+              content: [{ type: "text", text: "the full output of the cleared call" }],
+            }),
+          ],
+          time: { created: 2, completed: 3 },
+        },
+        ...(withMarker
+          ? [
+              {
+                id: "msg_cleared",
+                type: "context-cleared",
+                trigger: "idle",
+                tools: [{ assistantMessageID: "msg_assistant", id: "Bash-1" }],
+                time: { created: 4 },
+              },
+            ]
+          : []),
+        { id: "msg_next", type: "user", text: "Thanks", files: [], agents: [], time: { created: 5 } },
+      ] as SessionMessages
+      const transport = await createSessionTransport({
+        sdk: sdk({ streams: [events], messages: { ses_1: history } }),
+        sessionID: "ses_1",
+        thinking: false,
+        replay: true,
+        footer: ui.api,
+      })
+      const deadline = Date.now() + 3000
+      while (!ui.commits.some((commit) => commit.text.includes("Thanks")) && Date.now() < deadline) await Bun.sleep(5)
+      await transport.close()
+      return ui.commits
+    }
+
+    const commits = await replayed(true)
+    // The tool's output is replayed whole, and no commit belongs to the marker.
+    expect(commits.some((commit) => JSON.stringify(commit).includes("the full output of the cleared call"))).toBe(true)
+    expect(commits.some((commit) => commit.messageID === "msg_cleared")).toBe(false)
+    // Control: without the marker the replay is the same.
+    expect(commits).toEqual(await replayed(false))
+  })
+
+  // The away summary waits for a turn that was already running when Mini attached, which only this read reveals.
+  test.each([true, false])("reports whether its session is running when it loads it (running: %s)", async (running) => {
+    const events = feed()
+    events.push(connected())
+    const seen: boolean[] = []
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        streams: [events],
+        active: (): Record<string, { type: "running" }> => (running ? { ses_1: { type: "running" } } : {}),
+        messages: { ses_1: [] },
+      }),
+      sessionID: "ses_1",
+      thinking: false,
+      footer: footer().api,
+      onActive: (active) => seen.push(active),
+    })
+    const deadline = Date.now() + 3000
+    while (seen.length === 0 && Date.now() < deadline) await Bun.sleep(5)
+    expect(seen).toEqual([running])
+    await transport.close()
+  })
+
+  test("compaction progress writes no reply text; the summary arrives whole at the end", async () => {
     const events = feed()
     events.push(connected())
     const ui = footer()
@@ -529,8 +661,15 @@ describe("V2 mini transport", () => {
       id: "evt_compaction_delta",
       created: 2,
       type: "session.compaction.delta",
-      data: { sessionID: "ses_1", text: "Transport" },
+      data: { sessionID: "ses_1", characters: 9 },
     })
+    // An older server still sends the text and no count: it is not written either.
+    events.push({
+      id: "evt_compaction_delta_old",
+      created: 2,
+      type: "session.compaction.delta",
+      data: { sessionID: "ses_1", text: "HOSTILE" },
+    } as never)
     events.push({
       id: "evt_compaction_ended",
       created: 3,
@@ -545,6 +684,7 @@ describe("V2 mini transport", () => {
       { text: "Transport", phase: "progress", messageID: "msg_compaction" },
       { text: "", phase: "final", messageID: "msg_compaction" },
     ])
+    expect(JSON.stringify(ui.commits)).not.toContain("HOSTILE")
     await transport.close()
   })
 
@@ -613,7 +753,7 @@ describe("V2 mini transport", () => {
     })
 
     while (!ui.events.some((event) => event.type === "stream.patch" && event.patch.usage)) await Bun.sleep(0)
-    expect(ui.events).toContainEqual({ type: "stream.patch", patch: { usage: { tokens: 7_508, percent: 5 } } })
+    expect(ui.events).toContainEqual({ type: "stream.patch", patch: { usage: { tokens: 7_000, percent: 4 } } })
 
     events.push({
       id: "evt_cost_only",
@@ -633,6 +773,52 @@ describe("V2 mini transport", () => {
       type: "stream.patch",
       patch: { usage: { tokens: 0, percent: undefined, cost: 0.1234 } },
     })
+    await transport.close()
+  })
+
+  // MF1, D10: the Mini footer's figure is what the response's prompt held (input, cache read and cache write), the same
+  // figure as the terminal UI's footer and /context; the response's own output and reasoning are left out.
+  test("the Mini footer's context figure leaves out output and reasoning", async () => {
+    const events = feed()
+    events.push(connected())
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: sdk({ streams: [events] }),
+      sessionID: "ses_1",
+      thinking: false,
+      footer: ui.api,
+      contextLimit: (model) => (model.providerID === "test" && model.modelID === "model" ? 10_000 : undefined),
+    })
+
+    events.push({
+      id: "evt_step_started",
+      created: 1,
+      type: "session.step.started",
+      durable: durable("ses_1", 1),
+      data: {
+        started: 1,
+        sessionID: "ses_1",
+        assistantMessageID: "msg_assistant",
+        agent: "build",
+        model: { providerID: "test", id: "model" },
+      },
+    })
+    events.push({
+      id: "evt_step_ended",
+      created: 2,
+      type: "session.step.ended",
+      durable: durable("ses_1", 2),
+      data: {
+        sessionID: "ses_1",
+        assistantMessageID: "msg_assistant",
+        finish: "stop",
+        cost: 0,
+        tokens: { input: 3_000, output: 2_000, reasoning: 1_000, cache: { read: 1_500, write: 500 } },
+      },
+    })
+
+    while (!ui.events.some((event) => event.type === "stream.patch" && event.patch.usage)) await Bun.sleep(0)
+    expect(ui.events).toContainEqual({ type: "stream.patch", patch: { usage: { tokens: 5_000, percent: 50 } } })
     await transport.close()
   })
 

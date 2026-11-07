@@ -1,5 +1,6 @@
 import { expect } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Logger } from "effect"
+import { TestClock } from "effect/testing"
 import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { it } from "../../core/test/lib/effect"
 import { ServerProcess } from "../src/process"
@@ -164,6 +165,53 @@ it.live("authenticates API requests behind the frontend transform while allowing
         )
       }),
     )
+  }),
+)
+
+// foundations-19: the server starts the retention schedule unless its options turn it off, as a bare run's private
+// server does (class 12). The flag-scope config does not parse, so when the first pass is due the schedule reads the
+// setting, logs that it skips, and removes nothing; the test clock starts at the epoch, so no file is past any cutoff
+// either. These tests do not isolate Orbit's data folder, so a pass must never have anything to remove here.
+it.effect("schedules session retention ten minutes after start unless the options turn it off", () =>
+  Effect.gen(function* () {
+    const skipped = (retention: boolean | undefined) =>
+      Effect.gen(function* () {
+        const logged: string[] = []
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            yield* ServerProcess.start<never, never>({
+              hostname: "127.0.0.1",
+              port: 0,
+              password: "secret",
+              app: { version: "test-version" },
+              database: { path: ":memory:" },
+              config: { content: "{" },
+              fs: { filewatcher: false },
+              models: { fetch: false },
+              ...(retention === undefined ? {} : { retention }),
+            })
+            yield* TestClock.adjust("10 minutes")
+            // The schedule runs on its own fiber; give it real time to reach the setting.
+            for (let attempt = 0; attempt < 50 && logged.length === 0; attempt++)
+              yield* Effect.promise(() => Bun.sleep(20))
+          }),
+        ).pipe(
+          Effect.provideService(
+            Logger.CurrentLoggers,
+            new Set([
+              Logger.make((entry) => {
+                const message = [entry.message].flat()[0]
+                if (typeof message === "string" && message.startsWith("session retention")) logged.push(message)
+              }),
+            ]),
+          ),
+        )
+        return logged
+      })
+
+    expect(yield* skipped(undefined)).toEqual(["session retention skipped: a config file does not parse"])
+    expect(yield* skipped(true)).toEqual(["session retention skipped: a config file does not parse"])
+    expect(yield* skipped(false)).toEqual([])
   }),
 )
 

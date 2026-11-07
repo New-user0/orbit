@@ -450,7 +450,7 @@ describe("what the private server loads", () => {
     expect(list.filter((entry) => entry.scope === "flag").map((entry) => entry.info.shell)).toEqual(["flag-shell"])
   })
 
-  test("a file the person named is not held back in a folder nothing trusts, and the project's own file stays held back", async () => {
+  test("a file the person named is not held back in a folder nothing trusts, and the project's own file is not read", async () => {
     const team = path.join(project, "team.json")
     await Bun.write(team, '{"shell":"team-shell","username":"team-user"}')
     const untrusted = { ORBIT_TRUST_PROJECT: undefined }
@@ -460,12 +460,12 @@ describe("what the private server loads", () => {
     expect(flag[0]).not.toHaveProperty("trusted")
     expect(flag[0].info.shell).toBe("team-shell")
 
-    // The folder's own orbit.json, named again, loads once, at its scope and still withheld.
+    // The folder's own orbit.json, named again, is not read at all: not at its own scope, which an untrusted folder's
+    // files are not read in (trust-first), and not as a flag document, whose scope would apply none of the folder's trust.
     const own = await entries(["--settings", path.join(project, "orbit.json")], untrusted)
     const documents = own.filter((entry) => entry.path === path.join(project, "orbit.json"))
-    expect(documents).toHaveLength(1)
-    expect(documents[0]).toMatchObject({ scope: "project", trusted: false })
-    expect(documents[0].info.shell).toBeUndefined()
+    expect(documents).toEqual([])
+    expect(JSON.stringify(own)).not.toContain("project-shell")
     expect(scopes(own)).not.toContain("flag")
     if (process.platform === "win32") {
       const upper = await entries(["--settings", path.join(project, "ORBIT.JSON")], untrusted)
@@ -495,13 +495,13 @@ describe("what the private server loads", () => {
   const rootShort = shortName(root)
   const projectShort = rootShort === undefined ? undefined : path.join(rootShort, "e2e", "work", "project")
   test.skipIf(projectShort === undefined)(
-    "the folder's own file, named from a folder spelled by its 8.3 short name, still loads once and withheld",
+    "the folder's own file, named from a folder spelled by its 8.3 short name, is not read as a flag document either",
     async () => {
       const short = projectShort!
       const list = await entries(["--settings", "./orbit.json"], { ORBIT_TRUST_PROJECT: undefined }, short)
       expect(list.filter((entry) => entry.scope === "flag" && entry.path !== undefined)).toEqual([])
       expect(JSON.stringify(list.filter((entry) => entry.scope === "flag"))).not.toContain("project-shell")
-      expect(list.filter((entry) => entry.scope === "project")).toMatchObject([{ trusted: false }])
+      expect(list.filter((entry) => entry.scope === "project")).toEqual([])
     },
   )
 

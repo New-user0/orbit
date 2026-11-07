@@ -9,7 +9,9 @@ import { ToolNames } from "./names.js"
 /**
  * A nudge to look at the todo or task list, derived from history. Assistant text and tool calls are counted one by one
  * (reasoning is not), and the nudge comes before a run once at least ten have passed since both the latest call that
- * changes the list and the latest nudge. A call counts however it ended. The count starts again after a compaction.
+ * changes the list and the latest nudge. A call counts however it ended. The count starts again after a compaction,
+ * while the lists themselves cross it in the compaction's rehydration row (`current`), as the reference keeps them in
+ * its app state.
  *
  * Whether the nudge is wanted at all depends on the tools offered now, for every position, so a change in the tool set
  * moves earlier nudges. It is the one producer whose earlier runs read the tool names, because a session without a
@@ -25,6 +27,7 @@ export type Given = Pick<Input, "tools" | "messages">
 const Items = Schema.Array(Schema.Struct({ content: Schema.String, status: Schema.String }))
 const TodoInput = Schema.Struct({ todos: Items })
 const Metadata = Schema.Struct({ todos: Items })
+const FamilyName = Schema.Literals(["todo", "task"])
 
 export type Item = (typeof Items.Type)[number]
 
@@ -41,20 +44,46 @@ export const itemsOf = (part: Tool): ReadonlyArray<Item> | undefined => {
 
 export const insertions = (input: Given): ReadonlyArray<Insertion> => {
   if (!input.tools.includes("TodoWrite") && !input.tools.includes("TaskUpdate")) return []
+  return walk(input.messages, input.tools.includes("TodoWrite") ? "todo" : "task").out
+}
+
+/**
+ * The lists as the producer's scan leaves them at the end of the epoch: the newest todo list, the newest task list, and
+ * the family of the newest call that changed a list. A compaction carries them in its rehydration row.
+ */
+export const current = (messages: ReadonlyArray<SessionMessage.Info>) => walk(messages).lists
+
+export interface Lists {
+  readonly todos: ReadonlyArray<Item>
+  readonly tasks: ReadonlyArray<Item>
+  readonly family?: typeof FamilyName.Type
+}
+
+// Folds the epoch's runs in order. With `fallback`, the wording when no list call named a family, it also places the
+// nudges.
+const walk = (messages: ReadonlyArray<SessionMessage.Info>, fallback?: typeof FamilyName.Type) => {
   const out: Insertion[] = []
   let sinceWrite = 0
   let sinceNudge = 0
-  let family: "todo" | "task" | undefined
-  let todos: ReadonlyArray<Item> = []
-  let tasks: ReadonlyArray<Item> = []
+  let lists: Lists = { todos: [], tasks: [] }
 
-  ReminderText.runs(input.messages).forEach((run) => {
-    if (sinceWrite >= GAP && sinceNudge >= GAP) {
+  ReminderText.runs(messages).forEach((run) => {
+    // A rehydration row sets the lists it carries and leaves both counts as they are.
+    run.messages.forEach((message) => {
+      const found = carried(message)
+      if (found === undefined) return
+      lists = {
+        todos: found.todos ?? lists.todos,
+        tasks: found.tasks ?? lists.tasks,
+        family: found.family ?? lists.family,
+      }
+    })
+    if (fallback !== undefined && sinceWrite >= GAP && sinceNudge >= GAP) {
       sinceNudge = 0
-      const variant = family ?? (input.tools.includes("TodoWrite") ? "todo" : "task")
+      const variant = lists.family ?? fallback
       // The todo tool empties its list when a call completes every item, so a fully completed list shows nothing.
       const items =
-        variant === "task" ? tasks : todos.every((item) => item.status === "completed") ? [] : todos
+        variant === "task" ? lists.tasks : lists.todos.every((item) => item.status === "completed") ? [] : lists.todos
       out.push({
         after: run.anchor,
         kind: "todo",
@@ -79,15 +108,29 @@ export const insertions = (input: Given): ReadonlyArray<Insertion> => {
       const name = ToolNames.canonical(part.name)
       if (name === "TodoWrite" || name === "TaskCreate" || name === "TaskUpdate") {
         sinceWrite = 0
-        family = name === "TodoWrite" ? "todo" : "task"
+        lists = { ...lists, family: name === "TodoWrite" ? "todo" : "task" }
       } else sinceWrite += 1
       const items = itemsOf(part)
       if (items === undefined) return
-      if (name === "TodoWrite") todos = items
-      if (name === "TaskCreate" || name === "TaskUpdate" || name === "TaskList") tasks = items
+      if (name === "TodoWrite") lists = { ...lists, todos: items }
+      if (name === "TaskCreate" || name === "TaskUpdate" || name === "TaskList") lists = { ...lists, tasks: items }
     })
   })
-  return out
+  return { out, lists }
+}
+
+// The lists a rehydration row carries. The row is stored session data, which an import can supply (class 5), so each
+// list is decoded on its own and a malformed one costs only itself (class 7).
+const carried = (message: SessionMessage.Info) => {
+  if (message.type !== "synthetic") return undefined
+  const rehydration = message.metadata?.rehydration
+  if (typeof rehydration !== "object" || rehydration === null) return undefined
+  const field = (key: string) => (rehydration as Record<string, unknown>)[key]
+  return {
+    todos: Option.getOrUndefined(Schema.decodeUnknownOption(Items)(field("todos"))),
+    tasks: Option.getOrUndefined(Schema.decodeUnknownOption(Items)(field("tasks"))),
+    family: Option.getOrUndefined(Schema.decodeUnknownOption(FamilyName)(field("family"))),
+  }
 }
 
 const todoText = (listed: boolean) =>

@@ -39,6 +39,9 @@ export const SessionTable = sqliteTable(
     share_url: text(),
     summary_additions: integer(),
     summary_deletions: integer(),
+    /** Lines the edit tools added and removed over the session's life; null for a session from before they were counted. */
+    lines_added: integer(),
+    lines_removed: integer(),
     summary_files: integer(),
     summary_diffs: text({ mode: "json" }).$type<FileDiff.LegacyInfo[]>(),
     metadata: text({ mode: "json" }).$type<Session.Metadata>(),
@@ -165,12 +168,58 @@ export const SessionUsageTable = sqliteTable(
     tokens_reasoning: integer().notNull(),
     tokens_cache_read: integer().notNull(),
     tokens_cache_write: integer().notNull(),
+    /** The model the call used; null on records written before they named it. */
+    provider_id: text(),
+    model_id: text(),
   },
   (table) => [
     primaryKey({ columns: [table.session_id, table.seq] }),
     index("session_usage_time_idx").on(table.time_created),
   ],
 )
+
+/**
+ * The stats of the sessions that retention removed (`SessionRetention`), so that `orb stats` keeps their history after
+ * the messages are gone. One row per session, 15-minute bucket, kind and key: every real time zone is a whole number of
+ * quarter hours from UTC, so a bucket never straddles a local day. It outlives its session, so it has no foreign key.
+ */
+export const SessionStatsArchiveTable = sqliteTable(
+  "session_stats_archive",
+  {
+    id: integer().primaryKey({ autoIncrement: true }),
+    session_id: text().$type<SessionSchema.ID>().notNull(),
+    project_id: text().$type<Project.ID>().notNull(),
+    subagent: integer({ mode: "boolean" }).notNull(),
+    bucket: integer().notNull(),
+    kind: text().$type<"user" | "step" | "tool" | "usage">().notNull(),
+    provider_id: text(),
+    model_id: text(),
+    variant: text(),
+    name: text(),
+    status: text(),
+    count: integer().notNull(),
+    cost: real().notNull(),
+    tokens_input: integer().notNull(),
+    tokens_output: integer().notNull(),
+    tokens_reasoning: integer().notNull(),
+    tokens_cache_read: integer().notNull(),
+    tokens_cache_write: integer().notNull(),
+  },
+  (table) => [
+    index("session_stats_archive_session_idx").on(table.session_id),
+    index("session_stats_archive_bucket_idx").on(table.bucket),
+  ],
+)
+
+/**
+ * The IDs of the sessions this database removed (`SessionRetention`). Their saved-result and scratchpad folders lie under
+ * roots that every database on the machine shares (each channel and `ORBIT_DB` has its own), so retention removes only a
+ * folder named here and never one that another database's session may still use. A row goes once neither root holds a
+ * folder of its name. It outlives its session, so it has no foreign key.
+ */
+export const SessionRemovedTable = sqliteTable("session_removed", {
+  id: text().$type<SessionSchema.ID>().primaryKey(),
+})
 
 /**
  * When each user input was admitted, kept after the input leaves the inbox: a turn limit binds a subagent to the turn

@@ -128,6 +128,62 @@ describe("run runtime queue", () => {
     expect(ui.commits).toEqual([])
   })
 
+  test("/compact with text passes its instructions to the compaction", async () => {
+    const ui = createFooterApiFixture()
+    const seen: string[] = []
+    const compacted: Array<string | undefined> = []
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      onCompact: async (instructions) => {
+        compacted.push(instructions)
+      },
+      run: async (input) => {
+        seen.push(input.text)
+        ui.api.close()
+      },
+    })
+
+    ui.submit("/compact focus on tests")
+    ui.submit("/compact")
+    ui.submit("hello")
+    await task
+
+    // No prompt carries the command text, and the bare command passes nothing.
+    expect(compacted).toEqual(["focus on tests", undefined])
+    expect(seen).toEqual(["hello"])
+  })
+
+  test("/compact with text keeps a project command named compact; a bare one stays the built-in", async () => {
+    const ui = createFooterApiFixture()
+    const seen: Array<string | undefined> = []
+    const compacted: Array<string | undefined> = []
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      onCompact: async (instructions) => {
+        compacted.push(instructions)
+      },
+      run: async (input) => {
+        seen.push(input.command?.arguments ?? input.text)
+        if (seen.length === 2) ui.api.close()
+      },
+    })
+
+    ui.submit({
+      text: "/compact keep the db notes",
+      parts: [],
+      command: { name: "compact", arguments: "keep the db notes" },
+    })
+    ui.submit({ text: "/compact", parts: [], command: { name: "compact", arguments: "" } })
+    ui.submit("hello")
+    await task
+
+    // The project command with text runs; the bare command and the plain-text control are the built-in.
+    expect(seen).toEqual(["keep the db notes", "hello"])
+    expect(compacted).toEqual([undefined])
+  })
+
   test("keeps prompts submitted after an in-flight /compact behind the compaction barrier", async () => {
     const ui = createFooterApiFixture()
     const active = Promise.withResolvers<void>()
@@ -158,6 +214,41 @@ describe("run runtime queue", () => {
     active.resolve()
     await task
     expect(order).toEqual(["run:first", "compact", "run:later"])
+  })
+
+  test("a waiting skill command named compact with text is not a compaction barrier", async () => {
+    const ui = createFooterApiFixture()
+    const active = Promise.withResolvers<void>()
+    const order: string[] = []
+
+    const task = runPromptQueue({
+      footer: ui.api,
+      onCompact: async () => {
+        order.push("compact")
+      },
+      admit: async (prompt) => {
+        order.push(`admit:${prompt.text}`)
+      },
+      run: async (prompt, _signal, admitted) => {
+        admitted()
+        order.push(`run:${prompt.text}`)
+        if (prompt.text === "first") await active.promise
+        if (prompt.text === "/compact notes") ui.api.close()
+      },
+    })
+
+    ui.submit("first")
+    await Promise.resolve()
+    // A skill never runs while another prompt is active, so it waits in the queue; it is not the built-in.
+    ui.submit({ text: "/compact notes", parts: [], command: { name: "compact", arguments: "notes", source: "skill" } })
+    ui.submit("later")
+    await Bun.sleep(20)
+    // "later" is admitted behind the active prompt at once, which it could not be behind a compaction barrier.
+    expect(order).toEqual(["run:first", "admit:later"])
+
+    active.resolve()
+    await task
+    expect(order).not.toContain("compact")
   })
 
   test("shell mode submits /exit as a shell command", async () => {

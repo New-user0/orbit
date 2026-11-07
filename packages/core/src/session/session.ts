@@ -182,6 +182,9 @@ export const make = Effect.fn("Session.make")(function* () {
     input: { id?: SessionMessage.ID; command: string },
   ) {
     const session = yield* get(sessionID)
+    // A person's command is new work, so it settles a staged revert as a prompt does;
+    // otherwise its message and output land after the boundary and the next prompt drops them.
+    if (session.revert) yield* SessionRevert.commit(bus, session)
     // The server owns completion recording even if the submitting client disconnects.
     const running = yield* Effect.gen(function* () {
       const started = yield* SessionShell.start({ session, command: input.command }).pipe(
@@ -229,6 +232,8 @@ export const make = Effect.fn("Session.make")(function* () {
     const skill = yield* SessionSkill.get({ session, skill: input.skill }).pipe(
       Effect.provideService(Instance.Service, instances),
     )
+    // An activated skill is new work too: commit a staged revert once the skill is known, as a prompt does.
+    if (session.revert) yield* SessionRevert.commit(bus, session)
     yield* bus.publish(
       SessionEvent.Skill.Activated,
       {
@@ -246,7 +251,7 @@ export const make = Effect.fn("Session.make")(function* () {
   })
   const compact = Effect.fn("Session.compact")(function* (
     sessionID: SessionSchema.ID,
-    input: { id?: SessionMessage.ID; delivery?: SessionInbox.Delivery },
+    input: { id?: SessionMessage.ID; delivery?: SessionInbox.Delivery; instructions?: string },
   ) {
     const session = yield* get(sessionID)
     if (session.revert) yield* SessionRevert.commit(bus, session)
@@ -256,6 +261,7 @@ export const make = Effect.fn("Session.make")(function* () {
         id: inputID,
         sessionID,
         delivery: input.delivery ?? "steer",
+        instructions: input.instructions?.trim() || undefined,
       })
       .pipe(
         Effect.catchTag("SessionInbox.LifecycleConflict", () => new CompactionConflictError({ sessionID, inputID })),
@@ -343,7 +349,19 @@ export const make = Effect.fn("Session.make")(function* () {
     if (yield* execution.isActive(sessionID)) return yield* new BusyError({ sessionID })
     return yield* SessionRevert.commit(bus, session)
   })
-  const revert = { stage, clear, commit }
+  const files = Effect.fn("Session.revert.files")(function* (
+    sessionID: SessionSchema.ID,
+    input: { messageID: SessionMessage.ID; dryRun?: boolean },
+  ) {
+    const session = yield* get(sessionID)
+    // A rewind writes files that a running step may be writing too, so the session must be idle.
+    if (yield* execution.isActive(sessionID)) return yield* new BusyError({ sessionID })
+    return yield* SessionRevert.files({ session, messageID: input.messageID, dryRun: input.dryRun }).pipe(
+      Effect.provideService(Instance.Service, instances),
+      Effect.provideService(Database.Service, database),
+    )
+  })
+  const revert = { stage, clear, commit, files }
   const operations = {
     get,
     message,
@@ -392,7 +410,8 @@ export const make = Effect.fn("Session.make")(function* () {
     const stage = operations.revert.stage.bind(undefined, sessionID)
     const clear = operations.revert.clear.bind(undefined, sessionID)
     const commit = operations.revert.commit.bind(undefined, sessionID)
-    const revert = { stage, clear, commit }
+    const files = operations.revert.files.bind(undefined, sessionID)
+    const revert = { stage, clear, commit, files }
 
     return {
       id: sessionID,

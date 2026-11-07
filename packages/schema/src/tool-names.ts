@@ -35,7 +35,6 @@ export const tools = {
   enter_worktree: "EnterWorktree",
   exit_worktree: "ExitWorktree",
   workflow: "Workflow",
-  memory: "Memory",
   execute: "Execute",
 } as const satisfies Record<string, string>
 

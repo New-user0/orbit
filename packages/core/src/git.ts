@@ -1,5 +1,6 @@
 export * as Git from "./git.js"
 
+import { lstat } from "fs/promises"
 import path from "path"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
@@ -542,8 +543,14 @@ const layer = Layer.effect(
         ],
         { concurrency: 2 },
       )
-      const candidates = Array.from(new Set([...tracked, ...untracked])).map((file) => RelativePath.make(file))
-      if (!candidates.length) return { skipped: [] }
+      // A path behind a link is not captured, and a tracked one leaves the index (see linkedPaths). On Windows git lists
+      // the files inside a junction as untracked files of the work tree, so without this their contents, which lie
+      // outside the project, would be stored in the snapshot.
+      const linked = yield* linkedPaths(input.repository.worktree, [...tracked, ...untracked])
+      const candidates = Array.from(new Set([...tracked, ...untracked]))
+        .filter((file) => !linked.has(file))
+        .map((file) => RelativePath.make(file))
+      if (!candidates.length && !linked.size) return { skipped: [] }
       const excluded = input.ignores
         ? yield* ignored({ repository: input.ignores, paths: candidates })
         : new Set<RelativePath>()
@@ -563,7 +570,7 @@ const layer = Layer.effect(
           )).filter((item): item is RelativePath => item !== undefined)
         : []
       const stage = allowed.filter((item) => !skipped.includes(item))
-      const remove = [...excluded, ...skipped]
+      const remove = [...excluded, ...skipped, ...tracked.filter((file) => linked.has(file))]
       if (remove.length)
         yield* repositoryOperation(
           "refresh",
@@ -594,7 +601,12 @@ const layer = Layer.effect(
       paths: readonly RelativePath[]
       tracked?: "keep"
     }) {
-      if (!input.paths.length) return new Set<RelativePath>()
+      // A path behind a link is answered by its first linked folder, which git accepts on every platform (see
+      // linkedPaths), so a file below a link in an ignored folder stays ignored.
+      const linked = yield* linkedPaths(input.repository.worktree, input.paths)
+      const asked = (file: RelativePath) => linked.get(file) ?? file
+      const paths = Array.from(new Set(input.paths.map(asked)))
+      if (!paths.length) return new Set<RelativePath>()
       const result = yield* proc
         .run(
           ChildProcess.make(
@@ -617,7 +629,7 @@ const layer = Layer.effect(
           // `check-ignore` refuses `--literal-pathspecs`, and reads a leading `:` as pathspec magic: `:memo` would answer
           // for `memo`, and `:!x` or `:(icase)x` would stop the command and with it the capture or comparison that asked.
           // Behind `./` the name keeps its colon, and it is given back with the same `./` in front.
-          { stdin: input.paths.map((file) => `./${file}\0`).join("") },
+          { stdin: paths.map((file) => `./${file}\0`).join("") },
         )
         .pipe(
           Effect.mapError(
@@ -636,9 +648,10 @@ const layer = Layer.effect(
           directory: input.repository.worktree,
           message: result.stderr.toString("utf8").trim() || "Failed to check ignored paths",
         })
-      return new Set(
-        nuls(result.stdout.toString("utf8")).map((file) => RelativePath.make(file.startsWith("./") ? file.slice(2) : file)),
+      const answered = new Set(
+        nuls(result.stdout.toString("utf8")).map((file) => (file.startsWith("./") ? file.slice(2) : file)),
       )
+      return new Set(input.paths.filter((file) => answered.has(asked(file))))
     })
 
     const writeTree = Effect.fn("Git.tree.write")(function* (repository: Repository) {
@@ -777,38 +790,43 @@ const layer = Layer.effect(
       return true
     })
 
+    // A file that fails to go back (one that Windows holds open, say) costs only itself: it is logged, the others still
+    // go back, and the restore fails at the end so that its caller knows it was partial (class 7).
     const restore = Effect.fn("Git.tree.restore")(
       (input: { repository: Repository; files: ReadonlyMap<RelativePath, TreeID> }) =>
         locked(
           input.repository,
-          Effect.forEach(
-            input.files,
-            ([file, tree]) =>
-              Effect.gen(function* () {
-                if (yield* hasEntry(input.repository, tree, file)) {
-                  yield* repositoryOperation("restore", input.repository, [
-                    "--literal-pathspecs",
-                    "checkout",
-                    "--no-recurse-submodules",
-                    tree,
-                    "--",
-                    file,
-                  ])
-                  return
-                }
-                yield* fs.remove(path.join(input.repository.worktree, file), { recursive: true, force: true }).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new OperationError({
-                        operation: "restore",
-                        directory: input.repository.worktree,
-                        message: `Failed to remove ${file}`,
-                        cause,
-                      }),
-                  ),
-                )
-              }),
-            { discard: true },
+          Effect.forEach(input.files, ([file, tree]) =>
+            Effect.gen(function* () {
+              if (yield* hasEntry(input.repository, tree, file)) {
+                yield* repositoryOperation("restore", input.repository, [
+                  "--literal-pathspecs",
+                  "checkout",
+                  "--no-recurse-submodules",
+                  tree,
+                  "--",
+                  file,
+                ])
+                return false
+              }
+              // Not recursive: only a file or a link goes, never a folder with what it holds.
+              yield* fs.remove(path.join(input.repository.worktree, file), { force: true })
+              return false
+            }).pipe(
+              Effect.catch((cause) => Effect.logWarning("restore failed for a file", { file, cause }).pipe(Effect.as(true))),
+            ),
+          ).pipe(
+            Effect.flatMap((failed) => {
+              const count = failed.filter(Boolean).length
+              if (count === 0) return Effect.void
+              return Effect.fail(
+                new OperationError({
+                  operation: "restore",
+                  directory: input.repository.worktree,
+                  message: `Failed to restore ${count} of ${failed.length} files`,
+                }),
+              )
+            }),
           ),
         ),
     )
@@ -979,6 +997,39 @@ function wholeLines(text: string, truncated: boolean) {
 /** Split NUL-terminated git output into its records. */
 function nuls(text: string) {
   return text.split("\0").filter(Boolean)
+}
+
+/**
+ * The work-tree paths with a link (a junction on Windows included) among their folders below the work tree, which git
+ * refuses to check or add ("beyond a symbolic link"). Each folder is looked at once. A tracked file whose folder became
+ * a link since the last capture is no longer in the work tree, and git's refusal would fail the whole capture or
+ * comparison that asked: a capture takes such a path out of the index instead of staging it, and the ignore check asks
+ * about the first linked folder in its place. On Windows a path that is itself a link counts too: git for Windows takes
+ * a junction for a folder and adds the files it leads to, while git elsewhere stores a link as a link. Each path is
+ * mapped to the first linked folder on its way.
+ */
+function linkedPaths<Name extends string>(worktree: string, files: readonly Name[]) {
+  const folders = (file: string) =>
+    file
+      .split("/")
+      .slice(0, process.platform === "win32" ? undefined : -1)
+      .map((_, index, parts) => parts.slice(0, index + 1).join("/"))
+  const unique = Array.from(new Set(files.flatMap(folders)))
+  const isLink = (folder: string) =>
+    lstat(path.join(worktree, folder))
+      .then((info) => info.isSymbolicLink())
+      .catch(() => false)
+  return Effect.promise(() => Promise.all(unique.map(isLink))).pipe(
+    Effect.map((links) => {
+      const linked = new Set(unique.filter((_, index) => links[index]))
+      return new Map(
+        files.flatMap((file) => {
+          const folder = folders(file).find((item) => linked.has(item))
+          return folder === undefined ? [] : [[file, folder] as const]
+        }),
+      )
+    }),
+  )
 }
 
 function resolvePath(cwd: string, value: string) {

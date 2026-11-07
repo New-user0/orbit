@@ -1,4 +1,6 @@
 import { expect } from "bun:test"
+import { SessionRehydration } from "@orbit/core/session/rehydration"
+import path from "path"
 import { App } from "@orbit/core/app"
 import {
   LLMClient,
@@ -55,10 +57,13 @@ import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { PluginSupervisor } from "@orbit/core/plugin/supervisor"
 import { Tool } from "@orbit/core/tool"
+import { ToolOutput } from "@orbit/core/tool-output"
+import { Money } from "@orbit/schema/money"
 import { asc, eq } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 import { overloaded } from "./lib/provider-failure"
+import { noMemory } from "./lib/memory"
 import { noScratchpad } from "./lib/scratchpad"
 import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { stubSnapshot } from "./lib/tool"
@@ -106,6 +111,7 @@ const models = Layer.mock(SessionRunnerModel.Service)({
 })
 const builtins = Layer.mock(InstructionBuiltIns.Service, {
   preferences: () => Effect.succeed(Instructions.empty),
+  toolResults: () => Instructions.empty,
   load: () =>
     Effect.succeed(
       Instructions.make({
@@ -161,6 +167,7 @@ const it = testEffect(
       SessionContext.node,
       SessionReminders.node,
       PluginHooks.node,
+      ToolOutput.node,
       llmClient,
     ]),
     [
@@ -171,7 +178,10 @@ const it = testEffect(
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(builtins),
       noScratchpad,
+      noMemory,
       noVcsSnapshot,
+      // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+      SessionRehydration.node.replace(SessionRehydration.noopLayer),
       InstructionDiscovery.node.replace(discovery),
       SkillInstructions.node.replace(skills),
       ReferenceInstructions.node.replace(references),
@@ -385,6 +395,7 @@ it.effect(
       expect(spent.map((row) => [row.kind, row.source, row.tokens_input, row.tokens_output])).toEqual([
         ["side_query", "session.generate", 0, 10],
       ])
+      expect(spent[0]).toMatchObject({ provider_id: "test", model_id: "generate-model" })
       expect(
         (yield* SessionTurn.usage(db, sessionID, { seq: -1, time: DateTime.makeUnsafe(0) })).tokens,
       ).toBe(10)
@@ -425,6 +436,62 @@ it.effect("a generation lowers a prompt's hint and editor note like the main req
       Effect.provideService(SessionReminders.Service, SessionReminders.Service.of({ ...reminders, minimal: true })),
     )
     expect(lean).toEqual(["Original prompt", "Side question"])
+  }),
+)
+
+// tool-runtime-8: a side query lowers a saved result as its wrapper, as the main request does, so the full text is not
+// sent again.
+it.effect("a generation lowers a saved tool result as its wrapper", () =>
+  Effect.gen(function* () {
+    requests.length = 0
+    instruction = "Initial context"
+    const { db, bus, instructions, session, instances } = yield* setup
+    const toolOutput = yield* ToolOutput.Service
+    yield* InstructionState.prepare(db, bus, instructions, sessionID)
+    const prompt = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.InboxEnqueued, {
+      sessionID,
+      inboxID: prompt,
+      item: { type: "user", payload: { text: "Search" }, delivery: "steer" },
+    })
+    yield* bus.publish(SessionEvent.InboxDelivered, { sessionID, inboxID: prompt })
+    const assistantMessageID = SessionMessage.ID.create()
+    yield* bus.publish(SessionEvent.Step.Started, {
+      sessionID,
+      assistantMessageID,
+      agent: Agent.ID.make("build"),
+      model: { id: ID.make("generate-model"), providerID: Provider.ID.make("test") },
+      started: 0,
+    })
+    yield* bus.publish(SessionEvent.Tool.Input.Started, { sessionID, assistantMessageID, id: "call_saved", name: "lookup" })
+    yield* bus.publish(SessionEvent.Tool.Input.Ended, { sessionID, assistantMessageID, id: "call_saved", text: "{}" })
+    yield* bus.publish(SessionEvent.Tool.Called, { sessionID, assistantMessageID, id: "call_saved", input: {}, executed: false })
+    const name = "msg_0123abc-call_saved-1a2b3c4d.txt"
+    yield* bus.publish(SessionEvent.Tool.Success, {
+      sessionID,
+      assistantMessageID,
+      id: "call_saved",
+      content: [{ type: "text", text: "r".repeat(60_000) }],
+      metadata: { persisted: { session: sessionID, name, size: 60_000, format: 1 } },
+      executed: false,
+    })
+    yield* bus.publish(SessionEvent.Step.Ended, {
+      sessionID,
+      assistantMessageID,
+      finish: "stop",
+      cost: Money.USD.zero,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    })
+
+    yield* SessionGenerate.generate({ session, prompt: "Side question" }).pipe(Effect.provideService(Instance.Service, instances))
+
+    const results = requests[0]?.messages.flatMap((message) => (message.role === "tool" ? message.content : [])) ?? []
+    expect(results).toHaveLength(1)
+    const result = results[0]
+    if (result?.type !== "tool-result" || result.result.type !== "text") throw new Error("Expected a text tool result")
+    expect(String(result.result.value)).toStartWith("<saved-output>")
+    expect(String(result.result.value)).toContain(`The full output is saved at: ${path.join(toolOutput.root, sessionID, name)}`)
+    expect(String(result.result.value)).not.toContain("r".repeat(2_001))
   }),
 )
 

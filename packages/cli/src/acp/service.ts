@@ -7,6 +7,7 @@ import {
 } from "@orbit/client/promise"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Effect, Option, Ref, Result, Stream } from "effect"
+import { plain } from "@orbit/util/plain"
 import { withTimestampedFallback } from "@orbit/util/session-title-fallback"
 import type {
   AuthenticateRequest,
@@ -128,6 +129,31 @@ export function make(input: {
     return session
   })
 
+  // No session opens in a folder that is not trusted (trust-first, class 12). The server refuses a new one itself, and
+  // `ACPPromise` carries that refusal; a session that exists is opened without a route that would refuse, so it is asked
+  // here. The editor picks the folder, so the refusal goes back to it as a typed error that names the folder (class 13),
+  // through `plain` (class 9). A server that cannot say fails the request as well (class 7).
+  const requireTrusted = Effect.fnUntraced(function* (directory: string) {
+    const status = yield* ACPPromise.promise((signal) =>
+      input.client.location.trust.get({ location: { directory } }, { signal }),
+    )
+    if (status.trusted) return
+    return yield* new ACPError.UntrustedFolderError({
+      directory: status.directory,
+      persistent: status.persistent,
+      message: `${plain(status.directory)} is not trusted. Trust it with \`orb trust\`, or start \`orb\` there and answer the question.`,
+    })
+  })
+
+  // An additional directory is granted to the session's tools (`external_directory`), so the editor's choice opens it to
+  // the model as the session's own folder is. Each has to be trusted as well, decided by the server for that folder, and
+  // the first that is not is refused with the same typed error before anything is created or granted (class 3, class 12).
+  const additional = Effect.fnUntraced(function* (cwd: string, requested: Parameters<typeof ACPDirectories.parse>[1]) {
+    const directories = yield* ACPDirectories.parse(cwd, requested)
+    yield* Effect.forEach(directories, requireTrusted, { discard: true })
+    return directories
+  })
+
   const replay = (attached: Attached) =>
     Stream.paginate(undefined, (cursor: string | undefined) =>
       ACPPromise.promise(() =>
@@ -185,7 +211,7 @@ export function make(input: {
       return {}
     }),
     newSession: Effect.fnUntraced(function* (params) {
-      const directories = yield* ACPDirectories.parse(params.cwd, params.additionalDirectories)
+      const directories = yield* additional(params.cwd, params.additionalDirectories)
       // Load before creating so a catalog failure leaves no session behind. Agent and model stay unset
       // so the server resolves its defaults after plugins activate.
       yield* input.catalog.get(params.cwd)
@@ -199,8 +225,9 @@ export function make(input: {
       return { sessionId: attached.id, configOptions: yield* currentOptions(attached) }
     }),
     loadSession: Effect.fnUntraced(function* (params) {
-      const directories = yield* ACPDirectories.parse(params.cwd, params.additionalDirectories)
+      const directories = yield* additional(params.cwd, params.additionalDirectories)
       const session = yield* getSession(params.sessionId, params.cwd)
+      yield* requireTrusted(session.location.directory)
       yield* ACPDirectories.activate(input.client, session, directories)
       const attached = yield* input.sessions.attach(session, session.location.directory, params.mcpServers)
       return yield* replay(attached).pipe(
@@ -244,8 +271,9 @@ export function make(input: {
       return {}
     }),
     resumeSession: Effect.fnUntraced(function* (params) {
-      const directories = yield* ACPDirectories.parse(params.cwd, params.additionalDirectories)
+      const directories = yield* additional(params.cwd, params.additionalDirectories)
       const session = yield* getSession(params.sessionId, params.cwd)
+      yield* requireTrusted(session.location.directory)
       yield* ACPDirectories.activate(input.client, session, directories)
       const attached = yield* input.sessions.attach(session, session.location.directory, params.mcpServers ?? [])
       return { configOptions: yield* currentOptions(attached) }
@@ -256,7 +284,7 @@ export function make(input: {
       return {}
     }),
     forkSession: Effect.fnUntraced(function* (params) {
-      const directories = yield* ACPDirectories.parse(params.cwd, params.additionalDirectories)
+      const directories = yield* additional(params.cwd, params.additionalDirectories)
       const forked = yield* ACPPromise.promise(() => input.client.session.fork({ sessionID: params.sessionId }))
       // Forks copy the source session's rules, so the request list replaces any inherited grants.
       yield* ACPDirectories.activate(input.client, forked, directories)

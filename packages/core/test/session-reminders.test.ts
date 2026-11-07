@@ -35,6 +35,8 @@ import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Bus } from "@orbit/core/bus"
 import type { SessionContext } from "@orbit/core/session/context"
 import { LayerNode } from "@orbit/util/effect/layer-node"
+import { AbsolutePath } from "@orbit/core/schema"
+import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 import { overloaded } from "./lib/provider-failure"
 import {
@@ -661,7 +663,13 @@ describe("the language-server reminder", () => {
         Effect.provide(
           AppNodeBuilder.build(LayerNode.group([Bus.node, SessionReminders.node]), [
             LspDiagnostics.node.replace(Layer.succeed(LspDiagnostics.Service, held.collector)),
-            Location.node.replace(Layer.succeed(Location.Service, { directory: "/project" } as Location.Interface)),
+            // A whole Location: the file-change and style producers of the node read the project's folders too.
+            Location.node.replace(
+              Layer.succeed(
+                Location.Service,
+                location(Location.Ref.make({ directory: AbsolutePath.make("/project") })),
+              ),
+            ),
           ]),
         ),
       )
@@ -690,7 +698,7 @@ describe("compaction", () => {
     expect(summary).not.toContain("DERIVED-")
     // The first request after the checkpoint carries the second collection and the derived reminders again.
     const final = allTexts(s.requests[1])
-    expect(final.some((text) => text.includes("<summary>"))).toBe(true)
+    expect(final.some((text) => text.includes("Earlier messages in this session were replaced by the summary"))).toBe(true)
     expect(final.join("\n")).not.toContain("MARK-1")
     expect(final).toContain(rendered(2))
     expect(final).toContain("<system-reminder>\nDERIVED-0\n</system-reminder>")
@@ -959,11 +967,11 @@ describe("lowering", () => {
   })
 
   test("never moves anything above a checkpoint or between a call and its result", () => {
-    const history = [user(1, "OLD"), checkpoint(2), user(3, "P"), reminder(4)]
+    // The view begins at the checkpoint, which the request opens with wherever it is stored.
+    const history = [checkpoint(2), user(3, "P"), reminder(4)]
 
     expect(roles(history, [{ after: "start", text: "INS" }])).toEqual([
-      "OLD",
-      expect.stringContaining("conversation-checkpoint"),
+      expect.stringContaining("Earlier messages in this session were replaced by the summary"),
       "n",
       "INS",
       "P",
@@ -974,6 +982,20 @@ describe("lowering", () => {
     const history = [user(1, "OLD"), checkpoint(2), user(3, "P")]
 
     expect(roles(history, [{ after: "start", text: "INS" }]).filter((text) => text === "INS")).toHaveLength(1)
+  })
+
+  test("keys a start insertion to the latest checkpoint when an earlier one stays in the view", () => {
+    // A view that failed open holds the earlier checkpoint too, which the request lowers after the latest one.
+    const history = [checkpoint(1), user(2, "kept"), checkpoint(3), user(4, "P")]
+    const out = roles(history, [{ after: "start", text: "INS" }])
+
+    expect(out.map((text) => (text.includes("replaced by the summary") ? "CP" : text))).toEqual([
+      "CP",
+      "INS",
+      "CP",
+      "kept",
+      "P",
+    ])
   })
 
   test("keys an insertion to the run after its assistant message", () => {

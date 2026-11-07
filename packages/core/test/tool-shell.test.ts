@@ -2496,14 +2496,69 @@ describe("ShellTool", () => {
     ),
   )
 
+  // tool-runtime-8: a command that prints nothing returns no text of its own, so the step's empty marker names the tool,
+  // as the reference's empty shell result does. Control: a command that prints keeps its text.
+  it.live("gives no text for a command that prints nothing", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const silent = yield* executeTool(registry, call({ command: "exit 0" }, "call-silent"))
+            expect(silent.status).toBe("completed")
+            expect(silent.metadata).toMatchObject({ exit: 0 })
+            expect(silent.content?.every((item) => item.type === "text" && item.text.trim() === "")).toBe(true)
+            const spoken = yield* executeTool(registry, call({ command: helloCommand }, "call-spoken"))
+            expect(spoken.content?.[0]).toEqual({ type: "text", text: "hello" })
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  // shell-safety-6: the head that stands for output that did not fit starts at its first line that is not blank and has no
+  // trailing space. Output that fits keeps both, which is the control.
   it.live(
-    "truncates the model view and points at the saved output file when output overflows",
+    "trims the blank lines and trailing space of a head that did not fit",
     () =>
       Effect.acquireUseRelease(
         Effect.promise(() => tmpdir()),
         (tmp) => {
           reset()
-          const bytes = ToolOutput.MAX_BYTES + 1024
+          const command = isWindows ? '[Console]::Out.Write("`n `n`nabc   def")' : "printf '\\n \\n\\nabc   def'"
+          const head = (maxBytes: number) =>
+            Effect.gen(function* () {
+              yield* Effect.promise(() =>
+                Bun.write(path.join(tmp.path, "orbit.json"), JSON.stringify({ tool_output: { max_bytes: maxBytes } })),
+              )
+              const settled = yield* withSession(tmp.path, (registry) =>
+                executeTool(registry, call({ command }, `call-trim-${maxBytes}`)),
+              )
+              const content = settled.content?.[0]
+              if (!content || content.type !== "text") throw new Error("Expected text content")
+              return content.text
+            })
+          return Effect.gen(function* () {
+            expect(yield* head(9)).toBe("abc")
+            expect(yield* head(100)).toBe("\n \n\nabc   def")
+          })
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  // shell-safety-6: output past the head limit keeps its head, not its tail.
+  it.live(
+    "keeps the head of output that overflows",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          const bytes = Shell.HEAD_BYTES + 1024
           return withSession(tmp.path, (registry) =>
             executeTool(registry, call({ command: overflowCommand(bytes) }, "call-overflow")),
           ).pipe(
@@ -2512,9 +2567,8 @@ describe("ShellTool", () => {
                 expect(settled.metadata).toMatchObject({ exit: 0, truncated: true })
                 const content = settled.content?.[0]
                 if (!content || content.type !== "text") throw new Error("Expected text content")
-                expect(content.text.includes("output-start")).toBe(false)
-                expect(content.text.includes("output-end")).toBe(true)
-                expect(content).toMatchObject(Expected.text(expect.stringContaining("full output saved to ")))
+                expect(content.text).toStartWith("output-start")
+                expect(content.text.includes("output-end")).toBe(false)
               }),
             ),
           )
@@ -2524,7 +2578,51 @@ describe("ShellTool", () => {
     { timeout: 15_000 },
   )
 
-  it.live("uses configured line limits", () =>
+  // shell-safety-6: a head limit raised past the declared 30,000 characters lets output that fits the head but not the
+  // limit reach the step, which saves it like any other result.
+  it.live(
+    "leaves output past the declared limit to the step when the head limit is raised",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return Effect.gen(function* () {
+            yield* Effect.promise(() =>
+              Bun.write(path.join(tmp.path, "orbit.json"), JSON.stringify({ tool_output: { max_bytes: 100_000 } })),
+            )
+            return yield* withSession(tmp.path, (registry) =>
+              Effect.gen(function* () {
+                const input = { command: overflowCommand(60_000) }
+                const traits = yield* toolTraits(registry, "Bash", input)
+                const tools = yield* registry.snapshot()
+                const result = yield* tools.execute(call(input, "call-raised"))
+                const toolOutput = yield* ToolOutput.Service
+                const settled = yield* toolOutput.settle({
+                  sessionID,
+                  messageID: SessionMessage.ID.create(),
+                  callID: "call-raised",
+                  tool: "Bash",
+                  limit: ToolOutput.threshold(traits.maxResultChars, undefined),
+                  result,
+                })
+                expect(traits.maxResultChars).toBe(30_000)
+                expect(settled.metadata?.truncated).toBe(false)
+                expect(settled.metadata?.persisted).toMatchObject({
+                  size: "output-start".length + 60_000 + "output-end".length,
+                })
+                expect(settled.metadata?.persisted).not.toHaveProperty("parts")
+              }),
+            )
+          })
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  // shell-safety-6: `max_lines` no longer bounds a result; `max_bytes` alone does, from the start of the output.
+  it.live("reads the head by bytes and ignores max_lines", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => {
@@ -2533,7 +2631,7 @@ describe("ShellTool", () => {
           yield* Effect.promise(() =>
             Bun.write(
               path.join(tmp.path, "orbit.json"),
-              JSON.stringify({ tool_output: { max_lines: 2, max_bytes: 1_000 } }),
+              JSON.stringify({ tool_output: { max_lines: 2, max_bytes: 6 } }),
             ),
           )
           const settled = yield* withSession(tmp.path, (registry) =>
@@ -2542,10 +2640,8 @@ describe("ShellTool", () => {
           expect(settled.metadata).toMatchObject({ exit: 0, truncated: true })
           const content = settled.content?.[0]
           if (!content || content.type !== "text") throw new Error("Expected text content")
-          expect(content.text).not.toContain("one")
-          // Windows shells emit CRLF; the assertion targets line limits, not line endings.
-          expect(content.text.replaceAll("\r\n", "\n")).toStartWith("two\nthree")
-          expect(content.text).toContain("full output saved to ")
+          // The first six bytes; Windows shells end a line with CRLF.
+          expect(["one\ntw", "one\r\nt"]).toContain(content.text)
         })
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
@@ -2565,7 +2661,7 @@ describe("ShellTool", () => {
             Effect.gen(function* () {
               const observed = yield* Deferred.make<string>()
               yield* executeTool(registry, {
-                ...call({ command: progressOverflowCommand(ToolOutput.MAX_BYTES + 1024, release) }, "call-progress"),
+                ...call({ command: progressOverflowCommand(Shell.HEAD_BYTES + 1024, release) }, "call-progress"),
                 progress: (update) =>
                   Effect.gen(function* () {
                     if (typeof update.shellID !== "string") return
@@ -2734,7 +2830,7 @@ describe("ShellTool", () => {
               {
                 id: settled.metadata?.shellID,
                 status: "completed",
-                output: "(no output)\n\nExited with code 7",
+                output: "Exited with code 7",
               },
             ])
           }),
@@ -3735,6 +3831,20 @@ describe("ShellTool timeouts", () => {
         return yield* Effect.fail(new Error("The command printed nothing"))
       })
 
+    // Output that grows after the watcher's first check starts its quiet count again, and the clock moves only where a
+    // test moves it, so a test whose command writes in parts waits for the last part before it moves the clock.
+    const untilPrompt = (shellID: string) =>
+      Effect.gen(function* () {
+        const shell = yield* Shell.Service
+        for (let attempt = 0; attempt < 500; attempt++) {
+          const size = (yield* shell.output(ID.make(shellID), { cursor: Number.MAX_SAFE_INTEGER })).size
+          const tail = (yield* shell.output(ID.make(shellID), { cursor: Math.max(0, size - 64) })).output
+          if (tail.includes("Continue? [y/N]")) return
+          yield* realWait(20)
+        }
+        return yield* Effect.fail(new Error("The command did not print its prompt"))
+      })
+
     /** Moves the test clock in 5 second checks, letting the watcher and the notification run after each. */
     const advance = (seconds: number) =>
       Effect.forEach(Array.from({ length: seconds / 5 }), () =>
@@ -3912,13 +4022,16 @@ describe("ShellTool timeouts", () => {
           Effect.gen(function* () {
             const seen = yield* collect
             const shell = yield* Shell.Service
+            // The command writes the start, pauses, then writes the rest, as a loaded runner wrote the earlier one-line
+            // form; `start` returns once the first part is there, so the test waits for the prompt.
             const shellID = yield* start(
               registry,
               isWindows
-                ? "[Console]::Out.Write('HEAD' + 'MARKER' + ('x' * 3000) + \"`nContinue? [y/N] \"); Start-Sleep -Seconds 600"
-                : "printf HEAD; printf MARKER; head -c 3000 /dev/zero | tr '\\0' x; printf '\\nContinue? [y/N] '; sleep 600",
+                ? "[Console]::Out.Write('HEAD' + 'MARKER'); [Console]::Out.Flush(); Start-Sleep -Seconds 1; [Console]::Out.Write(('x' * 3000) + \"`nContinue? [y/N] \"); Start-Sleep -Seconds 600"
+                : "printf HEAD; printf MARKER; sleep 1; head -c 3000 /dev/zero | tr '\\0' x; printf '\\nContinue? [y/N] '; sleep 600",
               "call-long",
             )
+            yield* untilPrompt(shellID)
             yield* advance(50)
             yield* settle(seen, 1)
             expect(seen[0]?.text).toContain("Continue? [y/N]")

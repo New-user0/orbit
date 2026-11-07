@@ -15,9 +15,14 @@ import { ProjectTrust } from "../../project-trust.js"
 import { ConfigPermissionExpand } from "../expand-permissions.js"
 import { AgentFile } from "./agent-file.js"
 import { PlanMode } from "../../plan-mode.js"
+import { ToolNames } from "../../tool/names.js"
+import { MemoryStore } from "../../memory/store.js"
 
 // Keep in sync with the scan patterns and the name-strip regex in agent-file.ts.
 const sourceDirectories = ["agent", "agents", "mode", "modes"] as const
+
+// The tools an agent with a memory scope reaches its memory with, in the order they are added to its allow list.
+const MEMORY_TOOLS = ["Write", "Edit", "Read"]
 
 export const Plugin = define({
   id: "orbit.config.agent",
@@ -209,6 +214,20 @@ export const Plugin = define({
             }
           })
         }
+      }
+
+      // An agent with a memory scope reaches its memory with the file tools, so while memory is on, a list of allowed
+      // tools gains Write, Edit and Read where they are missing, in that order, as the reference does. This runs after
+      // every document, so a list from one document and a scope from a later one combine. The deny list stays as written.
+      if (!MemoryStore.enabled(process.env, loaded.documents)) return
+      for (const current of editor.list()) {
+        const allow = current.tools?.allow
+        if (current.memory === undefined || allow === undefined) continue
+        const missing = MEMORY_TOOLS.filter((tool) => !allow.some((name) => ToolNames.canonical(name) === tool))
+        if (missing.length > 0)
+          editor.update(current.id, (agent) => {
+            agent.tools = { ...agent.tools, allow: [...allow, ...missing] }
+          })
       }
     })
   }),

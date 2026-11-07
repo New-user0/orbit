@@ -5,10 +5,11 @@ import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
 
-// A project of its own, with a plugin whose setup and cleanup leave a trace the test can read.
-async function project() {
+// A project of its own, with a plugin whose setup and cleanup leave a trace the test can read. The trace is kept in the
+// project unless a folder is named for it: a write into a folder the plugin loader watches reconciles the plugins by itself.
+async function project(traces?: string) {
   const root = await tmpdir()
-  const marks = path.join(root.path, "marks.txt")
+  const marks = path.join(traces ?? root.path, "marks.txt")
   const plugin = path.join(root.path, ".orbit", "plugins", "hello")
   await mkdir(path.join(root.path, ".git"), { recursive: true })
   await mkdir(plugin, { recursive: true })
@@ -173,14 +174,15 @@ test("a server that takes the first read and never answers does not hold the ter
   })
 }, 20_000)
 
-test("a plugin in a folder above the folder the server calls its project waits until that folder is trusted too", async () => {
+// D7 and class 3: the terminal UI looks for the project's root on its own and finds the repository around `sub`. The
+// server, which could not open that repository, takes `sub` as its project. Nothing above the server's project is read,
+// so the plugin around `sub` never loads, even once the folder that holds it is trusted too. The control is the first row
+// of this file, where the server's project is the repository and the same plugin loads.
+test("a plugin in a folder above the folder the server calls its project never loads", async () => {
   await using fixture = await project()
   await using state = await tmpdir()
   const sub = path.join(fixture.path, "sub")
   await mkdir(sub)
-  let held = true
-  // The terminal UI looks for the project's root on its own and finds the repository around `sub`. The server, which
-  // could not open that repository, takes `sub` as its project, and lists the folder around it as config above.
   await inside(sub, async () => {
     const cwd = process.cwd()
     const above = path.dirname(cwd)
@@ -188,10 +190,7 @@ test("a plugin in a folder above the folder the server calls its project waits u
       state: state.path,
       fetch: (url, request) => {
         if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
-        return json({
-          ...status(cwd, true),
-          withheld: held ? [{ path: path.join(above, ".orbit"), kinds: ["plugins"], directory: above }] : [],
-        })
+        return json(status(cwd, true))
       },
     })
     await setup.ready
@@ -200,12 +199,57 @@ test("a plugin in a folder above the folder the server calls its project waits u
     // The folder in view is trusted, and no dialog asks about the one above it, but its plugin has not run.
     expect(await fixture.marks()).toEqual([])
 
-    held = false
     setup.events.emit({ id: "evt_trust", created: 1, type: "trust.updated", data: { directory: above, trusted: true } })
+    await setup.flush()
+    await Bun.sleep(500)
+    expect(await fixture.marks()).toEqual([])
+  })
+}, 20_000)
+
+// Class 3: the folder the server decides trust for can change while the folder stays trusted, such as when the server
+// stops taking the repository around `sub` as its project. The plugins are reconciled again with the new answer, so the
+// plugin above the new project unloads. The control is the first answer, under which the same plugin loads. The trace is
+// kept outside the project, so that only the new answer can start the reconcile, not the watcher seeing the trace written.
+test("a project's plugins are reconciled again when the folder the server decides trust for changes", async () => {
+  await using traces = await tmpdir()
+  await using fixture = await project(traces.path)
+  await using state = await tmpdir()
+  const sub = path.join(fixture.path, "sub")
+  await mkdir(sub)
+  await inside(sub, async () => {
+    const cwd = process.cwd()
+    // First the repository around `sub`, where the plugin is.
+    let decided = path.dirname(cwd)
+    let reads = 0
+    await using setup = await createAppFixture({
+      state: state.path,
+      fetch: (url, request) => {
+        if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
+        reads++
+        return json(status(decided, true))
+      },
+    })
+    await setup.ready
+    await setup.waitForFrame((frame) => promptReady(frame))
     await setup.waitFor(async () => (await fixture.marks()).length > 0, { maxPasses: 200 })
     expect(await fixture.marks()).toEqual(["loaded"])
+    // The start queues several reconciles, and each reads the status again. They finish first, so that none of them
+    // can take up the new answer: the reconcile below is the one the new answer starts.
+    for (let seen = -1; seen !== reads; ) {
+      seen = reads
+      await Bun.sleep(750)
+    }
+
+    const before = decided
+    decided = cwd
+    setup.events.emit({ id: "evt_trust", created: 1, type: "trust.updated", data: { directory: before, trusted: true } })
+    // The answer is taken up within moments. The bound keeps the wait short of the event stream's idle timeout, whose
+    // reconnect would reconcile the plugins by itself.
+    const deadline = Date.now() + 2_500
+    while ((await fixture.marks()).length < 2 && Date.now() < deadline) await Bun.sleep(50)
+    expect(await fixture.marks()).toEqual(["loaded", "unloaded"])
   })
-})
+}, 30_000)
 
 test.each([
   ["has no trust route", () => new Response("not found", { status: 404 })],
@@ -262,7 +306,9 @@ test("a plugin planted while the server cannot answer is not imported on the ans
   })
 }, 30_000)
 
-test("a project's tui-only plugin is not imported while the server reports its plugins as changed", async () => {
+// D8: a server older than this client can still list a trusted project's plugins as changed since the grant; they load
+// all the same.
+test("a project's tui-only plugin is imported even while an older server reports its plugins as changed", async () => {
   await using fixture = await project()
   await using state = await tmpdir()
   await inside(fixture.path, async () => {
@@ -278,8 +324,8 @@ test("a project's tui-only plugin is not imported while the server reports its p
     })
     await setup.ready
     await setup.waitForFrame((frame) => promptReady(frame))
-    await Bun.sleep(500)
-    expect(await fixture.marks()).toEqual([])
+    await setup.waitFor(async () => (await fixture.marks()).length > 0, { maxPasses: 200 })
+    expect(await fixture.marks()).toEqual(["loaded"])
   })
 }, 30_000)
 

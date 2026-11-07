@@ -352,9 +352,9 @@ describe("LifecycleHooksPlugin with another product's settings files", () => {
 
   it.live("keeps Orbit's name for a tool that the vendor has no name for", () =>
     Effect.gen(function* () {
-      expect(yield* eventsFor("Memory", ["Memory", undefined])).toMatchObject([
-        { tool_name: "Memory" },
-        { tool_name: "Memory" },
+      expect(yield* eventsFor("Workflow", ["Workflow", undefined])).toMatchObject([
+        { tool_name: "Workflow" },
+        { tool_name: "Workflow" },
       ])
     }),
   )

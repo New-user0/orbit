@@ -18,6 +18,13 @@ import { DialogAgentEdit, editable } from "./dialog-agent-edit"
 const create = Symbol("create")
 const edit = Symbol("edit")
 
+/** Whether the server at `url` runs on this machine and sees `directory`, so a path it names can be opened here. */
+export function onThisMachine(url: string | undefined, directory: string) {
+  if (!url || !URL.canParse(url)) return false
+  const host = new URL(url).hostname
+  return (host === "localhost" || host === "[::1]" || (isIPv4(host) && host.startsWith("127."))) && existsSync(directory)
+}
+
 export function DialogAgent() {
   const local = useLocal()
   const dialog = useDialog()
@@ -30,12 +37,7 @@ export function DialogAgent() {
   const ref = () => location.ref ?? data.location.default()
   const agents = () => data.location.agent.list(ref()) ?? []
   // The files are written by this process, so they can only be made where the server's folders are this machine's.
-  const here = () => {
-    const url = client.url
-    if (!url || !URL.canParse(url)) return false
-    const host = new URL(url).hostname
-    return (host === "localhost" || host === "[::1]" || (isIPv4(host) && host.startsWith("127."))) && existsSync(ref().directory)
-  }
+  const here = () => onThisMachine(client.url, ref().directory)
   const configDirectory = (scope: "project" | "user") =>
     scope === "project"
       ? path.join(ref().directory, ".orbit")

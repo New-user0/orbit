@@ -49,6 +49,15 @@ export interface Interface {
     readonly scope: Instruction.NoteScope
     readonly text: string
   }) => Effect.Effect<Instruction.NoteAdded, TargetError | WriteError>
+  /**
+   * The file a note for `scope` would be added to, created empty when it is not there, and where it really is. An
+   * existing file is never changed. Unlike `add` it takes a file the loader does not read (a scope that is off, an
+   * excluded file), since a person may want to open it all the same; a file that leads outside is refused as `add`
+   * refuses it.
+   */
+  readonly ensure: (
+    scope: Instruction.NoteScope,
+  ) => Effect.Effect<{ readonly path: string; readonly created: boolean }, TargetError | WriteError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/InstructionNotes") {}
@@ -244,6 +253,45 @@ export const layer = Layer.effect(
       })
     })
 
+    const ensure = Effect.fn("InstructionNotes.ensure")(function* (scope: Instruction.NoteScope) {
+      yield* plugins.awaitActivation
+      const item = yield* target(scope)
+      const leads = () => refuse(scope, "outside", `${item.file} leads outside the project, which is not trusted.`)
+      if (yield* outside(item)) return yield* leads()
+      if (item.exists) return { path: item.path, created: false }
+      const folder = dirname(item.path)
+      const failed = (error: { readonly message: string }) => new WriteError({ scope, path: item.path, message: error.message })
+      return yield* mutation.withLock([item.path])(
+        Effect.gen(function* () {
+          yield* fs.ensureDir(folder).pipe(Effect.mapError(failed))
+          const made = yield* exclusive(item.path, "", failed)
+          // What is there now, the file this made or one that appeared, must really be in the folder the target named, and
+          // a link that leads nowhere is not (class 4). So a link out that was swapped in since the question above is refused
+          // here: the exclusive create never writes through it, and where it leads is not in that folder.
+          const real = yield* fs.realPath(item.path).pipe(Effect.orElseSucceed(() => undefined))
+          const base = yield* fs.realPath(folder).pipe(Effect.orElseSucceed(() => undefined))
+          if (real === undefined || base === undefined || !FSUtil.contains(base, real)) return yield* leads()
+          if (!(yield* fs.isFile(real))) return yield* failed({ message: `${item.path} is not a file.` })
+          return { path: real, created: made === "created" }
+        }),
+      )
+    })
+
+    // Creates `path` holding `text` unless something is there. A link at the file's own place counts as something: an
+    // exclusive create on Windows follows it, even one that leads nowhere, and would make the file where it points.
+    const exclusive = Effect.fnUntraced(function* (
+      path: string,
+      text: string,
+      failed: (error: { readonly message: string }) => WriteError,
+    ) {
+      if (yield* Effect.isSuccess(fs.readLink(path))) return "link" as const
+      return yield* fs.writeFileString(path, text, { flag: "wx" }).pipe(
+        Effect.as("created" as const),
+        Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.succeed("exists" as const)),
+        Effect.mapError(failed),
+      )
+    })
+
     // Appends in one write and returns whether the file was created by it. An existing file is never truncated.
     const append = Effect.fnUntraced(function* (scope: Instruction.NoteScope, path: string, text: string) {
       const failed = (error: { readonly message: string }) => new WriteError({ scope, path, message: error.message })
@@ -256,12 +304,10 @@ export const layer = Layer.effect(
       if (read === undefined) {
         yield* fs.ensureDir(dirname(path)).pipe(Effect.mapError(failed))
         // Exclusive, so that a file that appeared in between is appended to and never replaced.
-        const made = yield* fs.writeFileString(path, addition, { flag: "wx" }).pipe(
-          Effect.as(true),
-          Effect.catchReason("PlatformError", "AlreadyExists", () => Effect.succeed(false)),
-          Effect.mapError(failed),
-        )
-        if (made) return true
+        const made = yield* exclusive(path, addition, failed)
+        if (made === "created") return true
+        // The file could not be read and a link is at its place: it leads nowhere, or somewhere nobody asked about (class 4).
+        if (made === "link") return yield* refuse(scope, "outside", `${path} is a link, and a new file is never written through one.`)
         const now = yield* fs.readFile(path).pipe(Effect.mapError(failed))
         yield* fs.writeFileString(path, format(Bom.decodeBytes(now).text, text), { flag: "a" }).pipe(Effect.mapError(failed))
         return false
@@ -321,7 +367,7 @@ export const layer = Layer.effect(
         ),
       )
 
-    return Service.of({ targets, add })
+    return Service.of({ targets, add, ensure })
   }),
 )
 

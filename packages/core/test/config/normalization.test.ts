@@ -205,6 +205,17 @@ describe("ConfigNormalize", () => {
     expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
   })
 
+  test("keeps the memory settings, and a bad one costs only itself", () => {
+    expect(normalized({ memory: { enabled: false, directory: "~/notes" } }).encoded.memory).toEqual({
+      enabled: false,
+      directory: "~/notes",
+    })
+    expect(decoded({ memory: { enabled: false } }).memory?.enabled).toBe(false)
+    const invalid = normalized({ memory: { enabled: "no", directory: "~/notes" } })
+    expect(invalid.encoded.memory).toEqual({ directory: "~/notes" })
+    expect(invalid.diagnostics.map((item) => item.kind)).toContain("invalid")
+  })
+
   test("keeps a positive tool concurrency cap and reports any other value", () => {
     expect(normalized({ tool_execution: { max_concurrency: 3 } }).encoded.tool_execution).toEqual({
       max_concurrency: 3,

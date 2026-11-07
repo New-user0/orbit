@@ -160,7 +160,7 @@ test("a team's lead assigns work, members message each other, and the lead finis
   expect(turns[3]?.history).toBeGreaterThan(turns[0]?.history ?? 0)
   // Git for Windows may check files out with CRLF line endings (core.autocrlf).
   expect((await Bun.file(path.join(repository, "answer.txt")).text()).replace(/\r\n/g, "\n")).toBe("42\n")
-  const shown = await orb(repository, ["flow", "show", await runID(repository)])
+  const shown = await orb(repository, ["flow", "show", "--standalone", await runID(repository)])
   expect(shown.stdout).toContain("feature: lead → coder: Write 42 into answer.txt.")
   expect(shown.stdout).toContain("feature: lead noted plan:")
   const calls = turns.length
@@ -208,7 +208,7 @@ async function repo(name: string) {
 }
 
 async function runID(directory: string) {
-  return JSON.parse((await orb(directory, ["flow", "ls", "--format", "json"])).stdout)[0].id as string
+  return JSON.parse((await orb(directory, ["flow", "ls", "--standalone", "--format", "json"])).stdout)[0].id as string
 }
 
 async function orb(directory: string, args: string[]) {

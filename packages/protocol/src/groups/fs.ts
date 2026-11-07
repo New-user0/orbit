@@ -3,7 +3,7 @@ import { Location } from "@orbit/schema/location"
 import { PositiveInt } from "@orbit/schema/schema"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { FileNotFoundError } from "../errors.js"
+import { FileNotFoundError, UntrustedFolderError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 const ListQuery = Schema.Struct({
@@ -77,6 +77,7 @@ export const FileSystemGroup = HttpApiGroup.make("server.fs")
       query: WriteQuery,
       payload: Schema.Uint8Array.pipe(HttpApiSchema.asUint8Array()),
       success: Location.response(FileSystem.Write),
+      error: UntrustedFolderError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -84,7 +85,7 @@ export const FileSystemGroup = HttpApiGroup.make("server.fs")
           identifier: "experimental.fs.write",
           summary: "Write file",
           description:
-            "Write the raw request body to an absolute path or a path relative to the requested location, creating parent directories, and return the resolved absolute path. Unlike read, the target is not confined to the location. Experimental: may change without compatibility guarantees.",
+            "Write the raw request body to an absolute path or a path relative to the requested location, creating parent directories, and return the resolved absolute path. Unlike read, the target is not confined to the location, but the folder it really lands in, once every link in the path is followed, must be trusted as the location must, unless it is Orbit's temporary folder. Experimental: may change without compatibility guarantees.",
         }),
       ),
   )

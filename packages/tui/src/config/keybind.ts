@@ -194,6 +194,7 @@ export const Definitions = {
   "messages.copy": keybind("<leader>y", "Copy message"),
   "session.undo": keybind("<leader>u", "Undo message"),
   "session.redo": keybind("<leader>r", "Redo message"),
+  "session.rewind": keybind("none", "Rewind the code, the conversation or both"),
   "session.toggle.thinking": keybind("none", "Toggle thinking blocks visibility"),
 
   "prompt.submit": keybind("none", "Submit prompt"),

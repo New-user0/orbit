@@ -168,9 +168,9 @@ describe("Agent", () => {
       const folders = (info?.permissions ?? []).filter(
         (rule) => rule.action === "external_directory" && rule.effect === "allow",
       )
-      expect(folders).toHaveLength(4)
-      expect(folders.map(Agent.isOwnFolder)).toEqual([true, true, true, true])
-      expect(folders.map((rule) => Agent.isOwnFolder({ ...rule }))).toEqual([false, false, false, false])
+      expect(folders).toHaveLength(5)
+      expect(folders.map(Agent.isOwnFolder)).toEqual([true, true, true, true, true])
+      expect(folders.map((rule) => Agent.isOwnFolder({ ...rule }))).toEqual([false, false, false, false, false])
 
       yield* agent.transform((editor) => editor.remove(id))
       expect(yield* agent.get(id)).toBeUndefined()
@@ -315,12 +315,12 @@ describe("Agent.scratchpad", () => {
     expect([cut[1], cut[3]].every((rule) => Agent.isOwnFolder(rule!))).toBe(true)
     expect(first!.resource).toBe(path.join("/tmp/orbit", "sessions", "*"))
     // Each names its folder for both spellings, so a call through a link is held to the real place.
-    expect(Agent.scratchpadFolders(cut[1]!)).toEqual([
+    expect(Agent.narrowedFolders(cut[1]!)).toEqual([
       path.join("/tmp/orbit", "sessions", "ses_a"),
       path.join("/real/tmp", "sessions", "ses_a"),
     ])
-    expect(Agent.scratchpadFolders(first!)).toBeUndefined()
-    expect(Agent.scratchpadFolders(person)).toBeUndefined()
+    expect(Agent.narrowedFolders(first!)).toBeUndefined()
+    expect(Agent.narrowedFolders(person)).toBeUndefined()
   })
 
   test("leaves a session that has no scratchpad with none of them", () => {

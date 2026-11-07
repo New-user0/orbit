@@ -2161,6 +2161,61 @@ describe("InstructionTriggers injects rules that wait for a matching read", () =
     }),
   )
 
+  // Classes 1 and 4: the walk above the project follows links, as the reference's does. A rule that waits in a rules folder
+  // above a trusted project is injected wherever its link leads (the session start records it by its real path), and in a
+  // project that is not trusted it is not. A rule of the project itself is the control of each row, and in the file row
+  // the plain rule beside the link as well.
+  const linkedAbove = (mode: "folder" | "file") =>
+    Effect.gen(function* () {
+      const dir = (yield* Location.Service).directory
+      const outer = path.dirname(dir)
+      const outside = yield* outsideFolder
+      const secret = path.join(outside, "secret.md")
+      const rules = path.join(outer, ".orbit", "rules")
+      const inner = path.join(dir, ".orbit", "rules", "i.md")
+      const plain = path.join(rules, "o.md")
+      yield* writeAgents(secret, "SECRET MARKER")
+      yield* mkdir(mode === "folder" ? path.dirname(rules) : rules)
+      yield* mkdir(path.dirname(inner))
+      yield* writeAgents(inner, "INNER MARKER")
+      if (mode === "file") yield* writeAgents(plain, "OUTER MARKER")
+      yield* Effect.promise(() =>
+        mode === "folder" ? fs.symlink(outside, rules, "junction") : fs.symlink(secret, path.join(rules, "link.md")),
+      )
+      yield* writeAgents(path.resolve(dir, "a.ts"), "a")
+      yield* found(
+        waiting(secret, ["*.ts"], outer),
+        waiting(inner, ["*.ts"], dir),
+        ...(mode === "file" ? [waiting(plain, ["*.ts"], outer)] : []),
+      )
+      const sessionID = yield* sessionIn(dir)
+      yield* read(sessionID, "a.ts")
+      return (yield* texts(sessionID)).join("\n")
+    })
+  for (const mode of ["folder", "file"] as const) {
+    const linked = mode === "file" && !canLinkFile
+    ;(linked ? above(true).live.skip : above(true).live)(
+      `injects a rule that waits in a ${mode} link out of a rules folder above the project, in a trusted project`,
+      () =>
+        Effect.gen(function* () {
+          const injected = yield* linkedAbove(mode)
+          expect(injected).toContain("SECRET MARKER")
+          expect(injected).toContain("INNER MARKER")
+          if (mode === "file") expect(injected).toContain("OUTER MARKER")
+        }),
+    )
+    ;(linked ? above(false).live.skip : above(false).live)(
+      `injects no rule that waits in a ${mode} link out of a rules folder above the project, in a project that is not trusted`,
+      () =>
+        Effect.gen(function* () {
+          const injected = yield* linkedAbove(mode)
+          expect(injected).not.toContain("SECRET MARKER")
+          expect(injected).not.toContain("OUTER MARKER")
+          expect(injected).toContain("INNER MARKER")
+        }),
+    )
+  }
+
   // Class 4: a nested rules folder, or a nested rule file, that is a link out of the project is not listed or read at all.
   // The recording file system lists every path it is asked to list, stat or read.
   const touchedPaths: string[] = []

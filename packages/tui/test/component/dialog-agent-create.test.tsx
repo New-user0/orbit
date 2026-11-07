@@ -45,13 +45,17 @@ async function closed(setup: Awaited<ReturnType<typeof renderLocal>>) {
   expect(setup.dialog.stack.length).toBe(0)
 }
 
-/** A toast comes after the asynchronous save, so the frame is polled for a while. */
+/**
+ * A toast comes after the asynchronous save, so the frame is polled for a while. The toast is drawn beside the dialog,
+ * so where its text wraps the dialog's border characters fall between two of its words.
+ */
 async function toasted(setup: Awaited<ReturnType<typeof renderLocal>>, text: string) {
+  const words = new RegExp(text.split(" ").map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("[\\s┃]+"))
   let frame = ""
   for (let attempt = 0; attempt < 100; attempt++) {
     await setup.renderOnce()
     frame = setup.captureCharFrame().replace(/\s+/g, " ")
-    if (frame.includes(text)) return frame
+    if (words.test(frame)) return frame
     await Bun.sleep(30)
   }
   throw new Error(`No toast with ${text}:\n${frame}`)

@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { LanguageModel } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols/openai-chat"
 import { TestLLM } from "@orbit/ai/testing"
@@ -158,13 +158,11 @@ describe("command subagents", () => {
 })
 
 // An agent's own rules come after the user's and win, so which agent a command runs as is a choice between sets of
-// rules, which a folder that is not trusted does not get to make, as it does not for `default_agent`. The user's config
-// asks before every edit, and has an agent that allows them.
+// rules, which a folder that is not trusted does not get to make. Since trust-first a folder that is not trusted has no
+// commands at all, because none of its files are read. The user's config asks before every edit, and has an agent that
+// allows them.
 describe("the agent of a command from a folder that is not trusted", () => {
-  const folders = [
-    { name: "a folder that is not trusted", harness: untrusted, agent: "build", child: "build" },
-    { name: "a trusted folder", harness: it, agent: "autopilot", child: "autopilot" },
-  ] as const
+  const folders = [{ name: "a trusted folder", harness: it, agent: "autopilot", child: "autopilot" }] as const
 
   for (const folder of folders)
     folder.harness.live(`runs a command file in ${folder.name} as ${folder.agent}`, () =>
@@ -195,14 +193,20 @@ describe("the agent of a command from a folder that is not trusted", () => {
       }),
     )
 
-  // The commands of the folder's `orbit.json` are cut down in the same way.
-  untrusted.live("runs a command of the folder's config as the current agent too", () =>
+  // Neither a command file nor a command of the folder's `orbit.json` exists while the folder is not trusted, so neither
+  // runs, as any agent.
+  untrusted.live("finds no command of a folder that is not trusted, from a file or from its config", () =>
     Effect.gen(function* () {
-      const parent = yield* setup([], { commands: { setup: { template: "Set up the project", agent: "autopilot" } } })
       const sessions = yield* Session.Service
-      yield* sessions.command({ sessionID: parent.id, command: "setup", text: "" })
-      yield* sessions.wait(parent.id)
-      expect(yield* sessions.get(parent.id)).toMatchObject({ agent: "build" })
+      for (const parent of [
+        yield* setup(["agent: autopilot"]),
+        yield* setup([], { commands: { setup: { template: "Set up the project", agent: "autopilot" } } }),
+      ]) {
+        const ran = yield* sessions.command({ sessionID: parent.id, command: "setup", text: "" }).pipe(Effect.exit)
+        expect(Exit.isFailure(ran)).toBe(true)
+        expect(yield* sessions.get(parent.id)).toMatchObject({ agent: "build" })
+        expect((yield* sessions.list({ parentID: parent.id })).data).toEqual([])
+      }
     }),
   )
 })

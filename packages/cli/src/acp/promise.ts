@@ -1,5 +1,10 @@
 import { RequestError } from "@agentclientprotocol/sdk"
-import { ClientError, isInvalidRequestError, isSessionNotFoundError } from "@orbit/client/promise"
+import {
+  ClientError,
+  isInvalidRequestError,
+  isSessionNotFoundError,
+  isUntrustedFolderError,
+} from "@orbit/client/promise"
 import { Effect } from "effect"
 import { ACPError } from "./error"
 
@@ -13,6 +18,10 @@ export function classify(cause: unknown): Effect.Effect<never, ACPError.Error | 
     return Effect.fail(new ACPError.ServerUnavailableError())
   if (isSessionNotFoundError(cause))
     return Effect.fail(new ACPError.SessionNotFoundError({ sessionId: cause.sessionID }))
+  if (isUntrustedFolderError(cause))
+    return Effect.fail(
+      new ACPError.UntrustedFolderError({ directory: cause.directory, persistent: cause.persistent, message: cause.message }),
+    )
   if (isInvalidRequestError(cause))
     return Effect.fail(new ACPError.InvalidRequestError({ message: cause.message, field: cause.field }))
   return Effect.die(cause)

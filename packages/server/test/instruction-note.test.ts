@@ -183,7 +183,7 @@ it.live("carries a refusal as field scope with the reason as kind", () =>
 // A link to a share must never be opened: on Windows that connects to the host the repository named. The link is made as
 // a file link explicitly, because making it without a type already asks the host what the target is.
 for (const [name, scope, index] of [["AGENTS.md", "project", 1], ["ORBIT.local.md", "local", 2]] as const)
-  it.live(`lists a ${scope} file that links to a network share as there and not enabled, and refuses a note as outside`, () =>
+  it.live(`lists a ${scope} file that links to a network share as there and not enabled, and refuses a note there`, () =>
     Effect.gen(function* () {
       if (process.platform !== "win32") return
       const s = yield* server({ untrusted: true })
@@ -194,8 +194,10 @@ for (const [name, scope, index] of [["AGENTS.md", "project", 1], ["ORBIT.local.m
       expect(listed.status).toBe(200)
       const body = (yield* Effect.promise(() => listed.json())) as { data: { exists: boolean; enabled: boolean }[] }
       expect(body.data[index]).toMatchObject({ path: link, exists: true, enabled: false })
+      // The folder is not trusted, so the route refuses before the note service looks at the file at all (trust-first);
+      // the service's own "outside" refusal of such a link is pinned in core `instruction-notes.test.ts`.
       const posted = yield* s.post({ scope, text: "x" })
-      expect(posted.status).toBe(400)
-      expect(yield* Effect.promise(() => posted.json())).toMatchObject({ _tag: "InvalidRequestError", field: "scope", kind: "outside" })
+      expect(posted.status).toBe(403)
+      expect(yield* Effect.promise(() => posted.json())).toMatchObject({ _tag: "UntrustedFolderError" })
     }).pipe(Effect.scoped),
   )

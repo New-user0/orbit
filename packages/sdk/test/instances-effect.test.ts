@@ -45,6 +45,7 @@ it.live(
         config: { directory: directory.path, project: false, content: "{}" },
         models: { fetch: false },
         fs: { filewatcher: false },
+        trust: { implicit: true },
         instances: {
           key: (session) => metadata(session.metadata).threadID,
           configure: (key) =>
@@ -188,6 +189,7 @@ it.live(
                 }
               }),
           },
+          trust: { implicit: true },
         },
         {
           overrides: [
@@ -275,6 +277,7 @@ it.live(
               }
             }),
         },
+        trust: { implicit: true },
       }).pipe(Layer.provide(Layer.succeed(Personas, { of: (threadID) => Effect.succeed(`persona-for-${threadID}`) })))
       const orbit = Context.get(yield* Layer.build(layer).pipe(Scope.provide(hostScope)), Orbit.Service)
       const session = yield* orbit.sessions.create({

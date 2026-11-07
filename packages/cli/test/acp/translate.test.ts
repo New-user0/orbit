@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { OrbitEvent } from "@orbit/client/promise"
 import { ACPTranslate } from "../../src/acp/translate"
 import {
+  assistantMessage,
   childCreated,
   delivered,
   durableEvent,
@@ -14,6 +15,7 @@ import {
   toolCalled,
   toolProgress,
   toolStarted,
+  toolSucceeded,
 } from "./wire-fixture"
 
 const root = "ses_root"
@@ -137,6 +139,10 @@ describe("acp turn translation", () => {
     const noTokens = started(failed(root, { type: "limit.tokens-unknown", message: "No tokens." }))
     expect(ACPTranslate.failure(noTokens.state)).toMatchObject({ errorName: "limit.tokens-unknown" })
     expect(ACPTranslate.response(noTokens.state, root, "failed").stopReason).not.toBe("max_turn_requests")
+    // A request refused locally because the conversation no longer fits is a failure, not a reached limit.
+    const noRoom = started(failed(root, { type: "context.limit", message: "Run /compact." }))
+    expect(ACPTranslate.failure(noRoom.state)).toMatchObject({ errorName: "context.limit" })
+    expect(ACPTranslate.response(noRoom.state, root, "failed").stopReason).not.toBe("max_turn_requests")
   })
 
   test("forwards any synthetic message that names a notice, and none that does not", () => {
@@ -257,5 +263,147 @@ describe("acp turn translation", () => {
       expect.objectContaining({ toolCallId: "ses_child:call_child", status: "failed", title: "Explore: read" }),
     ])
     expect(ACPTranslate.abandonTools(abandoned.state, ctx).outputs).toEqual([])
+  })
+})
+
+// An approval can be answered with the person's own version of the file, which the tool writes instead of the model's
+// proposal. The completed call then shows the diff the tool recorded of what it wrote, live and when a loaded session
+// replays it, never one rebuilt from the model's input (class 8).
+describe("acp shows a completed Edit or Write as what ran", () => {
+  const place = "/workspace/a.txt"
+  const rows: ReadonlyArray<{
+    readonly name: string
+    readonly tool: string
+    readonly input: Record<string, string>
+    readonly files?: Array<{ file: string; patch: string }>
+    readonly shown?: { readonly oldText: string; readonly newText: string }
+  }> = [
+    {
+      name: "an Edit whose approval carried the person's version",
+      tool: "Edit",
+      input: { file_path: "a.txt", old_string: "beta", new_string: "BETA" },
+      files: [{ file: "a.txt", patch: "--- a.txt\n+++ a.txt\n@@ -1,2 +1,2 @@\n alpha\n-beta\n+REVISED\n" }],
+      shown: { oldText: "alpha\nbeta", newText: "alpha\nREVISED" },
+    },
+    {
+      name: "a Write whose approval carried the person's version",
+      tool: "Write",
+      input: { file_path: "a.txt", content: "proposed\n" },
+      files: [{ file: "a.txt", patch: "--- a.txt\n+++ a.txt\n@@ -0,0 +1,1 @@\n+revised\n" }],
+      shown: { oldText: "", newText: "revised" },
+    },
+    {
+      name: "an Edit that recorded no diff",
+      tool: "Edit",
+      input: { file_path: "a.txt", old_string: "beta", new_string: "BETA" },
+    },
+  ]
+  const diffs = (content: ReadonlyArray<{ readonly type: string }> | null | undefined) =>
+    (content ?? []).filter((item) => item.type === "diff")
+  const expected = (row: (typeof rows)[number]) => (row.shown ? [{ type: "diff", path: place, ...row.shown }] : [])
+
+  for (const row of rows) {
+    const metadata = { places: [place], ...(row.files ? { files: row.files } : {}) }
+
+    test(`${row.name}, live`, () => {
+      const result = started(
+        toolStarted(root, "call_ran", row.tool),
+        toolCalled(root, "call_ran", row.input),
+        toolProgress(root, "call_ran", { places: [place] }),
+        toolSucceeded(root, "call_ran", metadata, "done"),
+      )
+      const completed = updates(result.outputs).flatMap((update) =>
+        update.sessionUpdate === "tool_call_update" && update.status === "completed" ? [update] : [],
+      )
+      expect(completed).toHaveLength(1)
+      expect(diffs(completed[0]?.content)).toEqual(expected(row))
+    })
+
+    test(`${row.name}, replayed`, () => {
+      const replayed = [
+        ...ACPTranslate.replayMessage(
+          assistantMessage("msg_ran", {
+            content: [
+              {
+                type: "tool",
+                id: "call_ran",
+                name: row.tool,
+                time: { created: 1, completed: 2 },
+                state: { status: "completed", input: row.input, metadata, content: [{ type: "text", text: "done" }] },
+              },
+            ],
+          }),
+          "/workspace",
+        ),
+      ].flatMap((update) =>
+        update.sessionUpdate === "tool_call_update" && update.status === "completed" ? [update] : [],
+      )
+      expect(replayed).toHaveLength(1)
+      expect(diffs(replayed[0]?.content)).toEqual(expected(row))
+    })
+  }
+})
+
+// clients-ux-27: the away summary is drawn only by the interactive terminal clients, as the reference draws it only in
+// its interactive terminal UI. An editor neither replays a stored recap nor turns a live one into an update.
+describe("acp away summary", () => {
+  test("a stored recap replays nothing and a live recap produces no update", () => {
+    const stored: Parameters<typeof ACPTranslate.replayMessage>[0] = {
+      id: "msg_recap",
+      type: "recap",
+      text: "Fixing the build.",
+      time: { created: 1 },
+    }
+    expect([...ACPTranslate.replayMessage(stored, "/workspace")]).toEqual([])
+
+    const live = durableEvent("session.recap.recorded", { sessionID: root, text: "Fixing the build." })
+    expect(ACPTranslate.step(ACPTranslate.initial, live, ctx).outputs).toEqual([])
+  })
+})
+
+// context-memory-3: the clearing marker tells the model's request what to leave out; an editor draws the stored output
+// as it always did and gets no update for the marker, stored or live.
+describe("acp context clearing", () => {
+  test("translates a context-cleared row to no update", () => {
+    const marker: Parameters<typeof ACPTranslate.replayMessage>[0] = {
+      id: "msg_cleared",
+      type: "context-cleared",
+      trigger: "idle",
+      tools: [{ assistantMessageID: "msg_ran", id: "call_ran" }],
+      time: { created: 3 },
+    }
+    expect([...ACPTranslate.replayMessage(marker, "/workspace")]).toEqual([])
+
+    // The assistant message the marker names replays its tool call and result as before.
+    const replayed = [
+      ...ACPTranslate.replayMessage(
+        assistantMessage("msg_ran", {
+          content: [
+            {
+              type: "tool",
+              id: "call_ran",
+              name: "Read",
+              time: { created: 1, completed: 2 },
+              state: {
+                status: "completed",
+                input: { file_path: "notes.txt" },
+                metadata: {},
+                content: [{ type: "text", text: "the full output" }],
+              },
+            },
+          ],
+        }),
+        "/workspace",
+      ),
+    ]
+    expect(replayed.map((update) => update.sessionUpdate)).toContain("tool_call_update")
+    expect(JSON.stringify(replayed)).toContain("the full output")
+
+    const live = durableEvent("session.context.cleared", {
+      sessionID: root,
+      trigger: "idle",
+      tools: [{ assistantMessageID: "msg_ran", id: "call_ran" }],
+    })
+    expect(ACPTranslate.step(ACPTranslate.initial, live, ctx).outputs).toEqual([])
   })
 })

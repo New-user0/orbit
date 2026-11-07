@@ -143,6 +143,18 @@ describe("search tools", () => {
     }
   }
 
+  // tool-runtime-8: a Grep result above 20,000 characters is saved behind the wrapper, as the reference declares.
+  it.live("declares 20,000 characters as Grep's result limit", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* withTools(tmp.path, (registry) =>
+        Effect.gen(function* () {
+          expect((yield* toolTraits(registry, "Grep", { pattern: "needle" })).maxResultChars).toBe(20_000)
+        }),
+      )
+    }),
+  )
+
   it.live("bounds omitted glob and grep limits", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -902,7 +914,8 @@ describe("search tools", () => {
           )
           expect(paged.metadata).toEqual({ matches: 1, truncated: false })
           expect(text(paged)).toContain("Line 6: needle a2")
-          expect(text(paged)).not.toContain("a1")
+          // The match line, not "a1" alone: the random temporary folder in the result's path can hold those letters.
+          expect(text(paged)).not.toContain("needle a1")
 
           const context = yield* executeTool(registry, call("Grep", { pattern: "needle", path: "a.ts", context: 1 }))
           expect(context.metadata).toEqual({ matches: 2, truncated: false })

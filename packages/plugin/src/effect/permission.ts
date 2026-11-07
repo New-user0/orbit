@@ -1,4 +1,4 @@
-import type { PermissionApi } from "@orbit/client/effect/api"
+import type { PermissionApi, PermissionReplyInput } from "@orbit/client/effect/api"
 import type { Agent } from "@orbit/schema/agent"
 import type { Permission } from "@orbit/schema/permission"
 import type { Session } from "@orbit/schema/session"
@@ -25,6 +25,9 @@ export interface PermissionHooks {
   readonly evaluate: PermissionEvaluation
 }
 
-export type PermissionDomain = Pick<PermissionApi<unknown>, "list" | "get" | "reply"> & {
+export type PermissionDomain = Pick<PermissionApi<unknown>, "list" | "get"> & {
+  // A plugin answers a question with the proposal or a reject. Revised content is a person's answer and comes only
+  // through a client's reply route, so the plugin reply has no field for it and the host refuses one (class 12).
+  readonly reply: (input: Omit<PermissionReplyInput, "content">) => ReturnType<PermissionApi<unknown>["reply"]>
   readonly hook: Hooks<PermissionHooks>
 }

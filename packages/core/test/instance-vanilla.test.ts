@@ -105,6 +105,7 @@ describe("Instance vanilla", () => {
                 instructions: yield* discovery.list(),
                 shell: Config.latest(entries, "shell"),
                 preferences: (yield* builtIns.preferences()).map((source) => source.key),
+                toolResults: builtIns.toolResults(Effect.succeed(true)).map((source) => source.key),
                 snapshot: vcs.source({ id: SessionSchema.ID.make("ses_vanilla") }).map((source) => source.key),
               }
             }).pipe(Effect.scoped, Effect.provide(locations.get(ref)))
@@ -116,6 +117,8 @@ describe("Instance vanilla", () => {
           expect(vanilla.snapshot).toEqual([])
           // The reply language is dropped from a vanilla instance, even one the host configured with a language.
           expect(vanilla.preferences).toEqual([])
+          // The minimal prompt has no tool-results section either.
+          expect(vanilla.toolResults).toEqual([])
           // Host-injected content survives discovery: false.
           expect(vanilla.shell).toBe("vanilla-host")
 
@@ -125,11 +128,13 @@ describe("Instance vanilla", () => {
           expect(bare.instructions).toEqual([])
           expect(bare.snapshot).toEqual([])
           expect(bare.preferences).toEqual([])
+          expect(bare.toolResults).toEqual([])
           expect(bare.shell).toBeUndefined()
 
           const discovery = yield* read(yield* plant("discovery"))
           expect(discovery.snapshot).toEqual([VcsInstructions.key])
           expect(discovery.preferences.map(String)).toEqual(["core/language"])
+          expect(discovery.toolResults.map(String)).toEqual(["core/tool-results"])
           expect(discovery.documents.length).toBeGreaterThan(0)
           expect(
             Array.isArray(discovery.instructions) &&

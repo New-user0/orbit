@@ -122,8 +122,9 @@ export interface Traits<Input = unknown> {
   /** Whether a new user message ends the call or waits for it. Defaults to `"block"`. */
   readonly interruptBehavior?: InterruptBehavior
   /**
-   * The length, in characters, above which a result of this tool should be written to a file rather than sent in
-   * full. A positive number; `Infinity` means the result is never written to a file.
+   * The length, in characters, above which a result of this tool is written to a file and the model gets a preview
+   * instead. The configured ceiling (`tool_output.max_result_chars`, 50,000 by default) caps it. A positive number;
+   * `Infinity` means the result is never written to a file, whatever the ceiling.
    */
   readonly maxResultChars?: number
   /**

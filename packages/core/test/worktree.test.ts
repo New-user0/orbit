@@ -214,6 +214,25 @@ describe("Worktree", () => {
     }),
   )
 
+  // Class 3: the worktree to branch from is read from the project's folder, as the folder to make it in is, never from
+  // the process's own working folder.
+  it.live("reads a relative worktree to branch from in the project's folder", () =>
+    Effect.gen(function* () {
+      const input = yield* setup()
+      const worktree = yield* fixtureWorktree()
+      const temp = yield* Effect.promise(() => fs.realpath(path.dirname(input.root.path)))
+      const parent = abs(path.join(temp, path.basename(input.root.path) + "-worktree-relative-from"))
+      yield* Effect.addFinalizer(() => Effect.promise(() => fs.rm(parent, { recursive: true, force: true })))
+
+      const created = yield* worktree.create({ from: abs("."), directory: parent, name: "worktree" })
+
+      expect(yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(created.directory).text())).toBe(
+        yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(input.sourceDirectory).text()),
+      )
+      yield* worktree.remove({ directory: created.directory, force: false })
+    }),
+  )
+
   it.live("creates and removes a git worktree directory", () =>
     Effect.gen(function* () {
       const input = yield* setup()

@@ -5,12 +5,11 @@ import { Locale } from "../../util/locale"
 import { bodyText } from "../../util/renderer"
 import { DialogMessage } from "./dialog-message"
 import { useDialog } from "../../ui/dialog"
-import type { PromptInfo } from "../../prompt/history"
 
 export function DialogTimeline(props: {
   sessionID: string
   onMove: (messageID: string) => void
-  setPrompt?: (prompt: PromptInfo) => void
+  onRewind: (messageID: string) => unknown
 }) {
   const data = useData()
   const dialog = useDialog()
@@ -30,7 +29,7 @@ export function DialogTimeline(props: {
         footer: Locale.time(message.time.created),
         onSelect: (dialog) => {
           dialog.replace(() => (
-            <DialogMessage messageID={message.id} sessionID={props.sessionID} setPrompt={props.setPrompt} />
+            <DialogMessage messageID={message.id} sessionID={props.sessionID} onRewind={props.onRewind} />
           ))
         },
       })

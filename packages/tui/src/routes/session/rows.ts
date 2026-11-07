@@ -351,6 +351,8 @@ export function reduceSessionRows(
         return rows
       }
       if (message.type === "synthetic" && !message.description?.trim()) return rows
+      // A clearing marker is bookkeeping, not a transcript row: it adds no entry and closes no group.
+      if (message.type === "context-cleared") return rows
       if (message.type === "compaction" && message.status === "completed" && usage) usage.previousTurnCache = undefined
       rows.push({
         entry: { type: "message", messageID: message.id },

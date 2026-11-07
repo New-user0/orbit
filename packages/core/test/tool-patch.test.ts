@@ -1642,3 +1642,60 @@ describe("PatchTool", () => {
     ),
   )
 })
+
+// clients-ux-5: a code restore puts back only what the session's own file tools changed, and learns which files those
+// were from the calls it recorded. A move changes two files, so the recorded call names the source it removed as well as
+// the destination it wrote; without the source, a restore would leave the moved file at its new name only.
+describe("PatchTool records every file it changed, for code rewind", () => {
+  it.live("names a move's source beside its destination in the completed call", () =>
+    withTempTool((directory, registry) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, "old.txt"), "before\n"))
+        const settled = yield* executeTool(
+          registry,
+          call("*** Begin Patch\n*** Update File: old.txt\n*** Move to: moved.txt\n@@\n-before\n+after\n*** End Patch"),
+        )
+        expect(settled.status).toBe("completed")
+        expect(settled.metadata?.files).toEqual([expect.objectContaining({ file: "moved.txt", from: "old.txt" })])
+      }),
+    ),
+  )
+
+  // A patch that fails part way changed the files before the failure and was changing one when it failed: the failed
+  // call names them all, a move's source included, so a rewind puts back what it wrote.
+  it.live("names the files it changed, and a move's source, when removing that source fails", () =>
+    withTempTool((directory, registry) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, "first.txt"), "first\n"))
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, "old.txt"), "before\n"))
+        failRemoveErrorTarget = "old.txt"
+        const failure = yield* registry.snapshot().pipe(
+          Effect.flatMap((tools) =>
+            tools.execute(
+              call(
+                "*** Begin Patch\n*** Update File: first.txt\n@@\n-first\n+second\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n-before\n+after\n*** End Patch",
+              ),
+            ),
+          ),
+          Effect.flip,
+        )
+        expect(yield* Effect.promise(() => fs.readFile(path.join(directory, "new.txt"), "utf8"))).toBe("after\n")
+        expect(failure.metadata?.files).toEqual([{ file: "first.txt" }, { file: "new.txt", from: "old.txt" }])
+      }),
+    ),
+  )
+
+  it.live("names a file it failed to delete", () =>
+    withTempTool((directory, registry) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => fs.writeFile(path.join(directory, "gone.txt"), "gone\n"))
+        failRemoveErrorTarget = "gone.txt"
+        const failure = yield* registry.snapshot().pipe(
+          Effect.flatMap((tools) => tools.execute(call("*** Begin Patch\n*** Delete File: gone.txt\n*** End Patch"))),
+          Effect.flip,
+        )
+        expect(failure.metadata?.files).toEqual([{ file: "gone.txt" }])
+      }),
+    ),
+  )
+})

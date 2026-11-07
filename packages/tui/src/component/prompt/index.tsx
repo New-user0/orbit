@@ -59,6 +59,7 @@ import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { useConfig } from "../../config"
 import { useTrust } from "../../context/trust"
+import { usePromptSuggestions } from "../../context/prompt-suggestion"
 import { Vim } from "./vim-state"
 import { VimAdapter } from "./vim-adapter"
 import { StatusLine } from "./status-line"
@@ -75,6 +76,7 @@ import { useInteractivity } from "../../context/interactivity"
 import { abbreviateHome } from "../../runtime"
 import { Slot } from "../../plugin/render"
 import type { SessionInbox } from "@orbit/schema/session-inbox"
+import { SessionMessage } from "@orbit/schema/session-message"
 import {
   deduplicatePromptImages,
   preserveMentionlessPromptAttachments,
@@ -94,6 +96,11 @@ export type PromptProps = {
   muted?: boolean
   onSubmit?: () => void
   onEmptySubmit?: () => boolean | Promise<boolean>
+  /**
+   * The session's rewind hooks: Esc pressed twice on an empty prompt opens the picker when `ready` holds and the session
+   * is idle, and a double-Esc interrupt of a running session calls `interrupted` once the server has answered it.
+   */
+  rewind?: { ready: () => boolean; open: () => void; interrupted: () => void }
   ref?: (ref: PromptRef | undefined) => void
   hint?: JSX.Element
   right?: JSX.Element
@@ -118,6 +125,8 @@ export type PromptRef = {
 
 const DRAFT_RETENTION_MIN_CHARS = 20
 const revealedPromptMetadata = new WeakSet<object>()
+// The window in which a second Esc on an idle session opens the rewind picker.
+const REWIND_ESCAPE_MS = 800
 
 function randomIndex(count: number) {
   if (count <= 0) return 0
@@ -223,16 +232,30 @@ export function formatEditorContext(selection: EditorSelection) {
 /** The most of a selection that reaches the model, as in core and the VS Code chat. */
 const EDITOR_SELECTION_LIMIT = 2000
 
-function argumentSlash(input: string, commands: readonly KeymapCommand[]) {
+function argumentSlash(input: string, commands: readonly KeymapCommand[], locationCommands: ReadonlySet<string>) {
   const head = parseSlashHead(input, /\s/)
   if (!head) return
   const command = commands.find(
     (command) =>
       command.slash?.arguments &&
+      // A location command of the same name keeps its place, as it did before the built-in took optional text.
+      !(command.slash.arguments === "optional" && locationCommands.has(head.name)) &&
       (command.slash.name === head.name || command.slash.aliases?.includes(head.name) === true),
   )
   if (!command) return
   return { command, input: head.arguments }
+}
+
+/** The command a slash command line names when it is that command alone and the command takes no argument. */
+function namedSlash(input: string, commands: readonly KeymapCommand[]) {
+  const head = parseSlashHead(input, /\s/)
+  if (!head || head.arguments.trim()) return
+  return commands.find(
+    (command) =>
+      command.slash &&
+      !command.slash.arguments &&
+      (command.slash.name === head.name || command.slash.aliases?.includes(head.name) === true),
+  )
 }
 
 export function Prompt(props: PromptProps) {
@@ -241,7 +264,10 @@ export function Prompt(props: PromptProps) {
   const [inputTarget, setInputTarget] = createSignal<TextareaRenderable | undefined>()
 
   const enabled = useInteractivity()
-  const disabled = () => props.disabled || !enabled()
+  const trust = useTrust()
+  // Until the folder's trust is settled the prompt takes no keys at all, so nothing typed ahead is sent or reaches the
+  // question about the folder (`trust.typing`).
+  const disabled = () => props.disabled || !enabled() || !trust.typing()
   const leader = Keymap.useLeaderActive()
   const muted = () => leader() || props.muted
   const local = useLocal()
@@ -260,7 +286,6 @@ export function Prompt(props: PromptProps) {
   const currentLocation = useLocation()
   const args = useArgs()
   const config = useConfig().data
-  const trust = useTrust()
   // With prompt.vim on, Escape leaves insert mode and normal-mode keys move and edit instead of typing.
   // The mode, the half-typed command and the unnamed register live as long as the prompt does; a submit leaves them.
   const [vim, setVim] = createSignal<Vim.State>(Vim.initial)
@@ -296,6 +321,10 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => data.session.status(props.sessionID ?? ""))
+  const suggestions = usePromptSuggestions()
+  const suggestion = createMemo(() => (props.sessionID ? suggestions.session(props.sessionID) : undefined))
+  // The width of the input row, measured once it is laid out, which a suggestion is cut to.
+  const [inputWidth, setInputWidth] = createSignal(0)
   const history = usePromptHistory()
   // The folder that a sent prompt is filed under in history: the session's own, or where the next session starts.
   const historyDirectory = () =>
@@ -508,6 +537,11 @@ export function Prompt(props: PromptProps) {
     ),
   )
 
+  // Esc on an idle session belongs to the rewind picker only on an empty prompt of a session that has something to
+  // rewind. Shell mode, Vim's insert mode and an open completion take Esc before this command sees it.
+  let lastEscape = 0
+  const rewindReady = () => !!props.rewind?.ready() && store.prompt.text === ""
+
   const promptCommands = createMemo(() =>
     [
       {
@@ -595,7 +629,7 @@ export function Prompt(props: PromptProps) {
         name: "session.interrupt",
         category: "Session",
         palette: undefined,
-        enabled: status() === "running",
+        enabled: status() === "running" || rewindReady(),
         run: () => {
           if (auto()?.visible) return
           if (!input.focused) return
@@ -605,6 +639,14 @@ export function Prompt(props: PromptProps) {
             return
           }
           if (!props.sessionID) return
+          if (status() !== "running") {
+            // The first Esc on an idle session arms; a second one within the window opens the rewind picker.
+            const now = Date.now()
+            const armed = now - lastEscape <= REWIND_ESCAPE_MS
+            lastEscape = armed ? 0 : now
+            if (armed) props.rewind?.open()
+            return
+          }
 
           setStore("interrupt", store.interrupt + 1)
 
@@ -613,10 +655,12 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void client.api.session.interrupt({
-              sessionID: props.sessionID,
-              resume: true,
-            })
+            void client.api.session
+              .interrupt({
+                sessionID: props.sessionID,
+                resume: true,
+              })
+              .then(() => props.rewind?.interrupted())
             setStore("interrupt", 0)
           }
           dialog.clear()
@@ -1209,6 +1253,8 @@ export function Prompt(props: PromptProps) {
     }
   })
 
+  // Each layer on the text area adds a `destroyed` listener to it, and past ten the runtime prints a leak warning on
+  // every prompt, so layers that share a condition share one layer.
   Keymap.createLayer(() => {
     return {
       context: "prompt",
@@ -1242,20 +1288,6 @@ export function Prompt(props: PromptProps) {
             input.cursorOffset = 0
           },
         },
-      ],
-    }
-  })
-
-  Keymap.createLayer(() => {
-    return {
-      context: "prompt",
-      priority: 1,
-      target: inputTarget,
-      enabled: (() => {
-        cursorVersion()
-        return inputTarget() !== undefined && !disabled() && !auto()?.visible && input !== undefined
-      })(),
-      commands: [
         {
           id: "prompt.history.next",
           title: "Next prompt history",
@@ -1353,11 +1385,29 @@ export function Prompt(props: PromptProps) {
       setStore("prompt", "text", input.plainText)
       syncExtmarksWithPromptParts()
     }
+    // Enter on a drawn suggestion sends the text drawn, as if typed. One cut to the row is put in the input instead, so
+    // nothing is sent that the person could not read first (class 8). Either way it stays a prompt to the model: as in
+    // the reference, Enter never takes a leading `!` into shell mode, so the next Enter does not run it as a command.
+    const shown = ghost()
+    if (shown) {
+      fillPrompt(shown.value, false)
+      if (!shown.whole) return false
+    }
+    // Typed, a slash command that takes no argument runs from the list that opens on it, which a filled input does not
+    // open; Enter on such a suggestion runs it the same way.
+    const named = shown ? namedSlash(shown.value, keymapCommands()) : undefined
+    if (named) {
+      suggestion()?.submitted()
+      clearPrompt()
+      named.run()
+      return true
+    }
     if (move.creating()) return false
     if (auto()?.visible) return false
     const trimmed = store.prompt.text.trim()
     if (!trimmed && (!props.sessionID || store.mode === "shell" || delivery === "queue"))
       return delivery === "steer" ? (await props.onEmptySubmit?.()) === true : false
+    if (trimmed) suggestion()?.submitted()
     const exitWord = trimmed === "exit" || trimmed === "quit" || trimmed === ":q"
     const inputText = expandTrackedPastedText(
       store.prompt.text,
@@ -1369,7 +1419,11 @@ export function Prompt(props: PromptProps) {
         return [{ start: extmark.start, end: extmark.end, text: part.text }]
       }),
     )
-    const slash = argumentSlash(inputText, keymapCommands())
+    const slash = argumentSlash(
+      inputText,
+      keymapCommands(),
+      new Set((data.location.command.list(currentLocation.ref) ?? []).map((command) => command.name)),
+    )
     if (delivery === "queue" && (store.mode === "shell" || exitWord || slash)) {
       toast.show({ message: "This prompt cannot be queued", variant: "warning" })
       return false
@@ -1540,13 +1594,25 @@ export function Prompt(props: PromptProps) {
       })
       return true
     }
-    history.append(entry, historyDirectory())
+    // A prompt is sent under an ID minted here, so that the history entry it adds can be found again by the message it
+    // became. A `!` command and a slash command are sent without one: neither becomes a message of an ID chosen here.
+    const messageID = currentMode === "shell" || (slashHead && isCommand) ? undefined : SessionMessage.ID.create()
+    history.append(entry, historyDirectory(), messageID)
     if (currentMode === "shell") {
       move.startSubmit()
+      // A command is new work too: settle a staged revert first, as a prompt does, so the command lands after the
+      // rewind instead of behind the boundary, where it is drawn nowhere and the next prompt's commit drops it.
+      if (
+        session?.revert &&
+        !(await attempt("Failed to commit revert", () => client.api.session.revert.commit({ sessionID: target })))
+      )
+        return false
       const send = () => client.api.session.shell({ sessionID: target, command: inputText })
       void (newSession ? newSession.gate.then(send).catch(newSession.recover) : send())
       setStore("mode", "normal")
     } else if (slashHead && isCommand) {
+      // New work for the model: every diff tab in the editor closes, as for a prompt. A `!` command above does not.
+      editor.diff.closeAll()
       const send = async () => {
         // Commands inherit the composer selection; command-specific overrides
         // remain server-owned and run after this preparation.
@@ -1566,6 +1632,8 @@ export function Prompt(props: PromptProps) {
       )
     } else {
       move.startSubmit()
+      // A prompt for the model closes every diff tab in the editor, as the reference does.
+      editor.diff.closeAll()
       if (!(await attempt("Failed to prepare session", prepareAgent))) return true
       // Revert must settle before optimistic admission: its committed echo
       // splices every local row at or after the boundary, which would include
@@ -1597,6 +1665,7 @@ export function Prompt(props: PromptProps) {
           sessionID: target,
           text: inputText,
           files: entry.files,
+          id: messageID,
           agents: entry.agents,
           skills: entry.skills?.length ? entry.skills : undefined,
           delivery,
@@ -1833,6 +1902,65 @@ export function Prompt(props: PromptProps) {
   // The command is handed this folder as `cwd` and `project_dir`, and programs it starts there (git, bun) read what the
   // folder chose, so it is a folder the person has to trust as well. It is not always the one the terminal UI started in.
   const statusLineTrusted = trust.folder(() => statusLineLocation().directory)
+  // Whether a next-prompt suggestion can be seen now: an exactly empty input in prompt mode, on an idle session. A list
+  // opens only on typed text, so none is open then. A key takes a suggestion only while it is drawn (class 8).
+  const drawable = () => store.mode === "normal" && store.prompt.text === "" && status() === "idle"
+  createEffect(() => {
+    const watch = suggestion()?.watch
+    if (watch) onCleanup(watch(drawable))
+  })
+  // The suggestion is model text, so it is drawn, taken and sent in its escaped form: what is drawn is what runs
+  // (class 9). It is cut to the input row. A prompt that takes no keys draws none either; a held suggestion waits for it.
+  const ghost = createMemo(() => {
+    const text = suggestion()?.text()
+    if (text === undefined || !drawable() || disabled()) return undefined
+    const value = plain(text)
+    const drawn = Locale.takeWidth(value, inputWidth())
+    if (!drawn) return undefined
+    return { value, drawn, whole: drawn === value }
+  })
+  // Puts a suggestion in the input with the cursor at its end. To be edited, a leading `!` takes the prompt into shell
+  // mode with the command after it, as typing it would; to be sent, the text stays as it is, a prompt to the model.
+  function fillPrompt(value: string, edit = true) {
+    const shell = edit && value.startsWith("!")
+    const text = shell ? value.slice(1) : value
+    if (shell) setStore("mode", "shell")
+    input.setText(text)
+    setStore("prompt", "text", text)
+    input.gotoBufferEnd()
+  }
+  Keymap.createLayer(() => ({
+    context: "prompt",
+    target: inputTarget,
+    enabled: inputTarget() !== undefined && ghost() !== undefined,
+    commands: ["tab", "right"].map((bind) => ({
+      bind,
+      title: "Take the suggestion",
+      group: "Prompt",
+      run: () => {
+        const shown = ghost()
+        if (!shown) return false
+        fillPrompt(shown.value)
+      },
+    })),
+  }))
+  const placeholderText = createMemo(() => {
+    const shown = ghost()
+    if (shown) return shown.drawn
+    // A prompt that cannot be used yet does not invite typing.
+    if (props.showPlaceholder === false || !trust.typing()) return undefined
+    const value = (() => {
+      if (store.mode === "shell") {
+        if (!shell().length) return undefined
+        return `Run a command… "${shell()[store.placeholder % shell().length]}"`
+      }
+      if (!list().length) return undefined
+      return `Ask anything… "${list()[store.placeholder % list().length]}"`
+    })()
+    if (!value) return undefined
+    const width = dimensions().width < 44 ? dimensions().width - 5 : Math.min(75, dimensions().width - 4) - 5
+    return Locale.takeWidth(value, Math.max(1, width)).trimEnd()
+  })
   // A user-configured status line command, shown under the prompt footer.
   const statusLine = (
     <StatusLine
@@ -1918,20 +2046,6 @@ export function Prompt(props: PromptProps) {
     showDetails: store.interrupt === 0 || dimensions().width >= 80,
   })
 
-  const placeholderText = createMemo(() => {
-    if (props.showPlaceholder === false) return undefined
-    const value = (() => {
-      if (store.mode === "shell") {
-        if (!shell().length) return undefined
-        return `Run a command… "${shell()[store.placeholder % shell().length]}"`
-      }
-      if (!list().length) return undefined
-      return `Ask anything… "${list()[store.placeholder % list().length]}"`
-    })()
-    if (!value) return undefined
-    const width = dimensions().width < 44 ? dimensions().width - 5 : Math.min(75, dimensions().width - 4) - 5
-    return Locale.takeWidth(value, Math.max(1, width)).trimEnd()
-  })
   const footerLocation = createMemo(() => {
     if (!props.sessionID) {
       // No session yet: show where the next session will be created.
@@ -1994,7 +2108,17 @@ export function Prompt(props: PromptProps) {
               {store.mode === "shell" ? "!" : "›"}
             </text>
           </box>
-          <box paddingLeft={1} paddingRight={dimensions().width < 44 ? 1 : 2} flexShrink={0} flexGrow={1} minWidth={0}>
+          <box
+            paddingLeft={1}
+            paddingRight={dimensions().width < 44 ? 1 : 2}
+            flexShrink={0}
+            flexGrow={1}
+            minWidth={0}
+            // The text area does not report its own size, so the row it gets is this box less its padding.
+            onSizeChange={function (this: BoxRenderable) {
+              setInputWidth(this.width - 1 - (dimensions().width < 44 ? 1 : 2))
+            }}
+          >
             <Show when={config.prompt?.image_preview && visibleImageAttachments().length > 0}>
               <box
                 width="100%"
@@ -2074,6 +2198,8 @@ export function Prompt(props: PromptProps) {
               cursorStyle={vimCommand() ? { ...config.cursor, style: "block" } : insertCursor()}
               onContentChange={() => {
                 const value = input.plainText
+                // Typing cancels a suggestion request that is still out; a suggestion already drawn stays held.
+                suggestion()?.changed()
                 setStore("prompt", "text", value)
                 auto()?.onInput(value)
                 syncExtmarksWithPromptParts()
@@ -2310,6 +2436,8 @@ export function Prompt(props: PromptProps) {
         ref={(r) => {
           setAuto(() => r)
         }}
+        // A command run from the list is a submit, so it ends the suggestion as sending a prompt does.
+        onCommand={() => suggestion()?.submitted()}
         anchor={() => anchor}
         input={() => input}
         setPrompt={(cb) => {

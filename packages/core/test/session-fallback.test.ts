@@ -1,4 +1,5 @@
 import { expect } from "bun:test"
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import { LanguageModel } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { Agent } from "@orbit/core/agent"
@@ -26,6 +27,7 @@ import { Tool } from "@orbit/core/tool"
 import { Document, Info } from "@orbit/schema/config"
 import { Effect, Layer, Logger, Schema } from "effect"
 import { testEffect } from "./lib/effect"
+import { noMemory } from "./lib/memory"
 import { noScratchpad } from "./lib/scratchpad"
 import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { stubSnapshot } from "./lib/tool"
@@ -73,10 +75,13 @@ const it = testEffect(
         Config.node.replace(config),
         SessionRunnerModel.node.replace(models),
         InstructionBuiltIns.node.replace(
-          Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(empty), preferences: () => Effect.succeed(empty) }),
+          Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(empty), preferences: () => Effect.succeed(empty), toolResults: () => empty }),
         ),
         noScratchpad,
+        noMemory,
         noVcsSnapshot,
+        // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+        SessionRehydration.node.replace(SessionRehydration.noopLayer),
         InstructionDiscovery.node.replace(
           Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
         ),

@@ -131,6 +131,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           },
           managed: managedOptions(process.env),
           trust: trustOptions(options.mode, process.env),
+          retention: retentionOption(options.mode, process.env),
           windows: {
             gitbash: process.env.ORBIT_GIT_BASH_PATH,
           },
@@ -208,6 +209,15 @@ function serviceURL(hostname: string, port: number) {
  */
 export function trustOptions(mode: Mode, env: Readonly<Record<string, string | undefined>>) {
   return { implicit: mode === "service" ? false : truthy(env.ORBIT_TRUST_PROJECT) }
+}
+
+/**
+ * Whether the server removes idle sessions on `cleanup_period_days`. A private or foreground server is off when its
+ * environment asks (a bare run). The background service is shared by every client, so the environment of the one that
+ * started it does not decide.
+ */
+export function retentionOption(mode: Mode, env: Readonly<Record<string, string | undefined>>) {
+  return mode === "service" || !truthy(env.ORBIT_DISABLE_RETENTION)
 }
 
 /**

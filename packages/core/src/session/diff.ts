@@ -10,6 +10,7 @@ import { PATCH_CONTEXT_LINES } from "../vcs/patch.js"
 import { MessageNotFoundError } from "./error.js"
 import { SessionMessage } from "./message.js"
 import { SessionSchema } from "./schema.js"
+import { SessionRevert } from "./revert.js"
 import { SessionMessageTable } from "./sql.js"
 
 export class TurnRangeError extends Schema.TaggedError<TurnRangeError>()("Session.TurnRangeError", {
@@ -30,7 +31,9 @@ const decodeLocation = Schema.decodeUnknownSync(Schema.fromJsonString(Location.R
  * diffs, an omitted `context` yields full-file patches.
  *
  * A Session without any idle marker predates them, so its prompts span until the
- * next user message instead.
+ * next user message instead. `scope: "prompt"` takes that range for any Session
+ * and counts only what the Session's file tools changed in it, a steered prompt's
+ * own edits included.
  *
  * Snapshot trees live in the repository of the Location that captured them, so a
  * range spanning a location switch is rejected rather than diffed wrongly.
@@ -45,6 +48,8 @@ export const turn = Effect.fn("SessionDiff.turn")(function* (
     readonly from?: SessionMessage.ID
     readonly to?: SessionMessage.ID
     readonly context?: number
+    /** `prompt` ranges from `from` to the next user message and keeps only the file-tool edits of its steps. */
+    readonly scope?: "turn" | "prompt"
   },
 ) {
   const sessionID = input.session.id
@@ -75,15 +80,19 @@ export const turn = Effect.fn("SessionDiff.turn")(function* (
   })
   const anchor = input.from ? yield* resolve("from", input.from) : users[users.length - 1]
   if (!anchor) return []
+  const prompt = input.scope === "prompt"
+  if (prompt && input.to)
+    return yield* new TurnRangeError({ sessionID, field: "to", message: "A prompt's diff covers that prompt alone" })
   const last = input.to ? yield* resolve("to", input.to) : anchor
   if (last.seq < anchor.seq)
     return yield* new TurnRangeError({ sessionID, field: "to", message: `Message ${last.id} precedes ${anchor.id}` })
-  // Without any marker, history predates idle markers and a prompt's turn ends at the next prompt.
-  const legacy = markers.length === 0
+  // Without any marker, history predates idle markers and a prompt's turn ends at the next prompt, as a prompt's own
+  // range always does.
+  const single = prompt || markers.length === 0
   // The turn opens with the first prompt after the previous idle marker; the anchor itself is the latest candidate.
   const opened = markers.findLast((row) => row.seq < anchor.seq)?.seq ?? -1
-  const start = legacy ? anchor.seq : (users.find((row) => row.seq > opened)?.seq ?? anchor.seq)
-  const end = legacy ? users.find((row) => row.seq > last.seq)?.seq : markers.find((row) => row.seq > last.seq)?.seq
+  const start = single ? anchor.seq : (users.find((row) => row.seq > opened)?.seq ?? anchor.seq)
+  const end = single ? users.find((row) => row.seq > last.seq)?.seq : markers.find((row) => row.seq > last.seq)?.seq
   const steps = yield* db
     .select({
       seq: SessionMessageTable.seq,
@@ -133,6 +142,10 @@ export const turn = Effect.fn("SessionDiff.turn")(function* (
       from: Snapshot.ID.make(from),
       to: Snapshot.ID.make(to),
       context: input.context ?? PATCH_CONTEXT_LINES,
+      // A prompt's own diff counts only what the session's file tools changed in its steps, as a code rewind does.
+      paths: prompt
+        ? Array.from(yield* SessionRevert.toolNames(db, sessionID, { after: start, before: end }))
+        : undefined,
     })
   }).pipe(Effect.provide(locations.get(location)))
 })

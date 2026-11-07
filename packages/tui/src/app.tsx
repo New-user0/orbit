@@ -7,7 +7,7 @@ import { Orbit, type SessionInfo } from "@orbit/client"
 import { Global } from "@orbit/util/global"
 import { ClipboardProvider, useClipboard } from "./context/clipboard"
 import { LogProvider, useLog, type LogSink } from "./context/log"
-import { ExitProvider, useExit } from "./context/exit"
+import { exitStatus, ExitProvider, useExit } from "./context/exit"
 import { EpilogueProvider } from "./context/epilogue"
 import { Selection } from "./util/selection"
 import {
@@ -74,6 +74,7 @@ import { DialogPair } from "./component/dialog-pair"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
 import { DialogAgent } from "./component/dialog-agent"
+import { DialogMemory } from "./component/dialog-memory"
 import { DialogSessionList } from "./component/dialog-session-list"
 import { DialogOpen, DialogOpenKey, moveOpenSession } from "./component/dialog-open"
 import { SessionTabs } from "./component/session-tabs"
@@ -105,6 +106,7 @@ import { UpdateNotificationProvider, useUpdateNotification, type UpdateSource } 
 import { PluginProvider, usePlugin, type PackageSource } from "./plugin/context"
 import { localPluginDirectories } from "./plugin/discovery"
 import { TrustProvider, useTrust } from "./context/trust"
+import { PromptSuggestionProvider } from "./context/prompt-suggestion"
 import { PluginRoute, Slot } from "./plugin/render"
 import { CommandPaletteDialog } from "./component/command-palette"
 import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "./context/keymap"
@@ -239,6 +241,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   )
   const directory = location.directory
   const pluginDirectories = yield* Effect.promise(() => localPluginDirectories(cwd, global))
+  const themeSource = createThemeSource(global)
   const handoff = input.terminalHandoff ? yield* Effect.promise(input.terminalHandoff) : undefined
   const managed = input.server.service
   const service = managed
@@ -409,7 +412,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                       <SessionTerminalsProvider>
                                                         <ThemeProvider
                                                           mode={mode}
-                                                          source={createThemeSource(global.config)}
+                                                          source={themeSource}
                                                         >
                                                           <ThemeErrorToast />
                                                           <KeybindingsToast />
@@ -426,12 +429,15 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                                           >
                                                                             <PanelProvider>
                                                                               <TrustProvider directory={cwd}>
-                                                                                <PluginProvider
-                                                                                  packages={input.packages}
-                                                                                  directories={pluginDirectories}
-                                                                                >
-                                                                                  <App />
-                                                                                </PluginProvider>
+                                                                                <ProjectThemes source={themeSource} />
+                                                                                <PromptSuggestionProvider>
+                                                                                  <PluginProvider
+                                                                                    packages={input.packages}
+                                                                                    directories={pluginDirectories}
+                                                                                  >
+                                                                                    <App />
+                                                                                  </PluginProvider>
+                                                                                </PromptSuggestionProvider>
                                                                               </TrustProvider>
                                                                             </PanelProvider>
                                                                           </UpdateNotificationProvider>
@@ -477,12 +483,24 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
       return { epilogue: exit.epilogue, reason: exit.reason }
     }),
   )
+  const status = exitStatus(result.reason)
   yield* Effect.sync(() => {
-    if (result.reason !== undefined)
+    // A trust question about the folder the terminal UI started in, answered with Exit or Escape, ends the process with
+    // a status of its own and prints nothing: it is not an error.
+    if (status !== undefined) process.exitCode = status
+    else if (result.reason !== undefined)
       process.stderr.write((cliErrorMessage(result.reason) ?? errorFormat(result.reason)) + "\n")
     if (result.epilogue) process.stdout.write(result.epilogue + "\n")
   })
 })
+
+// The theme provider sits outside the trust provider so that the first paint never waits for the trust read: the
+// project's themes are added once the folder the terminal UI started in is trusted, and taken away if that ends.
+function ProjectThemes(props: { source: ReturnType<typeof createThemeSource> }) {
+  const trust = useTrust()
+  createEffect(() => props.source.trust({ trusted: trust.startup.trusted(), root: trust.startup.root() }))
+  return null
+}
 
 function App() {
   const log = useLog({ component: "app" })
@@ -732,7 +750,7 @@ function App() {
         category: "System",
         palette: undefined,
         run: () => {
-          dialog.replace(() => <CommandPaletteDialog />)
+          dialog.replace(() => <CommandPaletteDialog linked={editorContext.connected} />)
         },
       },
       {
@@ -930,6 +948,16 @@ function App() {
         },
       },
       {
+        name: "memory.list",
+        title: "Memory files",
+        category: "Agent",
+        slash: { name: "memory" },
+        run: () => {
+          // Paths are long, so the dialog takes the large width.
+          dialog.replace(() => <DialogMemory />, undefined, { size: "large" })
+        },
+      },
+      {
         name: "mcp.list",
         title: "MCP servers",
         category: "Agent",
@@ -977,7 +1005,7 @@ function App() {
         run: () => {
           if (route.data.type !== "session") return
           const sessionID = route.data.sessionID
-          dialog.replace(() => <DialogContext sessionID={sessionID} />)
+          dialog.replace(() => <DialogContext sessionID={sessionID} />, undefined, { size: "large" })
         },
       },
       {
@@ -1065,7 +1093,7 @@ function App() {
         suggested: true,
         slash: { name: "settings", aliases: ["config"] },
         run: () => {
-          dialog.replace(() => <DialogConfig />)
+          dialog.replace(() => <DialogConfig linked={editorContext.connected} />)
         },
         category: "System",
       },

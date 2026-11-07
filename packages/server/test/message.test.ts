@@ -39,6 +39,7 @@ const setup = Effect.gen(function* () {
     config: { project: false },
     models: { fetch: false },
     fs: { filewatcher: false },
+    trust: { implicit: true },
   })
   const api = Orbit.make({
     baseUrl: "http://orbit.local",

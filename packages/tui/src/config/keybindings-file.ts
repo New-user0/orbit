@@ -245,6 +245,7 @@ const listing = {
     "session.parent",
     "session.undo",
     "session.redo",
+    "session.rewind",
     "messages.copy",
     "session.toggle.scrollbar",
     "session.toggle.thinking",

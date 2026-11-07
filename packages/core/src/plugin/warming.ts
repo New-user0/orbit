@@ -57,6 +57,8 @@ export const Plugin = define({
 
     const hook = (event: SessionHooks["context"]) =>
       Effect.gen(function* () {
+        // The context usage analysis builds a request it never sends; it must not start or extend warming.
+        if (event.analysis) return
         const session = yield* ctx.session.get({ sessionID: event.sessionID }).pipe(Effect.orDie)
         if (session.parentID) return
 

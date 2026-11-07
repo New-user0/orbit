@@ -56,6 +56,8 @@ type StreamInput = {
   onSessionTitle?: (title: string) => void
   /** Sees every live event of the session tree, for attention notifications. */
   onEvent?: (event: RunV2Event) => void
+  /** Whether the session is running a turn, each time the transport loads or reloads it. */
+  onActive?: (active: boolean) => void
   trace?: Trace
   signal?: AbortSignal
   onCatalogRefresh?: (signal?: AbortSignal) => unknown | Promise<unknown>
@@ -417,6 +419,11 @@ function skillCommits(messageID: string, skills: FooterQueuedPrompt["skills"] = 
   return Array.from(new Map(skills.map((skill) => [skill.id, skill])).values(), (skill) =>
     skillCommit(messageID, skill.name, skill.id),
   )
+}
+
+// The away summary, led by the reference mark the full TUI draws in its gutter.
+function recapCommit(messageID: string, text: string): StreamCommit {
+  return { kind: "system", source: "system", messageID, partID: "recap", text: `※ ${text}`, phase: "start" }
 }
 
 function compactionCommit(messageID: string): StreamCommit {
@@ -824,6 +831,12 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       if (completed && state.shellWait?.id === message.shellID) state.shellWait.resolve()
       return
     }
+    if (message.type === "recap") {
+      const visible = state.messageIDs.has(message.id)
+      state.messageIDs.add(message.id)
+      if (render && !visible) write([recapCommit(message.id, message.text)])
+      return
+    }
     if (message.type === "compaction") {
       const visible = state.messageIDs.has(message.id)
       state.messageIDs.add(message.id)
@@ -992,6 +1005,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       ? globals.data.filter((form) => form.sessionID === "global").map((form) => globalForm(form, globals.location))
       : []
     state.rootActive = input.sessionID in active
+    input.onActive?.(state.rootActive)
     syncBlockers()
     await subagents.hydrate({
       sdk: client,
@@ -1087,6 +1101,13 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       write([], { phase: "running", status: "assistant responding" })
       return
     }
+    if (event.type === "session.recap.recorded") {
+      const messageID = messageIDFromEvent(event.id)
+      if (state.messageIDs.has(messageID)) return
+      state.messageIDs.add(messageID)
+      write([recapCommit(messageID, event.data.text)])
+      return
+    }
     if (event.type === "session.skill.activated") {
       const messageID = messageIDFromEvent(event.id)
       if (state.wait?.messageID === messageID) promoteWait(state.wait, true)
@@ -1103,13 +1124,8 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       write([compactionCommit(messageID)], { phase: "running", status: "compacting session" })
       return
     }
-    if (event.type === "session.compaction.delta") {
-      if (!state.activeCompaction) return
-      const fragment = { messageID: state.activeCompaction, partID: "compaction:summary" }
-      if (!state.fragments.delta(fragment, event.data.text)) return
-      write([compactionSummary(state.activeCompaction, event.data.text, "progress")])
-      return
-    }
+    // A session.compaction.delta event carries a character count and no text, and Mini's scrollback cannot update a
+    // line in place, so it has no branch here: the stored summary is written whole when the compaction ends.
     if (event.type === "session.compaction.ended") {
       if (!state.activeCompaction) return
       const messageID = state.activeCompaction
@@ -1371,12 +1387,9 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       return
     }
     if (event.type === "session.step.ended") {
-      const total =
-        event.data.tokens.input +
-        event.data.tokens.output +
-        event.data.tokens.reasoning +
-        event.data.tokens.cache.read +
-        event.data.tokens.cache.write
+      // What the step's prompt held, the figure the terminal UI's footer and /context show; the step's own output and
+      // reasoning are not in the window yet.
+      const total = event.data.tokens.input + event.data.tokens.cache.read + event.data.tokens.cache.write
       const limit = state.stepModel ? input.contextLimit?.(state.stepModel) : undefined
       state.stepModel = undefined
       if (!showTools()) flushQuietText(event.data.assistantMessageID)

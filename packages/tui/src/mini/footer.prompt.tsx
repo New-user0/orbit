@@ -6,6 +6,7 @@
 // composer while the footer view renders any active menus below it.
 /** @jsxImportSource @opentui/solid */
 import {
+  BoxRenderable,
   StyledText,
   decodePasteBytes,
   fg,
@@ -35,8 +36,11 @@ import {
   onMount,
   type Accessor,
 } from "solid-js"
+import { plain } from "@orbit/util/plain"
 import { stringWidth } from "../util/string-width"
+import { Locale } from "../util/locale"
 import { errorMessage } from "../util/error"
+import type { PromptSuggestion } from "../prompt-suggestion"
 import {
   createPromptHistory,
   displayCharAt,
@@ -128,6 +132,8 @@ type PromptInput = {
   imagePreview?: boolean
   clipboard?: Pick<ClipboardService, "read">
   history?: Accessor<RunPrompt[]>
+  /** The session's next-prompt suggestion, drawn dimmed in the empty prompt. */
+  suggestion?: PromptSuggestion
   queuedPrompts: Accessor<FooterQueuedPrompt[]>
   onQueuedPromptSteer: (inboxID: string) => Promise<boolean>
   onSubmit: (input: RunPrompt) => boolean | Promise<boolean>
@@ -159,7 +165,7 @@ export type PromptState = {
   onKeyDown: (event: KeyEvent) => void
   onPaste: (event: PasteEvent) => Promise<void>
   onContentChange: () => void
-  onSizeChange: () => void
+  onSizeChange: (width: number) => void
   current: () => RunPrompt
   replacePrompt: (prompt: RunPrompt, cursor?: number) => void
   bind: (area?: TextareaRenderable) => void
@@ -226,7 +232,8 @@ export function RunPromptBody(props: {
   images: Accessor<ReadonlyArray<{ uri: string }>>
   layout: Accessor<ReturnType<typeof footerPromptLayout>>
   onContentChange: () => void
-  onSizeChange: () => void
+  /** Called with the width of the input row, which is the box less its rail and padding. */
+  onSizeChange: (width: number) => void
   bind: (area?: TextareaRenderable) => void
 }) {
   const renderer = useRenderer()
@@ -279,7 +286,9 @@ export function RunPromptBody(props: {
         customBorderChars={{ ...EmptyBorder, vertical: props.mono ? "|" : "┃" }}
         paddingLeft={1}
         paddingRight={2}
-        onSizeChange={props.onSizeChange}
+        onSizeChange={function (this: BoxRenderable) {
+          props.onSizeChange(this.width - 4)
+        }}
       >
         <Show when={props.layout().images > 0}>
           <box width="100%" height={props.layout().images} flexDirection="row" gap={1}>
@@ -349,7 +358,10 @@ export function createPromptState(input: PromptInput): PromptState {
   const [lines, setLines] = createSignal(TEXTAREA_MIN_ROWS)
   const [statusRows, setStatusRows] = createSignal(1)
   const [shell, setShell] = createSignal(false)
-  const placeholder = createMemo(() => {
+  // The text in the input and the width of its row, which decide whether and how much of a suggestion is drawn.
+  const [text, setText] = createSignal("")
+  const [areaWidth, setAreaWidth] = createSignal(0)
+  const hint = createMemo(() => {
     if (shell()) {
       return new StyledText([fg(input.theme().muted)('Run a command… "git status"')])
     }
@@ -405,6 +417,29 @@ export function createPromptState(input: PromptInput): PromptState {
   const [at, setAt] = createSignal(0)
   const [query, setQuery] = createSignal("")
   const visible = createMemo(() => mode() !== false)
+  // Whether a next-prompt suggestion can be seen now: the composer in view with an exactly empty input in prompt mode,
+  // while no turn runs. A list opens only on typed text, so none is open then. A key takes a suggestion only while it
+  // is drawn (class 8).
+  const drawable = () => input.prompt() && !shell() && text() === "" && input.state().phase === "idle"
+  createEffect(() => {
+    const watch = input.suggestion?.watch
+    if (watch) onCleanup(watch(drawable))
+  })
+  // The suggestion is model text, so it is drawn, taken and sent in its escaped form: what is drawn is what runs
+  // (class 9). It is cut to the input row.
+  const ghost = createMemo(() => {
+    const value = input.suggestion?.text()
+    if (value === undefined || !drawable()) return undefined
+    const escaped = plain(value)
+    const drawn = Locale.takeWidth(escaped, areaWidth())
+    if (!drawn) return undefined
+    return { value: escaped, drawn, whole: drawn === escaped }
+  })
+  const placeholder = createMemo(() => {
+    const shown = ghost()
+    if (shown) return new StyledText([fg(input.theme().muted)(shown.drawn)])
+    return hint()
+  })
 
   const setShellMode = (value: boolean) => {
     revision += 1
@@ -723,6 +758,14 @@ export function createPromptState(input: PromptInput): PromptState {
     area.focus()
   }
 
+  // Puts a suggestion in the input with the cursor at its end. To be edited, a leading `!` takes the prompt into shell
+  // mode with the command after it, as typing it would; to be sent, the text stays as it is, a prompt to the model.
+  const fill = (value: string, edit: boolean) => {
+    const shellMode = edit && value.startsWith("!")
+    restore(shellMode ? { text: value.slice(1), parts: [], mode: "shell" } : { text: value, parts: [] })
+    setText(area?.plainText ?? "")
+  }
+
   const resetDraft = () => {
     revision += 1
     if (area && !area.isDestroyed) {
@@ -881,7 +924,9 @@ export function createPromptState(input: PromptInput): PromptState {
         const normalized = image ? content.data : stripAnsiSequences(content.data).replace(/\r\n?/g, "\n")
         const resolved = image
           ? {
-              files: [{ type: "file" as const, uri: `data:${content.mime};base64,${content.data}`, filename: "clipboard" }],
+              files: [
+                { type: "file" as const, uri: `data:${content.mime};base64,${content.data}`, filename: "clipboard" },
+              ],
               rest: "",
             }
           : shell()
@@ -1037,7 +1082,10 @@ export function createPromptState(input: PromptInput): PromptState {
     }
 
     if (next.kind === "slash") {
+      // Running a command from the list is a submit, so it ends the suggestion as sending a prompt does. These two run
+      // here without reaching submitPrompt; every other item goes into the input and ends it when it is sent.
       if (next.action === "editor") {
+        input.suggestion?.submitted()
         void openEditor({
           value: resolveEditorSlashValue(area.plainText),
         })
@@ -1046,6 +1094,7 @@ export function createPromptState(input: PromptInput): PromptState {
 
       if (next.action === "settings" && !shell()) {
         cancelAutocomplete()
+        input.suggestion?.submitted()
         input.onSettings()
         return
       }
@@ -1280,6 +1329,21 @@ export function createPromptState(input: PromptInput): PromptState {
 
   Keymap.createLayer(() => ({
     context: "mini",
+    enabled: ghost() !== undefined,
+    commands: ["tab", "right"].map((bind) => ({
+      bind,
+      title: "Take the suggestion",
+      group: "Prompt",
+      run() {
+        const shown = ghost()
+        if (!shown) return false
+        fill(shown.value, true)
+      },
+    })),
+  }))
+
+  Keymap.createLayer(() => ({
+    context: "mini",
     enabled: input.prompt() && shell() && !visible(),
     commands: [
       {
@@ -1390,13 +1454,18 @@ export function createPromptState(input: PromptInput): PromptState {
       input.onStatus(input.state().phase === "running" ? "waiting for current response" : "empty prompt ignored")
       return
     }
+    input.suggestion?.submitted()
 
     const command = next.mode === "shell" ? undefined : selectedCommand(next.text, next.command)
+    const parsed =
+      command || next.parts.some((part) => part.type === "skill") || next.mode === "shell" || isNewCommand(next.text)
+        ? undefined
+        : parseSlashCommand(next.text, input.commands())
     if (
       delivery === "queue" &&
       (next.mode === "shell" ||
         isNewCommand(next.text) ||
-        isCompactCommand(next.text) ||
+        isCompactCommand(next.text, command ?? (parsed?.type === "command" ? parsed.command : undefined)) ||
         isExitCommand(next.text) ||
         next.text.trim().toLowerCase() === "/settings")
     ) {
@@ -1414,10 +1483,6 @@ export function createPromptState(input: PromptInput): PromptState {
       return
     }
 
-    const parsed =
-      command || next.parts.some((part) => part.type === "skill") || next.mode === "shell" || isNewCommand(next.text)
-        ? undefined
-        : parseSlashCommand(next.text, input.commands())
     if (parsed?.type === "pending") {
       input.onStatus("loading commands")
       return
@@ -1458,6 +1523,22 @@ export function createPromptState(input: PromptInput): PromptState {
       return
     }
     if (disposed || !input.prompt()) return
+    // Enter on a drawn suggestion sends the text drawn, as if typed. One cut to the row is put in the input instead, so
+    // nothing is sent that the person could not read first (class 8). Either way it stays a prompt to the model: as in
+    // the reference, Enter never takes a leading `!` into shell mode, so the next Enter does not run it as a command.
+    const shown = ghost()
+    if (shown) {
+      fill(shown.value, false)
+      if (!shown.whole) return
+      // A suggestion that is only a command's name runs from the list, as typing it and pressing Enter does. Sent as a
+      // prompt, a command that runs only from the list, such as `/editor`, would reach the model as text instead.
+      const head = parseSlashHead(shown.value, /\s/)
+      const named = head && !head.arguments.trim() ? slashOptions().find((item) => item.name === head.name) : undefined
+      if (named) {
+        select(named, delivery)
+        return
+      }
+    }
     syncDraft()
     submitPrompt(promptCopy(draft), delivery)
   }
@@ -1545,12 +1626,18 @@ export function createPromptState(input: PromptInput): PromptState {
     onPaste,
     onContentChange: () => {
       if (!applyingPaste && area && area.plainText !== draft.text) revision += 1
+      // Typing cancels a suggestion request that is still out; a suggestion already drawn stays held.
+      input.suggestion?.changed()
+      setText(area?.plainText ?? "")
       input.onInputClear()
       syncDraft()
       refresh()
       scheduleRows()
     },
-    onSizeChange: scheduleRows,
+    onSizeChange: (width) => {
+      setAreaWidth(width)
+      scheduleRows()
+    },
     current: () => {
       syncDraft()
       return promptCopy(draft)

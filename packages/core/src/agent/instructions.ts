@@ -28,7 +28,7 @@ const toolSummary = (tools: Agent.Info["tools"]) => {
 }
 
 // Every field is cleaned once, where the summary is built, so what is measured, stored and shown is the same text.
-const line = (agent: Summary) =>
+export const line = (agent: Summary) =>
   `- ${agent.id}: ${agent.description ?? "Start this agent only when the user asks for it."} (${agent.tools})`
 
 const render = (agents: ReadonlyArray<Summary>) =>

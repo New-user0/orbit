@@ -177,6 +177,9 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
     let fileBytes = 0
     // Appends and rewrites run one after another: an append that lands after a rewrite started would restore a trimmed entry.
     let writes: Promise<unknown> = Promise.resolve()
+    // The entry this process's newest append added, with the ID of the message its prompt was sent as; a skipped repeat
+    // added none. Only this entry can be forgotten, and only by that message's ID.
+    let added: { entry: PromptInfo; messageID?: string } | undefined
     const enqueue = (write: () => Promise<unknown>) => {
       writes = writes.then(write).catch(() => {})
     }
@@ -211,13 +214,16 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
         if (next === 0) return emptyPrompt()
         return store.history.at(next)
       },
-      append(item: PromptInfo, directory?: string) {
+      /** `messageID` is the ID the prompt is sent under, when the composer sends it as a prompt of its own. */
+      append(item: PromptInfo, directory?: string, messageID?: string) {
         const entry = { ...structuredClone(unwrap(item)), directory, time: Date.now() }
         // Time is not part of what makes a prompt a repeat.
         if (isDuplicateEntry(store.history.at(-1), entry)) {
+          added = undefined
           setStore("index", 0)
           return
         }
+        added = { entry, messageID }
         let trimmed = false
         setStore(
           produce((draft) => {
@@ -237,6 +243,36 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
           return
         }
         enqueue(() => appendText(historyPath, line))
+      },
+      /**
+       * Drops the entry the newest append added when its prompt was sent as message `messageID`: an interrupted prompt
+       * that went back into the input. The message ID, not the text, says which entry that is: the entry keeps what the
+       * composer held (a summarised paste stays a placeholder), the message what was sent. A repeat that append skipped
+       * added nothing, so the older entry it matched is never forgotten, and any later append replaces the one held here.
+       */
+      forget(messageID: string) {
+        if (added?.messageID !== messageID) return
+        const entry = added.entry
+        added = undefined
+        setStore(
+          produce((draft) => {
+            draft.history = draft.history.filter((item) => item.time !== entry.time || item.text !== entry.text)
+            draft.index = 0
+          }),
+        )
+        // The file is shared with other TUI processes, so it is read again and only this entry's line is removed;
+        // lines they appended since this process loaded the file stay.
+        const line = JSON.stringify(savedEntry(entry))
+        enqueue(async () => {
+          const lines = (await readText(historyPath)).split("\n").filter(Boolean)
+          const index = lines.lastIndexOf(line)
+          const content = lines
+            .filter((_, at) => at !== index)
+            .map((kept) => kept + "\n")
+            .join("")
+          fileBytes = Buffer.byteLength(content)
+          await writeText(historyPath, content)
+        })
       },
     }
   },

@@ -24,7 +24,7 @@ import { ConfigInstructionRules } from "../instruction-rules.js"
 // imports say which of the files another one imported, and `read` the real path of every import that was read.
 type Contribution = {
   readonly files: InstructionDiscovery.File[]
-  readonly warnings: (InstructionDiscovery.Warning | InstructionDiscovery.ImportWarning)[]
+  readonly warnings: InstructionDiscovery.AnyWarning[]
   readonly imports: InstructionDiscovery.Import[]
   readonly conditional: InstructionDiscovery.ConditionalRule[]
   readonly read: string[]
@@ -265,7 +265,7 @@ export const Plugin = define({
           ),
           read: loaded.read,
           kinds: loaded.files.map((item) => [item.path, scope] as const),
-        }
+        } satisfies Contribution as Contribution
       })
 
       const globalSource = Effect.fn("ConfigInstructionPlugin.globalSource")(function* (
@@ -390,6 +390,15 @@ export const Plugin = define({
         visited: Set<string>,
       ) {
         if (!project) return nothing
+        // The files and rules of this pass that are links and were left out for leading outside, which a person is told
+        // about (FU-M4-163). A plain file that is left out is not a link anyone made, so it is not named.
+        const outside = new Set<string>()
+        const leftOut = (spelling: string) =>
+          Effect.isSuccess(fs.readLink(spelling)).pipe(
+            Effect.map((link) => {
+              if (link) outside.add(spelling)
+            }),
+          )
         // An excluded file is as good as absent, so the next name in its slot takes its place. Exclusion comes first,
         // and only takes files out: what is left meets the same gate as before.
         const wanted = yield* ConfigInstructionFile.included(
@@ -410,7 +419,7 @@ export const Plugin = define({
                 : Effect.logWarning("instruction file skipped", {
                     path: candidate.file,
                     reason: "outside the project, which is not trusted",
-                  }),
+                  }).pipe(Effect.andThen(leftOut(candidate.file))),
             ),
           ),
         )
@@ -480,6 +489,7 @@ export const Plugin = define({
                       : Effect.succeed(false),
                   ),
                   Effect.flatMap((ok) => (ok && spelling !== undefined ? Effect.map(leadsOut(spelling, real), (out) => !out) : Effect.succeed(ok))),
+                  Effect.tap((ok) => (ok || spelling === undefined ? Effect.void : leftOut(spelling))),
                 ),
               patterns,
               visited,
@@ -490,7 +500,15 @@ export const Plugin = define({
           const local = yield* readSlot(slot(true), true)
           if (local !== undefined) contributions.push(local)
         }
-        return merge(contributions)
+        return merge([
+          ...contributions,
+          {
+            ...nothing,
+            warnings: [...outside].map(
+              (path) => new InstructionDiscovery.OutsideWarning({ path: AbsolutePath.make(path), kind: "outside" }),
+            ),
+          },
+        ])
       })
 
       const isolate = <A, E, R>(source: string, effect: Effect.Effect<A, E, R>) =>

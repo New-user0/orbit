@@ -9,6 +9,8 @@ import path from "path"
 import { Config } from "../config.js"
 import { ConfigMarkdown } from "../config/markdown.js"
 import { ProjectTrust } from "../project-trust.js"
+import { ReminderText } from "../session/reminder-text.js"
+import type { Durable } from "../session/reminders.js"
 import { SessionSystemPrompt } from "../session/system-prompt.js"
 import { PromptConfigPlugin } from "./prompt-config.js"
 import { SubagentPromptPlugin } from "./subagent-prompt.js"
@@ -31,7 +33,7 @@ import type { PluginInternal } from "./internal.js"
  * takes effect at once. Every kind of style leaves the sections that govern approvals as they are.
  */
 
-interface Style {
+export interface Style {
   readonly name: string
   readonly body: string
   readonly keepCodingInstructions: boolean
@@ -65,6 +67,30 @@ const BUILT_IN: Record<string, Style> = {
   },
 }
 
+/** The built-in style a name stands for, whatever its case, or undefined for the default style and any style file. */
+export const builtIn = (name: string): Style | undefined => BUILT_IN[name.toLowerCase()]
+
+const KIND = "output-style"
+
+/**
+ * Reminds the main conversation, on every logical step, which built-in style is active, as the reference does. The
+ * default style, and a style that a file defines, add nothing: the reference names only a style of its own table. The
+ * text holds the style's built-in name only, so nothing a repository wrote reaches the envelope.
+ */
+export const durable = (config: Config.Interface): Durable => ({
+  name: KIND,
+  scope: "primary",
+  run: (input) =>
+    Effect.gen(function* () {
+      const name = Config.latest(yield* config.entries(), "output_style")
+      const style = name === undefined ? undefined : builtIn(name)
+      if (style === undefined) return []
+      // A drain that restarts between collection and the request runs this again for the same step.
+      if (ReminderText.postedInRun(input.messages, KIND)) return []
+      return [{ kind: KIND, text: `Your replies follow the ${style.name} output style; keep to its guidelines.` }]
+    }),
+})
+
 /** Takes the place of `SessionSystemPrompt.INTRO` while a style applies. */
 export const STYLED_INTRO =
   "You are Orbit. You help the user in the way the output style at the end of this prompt describes, using the tools you are given."
@@ -77,8 +103,8 @@ export const Plugin = define({
     const trust = yield* ProjectTrust.Service
 
     const load = Effect.fn("OutputStylePlugin.load")(function* (name: string) {
-      const builtIn = BUILT_IN[name.toLowerCase()]
-      if (builtIn) return builtIn
+      const own = builtIn(name)
+      if (own) return own
       // A style is a file in an output-styles directory, so its name is one file name. The setting comes from any config,
       // a repository's included, and must not name a file outside the directory it is looked up in.
       if (/[/\\]/.test(name) || name.includes("..")) {

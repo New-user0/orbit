@@ -9,6 +9,8 @@ export default Runtime.handler(Print, (input) => {
   const output = Option.getOrUndefined(input.outputFormat) ?? "text"
   if (input.includePartialMessages && output !== "stream-json")
     return Effect.fail(new Error("--include-partial-messages requires --output-format stream-json"))
+  if (input.toolLabels && output !== "stream-json")
+    return Effect.fail(new Error("--tool-labels requires --output-format stream-json"))
   if (input.verbose && output !== "text") return Effect.fail(new Error("--verbose requires --output-format text"))
   if (Option.getOrUndefined(input.inputFormat) === "stream-json" && output !== "stream-json")
     return Effect.fail(new Error("--input-format stream-json requires --output-format stream-json"))

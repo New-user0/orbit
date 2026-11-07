@@ -508,3 +508,25 @@ describe.skipIf(process.platform !== "linux")("FileAccess.authorizeRead refuses 
       })
     })
 })
+
+describe("FileAccess.link", () => {
+  // A link to the folder that holds it leads above where its path would plainly be: one place nests in the other without
+  // being it, so that is a link on the way, inside the project. Only the same place names none.
+  it.live("names a link that leads to the folder that holds it, and none for a plain folder", () =>
+    Effect.gen(function* () {
+      const access = yield* FileAccess.Service
+      const location = yield* Location.Service
+      const docs = path.join(location.directory, "docs")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(docs)
+        await fs.symlink(docs, path.join(docs, "up"), "junction")
+      })
+      const real = yield* Effect.promise(() => fs.realpath(docs))
+      expect(access.link(yield* access.resolve({ path: "docs/up", kind: "directory" }))).toEqual({
+        place: AbsolutePath.make(real),
+        outside: false,
+      })
+      expect(access.link(yield* access.resolve({ path: "docs", kind: "directory" }))).toBeUndefined()
+    }).pipe(provide([])),
+  )
+})

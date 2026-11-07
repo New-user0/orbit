@@ -4,7 +4,7 @@ import { AbsolutePath } from "@orbit/schema/schema"
 import { Trust } from "@orbit/schema/trust"
 import { Context, Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { InvalidRequestError, ServiceUnavailableError } from "../errors.js"
+import { InvalidRequestError, ServiceUnavailableError, UntrustedFolderError } from "../errors.js"
 
 export const LocationQuery = Schema.Struct({
   location: Schema.optional(
@@ -90,10 +90,6 @@ export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, Lo
             description:
               "Whether a grant is stored on disk (true when omitted) or lasts only until the serving process restarts. A grant for the home directory or a filesystem root always lasts only until the restart. Ignored when trust is false.",
           }),
-          holder: Schema.optional(Schema.String).annotate({
-            description:
-              "A folder to trust instead of the location's project: the project's own root, or the `directory` of a file in `withheld` that sits in a folder above the project. Any other folder trusts nothing and leaves the status as it is. The answer is always the location's status. Ignored when trust is false.",
-          }),
         }),
         success: Trust.Status,
       })
@@ -104,7 +100,7 @@ export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, Lo
             identifier: "location.trust.update",
             summary: "Update workspace trust",
             description:
-              "Trust or stop trusting the requested location's project. Trust belongs to the project's root folder, so its linked worktrees share it. Granting or revoking reloads the configuration of every open location it concerns, which turns what was held back on or off, and publishes trust.updated.",
+              "Trust or stop trusting the requested location's project. Trust belongs to the project's root folder, so its linked worktrees share it. Granting or revoking reloads the configuration of every open location it concerns, which reads the project's configuration or stops reading it, and publishes trust.updated.",
           }),
         ),
     )
@@ -136,7 +132,7 @@ export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, Lo
           }),
         }),
         success: Schema.Struct({ data: Instruction.NoteAdded }),
-        error: [InvalidRequestError, ServiceUnavailableError],
+        error: [InvalidRequestError, ServiceUnavailableError, UntrustedFolderError],
       })
         .middleware(locationMiddleware)
         .annotateMerge(locationQueryOpenApi)
@@ -145,7 +141,47 @@ export const makeLocationGroup = <LocationId extends HttpApiMiddleware.AnyId, Lo
             identifier: "instruction.note.add",
             summary: "Add an instruction note",
             description:
-              "Append a note as a bullet to the instruction file the loader reads for the scope, creating ORBIT.md (user), AGENTS.md (project) or ORBIT.local.md (local) when there is none, then read the instruction files again so the note is listed at once. A new local file is kept out of git through the repository's own exclude file. A scope that is not loaded here, an instruction list that could not be read, a file that instructions_exclude drops and a file that leads outside an untrusted project are refused with kind disabled, unavailable, excluded or outside, and nothing is written. A file that cannot be written is a service-unavailable error for the instructions service.",
+              "Append a note as a bullet to the instruction file the loader reads for the scope, creating ORBIT.md (user), AGENTS.md (project) or ORBIT.local.md (local) when there is none, then read the instruction files again so the note is listed at once. A new local file is kept out of git through the repository's own exclude file. A scope that is not loaded here, an instruction list that could not be read, a file that instructions_exclude drops and a file that leads outside an untrusted project are refused with kind disabled, unavailable, excluded or outside, and nothing is written. A folder that is not trusted is refused with an untrusted-folder error, whatever the scope, and nothing is written. A file that cannot be written is a service-unavailable error for the instructions service.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("memory.list", "/api/location/memory", {
+        query: LocationQuery,
+        success: Schema.Struct({ data: Instruction.MemoryListing }),
+        error: UntrustedFolderError,
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.list",
+            summary: "List memory files and folders",
+            description:
+              "What /memory shows for the location: the instruction files it loaded at start-up in load order (each import with the file that imported it), then the user and project files a note would be added to when neither is among them, the warnings about the files, and, while memory is on, the memory folder, the team memory folder while team memory is on, and one folder for each agent with a memory scope. Folder paths are as spelled; ensure answers where each really is. The instruction files are read from disk again first, and nothing is created. A folder that is not trusted is refused with an untrusted-folder error.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("memory.ensure", "/api/location/memory", {
+        query: LocationQuery,
+        payload: Schema.Struct({
+          target: Instruction.MemoryTarget.annotate({
+            description:
+              "The row of the listing to make: a loaded file by its listed path, the user or project file, the memory or team memory folder, or an agent's folder by the agent's id.",
+          }),
+        }),
+        success: Schema.Struct({ data: Instruction.MemoryEnsured }),
+        error: [InvalidRequestError, ServiceUnavailableError, UntrustedFolderError],
+      })
+        .middleware(locationMiddleware)
+        .annotateMerge(locationQueryOpenApi)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "memory.ensure",
+            summary: "Make a memory file or folder",
+            description:
+              "Make the file or folder a row of the memory listing names when it is not there, and answer where it really is, which is the path a client opens. A file is created empty and an existing one is never changed; the user and project files are the ones a note would be added to. A folder is made at the real path its checks resolved and checked again afterwards. A target the listing does not hold is refused with kind unknown, a folder or file that is a link or no longer what was listed with kind refused, and a file that leads outside the project with kind outside; nothing is made for any of them. A file that cannot be created is a service-unavailable error for the memory service. A folder that is not trusted is refused with an untrusted-folder error, and nothing is made.",
           }),
         ),
     )

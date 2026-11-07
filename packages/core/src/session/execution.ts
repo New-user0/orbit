@@ -5,6 +5,7 @@ import { Bus } from "../bus.js"
 import { Database } from "../database/database.js"
 import { Job } from "../job.js"
 import { Instance } from "../instance/service.js"
+import { ProjectTrust } from "../project-trust.js"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { SessionEvent } from "./event.js"
 import { SessionRunCoordinator } from "./run-coordinator.js"
@@ -53,6 +54,23 @@ export function terminal(exit: Exit.Exit<void, SessionRunner.RunError>, reason?:
   return { type: "failed" as const, error: toSessionError(Cause.squash(exit.cause)) }
 }
 
+/**
+ * Whether work may start for a Session: its folder is trusted now. No work starts in a folder until a person trusts it
+ * (trust-first, class 12), and that covers the work no request asked for as well: startup recovery, wake-ups, scheduled
+ * prompts and subagents. A refusal is logged. Ask it inside the Session's Location (`Instance.provide`).
+ */
+export const permitted = Effect.fnUntraced(function* (session: SessionSchema.Info) {
+  const trust = yield* ProjectTrust.Service
+  const trusted = yield* trust.trusted()
+  if (!trusted)
+    yield* Effect.logWarning("session work not started", {
+      sessionID: session.id,
+      directory: session.location.directory,
+      reason: "its folder is not trusted",
+    })
+  return trusted
+})
+
 /** Process-local execution: drains run in this process using the selected instance. */
 export const layer = Layer.effect(
   Service,
@@ -92,9 +110,14 @@ export const layer = Layer.effect(
     ): Effect.fn.Return<void, SessionRunner.RunError> {
       const session = yield* store.get(sessionID)
       if (!session) return yield* Effect.die(new Error(`Session not found: ${sessionID}`))
-      const result = yield* SessionRunner.Service.use((runner) =>
-        runner.drain({ sessionID, force, continuation, promotable }),
-      ).pipe(
+      const result = yield* Effect.gen(function* () {
+        // A drain in a folder that is not trusted ends as an interruption the coordinator did not ask for, which it
+        // settles as a shutdown: the execution claim stays, so the Session resumes once the folder is trusted. The
+        // check runs in the Location the runner uses, so a wake-up waits for nothing more than it did.
+        if (!(yield* permitted(session))) return yield* Effect.interrupt
+        const runner = yield* SessionRunner.Service
+        return yield* runner.drain({ sessionID, force, continuation, promotable })
+      }).pipe(
         instances.provide(session),
         Effect.tapCause((cause) =>
           Cause.hasInterruptsOnly(cause)
@@ -104,6 +127,7 @@ export const layer = Layer.effect(
       )
       return yield* SessionRunner.DrainResult.$match(result, {
         Complete: () => Effect.void,
+        // A move lands in another folder, and the next drain checks that one before the work goes on there.
         Moved: (result) => drain(sessionID, false, result.continuation, promotable),
         Reloaded: (result) => drain(sessionID, result.force, result.continuation, promotable),
       })

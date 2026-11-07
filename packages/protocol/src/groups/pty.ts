@@ -3,7 +3,7 @@ import { PtyTicket } from "@orbit/schema/pty-ticket"
 import { Location } from "@orbit/schema/location"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { ForbiddenError, PtyNotFoundError } from "../errors.js"
+import { ForbiddenError, PtyNotFoundError, UntrustedFolderError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 export const PTY_CONNECT_TICKET_QUERY = "ticket"
@@ -38,6 +38,7 @@ export const PtyGroup = HttpApiGroup.make("server.pty")
       query: LocationQuery,
       payload: Pty.CreateInput,
       success: Location.response(Pty.Info),
+      error: UntrustedFolderError,
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(

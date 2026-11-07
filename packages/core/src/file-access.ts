@@ -10,6 +10,9 @@ import path from "path"
 import { DevicePath } from "./device-path.js"
 import { LinkShare } from "@orbit/util/link-share"
 import { Location } from "./location.js"
+import { SecretScan } from "@orbit/util/secret-scan"
+import { MemoryStore } from "./memory/store.js"
+import { MemoryTeam } from "./memory/team.js"
 import { Permission } from "./permission.js"
 import { Project } from "./project.js"
 import { ProjectTrust } from "./project-trust.js"
@@ -105,6 +108,13 @@ export interface Interface {
     context: Invocation,
     metadata?: Permission.AssertInput["metadata"],
   ) => Effect.Effect<void, Error | SessionErrors.NotFoundError>
+  /**
+   * The part of `authorizeRead` that asks nobody: a share or device spelling is refused before any disk is read, then the
+   * path is resolved, and a target that is a device, or elsewhere than Windows anything but a file or folder, is refused.
+   * A caller that reads without a tool call (the file-change reminder) resolves with this, so it reads what the read tool
+   * would read, and checks the rules on the target itself.
+   */
+  readonly locate: (file: string, kind?: Kind) => Effect.Effect<Target, FSUtil.Error | ToolFailure | DeviceError>
   /** Resolve a read target and obtain external-directory approval before read approval. */
   readonly authorizeRead: (
     file: string,
@@ -117,6 +127,26 @@ export interface Interface {
    * or asked: they are paths that a shell command names in its text, not paths a tool was given.
    */
   readonly escaped: (files: readonly string[]) => Effect.Effect<readonly Target[], FSUtil.Error | ToolFailure>
+  /**
+   * Whether a file that exists really is in a memory folder that is on: the project's own (`MemoryStore`), or the team
+   * folder while team memory is on (`MemoryTeam`).
+   */
+  readonly inMemory: (file: string) => Effect.Effect<boolean>
+  /**
+   * Fails when `text` looks like it holds a credential and any of `targets` is in the team memory folder, which is
+   * committed with the repository (context-memory-11). A target is in it when it is by name, or when where it really
+   * leads is in the folder's real path, so a link elsewhere in the project that leads in is held to it too (class 3).
+   * It follows the path alone, not the `memory.team` switch or trust, and is called before anything is asked or written.
+   * The failure names the kinds of credential found, never the text.
+   */
+  readonly refuseTeamSecrets: (targets: readonly Target[], text: string) => Effect.Effect<void, ToolFailure>
+  /**
+   * The link a target is reached through, if any: where it really leads, and whether that is outside the project's
+   * folders, both by real path (class 4). An approval names it from this value, so a client never resolves the path
+   * itself (class 8). A file below a project folder that is itself reached through a link of the system's, such as
+   * macOS's `/var`, is not reached through one of the repository's.
+   */
+  readonly link: (target: Target) => { readonly place: AbsolutePath; readonly outside: boolean } | undefined
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileAccess") {}
@@ -124,6 +154,17 @@ export class Service extends Context.Service<Service, Interface>()("@orbit/FileA
 /** Expand a leading ~ and normalize Windows shell paths before lexical resolution, as the clients that show a call do. */
 export const resolvePath = (directory: string, input: string, home = Global.Path.home) =>
   FSUtil.resolveFrom(directory, input, home)
+
+/**
+ * A folder or file that a request, a plugin or a config names, resolved once against the folder it is relative to, so
+ * that the folder a door checks and the folder it then acts in are one value (class 3). A name with a null byte, which
+ * no file system takes, gives undefined. Otherwise it is `resolvePath`'s answer (an empty name is `base`, `~` and `~/`
+ * are the home folder, the Git Bash, Cygwin and WSL drive forms are that drive, an absolute path is normalized and a
+ * relative one is read from `base`) in Unicode's composed form. `base` is a folder the door names, such as a session's
+ * or a Location's, never the server process's own.
+ */
+export const resolveNamed = (base: string, input: string, home = Global.Path.home) =>
+  input.includes("\0") ? undefined : AbsolutePath.make(resolvePath(base, input, home).normalize("NFC"))
 
 // A share or device path on Windows: `\\server\share`, `\\?\Volume{...}` or `\\.\...`. `resolvePath` already writes the
 // drive forms of a `\\?\` path as the drive.
@@ -153,6 +194,8 @@ export const leadsOf = (targets: readonly Target[]) => {
   )
   return entries.length === 0 ? {} : { leads: Object.fromEntries(entries) }
 }
+/** Where a target really is once its links, and the links of every folder above it, are followed. */
+export const realPlace = (target: Pick<Target, "place" | "leads">) => target.leads ?? target.place
 const slash = (value: string) => value.replaceAll("\\", "/")
 const invocation = (context: Invocation) => ({
   sessionID: context.sessionID,
@@ -164,6 +207,8 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
+    const memory = yield* MemoryStore.Service
+    const team = yield* MemoryTeam.Service
     const location = yield* Location.Service
     const permission = yield* Permission.Service
     const trust = yield* ProjectTrust.Service
@@ -417,18 +462,14 @@ const layer = Layer.effect(
         Effect.orElseSucceed(() => false),
       )
 
-    const authorizeRead = Effect.fn("FileAccess.authorizeRead")(function* (
-      file: string,
-      context: Invocation,
-      options?: ReadOptions,
-    ) {
+    const locate = Effect.fn("FileAccess.locate")(function* (file: string, kind?: Kind) {
       // Before any disk is read: resolving a path stats every part of it, and a stat of a device can block.
       // A share or device-namespace spelling (`\?\Volume{...}`) outside the project is refused as one first, with the
       // same code at every door, since the device list would otherwise answer for it with another message.
       const lexical = resolvePath(location.directory, file)
       if (isShare(lexical) && !folders.some((folder) => FSUtil.contains(folder, lexical))) return yield* shareFailure(file)
       if (DevicePath.blocked(lexical)) return yield* new DeviceError({ resource: file })
-      const target = yield* resolve({ path: file, kind: options?.kind ?? (options?.siblingOf ? "file" : undefined) })
+      const target = yield* resolve({ path: file, kind })
       // Before anything is asked or opened: a device is no place for a question. The listed names are the Windows rule;
       // elsewhere what the place really is decides, so a spelling the list lacks, a link to a device or a pipe is
       // refused too.
@@ -438,6 +479,15 @@ const layer = Layer.effect(
         (process.platform !== "win32" && (yield* isSpecial(target.place)))
       )
         return yield* new DeviceError({ resource: file })
+      return target
+    })
+
+    const authorizeRead = Effect.fn("FileAccess.authorizeRead")(function* (
+      file: string,
+      context: Invocation,
+      options?: ReadOptions,
+    ) {
+      const target = yield* locate(file, options?.kind ?? (options?.siblingOf ? "file" : undefined))
       const sibling =
         options?.siblingOf !== undefined && path.dirname(target.absolute) === path.dirname(options.siblingOf.absolute)
 
@@ -479,14 +529,61 @@ const layer = Layer.effect(
       return targets.flat()
     })
 
-    return Service.of({ resolve, externalRequest, authorizeExternal, authorizeRead, escaped })
+    const inMemory = Effect.fnUntraced(function* (file: string) {
+      if (!(yield* memory.enabled())) return false
+      if ((yield* memory.locate(file)) !== undefined) return true
+      return (yield* team.locate(file)) !== undefined
+    })
+
+    const refuseTeamSecrets = Effect.fn("FileAccess.refuseTeamSecrets")(function* (
+      targets: readonly Target[],
+      text: string,
+    ) {
+      const found = SecretScan.scan(text)
+      if (found.length === 0) return
+      const real = yield* team.guarded()
+      // By name, `absolute` decides: a target's `place` differs from it only when a link leads it out of the project, and
+      // then it is no name of the team folder, which is in the project.
+      const inTeam = targets.some(
+        (target) =>
+          FSUtil.contains(team.folder, target.absolute) ||
+          (real !== undefined &&
+            [target.place, target.leads].some((place) => place !== undefined && FSUtil.contains(real, place))),
+      )
+      if (!inTeam) return
+      return yield* new ToolFailure({
+        message: `Nothing was written: the content looks like it holds a secret (${found.map((match) => match.label).join(", ")}). Team memory is shared with everyone who works in this repository, so a secret must never go into it. Take the secret out of the content and try again.`,
+      })
+    })
+
+    const link = (target: Target) => {
+      const lead = realPlace(target)
+      const index = folders.findIndex((folder) => FSUtil.contains(folder, target.absolute))
+      // Where the target would be if no link of the repository were on its way: its path under the folder's real path.
+      const plainly =
+        index === -1 ? target.absolute : path.join(real[index]!, path.relative(folders[index]!, target.absolute))
+      if (FSUtil.contains(lead, plainly) && FSUtil.contains(plainly, lead)) return undefined
+      return { place: lead, outside: !real.some((folder) => FSUtil.contains(folder, lead)) }
+    }
+
+    return Service.of({
+      resolve,
+      externalRequest,
+      authorizeExternal,
+      locate,
+      authorizeRead,
+      escaped,
+      inMemory,
+      refuseTeamSecrets,
+      link,
+    })
   }),
 )
 
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [FSUtil.node, Location.node, Permission.node, ProjectTrust.node],
+  deps: [FSUtil.node, Location.node, Permission.node, ProjectTrust.node, MemoryStore.node, MemoryTeam.node],
 })
 
 // The name in `folder` that `part` stands for: `part` itself when the folder has an entry of that name or nothing is

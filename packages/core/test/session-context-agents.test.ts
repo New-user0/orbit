@@ -48,6 +48,7 @@ import { keys, live, planted } from "./fixture/git-keys"
 import { traced } from "./fixture/git-trace"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
+import { noMemory } from "./lib/memory"
 import { noScratchpad } from "./lib/scratchpad"
 import { insertSession } from "./lib/session-row"
 import { stubSnapshot } from "./lib/tool"
@@ -115,6 +116,7 @@ const harness = (vcs: (root: string) => Project.Vcs | undefined) =>
         McpInstructions.node.replace(Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(empty) })),
         PluginSupervisor.node.replace(Layer.empty),
         noScratchpad,
+        noMemory,
         Tool.node.replace(
           Layer.mock(Tool.Service, {
             snapshot: () =>

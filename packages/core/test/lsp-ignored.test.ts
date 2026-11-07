@@ -119,6 +119,28 @@ describe("Lsp.ignored", () => {
       }),
     )
 
+  // A folder in an ignored folder can be a link (a pnpm `node_modules` entry, a linked workspace package). Git will not
+  // answer for a path beyond a link everywhere, so the path is answered by the link itself: a result below the link in
+  // the ignored folder stays hidden, and one below a link in a folder that is not ignored still shows.
+  it.live("hides an ignored file below a linked folder, and shows one below a link that is not ignored", () =>
+    Effect.gen(function* () {
+      const { root, real } = yield* repository
+      const outside = path.join(root, "outside")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(outside, { recursive: true })
+        await Bun.write(path.join(outside, "index.fake"), "x")
+        await fs.symlink(outside, path.join(real, "ignored", "linked"), "junction")
+        await fs.symlink(outside, path.join(real, "src", "linked"), "junction")
+      })
+      const service = yield* lsp(real)
+      const below = path.join(real, "ignored", "linked", "index.fake")
+      const shown = path.join(real, "src", "linked", "index.fake")
+      expect([...(yield* service.ignored([below, shown, names(real, root).ignored]))].sort()).toEqual(
+        [below, names(real, root).ignored].sort(),
+      )
+    }),
+  )
+
   it.live("a failing git check shows every result", () =>
     Effect.gen(function* () {
       const { root, real } = yield* repository

@@ -270,9 +270,48 @@ const rows: {
     },
     show: [`out ${leftoverWritten}`, `mcp_y${written}`],
   },
+  // A completed Write is drawn from the diff it recorded (what ran), not from the model's `content`: a new file shows its
+  // whole text, a file that was there shows the diff.
   {
     sink: "write content",
-    messages: [user, tool("write", { input: { path: "a.ts", content: `const a = "${hostile}"` } })],
+    messages: [
+      user,
+      tool("write", {
+        input: { path: "a.ts", content: "const a = 1" },
+        metadata: {
+          files: [
+            {
+              file: "a.ts",
+              status: "added",
+              patch: `--- a.ts\n+++ a.ts\n@@ -0,0 +1,1 @@\n+const a = "${hostile}"\n`,
+              additions: 1,
+              deletions: 0,
+            },
+          ],
+        },
+      }),
+    ],
+    show: [written],
+  },
+  {
+    sink: "write diff",
+    messages: [
+      user,
+      tool("write", {
+        input: { path: "a.ts", content: "const a = 1" },
+        metadata: {
+          files: [
+            {
+              file: "a.ts",
+              status: "modified",
+              patch: `--- a.ts\n+++ a.ts\n@@ -1,1 +1,1 @@\n-const a = 0\n+const a = "${hostile}"\n`,
+              additions: 1,
+              deletions: 1,
+            },
+          ],
+        },
+      }),
+    ],
     show: [written],
   },
   {

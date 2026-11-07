@@ -1,0 +1,1 @@
+Last word: answer in plain text with an <analysis> block followed by a <handoff> block, and make no tool call. Any tool call is turned down and the handoff is lost.

@@ -67,7 +67,7 @@ const it = build(locationLayer)
 const inWorktree = build(worktreeLayer)
 // The minimal instance of `orb run --bare` and vanilla instances.
 const bare = build(locationLayer, [
-  InstructionBuiltIns.node.replace(InstructionBuiltIns.configured({ preferences: false })),
+  InstructionBuiltIns.node.replace(InstructionBuiltIns.configured({ minimal: true })),
 ])
 
 // A shell that resolves to a file the test made, so the shell the block names does not depend on the machine.
@@ -404,4 +404,38 @@ describe("InstructionBuiltIns.preferences", () => {
       expect(initial.text).not.toContain("Japanese")
     }),
   )
+})
+
+describe("InstructionBuiltIns.toolResults", () => {
+  it.effect("carries one core/tool-results source on the default instance", () =>
+    Effect.gen(function* () {
+      const context = yield* InstructionBuiltIns.Service
+      expect(context.toolResults(Effect.succeed(true)).map((source) => String(source.key))).toEqual(["core/tool-results"])
+    }),
+  )
+
+  bare.effect("leaves the tool-results section out on a minimal instance", () =>
+    Effect.gen(function* () {
+      const context = yield* InstructionBuiltIns.Service
+      expect(context.toolResults(Effect.succeed(true))).toEqual([])
+    }),
+  )
+})
+
+// `orb run --bare` sets ORBIT_DISABLE_INSTRUCTIONS before the server starts, and the default node reads it once at
+// load, so each row starts a fresh process; the row with "0" is the control on the same fixture.
+describe("the default InstructionBuiltIns.node", () => {
+  test.each([
+    ["1", "leaves the tool-results section out"],
+    ["0", "carries the tool-results section"],
+  ])("with ORBIT_DISABLE_INSTRUCTIONS=%s %s", async (value) => {
+    const child = Bun.spawn([process.execPath, "test", "./test/fixture/builtins-env.child.ts"], {
+      cwd: path.join(import.meta.dir, "..", ".."),
+      env: { ...process.env, ORBIT_DISABLE_INSTRUCTIONS: value },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [out, err, code] = await Promise.all([child.stdout.text(), child.stderr.text(), child.exited])
+    expect({ code, log: code === 0 ? "" : out + err }).toEqual({ code: 0, log: "" })
+  }, 60_000)
 })

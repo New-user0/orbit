@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import {
   AIError,
   CompactionPart,
@@ -83,6 +84,10 @@ import { InstructionDiscovery } from "@orbit/core/instruction-discovery"
 import { SkillInstructions } from "@orbit/core/skill/instructions"
 import { ReferenceInstructions } from "@orbit/core/reference/instructions"
 import { McpInstructions } from "@orbit/core/mcp/instructions"
+import { Mcp } from "@orbit/core/mcp/index"
+import { ToolOutput } from "@orbit/core/tool-output"
+import { FSUtil } from "@orbit/util/fs-util"
+import { emptyMcp } from "../fixture/mcp"
 import { SessionSystemPrompt } from "@orbit/core/session/system-prompt"
 import { ID, Model } from "@orbit/core/model"
 import { Location } from "@orbit/core/location"
@@ -106,6 +111,7 @@ import { Global } from "@orbit/util/global"
 import fs from "fs/promises"
 import path from "path"
 import { agentHost, modelHost, host, noProviders } from "../plugin/host"
+import { noMemory } from "./memory"
 import { CodeModeInstructions } from "@orbit/core/codemode/instructions"
 import { Token } from "@orbit/core/util/token"
 
@@ -174,6 +180,11 @@ const makeRunnerState = (compaction?: SessionRunnerModel.Resolved["compaction"])
     systemBaseline: "Initial context",
     systemRemoved: false,
     systemUnavailable: false,
+    // Sources added to the built-in ones of every selection, and what the discovery of MCP tools and server
+    // instructions reports. A test that reads them sets them before the step or the analysis.
+    extraSources: Instructions.empty as Instructions.List,
+    mcpTools: [] as Mcp.Tool[],
+    mcpServerInstructions: [] as Mcp.ServerInstructions[],
     systemLoadHook: Effect.void,
     skillBaselines: new Map<Agent.ID, string>(),
     authorizations: new Array<Tool.Context>(),
@@ -419,9 +430,10 @@ const makeLayer = (persist: boolean, production?: LspDiagnostics.Interface) =>
       const systemContextKey = Instructions.Key.make("test/context")
       const systemContext = Layer.mock(InstructionBuiltIns.Service, {
         preferences: () => Effect.succeed(Instructions.empty),
+        toolResults: InstructionBuiltIns.toolResultsSource,
         load: () =>
           Effect.sync(() =>
-            Instructions.make({
+            Instructions.combine([state.extraSources, Instructions.make({
               key: systemContextKey,
               codec: Schema.toCodecJson(Schema.String),
               read: state.systemLoadHook.pipe(
@@ -440,7 +452,7 @@ const makeLayer = (persist: boolean, production?: LspDiagnostics.Interface) =>
                 changed: (_previous, current) => current,
                 removed: () => "System context source removed: test/context",
               },
-            }),
+            })]),
           ),
       })
       const instructionContext = Layer.mock(InstructionDiscovery.Service, {
@@ -501,17 +513,30 @@ const makeLayer = (persist: boolean, production?: LspDiagnostics.Interface) =>
       })
       const replacements: LayerNode.Replacements = [
         Snapshot.node.replace(Snapshot.noopLayer),
+        // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+        SessionRehydration.node.replace(SessionRehydration.noopLayer),
         LayerNodePlatform.llmClient.replace(TestLLM.clientLayer.pipe(Layer.provide(testLLM))),
         SessionRunnerModel.node.replace(models),
         InstructionBuiltIns.node.replace(systemContext),
         InstructionDiscovery.node.replace(instructionContext),
         ...scratchpad,
+        noMemory,
         noVcsSnapshot,
         Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
         SkillInstructions.node.replace(skillInstructions),
         ReferenceInstructions.node.replace(referenceInstructions),
         Permission.node.replace(permission),
         Config.node.replace(config),
+        Mcp.node.replace(
+          Layer.succeed(
+            Mcp.Service,
+            Mcp.Service.of({
+              ...emptyMcp,
+              tools: () => Effect.sync(() => state.mcpTools),
+              instructions: () => Effect.sync(() => state.mcpServerInstructions),
+            }),
+          ),
+        ),
         PluginSupervisor.node.replace(Layer.empty),
         Plugin.node.replace(Layer.mock(Plugin.Service, { awaitActivation: Effect.void })),
         SessionModelTransport.node.replace(modelTransport),
@@ -582,6 +607,11 @@ const makeLayer = (persist: boolean, production?: LspDiagnostics.Interface) =>
           SessionCompaction.node,
           LayerNodePlatform.llmClient,
           SessionContext.node,
+          Mcp.node,
+          Plugin.node,
+          FSUtil.node,
+          ToolOutput.node,
+          SessionReminders.node,
           SessionScratchpad.node,
           SessionTitle.node,
           SessionRunnerLLM.node,
@@ -714,6 +744,7 @@ export {
   it,
   recoveryModel,
   undersizedContextModel,
+  unknownContextModel,
   layer,
   model,
   makeLayer,

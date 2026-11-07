@@ -30,6 +30,15 @@ export function approvalCard(item: {
   }
 }
 
+/**
+ * What an answered card says. "With your changes" comes from the server's answer, which names the files only when it
+ * approved the person's own version, and never from what the extension sent (class 8).
+ */
+export function answeredLabel(item: { readonly status: "pending" | "once" | "always" | "reject"; readonly revised?: boolean }) {
+  if (item.status === "once" && item.revised) return "Allowed with your changes"
+  return { pending: "Waiting", once: "Allowed", always: "Always allowed", reject: "Rejected" }[item.status]
+}
+
 function build(item: {
   readonly action: string
   readonly resources: ReadonlyArray<string>

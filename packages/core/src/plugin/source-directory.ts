@@ -47,7 +47,7 @@ export const discover = Effect.fn("PluginSourceDirectory.discover")(function* (
 /**
  * What the supervisor loads from `target`: unset when nothing would be loaded (no server entry, or an entry file that a
  * link leads out of the folder). `ConfigPluginSource.scan` activates by this. It hands the folder to the runtime's
- * resolver, which follows links, so it runs only for folders that are trusted; the fingerprints never call it.
+ * resolver, which follows links, so it runs only for folders that are trusted.
  */
 export const entrypoints = Effect.fn("PluginSourceDirectory.entrypoints")(function* (
   fs: FSUtil.Interface,

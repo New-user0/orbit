@@ -37,6 +37,7 @@ it.live("takes an editor field on a prompt, rejects a malformed one, and keeps i
         database: { path: ":memory:" },
         fs: { filewatcher: false },
         models: { fetch: false },
+        trust: { implicit: true },
       },
       {
         overrides: [

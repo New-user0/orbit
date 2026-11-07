@@ -1,7 +1,14 @@
 import { readdir, realpath, stat } from "node:fs/promises"
 import path from "node:path"
 import { localSource } from "@orbit/plugin/source"
-import { isMissingPath, localProjectDirectory, present, projectConfigDirectories } from "../util/config-directories"
+import {
+  isMissingPath,
+  localProjectDirectory,
+  present,
+  projectConfigDirectories,
+  realStart,
+  within,
+} from "../util/config-directories"
 
 export { localSource }
 
@@ -13,15 +20,18 @@ export type PluginDirectories = {
   readonly project: readonly string[]
   /** The project's root, which a plugin of the project must stay inside once every link in it is followed. */
   readonly root: string
+  /** The folder the terminal UI started in, by its real path, as the server takes it (class 4). */
+  readonly start: string
 }
 
 export async function localPluginDirectories(
   cwd: string,
   directories: { readonly config: string; readonly home: string },
 ): Promise<PluginDirectories> {
-  const projectDirectory = await localProjectDirectory(cwd)
+  const start = await realStart(cwd)
+  const projectDirectory = await localProjectDirectory(start)
   const projectConfig = path.join(projectDirectory, ".orbit")
-  const candidates = projectConfigDirectories(projectDirectory, cwd)
+  const candidates = projectConfigDirectories(projectDirectory, start)
   const exists = await Promise.all(
     candidates.map(async (directory) => {
       if (directory === projectConfig) return true
@@ -39,43 +49,38 @@ export async function localPluginDirectories(
     global: [path.join(directories.config, "plugins"), ...found.filter((item) => item.own).map((item) => item.plugins)],
     project: found.filter((item) => !item.own).map((item) => item.plugins),
     root: projectDirectory,
+    start,
   }
 }
 
 /**
  * The plugin directories to read now. A plugin runs in this process, so the ones a project keeps wait for its folder
- * to be trusted, as the server's do; the user's own never wait.
+ * to be trusted, as the server's do; the user's own never wait. Once it is trusted they load as they are, a plugin added
+ * after the grant included (D8).
  *
- * `above` is the folders around the project whose config the server still holds back, each waiting on its own decision.
- * The terminal UI finds the project's root without asking the server, so when the two disagree, a folder the server
- * counts as above its project can lie inside the terminal UI's walk, and its plugins wait like the server's.
- *
- * `changed` is the config directories whose plugins changed since their folder was trusted, which the server holds back
- * too: they wait until the changes are trusted, while the folder's other directories keep loading.
+ * `root` is the folder the server decided the trust for. The terminal UI finds the project's root without asking the
+ * server, and the server rejects some markers this walk accepts, so where `root` is the start folder or a folder above
+ * it, a plugins directory in a folder above `root` is left out: nothing above the project is read (D7), and the stricter
+ * of the two roots wins (class 3).
  */
 export function trustedPluginDirectories(
-  directories: Pick<PluginDirectories, "global" | "project">,
+  directories: Pick<PluginDirectories, "global" | "project" | "start">,
   trusted: boolean,
-  above: readonly string[],
-  changed: readonly string[] = [],
+  root?: string,
 ) {
   if (!trusted) return [...directories.global]
+  const bound = root !== undefined && within(root, directories.start) ? root : undefined
   return [
     ...directories.global,
-    // A plugins directory sits in `.orbit` in the folder that holds it. path.relative compares case-insensitively where
-    // Windows does.
-    ...directories.project.filter(
-      (plugins) =>
-        !above.some((folder) => path.relative(folder, path.dirname(path.dirname(plugins))) === "") &&
-        !changed.some((orbit) => path.relative(orbit, path.dirname(plugins)) === ""),
-    ),
+    // A plugins directory sits in `.orbit` in the folder that holds it.
+    ...directories.project.filter((plugins) => bound === undefined || within(bound, path.dirname(path.dirname(plugins)))),
   ]
 }
 
 /**
  * The plugins in these directories. With `within`, a plugin whose real path lies outside that folder is left out, and
- * so is every plugin of a directory that itself leads out: a link out of the project is not tracked by the server's
- * fingerprints, so what it points at could change after the folder was trusted without being asked about again.
+ * so is every plugin of a directory that itself leads out: what a link out of the project points at is not the
+ * project's to supply.
  */
 export async function discoverPluginTargets(directories: string[], within?: string) {
   const bound = within === undefined ? undefined : await realpath(within).catch(() => within)

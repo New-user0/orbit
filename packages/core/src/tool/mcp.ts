@@ -40,6 +40,9 @@ export function traits(tool: Mcp.Tool): Tool.Traits {
     destructive: !readOnly && annotations?.destructiveHint !== false,
     openWorld: annotations?.openWorldHint !== false,
     interruptBehavior: "block",
+    // Whatever the hints say. The ceiling (`tool_output.max_result_chars`, 50,000 unless the person raises it) still caps
+    // it, so a larger result is saved to a file.
+    maxResultChars: 100_000,
     ...(title === undefined ? {} : { displayName: plain(title) }),
   }
 }

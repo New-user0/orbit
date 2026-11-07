@@ -1,6 +1,7 @@
 export * as Snapshot from "./snapshot.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
+import { lstat } from "fs/promises"
 import path from "path"
 import { Context, Effect, Fiber, Layer, Schema, Scope } from "effect"
 import { FileDiff } from "@orbit/schema/file-diff"
@@ -64,8 +65,17 @@ export interface Interface extends State.Transformable<Editor> {
   /**
    * Restore selected project-relative paths from their associated trees. A path
    * absent from its selected tree is removed; paths outside the map are untouched.
+   * A path whose folder no longer leads where its name says, that has a file where
+   * one of its folders was, or that is now a link or a folder, is skipped and logged. A file that fails to go back is logged, the
+   * others still go back, and the restore then fails.
    */
   readonly restore: (input: RestoreInput) => Effect.Effect<void, Error>
+
+  /** The paths among `files` that `restore` would write or remove now, by the same per-path decision. */
+  readonly restorable: (files: readonly RelativePath[]) => Effect.Effect<readonly RelativePath[], Error>
+
+  /** The real work tree that the paths of `files`, `diff` and `restore` are relative to. */
+  readonly root: () => Effect.Effect<AbsolutePath, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/Snapshot") {}
@@ -185,13 +195,10 @@ const layer = Layer.effect(
     })
 
     const comparison = Effect.fnUntraced(function* (operation: "files" | "diff", input: CompareInput) {
+      const from = yield* treeID(operation, input.from)
+      const to = yield* treeID(operation, input.to)
       const repo = yield* repository(operation).pipe(Effect.mapError((cause) => failure(operation, cause)))
-      return {
-        source: repo.source,
-        repository: repo.snapshotRepository,
-        from: Git.TreeID.make(input.from),
-        to: Git.TreeID.make(input.to),
-      }
+      return { source: repo.source, repository: repo.snapshotRepository, from, to }
     })
 
     // Snapshots track every scoped file; the source repository's ignore rules decide what callers see.
@@ -235,13 +242,47 @@ const layer = Layer.effect(
       return diffs.filter((file) => !skipped.has(RelativePath.make(file.file)))
     })
 
+    // Each path is decided where it would be written, at the moment of the restore (class 4). It must name a place inside
+    // the work tree, and the folder that holds it must really be the folder its name says: a folder that became a link
+    // after the checkpoint (a junction, a dangling link, or a link to a share, which `leads` names without opening it)
+    // would carry the write or the deletion out of the project. The path itself must be neither a link nor a folder: git
+    // writes a file there by removing what stands in its way, and on Windows it takes a junction for a folder and removes
+    // the files it leads to; a folder would go with everything in it.
+    const placed = Effect.fnUntraced(function* (worktree: AbsolutePath, file: RelativePath) {
+      const absolute = path.join(worktree, file)
+      // The work tree itself is a folder, so the check of the path's own kind below refuses it.
+      if (!FSUtil.contains(worktree, absolute)) return false
+      const parent = path.dirname(absolute)
+      // A folder's real place cannot lie below its own name, so "inside" here means "the same folder", with case
+      // compared as the system compares it.
+      if (!FSUtil.contains(parent, yield* trust.leads(parent))) return false
+      // Every folder on the way that exists must still be a folder: git makes a missing folder by removing a file that
+      // stands at its name, and that file is the person's own.
+      const folders = path
+        .relative(worktree, parent)
+        .split(path.sep)
+        .filter(Boolean)
+        .map((_, index, parts) => path.join(worktree, ...parts.slice(0, index + 1)))
+      const found = yield* Effect.promise(() =>
+        Promise.all([...folders, absolute].map((item) => lstat(item).catch(() => undefined))),
+      )
+      if (found.slice(0, -1).some((info) => info && !info.isDirectory())) return false
+      const leaf = found.at(-1)
+      return !leaf?.isSymbolicLink() && !leaf?.isDirectory()
+    })
+
+    // A path that may not be written is skipped with one log line, and the others still go back (class 7).
     const plan = Effect.fnUntraced(function* (worktree: AbsolutePath, input: RestoreInput) {
       const files = new Map<RelativePath, Git.TreeID>()
       for (const [file, snapshot] of input.files) {
-        const absolute = path.resolve(worktree, file)
-        if (!FSUtil.contains(worktree, absolute))
-          return yield* new Error({ operation: "restore", message: `Path escapes the project: ${file}` })
-        files.set(file, Git.TreeID.make(snapshot))
+        const tree = yield* treeID("restore", snapshot)
+        if (!(yield* placed(worktree, file))) {
+          yield* Effect.logWarning("restore skipped a path that is not a plain file in its own folder of the project", {
+            file,
+          })
+          continue
+        }
+        files.set(file, tree)
       }
       return files
     })
@@ -249,12 +290,32 @@ const layer = Layer.effect(
     const restore = Effect.fn("Snapshot.restore")(function* (input: RestoreInput) {
       if (!enabled()) return yield* new Error({ operation: "restore", message: "Snapshots are disabled" })
       const repo = yield* repository("restore").pipe(Effect.mapError((cause) => failure("restore", cause)))
+      const files = yield* plan(repo.worktree, input)
+      if (files.size === 0) return
       yield* git.tree
-        .restore({ repository: repo.snapshotRepository, files: yield* plan(repo.worktree, input) })
+        .restore({ repository: repo.snapshotRepository, files })
         .pipe(Effect.mapError((cause) => failure("restore", cause)))
     })
 
-    return Service.of({ transform: state.transform, reload: state.reload, capture, files, diff, restore })
+    const restorable = Effect.fn("Snapshot.restorable")(function* (files: readonly RelativePath[]) {
+      const repo = yield* repository("restore").pipe(Effect.mapError((cause) => failure("restore", cause)))
+      return yield* Effect.filter(files, (file) => placed(repo.worktree, file))
+    })
+
+    const root = Effect.fn("Snapshot.root")(function* () {
+      return (yield* repository("files").pipe(Effect.mapError((cause) => failure("files", cause)))).worktree
+    })
+
+    return Service.of({
+      transform: state.transform,
+      reload: state.reload,
+      capture,
+      files,
+      diff,
+      restore,
+      restorable,
+      root,
+    })
   }).pipe(Effect.withSpan("Snapshot.boot")),
 )
 
@@ -273,8 +334,25 @@ export const noopLayer = Layer.succeed(
     files: () => Effect.succeed([]),
     diff: () => Effect.succeed([]),
     restore: () => Effect.void,
+    restorable: () => Effect.succeed([]),
+    root: () => Effect.fail(new Error({ operation: "files", message: "Snapshots are disabled" })),
   }),
 )
+
+/**
+ * Whether a stored checkpoint ID is the ID of a git tree: 40 lowercase hex digits, or 64 in a SHA-256 repository. A
+ * checkpoint ID comes from a session's stored steps, and an imported session's steps say whatever its file says (class
+ * 5). Git reads an argument that starts with `-` as an option, and `--output=<file>` makes `git diff` write that file, so
+ * every operation here refuses anything else before git starts, and an import drops it.
+ */
+export function isTree(value: string) {
+  return /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value)
+}
+
+function treeID(operation: Error["operation"], value: ID) {
+  if (isTree(value)) return Effect.succeed(Git.TreeID.make(value))
+  return Effect.fail(new Error({ operation, message: "The checkpoint is not a snapshot tree" }))
+}
 
 function failure(operation: Error["operation"], cause: unknown) {
   if (cause instanceof Error && cause.operation === operation) return cause

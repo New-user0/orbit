@@ -406,7 +406,7 @@
             }
           }
         },
-        "description": "Trust or stop trusting the requested location's project. Trust belongs to the project's root folder, so its linked worktrees share it. Granting or revoking reloads the configuration of every open location it concerns, which turns what was held back on or off, and publishes trust.updated.",
+        "description": "Trust or stop trusting the requested location's project. Trust belongs to the project's root folder, so its linked worktrees share it. Granting or revoking reloads the configuration of every open location it concerns, which reads the project's configuration or stops reading it, and publishes trust.updated.",
         "summary": "Update workspace trust",
         "requestBody": {
           "content": {
@@ -428,17 +428,6 @@
                       }
                     ],
                     "description": "Whether a grant is stored on disk (true when omitted) or lasts only until the serving process restarts. A grant for the home directory or a filesystem root always lasts only until the restart. Ignored when trust is false."
-                  },
-                  "holder": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "description": "A folder to trust instead of the location's project: the project's own root, or the `directory` of a file in `withheld` that sits in a folder above the project. Any other folder trusts nothing and leaves the status as it is. The answer is always the location's status. Ignored when trust is false."
                   }
                 },
                 "required": ["trust"],
@@ -613,6 +602,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "503": {
             "description": "ServiceUnavailableError",
             "content": {
@@ -624,7 +623,7 @@
             }
           }
         },
-        "description": "Append a note as a bullet to the instruction file the loader reads for the scope, creating ORBIT.md (user), AGENTS.md (project) or ORBIT.local.md (local) when there is none, then read the instruction files again so the note is listed at once. A new local file is kept out of git through the repository's own exclude file. A scope that is not loaded here, an instruction list that could not be read, a file that instructions_exclude drops and a file that leads outside an untrusted project are refused with kind disabled, unavailable, excluded or outside, and nothing is written. A file that cannot be written is a service-unavailable error for the instructions service.",
+        "description": "Append a note as a bullet to the instruction file the loader reads for the scope, creating ORBIT.md (user), AGENTS.md (project) or ORBIT.local.md (local) when there is none, then read the instruction files again so the note is listed at once. A new local file is kept out of git through the repository's own exclude file. A scope that is not loaded here, an instruction list that could not be read, a file that instructions_exclude drops and a file that leads outside an untrusted project are refused with kind disabled, unavailable, excluded or outside, and nothing is written. A folder that is not trusted is refused with an untrusted-folder error, whatever the scope, and nothing is written. A file that cannot be written is a service-unavailable error for the instructions service.",
         "summary": "Add an instruction note",
         "requestBody": {
           "content": {
@@ -641,6 +640,218 @@
                   }
                 },
                 "required": ["scope", "text"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/api/location/memory": {
+      "get": {
+        "tags": ["location"],
+        "operationId": "memory.list",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Instruction.MemoryListingEncoded"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "What /memory shows for the location: the instruction files it loaded at start-up in load order (each import with the file that imported it), then the user and project files a note would be added to when neither is among them, the warnings about the files, and, while memory is on, the memory folder, the team memory folder while team memory is on, and one folder for each agent with a memory scope. Folder paths are as spelled; ensure answers where each really is. The instruction files are read from disk again first, and nothing is created. A folder that is not trusted is refused with an untrusted-folder error.",
+        "summary": "List memory files and folders"
+      },
+      "post": {
+        "tags": ["location"],
+        "operationId": "memory.ensure",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "directory": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "required": false,
+            "style": "deepObject",
+            "explode": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Instruction.MemoryEnsuredEncoded"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Make the file or folder a row of the memory listing names when it is not there, and answer where it really is, which is the path a client opens. A file is created empty and an existing one is never changed; the user and project files are the ones a note would be added to. A folder is made at the real path its checks resolved and checked again afterwards. A target the listing does not hold is refused with kind unknown, a folder or file that is a link or no longer what was listed with kind refused, and a file that leads outside the project with kind outside; nothing is made for any of them. A file that cannot be created is a service-unavailable error for the memory service. A folder that is not trusted is refused with an untrusted-folder error, and nothing is made.",
+        "summary": "Make a memory file or folder",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "$ref": "#/components/schemas/Instruction.MemoryTarget_1"
+                  }
+                },
+                "required": ["target"],
                 "additionalProperties": false
               }
             }
@@ -1489,6 +1700,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -1772,6 +1993,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -2143,6 +2374,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -2265,6 +2506,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -2523,6 +2774,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -2534,7 +2795,7 @@
             }
           }
         },
-        "description": "Move a session to another project directory at the requested delivery boundary.",
+        "description": "Move a session to another project directory at the requested delivery boundary. A relative directory, or one that starts with ~, is read from the session's own folder, and the folder must be trusted.",
         "summary": "Move session",
         "requestBody": {
           "content": {
@@ -2622,6 +2883,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -2773,6 +3044,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError | CommandNotFoundError",
             "content": {
@@ -2899,6 +3180,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError | SkillNotFoundError",
             "content": {
@@ -3001,6 +3292,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -3138,6 +3439,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -3242,6 +3553,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -3270,7 +3591,7 @@
             }
           }
         },
-        "description": "Durably admit a session compaction request. Steers by default: it runs at the next step boundary instead of waiting behind queued prompts.",
+        "description": "Durably admit a session compaction request. Steers by default: it runs at the next step boundary instead of waiting behind queued prompts. Optional instructions are added to the summary prompt; a request with instructions replaces a pending compaction, and one without joins it.",
         "summary": "Compact session",
         "requestBody": {
           "content": {
@@ -3296,6 +3617,21 @@
                       },
                       {
                         "type": "null"
+                      }
+                    ]
+                  },
+                  "instructions": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "allOf": [
+                      {
+                        "description": "Text added to this compaction's summary prompt. Blank counts as none. A request with instructions replaces a pending compaction; one without joins it."
                       }
                     ]
                   }
@@ -3496,6 +3832,142 @@
                         "type": "null"
                       }
                     ]
+                  }
+                },
+                "required": ["messageID"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/api/session/{sessionID}/revert/files": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.revert.files",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Session.RewindFiles"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "MessageNotFoundError | SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MessageNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "SessionBusyError | RewindFilesError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionBusyErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RewindFilesErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Put the files that the session's own file tools (Edit, Write, Patch, NotebookEdit) changed back as they were when a prompt's work began, leaving shell edits, other edits and the conversation as they are. Takes effect at once and cannot be undone. A dry run lists the files that would change with their line totals, and answers a rewind that cannot happen with `canRewind: false`; a real run refuses one with RewindFilesError.",
+        "summary": "Rewind session files",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messageID": {
+                    "type": "string",
+                    "pattern": "^msg_",
+                    "description": "The prompt whose checkpoint the files go back to."
+                  },
+                  "dryRun": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Report what a rewind would change without changing it."
                   }
                 },
                 "required": ["messageID"],
@@ -3737,8 +4209,186 @@
             }
           }
         },
-        "description": "Retrieve the active context messages for a session (all messages after the last compaction).",
+        "description": "Retrieve the active context messages for a session: the latest checkpoint, the messages it keeps and everything after it, in the order they were recorded.",
         "summary": "Get session context"
+      }
+    },
+    "/api/session/{sessionID}/context/usage": {
+      "get": {
+        "tags": ["session"],
+        "operationId": "session.contextUsage",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SessionContextUsage.Info"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError | AgentNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/AgentNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "MainSessionOnlyError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MainSessionOnlyErrorEncoded"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "ServiceUnavailableError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceUnavailableErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Estimate what the session's next request would carry, by category: the system prompt, tools, MCP tools, custom agents, instruction files, skills and messages, with the reserve and free space of the model's window. The total is the newest response's measured prompt when there is one. Only a main session is answered (a child gets MainSessionOnlyError), and only in a trusted folder. It is read only: nothing is recorded and no model is asked.",
+        "summary": "Get context usage"
+      }
+    },
+    "/api/session/{sessionID}/cost": {
+      "get": {
+        "tags": ["session"],
+        "operationId": "session.cost",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/SessionCost.Info"
+                    }
+                  },
+                  "required": ["data"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                }
+              }
+            }
+          }
+        },
+        "description": "Summarize what the session and its subagents have cost, by provider and model, over the whole history and not only the part a client has loaded: the cost, the tokens, the time the providers spent answering, the lines the edit tools changed (unset for a session from before they were counted), and the spend no row explains. It reads stored rows only: it opens no folder and sends nothing to a model.",
+        "summary": "Get session cost"
       }
     },
     "/api/session/{sessionID}/diff": {
@@ -3802,6 +4452,23 @@
                 }
               ],
               "description": "Unchanged lines around each hunk. Omit for full-file patches."
+            },
+            "required": false
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": ["turn", "prompt"]
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`turn` (the default) diffs whole turns. `prompt` diffs from `from` to the next user message and keeps only what the session's file tools changed, a steered prompt's own edits included; it takes no `to`."
             },
             "required": false
           }
@@ -4166,6 +4833,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -4487,6 +5164,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "SessionNotFoundError",
             "content": {
@@ -4534,6 +5221,276 @@
           },
           "required": true
         }
+      }
+    },
+    "/api/session/{sessionID}/recap": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.recap",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "SessionRecapResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRecapResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Ask the small model for a short recap of the session for a person returning to it, at most once per turn of their input. Answers recorded: false when no recap was due, another request is writing one, no small model is available, or the call failed.",
+        "summary": "Record an away summary"
+      }
+    },
+    "/api/session/{sessionID}/assist/label": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.assist.label",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "SessionAssistLabelResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionAssistLabelResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Ask the side model for a short label of a finished batch of the session's tool calls. Nothing is stored or sent to the session. The label is model text, so escape it before printing it. The session's folder must be trusted.",
+        "summary": "Label a batch of tool calls",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "messageID": {
+                    "type": "string",
+                    "pattern": "^msg_",
+                    "description": "The assistant message that made the calls."
+                  },
+                  "toolCallIDs": {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 64,
+                    "description": "The tool calls of the finished batch, at most 64."
+                  }
+                },
+                "required": ["messageID", "toolCallIDs"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/api/session/{sessionID}/assist/suggestion": {
+      "post": {
+        "tags": ["session"],
+        "operationId": "session.assist.suggestion",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "SessionAssistSuggestionResponse",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionAssistSuggestionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UnauthorizedError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "SessionNotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SessionNotFoundErrorEncoded"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Ask the session's model, with the session's history, what the person might type next. Nothing is stored or sent to the session; a newer request or a prompt admitted meanwhile cancels it. The suggestion is model text, so escape it before printing it. The session's folder must be trusted.",
+        "summary": "Suggest the next prompt"
       }
     },
     "/api/experimental/session/{sessionID}/log": {
@@ -7554,17 +8511,24 @@
             }
           },
           "403": {
-            "description": "ForbiddenError",
+            "description": "ForbiddenError | UntrustedFolderError",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ForbiddenErrorEncoded"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ForbiddenErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                    }
+                  ]
                 }
               }
             }
           }
         },
-        "description": "Add an MCP server at runtime or replace an existing one, connecting it immediately.",
+        "description": "Add an MCP server at runtime or replace an existing one, connecting it immediately. A local server's working folder is read from the location's folder and must be trusted.",
         "summary": "Add MCP server",
         "requestBody": {
           "content": {
@@ -7739,6 +8703,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -8941,7 +9915,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestErrorEncoded"
+                    }
+                  ]
                 }
               }
             }
@@ -8997,6 +9978,17 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "content": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "The person's own version of the whole file, for a request marked revisable, given only with a once reply. The server writes it where the request resolved."
                   }
                 },
                 "required": ["decision"],
@@ -9398,9 +10390,19 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
           }
         },
-        "description": "Write the raw request body to an absolute path or a path relative to the requested location, creating parent directories, and return the resolved absolute path. Unlike read, the target is not confined to the location. Experimental: may change without compatibility guarantees.",
+        "description": "Write the raw request body to an absolute path or a path relative to the requested location, creating parent directories, and return the resolved absolute path. Unlike read, the target is not confined to the location, but the folder it really lands in, once every link in the path is followed, must be trusted as the location must, unless it is Orbit's temporary folder. Experimental: may change without compatibility guarantees.",
         "summary": "Write file",
         "requestBody": {
           "content": {
@@ -9984,6 +10986,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -10787,6 +11799,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -11609,9 +12631,19 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
           }
         },
-        "description": "Spawn one non-interactive shell command for a location. Combined stdout/stderr is captured to a file pageable via output.",
+        "description": "Spawn one non-interactive shell command for a location, in `cwd` (taken from the location's folder when relative) or else the location's folder. The location and the folder the command runs in must both be trusted. Combined stdout/stderr is captured to a file pageable via output.",
         "summary": "Run shell command",
         "requestBody": {
           "content": {
@@ -12246,6 +13278,16 @@
               }
             }
           },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
+                }
+              }
+            }
+          },
           "404": {
             "description": "ProjectNotFoundError",
             "content": {
@@ -12302,6 +13344,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -12364,6 +13416,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UnauthorizedErrorEncoded"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "UntrustedFolderError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UntrustedFolderErrorEncoded"
                 }
               }
             }
@@ -14011,7 +15073,7 @@
       "Agent.Memory": {
         "type": "string",
         "enum": ["user", "project", "local"],
-        "description": "Which memory scope the agent keeps its notes in"
+        "description": "Which memory scope the agent keeps its notes in: user in <data>/memory/agents/<id>, project in .orbit/agent-memory/<id> (committed with the repository) or local in .orbit/agent-memory-local/<id> (not committed)"
       },
       "Agent.ModelTier": {
         "type": "string",
@@ -14966,6 +16028,10 @@
             "type": "string",
             "enum": ["disable", "notify", "auto"]
           },
+          "cleanup_period_days": {
+            "type": "integer",
+            "minimum": 0
+          },
           "share": {
             "type": "string",
             "enum": ["manual", "auto", "disabled"]
@@ -15295,6 +16361,9 @@
             },
             "additionalProperties": false
           },
+          "background_tasks": {
+            "type": "boolean"
+          },
           "tool_output": {
             "type": "object",
             "properties": {
@@ -15303,6 +16372,14 @@
                 "exclusiveMinimum": 0
               },
               "max_bytes": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "max_result_chars": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "max_message_chars": {
                 "type": "integer",
                 "exclusiveMinimum": 0
               }
@@ -15362,6 +16439,10 @@
               "auto": {
                 "type": "boolean"
               },
+              "clear": {
+                "type": "boolean",
+                "description": "Whether old tool results are left out of the model's context after an hour idle or when automatic compaction is due, keeping the newest five. The transcript keeps them. Default true."
+              },
               "keep": {
                 "type": "object",
                 "properties": {
@@ -15375,6 +16456,21 @@
               "buffer": {
                 "type": "integer",
                 "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          },
+          "memory": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "directory": {
+                "type": "string"
+              },
+              "team": {
+                "type": "boolean"
               }
             },
             "additionalProperties": false
@@ -15846,6 +16942,22 @@
                 "type": "null"
               }
             ]
+          },
+          "memory": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false
@@ -16992,6 +18104,246 @@
         "required": ["data"],
         "additionalProperties": false
       },
+      "Instruction.MemoryEnsuredEncoded": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["file", "folder"]
+          }
+        },
+        "required": ["path", "created", "type"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryFileEncoded": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["managed", "user", "project", "local"]
+          },
+          "chars": {
+            "type": "integer"
+          },
+          "importedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["user", "project"]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget"
+          }
+        },
+        "required": ["path", "kind", "chars", "exists", "target"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryFolderEncoded": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["memory", "team", "agent"]
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["user", "project", "local"]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "type": "string"
+          },
+          "exists": {
+            "type": "boolean"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget"
+          }
+        },
+        "required": ["type", "path", "exists", "target"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryListingEncoded": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Instruction.MemoryFileEncoded"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Instruction.StatusWarningEncoded"
+            }
+          },
+          "folders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Instruction.MemoryFolderEncoded"
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "git": {
+            "type": "boolean"
+          },
+          "available": {
+            "type": "boolean"
+          }
+        },
+        "required": ["files", "warnings", "folders", "enabled", "git", "available"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryTarget": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.File"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Scope"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Memory"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Team"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Agent"
+          }
+        ]
+      },
+      "Instruction.MemoryTarget.Agent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["agent"]
+          },
+          "agent": {
+            "type": "string"
+          }
+        },
+        "required": ["type", "agent"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryTarget.File": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["file"]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": ["type", "path"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryTarget.Memory": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["memory"]
+          }
+        },
+        "required": ["type"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryTarget.Scope": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["scope"]
+          },
+          "scope": {
+            "type": "string",
+            "enum": ["user", "project", "local"]
+          }
+        },
+        "required": ["type", "scope"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryTarget.Team": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["team"]
+          }
+        },
+        "required": ["type"],
+        "additionalProperties": false
+      },
+      "Instruction.MemoryTarget_1": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.File"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Scope"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Memory"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Team"
+          },
+          {
+            "$ref": "#/components/schemas/Instruction.MemoryTarget.Agent"
+          }
+        ],
+        "description": "The row of the listing to make: a loaded file by its listed path, the user or project file, the memory or team memory folder, or an agent's folder by the agent's id."
+      },
       "Instruction.NoteAddedEncoded": {
         "type": "object",
         "properties": {
@@ -17105,7 +18457,7 @@
           },
           "type": {
             "type": "string",
-            "enum": ["size", "import-untrusted", "import-external"]
+            "enum": ["size", "import-untrusted", "import-external", "outside"]
           },
           "message": {
             "type": "string"
@@ -17879,6 +19231,26 @@
         "required": ["directory"],
         "additionalProperties": false
       },
+      "MainSessionOnlyErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["MainSessionOnlyError"]
+          },
+          "sessionID": {
+            "type": "string"
+          },
+          "parentID": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "sessionID", "parentID", "message"],
+        "additionalProperties": false
+      },
       "Mcp.LocalConfigEncoded": {
         "type": "object",
         "properties": {
@@ -18558,6 +19930,9 @@
           },
           "message": {
             "type": "string"
+          },
+          "revisable": {
+            "type": "boolean"
           }
         },
         "required": ["id", "sessionID", "action", "resources"],
@@ -19626,6 +21001,30 @@
           }
         ]
       },
+      "RewindFilesErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["RewindFilesError"]
+          },
+          "sessionID": {
+            "type": "string"
+          },
+          "messageID": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": ["disabled", "no-checkpoint", "failed"]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "sessionID", "messageID", "reason", "message"],
+        "additionalProperties": false
+      },
       "Rpc.Input": {
         "type": "object",
         "properties": {
@@ -19745,6 +21144,96 @@
         "required": ["_tag", "message"],
         "additionalProperties": false
       },
+      "Session.Assist.Label": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": ["label"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "null"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/Session.Assist.LabelSkip"
+              }
+            },
+            "required": ["label", "reason"],
+            "additionalProperties": false
+          }
+        ],
+        "description": "A short label for a finished batch of tool calls, or null with the reason there is none. The label is model text: escape it before printing it."
+      },
+      "Session.Assist.LabelSkip": {
+        "type": "string",
+        "enum": ["subagent", "not_found", "unsettled", "aborted", "empty", "unavailable"],
+        "description": "Why there is no label: the session is a subagent's, the calls are not in the message, a call has not finished, the calls were interrupted, the model answered nothing, or the model could not be asked."
+      },
+      "Session.Assist.Suggestion": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "suggestion": {
+                "type": "string"
+              }
+            },
+            "required": ["suggestion"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "suggestion": {
+                "type": "null"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/Session.Assist.SuggestionSkip"
+              }
+            },
+            "required": ["suggestion", "reason"],
+            "additionalProperties": false
+          }
+        ],
+        "description": "What the person might type next, or null with the reason there is none. The suggestion is model text: escape it before printing it."
+      },
+      "Session.Assist.SuggestionSkip": {
+        "type": "string",
+        "enum": [
+          "subagent",
+          "early_conversation",
+          "last_response_error",
+          "cache_cold",
+          "pending_permission",
+          "elicitation_active",
+          "plan_mode",
+          "busy",
+          "aborted",
+          "unavailable",
+          "empty",
+          "done",
+          "meta_text",
+          "meta_wrapped",
+          "error_message",
+          "prefixed_label",
+          "too_few_words",
+          "too_many_words",
+          "too_long",
+          "multiple_sentences",
+          "has_formatting",
+          "evaluative",
+          "assistant_voice"
+        ],
+        "description": "Why there is no suggestion: a state of the session that rules one out, a request cancelled by a newer one or by a prompt, a model that could not be asked, or a filter that dropped the text the model wrote."
+      },
       "Session.ForkBoundary": {
         "anyOf": [
           {
@@ -19815,14 +21304,14 @@
         "additionalProperties": false
       },
       "Session.Inbox.CompactionPayload": {
-        "anyOf": [
-          {
-            "type": "object"
-          },
-          {
-            "type": "array"
+        "type": "object",
+        "properties": {
+          "instructions": {
+            "type": "string",
+            "description": "Text from the person, added to this compaction's summary prompt."
           }
-        ]
+        },
+        "additionalProperties": false
       },
       "Session.Inbox.Delivery": {
         "type": "string",
@@ -20325,6 +21814,7 @@
           "providerResultState": {
             "$ref": "#/components/schemas/Session.Message.ProviderState_3"
           },
+          "override": {},
           "state": {
             "anyOf": [
               {
@@ -20417,6 +21907,11 @@
           },
           "recent": {
             "type": "string"
+          },
+          "retain": {
+            "type": "string",
+            "pattern": "^msg_",
+            "description": "The first message this checkpoint keeps verbatim after its summary. Unset when it keeps none."
           },
           "providerContext": {
             "$ref": "#/components/schemas/Session.ProviderContext"
@@ -20518,6 +22013,64 @@
         "required": ["type", "id", "time", "status", "reason", "summary", "recent"],
         "additionalProperties": false
       },
+      "Session.Message.ContextCleared": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^msg_"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "type": "number"
+              }
+            },
+            "required": ["created"],
+            "additionalProperties": false
+          },
+          "type": {
+            "type": "string",
+            "enum": ["context-cleared"]
+          },
+          "trigger": {
+            "type": "string",
+            "enum": ["idle", "pressure"]
+          },
+          "tools": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/Session.Message.ContextCleared.Tool"
+              }
+            ],
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/Session.Message.ContextCleared.Tool"
+            }
+          }
+        },
+        "required": ["id", "time", "type", "trigger", "tools"],
+        "additionalProperties": false
+      },
+      "Session.Message.ContextCleared.Tool": {
+        "type": "object",
+        "properties": {
+          "assistantMessageID": {
+            "type": "string",
+            "pattern": "^msg_"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["assistantMessageID", "id"],
+        "additionalProperties": false
+      },
       "Session.Message.Idle": {
         "type": "object",
         "properties": {
@@ -20584,6 +22137,12 @@
           },
           {
             "$ref": "#/components/schemas/Session.Message.Idle"
+          },
+          {
+            "$ref": "#/components/schemas/Session.Message.Recap"
+          },
+          {
+            "$ref": "#/components/schemas/Session.Message.ContextCleared"
           }
         ]
       },
@@ -20698,6 +22257,37 @@
       },
       "Session.Message.ProviderState_5": {
         "type": "object"
+      },
+      "Session.Message.Recap": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^msg_"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "time": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "type": "number"
+              }
+            },
+            "required": ["created"],
+            "additionalProperties": false
+          },
+          "type": {
+            "type": "string",
+            "enum": ["recap"]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "time", "type", "text"],
+        "additionalProperties": false
       },
       "Session.Message.Shell": {
         "type": "object",
@@ -21097,6 +22687,33 @@
         "required": ["messageID"],
         "additionalProperties": false
       },
+      "Session.RewindFiles": {
+        "type": "object",
+        "properties": {
+          "canRewind": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          },
+          "filesChanged": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "insertions": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deletions": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["canRewind"],
+        "additionalProperties": false
+      },
       "Session.StructuredError": {
         "type": "object",
         "properties": {
@@ -21178,6 +22795,26 @@
         "required": ["type"],
         "additionalProperties": false
       },
+      "SessionAssistLabelResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Session.Assist.Label"
+          }
+        },
+        "required": ["data"],
+        "additionalProperties": false
+      },
+      "SessionAssistSuggestionResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Session.Assist.Suggestion"
+          }
+        },
+        "required": ["data"],
+        "additionalProperties": false
+      },
       "SessionBusyErrorEncoded": {
         "type": "object",
         "properties": {
@@ -21193,6 +22830,350 @@
           }
         },
         "required": ["_tag", "sessionID", "message"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.Agent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["id", "scope", "tokens"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.Breakdown": {
+        "type": "object",
+        "properties": {
+          "toolCalls": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "toolResults": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attachments": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "assistant": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "user": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "calls": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "results": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": ["name", "calls", "results"],
+              "additionalProperties": false
+            }
+          },
+          "attachmentKinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Named"
+            }
+          }
+        },
+        "required": ["toolCalls", "toolResults", "attachments", "assistant", "user", "tools", "attachmentKinds"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.Category": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/SessionContextUsage.CategoryKind"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["kind", "tokens"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.CategoryKind": {
+        "type": "string",
+        "enum": [
+          "system",
+          "tools",
+          "mcp",
+          "mcp-deferred",
+          "tools-deferred",
+          "agents",
+          "instructions",
+          "skills",
+          "messages",
+          "auto-buffer",
+          "compact-buffer",
+          "free"
+        ]
+      },
+      "SessionContextUsage.File": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["path", "type", "tokens"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.Info": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "$ref": "#/components/schemas/Model.Ref"
+          },
+          "window": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "measured": {
+            "type": "boolean"
+          },
+          "percentage": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "auto": {
+            "type": "boolean"
+          },
+          "threshold": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Category"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.File"
+            }
+          },
+          "mcp": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.McpTool"
+            }
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Agent"
+            }
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Skill"
+            }
+          },
+          "systemTools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Named"
+            }
+          },
+          "deferredTools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Named"
+            }
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionContextUsage.Named"
+            }
+          },
+          "messages": {
+            "$ref": "#/components/schemas/SessionContextUsage.Breakdown"
+          }
+        },
+        "required": [
+          "model",
+          "total",
+          "measured",
+          "auto",
+          "categories",
+          "files",
+          "mcp",
+          "agents",
+          "skills",
+          "systemTools",
+          "deferredTools",
+          "sections",
+          "messages"
+        ],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.McpTool": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "server": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deferred": {
+            "type": "boolean"
+          }
+        },
+        "required": ["name", "server", "tokens", "deferred"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.Named": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["name", "tokens"],
+        "additionalProperties": false
+      },
+      "SessionContextUsage.Skill": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["id", "tokens"],
+        "additionalProperties": false
+      },
+      "SessionCost.Info": {
+        "type": "object",
+        "properties": {
+          "cost": {
+            "$ref": "#/components/schemas/Money.USD"
+          },
+          "own": {
+            "$ref": "#/components/schemas/Money.USD"
+          },
+          "subagents": {
+            "$ref": "#/components/schemas/Money.USD"
+          },
+          "other": {
+            "$ref": "#/components/schemas/Money.USD"
+          },
+          "api": {
+            "type": "number"
+          },
+          "wall": {
+            "type": "number"
+          },
+          "lines": {
+            "$ref": "#/components/schemas/SessionCost.Lines"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionCost.Row"
+            }
+          }
+        },
+        "required": ["cost", "own", "subagents", "rows"],
+        "additionalProperties": false
+      },
+      "SessionCost.Lines": {
+        "type": "object",
+        "properties": {
+          "added": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["added", "removed"],
+        "additionalProperties": false
+      },
+      "SessionCost.Row": {
+        "type": "object",
+        "properties": {
+          "providerID": {
+            "type": "string"
+          },
+          "modelID": {
+            "type": "string"
+          },
+          "responses": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/TokenUsage.Info"
+          },
+          "cost": {
+            "$ref": "#/components/schemas/Money.USD"
+          },
+          "unrecorded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "zero": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["providerID", "modelID", "responses", "tokens", "cost", "unrecorded", "zero"],
         "additionalProperties": false
       },
       "SessionGenerateResponse": {
@@ -21324,6 +23305,16 @@
           }
         },
         "required": ["_tag", "sessionID", "message"],
+        "additionalProperties": false
+      },
+      "SessionRecapResponse": {
+        "type": "object",
+        "properties": {
+          "recorded": {
+            "type": "boolean"
+          }
+        },
+        "required": ["recorded"],
         "additionalProperties": false
       },
       "SessionStats.Activity": {
@@ -21787,23 +23778,6 @@
         "required": ["type", "text"],
         "additionalProperties": false
       },
-      "Trust.Changed": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "kinds": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Trust.Kind"
-            }
-          }
-        },
-        "required": ["path", "kinds"],
-        "additionalProperties": false,
-        "description": "A configuration file or directory whose executable parts differ from what was there when the folder was trusted, and the kinds that differ."
-      },
       "Trust.Grant": {
         "type": "object",
         "properties": {
@@ -21841,7 +23815,7 @@
           "network",
           "settings"
         ],
-        "description": "What a project's configuration asks for that is withheld until its folder is trusted: hooks, MCP servers, plugins, slash commands that run shell snippets, permission rules that allow or ask, the choice of default agent and the removal of an agent, model providers and request overrides, the shell, the attribution text added to commits and pull requests, environment variables for the programs it starts, formatters, language servers, the sandbox, skill folders and the hooks their files carry, anything that reaches the network or is paid for, and other settings that point Orbit at code or files."
+        "description": "A kind of project configuration: hooks, MCP servers, plugins, slash commands that run shell snippets, permission rules that allow or ask, the choice of default agent and the removal of an agent, model providers and request overrides, the shell, the attribution text added to commits and pull requests, environment variables for the programs it starts, formatters, language servers, the sandbox, skill folders and the hooks their files carry, anything that reaches the network or is paid for, and other settings that point Orbit at code or files. Nothing of a folder's configuration is read until the folder is trusted."
       },
       "Trust.Source": {
         "type": "string",
@@ -21865,18 +23839,16 @@
           "source": {
             "$ref": "#/components/schemas/Trust.Source"
           },
+          "granted": {
+            "type": "string",
+            "description": "The folder above this one whose grant makes it trusted, set only when the grant is that folder's and not this one's own. A grant for a folder covers every folder below it, except a grant for the home directory or a filesystem root, which covers that folder alone. Revoking this folder leaves it trusted while that grant stands. Unset by a server older than this field."
+          },
           "withheld": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Trust.Withheld"
             },
-            "description": "The configuration files and directories that hold back something now, and what each holds. While the folder is untrusted these are the project's own files and its `.orbit` directories. A file or directory in a folder above the project is listed until the folder that holds it is trusted, which trusting the project does not do, and names that folder as its `directory`."
-          },
-          "changed": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Trust.Changed"
-            }
+            "description": "Always empty now: nothing of an untrusted folder is read, a trusted folder's configuration applies as it is, and nothing above the project is read. Kept for clients that read it, and removed in a later release."
           }
         },
         "required": ["directory", "trusted", "persistent", "withheld"],
@@ -21893,14 +23865,6 @@
             "items": {
               "$ref": "#/components/schemas/Trust.Kind"
             }
-          },
-          "directory": {
-            "type": "string",
-            "description": "The folder to trust to lift what this holds back, set only for a file or directory in a folder above the project: trusting the project does not lift it, because each folder is trusted on its own. Unset for the project's own files, which trusting the project lifts."
-          },
-          "persistent": {
-            "type": "boolean",
-            "description": "Whether a grant for `directory` can be stored on disk. False when it is the home directory or a filesystem root, which can only be trusted until the serving process restarts. Set with `directory`."
           }
         },
         "required": ["path", "kinds"],
@@ -21942,6 +23906,26 @@
           }
         },
         "required": ["_tag", "message"],
+        "additionalProperties": false
+      },
+      "UntrustedFolderErrorEncoded": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["UntrustedFolderError"]
+          },
+          "directory": {
+            "type": "string"
+          },
+          "persistent": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["_tag", "directory", "persistent", "message"],
         "additionalProperties": false
       },
       "V2EventEncoded": {

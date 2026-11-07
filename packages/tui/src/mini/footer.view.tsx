@@ -35,6 +35,7 @@ import { createFormBodyState, type FormBodyState } from "./form.shared"
 import { footerStatuslinePolicy } from "./footer.width"
 import { Keymap } from "../context/keymap"
 import type { ClipboardService } from "../context/clipboard"
+import type { PromptSuggestion } from "../prompt-suggestion"
 import { modelInfo } from "./variant.shared"
 import { monoShortcut } from "./mono"
 import { stringWidth } from "../util/string-width"
@@ -102,6 +103,8 @@ type RunFooterViewProps = {
   mono: boolean
   miniSettings: () => MiniSettings
   history?: () => RunPrompt[]
+  /** The session's next-prompt suggestion, drawn dimmed in the empty prompt. */
+  suggestion?: PromptSuggestion
   clipboard?: Pick<ClipboardService, "read">
   onSubmit: (input: RunPrompt) => boolean | Promise<boolean>
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
@@ -381,6 +384,7 @@ export function RunFooterView(props: RunFooterViewProps) {
     imagePreview: props.tuiConfig.prompt?.image_preview,
     clipboard: props.clipboard,
     history: props.history,
+    suggestion: props.suggestion,
     queuedPrompts: queue,
     onQueuedPromptSteer: (inboxID) => queuedPromptAction("steer", inboxID),
     onSubmit: props.onSubmit,

@@ -38,7 +38,7 @@ const it = testEffect(
     Session.node.replace(
       Layer.mock(Session.Service, {
         move: (input) => Effect.sync(() => void moves.push(input.directory)),
-        revert: { stage: unused, clear: unused, commit: unused },
+        revert: { stage: unused, clear: unused, commit: unused, files: unused },
       }),
     ),
   ]),

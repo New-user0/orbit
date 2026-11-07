@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { AbsolutePath } from "@orbit/schema/schema"
 import { Skill } from "@orbit/schema/skill"
 
 export class InvalidRequestError extends Schema.TaggedError<InvalidRequestError>()(
@@ -50,6 +51,21 @@ export class SessionBusyError extends Schema.TaggedError<SessionBusyError>()(
   "SessionBusyError",
   {
     sessionID: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
+) {}
+
+/**
+ * A code-only rewind that cannot put a prompt's files back: the folder takes no snapshots (`disabled`), the message has
+ * no checkpoint (`no-checkpoint`), or the restore failed (`failed`). The message is a fixed sentence.
+ */
+export class RewindFilesError extends Schema.TaggedError<RewindFilesError>()(
+  "RewindFilesError",
+  {
+    sessionID: Schema.String,
+    messageID: Schema.String,
+    reason: Schema.Literals(["disabled", "no-checkpoint", "failed"]),
     message: Schema.String,
   },
   { httpApiStatus: 409 },
@@ -145,6 +161,20 @@ export class SessionNotFoundError extends Schema.TaggedError<SessionNotFoundErro
     message: Schema.String,
   },
   { httpApiStatus: 404 },
+) {}
+
+/**
+ * The request is only answered for a main session, and this one is a child of `parentID`. The message names both, so a
+ * client can ask for the main session instead.
+ */
+export class MainSessionOnlyError extends Schema.TaggedError<MainSessionOnlyError>()(
+  "MainSessionOnlyError",
+  {
+    sessionID: Schema.String,
+    parentID: Schema.String,
+    message: Schema.String,
+  },
+  { httpApiStatus: 409 },
 ) {}
 
 export class MessageNotFoundError extends Schema.TaggedError<MessageNotFoundError>()(
@@ -257,4 +287,20 @@ export class ShellNotFoundError extends Schema.TaggedError<ShellNotFoundError>()
     message: Schema.String,
   },
   { httpApiStatus: 404 },
+) {}
+
+/**
+ * The request would start work in a folder that is not trusted: a session, a prompt, a command, a terminal, a worktree.
+ * Nothing a folder supplies loads, and no work starts there, until a person trusts it. `directory` is the folder to
+ * trust, the project's canonical root, and `persistent` whether a grant for it can be stored on disk (false for the home
+ * directory and filesystem roots).
+ */
+export class UntrustedFolderError extends Schema.TaggedError<UntrustedFolderError>()(
+  "UntrustedFolderError",
+  {
+    directory: AbsolutePath,
+    persistent: Schema.Boolean,
+    message: Schema.String,
+  },
+  { httpApiStatus: 403 },
 ) {}

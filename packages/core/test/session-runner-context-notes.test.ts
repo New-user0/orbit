@@ -135,7 +135,9 @@ describe("the note on input sent while work was in progress", () => {
       recent: "",
       time: { created },
     })
-    expect(hasNote(toLLMMessages([user("a"), toolStep("s1"), checkpoint, user("b")], model), "b")).toBe(false)
+    expect(hasNote(toLLMMessages([checkpoint, user("b")], model), "b")).toBe(false)
+    // The request opens with the latest checkpoint, so a steer stored after it and after a tool step is still one.
+    expect(hasNote(toLLMMessages([user("a"), toolStep("s1"), checkpoint, user("b")], model), "b")).toBe(true)
   })
 
   test("input marked as from the parent agent gets the parent framing", () => {

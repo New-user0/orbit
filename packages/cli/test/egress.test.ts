@@ -149,9 +149,10 @@ test("an untrusted repository that selects a search provider is refused before a
   const workspace = await fresh("untrusted", { websearch: { provider: "random" } })
   const result = await run(workspace, [], {})
   expect(result.code).toBe(1)
+  // Nothing of the folder is read before it is trusted (trust-first), so the refusal names the folder and lists none
+  // of its files.
   expect(result.stderr).toContain("is not trusted")
-  expect(result.stderr).toContain("orbit.json")
-  expect(result.stderr).toContain("network")
+  expect(result.stderr).not.toContain("orbit.json")
   expect(requests).toEqual([])
   expect(attempts).toEqual([])
   // The run stops at requireTrust, so the file may not exist yet, or may hold an earlier row's data.

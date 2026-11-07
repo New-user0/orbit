@@ -29,15 +29,16 @@ export const oneLine = (value: string) => neutralize(value.replace(/[\p{Cc}\p{Zl
 /**
  * Neutralizes text parts that an adapter may join into one string. A provider joins tool-result parts with nothing or
  * with a line break, and the server chooses where the parts split, so a tag cut across parts is escaped when it would
- * read as a tag under either join. Each returned part is the input part with its `<` escaped.
+ * read as a tag under either join. Each returned part is the input part with its `<` escaped. `tag` matches the `<` of
+ * each tag to escape (a global pattern); it is the envelope's unless a caller escapes another tag of Orbit's.
  */
-export const neutralizeParts = (parts: ReadonlyArray<string>) => {
+export const neutralizeParts = (parts: ReadonlyArray<string>, tag: RegExp = TAG) => {
   const marked = parts.map(() => new Set<number>())
   for (const separator of ["", "\n"]) {
     const starts = parts.map((_, index) =>
       parts.slice(0, index).reduce((sum, part) => sum + part.length + separator.length, 0),
     )
-    for (const match of parts.join(separator).matchAll(TAG)) {
+    for (const match of parts.join(separator).matchAll(tag)) {
       const part = starts.findLastIndex((start) => start <= match.index)
       marked[part].add(match.index - starts[part])
     }
@@ -109,7 +110,9 @@ export interface Run {
 
 /**
  * The runs of the epoch, as `toLLMMessages` lowers them: the first run, then one after each assistant message. A
- * derived producer folds over these in order so that each run decides from history up to itself.
+ * derived producer folds over these in order so that each run decides from history up to itself. After a checkpoint
+ * that keeps messages the first run is lowered after the last kept assistant message, so a kept message stored after
+ * that assistant sits in the same lowered run but is not listed here.
  */
 export const runs = (messages: ReadonlyArray<SessionMessage.Info>): ReadonlyArray<Run> => {
   const epoch = messages.slice(epochStart(messages))
@@ -125,6 +128,15 @@ export const runs = (messages: ReadonlyArray<SessionMessage.Info>): ReadonlyArra
   out[out.length - 1].anchor = "tail"
   return out
 }
+
+/**
+ * Whether the newest run already holds a stored reminder of `kind`. A durable producer asks this first, because a drain
+ * that restarts between collection and the request runs it again for the same step.
+ */
+export const postedInRun = (messages: ReadonlyArray<SessionMessage.Info>, kind: string) =>
+  runs(messages)
+    .at(-1)!
+    .messages.some((message) => isReminder(message) && (message.metadata?.reminder as { kind: string }).kind === kind)
 
 /** The newest user message, and whether the current step is the first one since it (no assistant message follows). */
 export const newestPrompt = (messages: ReadonlyArray<SessionMessage.Info>) => {

@@ -54,7 +54,7 @@ const Files = Schema.Array(Schema.Struct({ uri: Schema.String, name: Schema.opti
 const Delivery = Schema.optional(Schema.String)
 const PromptBody = Schema.Struct({ id: Schema.String, text: Schema.String, files: Files, delivery: Delivery })
 const CommandBody = Schema.Struct({ name: Schema.String, text: Schema.String, files: Files, delivery: Delivery })
-const CompactBody = Schema.Struct({ id: Schema.String })
+const CompactBody = Schema.Struct({ id: Schema.String, instructions: Schema.optional(Schema.String) })
 const SyntheticBody = Schema.Struct({
   text: Schema.String,
   description: Schema.optional(Schema.String),
@@ -707,6 +707,13 @@ function startServer(options: WireOptions, changed: () => void) {
             }),
             { headers: { "content-type": "text/event-stream" } },
           )
+        }),
+      },
+      // Every folder of these tests is trusted: ACP opens no session in one that is not (trust-first).
+      "/api/location/trust": {
+        GET: route((_req, query) => {
+          const directory = query["location[directory]"] ?? "/workspace"
+          return Response.json({ directory, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] })
         }),
       },
       "/api/model": { GET: catalogRoute("model") },

@@ -42,8 +42,17 @@ const sanitizedTransfer = {
   ],
 }
 
-const status = () =>
-  Response.json({ version: ORBIT_VERSION, pid: process.pid, urls: [], paths: { tmp: "/tmp/orbit" } })
+const status = () => Response.json({ version: ORBIT_VERSION, pid: process.pid, urls: [], paths: { tmp: "/tmp/orbit" } })
+// An import asks whether the folder the session lands in is trusted first; these servers say it is.
+const trusted = (url: URL) =>
+  Response.json({
+    directory: url.searchParams.get("location[directory]") ?? "",
+    trusted: true,
+    persistent: true,
+    source: "saved",
+    withheld: [],
+    changed: [],
+  })
 
 function run(args: string[], stdin?: string) {
   const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
@@ -160,6 +169,7 @@ test("import validates a file and sends it to the resolved location", async () =
     async fetch(request) {
       const url = new URL(request.url)
       if (url.pathname === "/api/info") return status()
+      if (url.pathname === "/api/location/trust") return trusted(url)
       if (url.pathname === "/api/location") {
         return Response.json({
           directory: root,
@@ -194,6 +204,61 @@ test("import validates a file and sends it to the resolved location", async () =
   }
 })
 
+// A checkpoint's `retain` is a message ID read from the file (class 5): a spelling that is not one is refused before any
+// request goes out (class 7), and a valid one travels with the document.
+test("import refuses a checkpoint whose retain is not a message ID, and sends a valid one", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-import-retain-"))
+  const checkpoint = (retain: string) => ({
+    id: "msg_checkpoint",
+    type: "compaction",
+    status: "completed",
+    reason: "manual",
+    summary: "Summary",
+    recent: "",
+    retain,
+    time: { created: 3 },
+  })
+  const document = (retain: string) => ({ ...transfer, messages: [...transfer.messages, checkpoint(retain)] })
+  const requests: string[] = []
+  let imported: unknown
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url)
+      requests.push(url.pathname)
+      if (url.pathname === "/api/info") return status()
+      if (url.pathname === "/api/location/trust") return trusted(url)
+      if (url.pathname === "/api/location")
+        return Response.json({ directory: root, project: { id: "global", directory: root, canonical: root } })
+      if (url.pathname === "/api/experimental/session/import") {
+        imported = await request.json()
+        return Response.json({ data: { ...info, location: { directory: root } } })
+      }
+      return new Response("Not found", { status: 404 })
+    },
+  })
+
+  try {
+    const send = async (name: string, retain: string) => {
+      const file = path.join(root, name)
+      await fs.writeFile(file, JSON.stringify(document(retain)))
+      return run(["session", "import", file, "--directory", root, "--server", server.url.toString()])
+    }
+    const [, , refused] = await send("forged.json", "../x")
+    expect(refused).toBe(1)
+    expect(imported).toBeUndefined()
+    expect(requests).not.toContain("/api/experimental/session/import")
+
+    // Control: the same file with a message ID imports and keeps the reference.
+    const [, , accepted] = await send("valid.json", "msg_second")
+    expect(accepted).toBe(0)
+    expect(imported).toMatchObject({ messages: [{}, {}, { type: "compaction", retain: "msg_second" }] })
+  } finally {
+    await server.stop(true)
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
 test("import reports an existing session without a stack trace", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-import-conflict-"))
   const file = path.join(root, "session.json")
@@ -203,6 +268,7 @@ test("import reports an existing session without a stack trace", async () => {
     fetch(request) {
       const url = new URL(request.url)
       if (url.pathname === "/api/info") return status()
+      if (url.pathname === "/api/location/trust") return trusted(url)
       if (url.pathname === "/api/location") {
         return Response.json({
           directory: root,

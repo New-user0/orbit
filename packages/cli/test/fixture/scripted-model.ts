@@ -2,25 +2,35 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 export type ScriptedRequest = {
-  /** Whether the request is one step of the agent, which carries tools, and not a helper request such as a title. */
+  /**
+   * Whether the request is one step of the agent, which carries tools it may call, and not a helper request such as a
+   * title. A side query that sends the session's history carries the tools too, with `tool_choice: "none"`, and is not
+   * a step.
+   */
   readonly step: boolean
   readonly system: string
   /** The text of the last user message. */
   readonly user: string
-  readonly body: { model?: string; messages: Array<{ role: string; content?: unknown }> }
+  readonly body: {
+    model?: string
+    messages: Array<{ role: string; content?: unknown }>
+    tools?: unknown
+    tool_choice?: unknown
+  }
 }
 
 /**
  * A local OpenAI-compatible chat server that answers from a script and records what it was asked, for tests that run
  * the real `orb` against it. The Nth step of the agent (a request that carries tools) is answered with the Nth reply of
- * `replies`, or with the last one when the script is shorter; every other request is answered with "Title".
+ * `replies`, or with the last one when the script is shorter; every other request is answered by `helper`, or with
+ * "Title".
  *
  * `config` is the content of an orbit.json that points the ollama provider at it; the model is `ollama/scripted:1b`.
  */
 export type ScriptedReply =
   | string
   | {
-      /** The text, sent as one chunk per element, so a client sees the answer stream. */
+      /** The text, sent as one chunk per element, so a client sees the answer stream. With `tool`, the text comes first. */
       readonly chunks?: ReadonlyArray<string>
       /** A tool call to make instead of answering; the model is asked again with its result. */
       readonly tool?: { readonly name: string; readonly input: unknown }
@@ -37,6 +47,8 @@ export function scriptedModel(
   observe?: (request: ScriptedRequest) => void | Promise<void>,
   /** Names of further models the server lists next to `scripted:1b`, for a test that switches models. */
   extraModels: ReadonlyArray<string> = [],
+  /** Answers a request that is not a step; no function, or an undefined answer, answers "Title". */
+  helper?: (request: ScriptedRequest) => ScriptedReply | undefined,
 ) {
   const requests: ScriptedRequest[] = []
   const details = {
@@ -70,10 +82,10 @@ export function scriptedModel(
           details: { parent_model: "", ...details },
         })
       if (pathname === "/api/ps") return Response.json({ models: [] })
-      const body: ScriptedRequest["body"] & { tools?: unknown } = await request.json()
+      const body: ScriptedRequest["body"] = await request.json()
       const user = body.messages.findLast((message) => message.role === "user")?.content
       const entry = {
-        step: Boolean(body.tools),
+        step: Boolean(body.tools) && body.tool_choice !== "none",
         system: String(body.messages.find((message) => message.role === "system")?.content ?? ""),
         user: typeof user === "string" ? user : JSON.stringify(user),
         body,
@@ -82,10 +94,20 @@ export function scriptedModel(
       await observe?.(entry)
       const reply = entry.step
         ? (replies[Math.min(requests.filter((item) => item.step).length - 1, replies.length - 1)] ?? "ok")
-        : "Title"
+        : (helper?.(entry) ?? "Title")
       const scripted = typeof reply === "string" ? { chunks: [reply] } : reply
       if ("delayMs" in scripted && scripted.delayMs) await Bun.sleep(scripted.delayMs)
+      const text = (scripted.chunks ?? []).map((chunk, index) => ({
+        choices: [
+          {
+            index: 0,
+            delta: { ...(index === 0 ? { role: "assistant" } : {}), content: chunk },
+            finish_reason: null,
+          },
+        ],
+      }))
       const events = [
+        ...text,
         ...(scripted.tool
           ? [
               {
@@ -108,15 +130,7 @@ export function scriptedModel(
                 ],
               },
             ]
-          : (scripted.chunks ?? []).map((chunk, index) => ({
-              choices: [
-                {
-                  index: 0,
-                  delta: { ...(index === 0 ? { role: "assistant" } : {}), content: chunk },
-                  finish_reason: null,
-                },
-              ],
-            }))),
+          : []),
         {
           choices: [{ index: 0, delta: {}, finish_reason: scripted.finish ?? (scripted.tool ? "tool_calls" : "stop") }],
         },

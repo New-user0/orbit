@@ -22,6 +22,7 @@ import { SessionStore } from "@orbit/core/session/store"
 import { Effect, Layer, LayerMap, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 import { globalProjectNode } from "./lib/project"
+import { trustedProject } from "./fixture/project-trust"
 
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const model = LanguageModel.make({
@@ -58,6 +59,8 @@ const locations = Layer.effect(
         Layer.provide(client),
         Layer.provide(config),
         Layer.provide(models),
+        // A drain starts only in a trusted folder (trust-first).
+        Layer.merge(trustedProject),
       ) as unknown as Layer.Layer<LocationServices>,
   ),
 )
@@ -165,6 +168,142 @@ describe("Session.compact", () => {
       expect(yield* session.inbox(created.id)).toEqual([
         expect.objectContaining({ id: compacted.id, type: "compaction" }),
       ])
+    }),
+  )
+
+  // context-memory-2 part 2: the instructions on a compaction item and the replace and join rules.
+  // The inbox IDs that `session.inbox.cancelled` named while the test ran.
+  const watchCancelled = Effect.gen(function* () {
+    const bus = yield* Bus.Service
+    const seen: string[] = []
+    yield* bus.subscribe(SessionEvent.InboxCancelled).pipe(
+      Stream.runForEach((event) => Effect.sync(() => seen.push(event.data.inboxID))),
+      Effect.forkScoped,
+    )
+    yield* Effect.yieldNow
+    return seen
+  })
+
+  it.effect("stores compaction instructions trimmed, blank ones not at all, and reads an older row as none", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const rows = [
+        { name: "text", instructions: "  focus on tests\n", payload: { instructions: "focus on tests" } },
+        { name: "blank", instructions: " \n ", payload: {} },
+        { name: "none", instructions: undefined, payload: {} },
+      ]
+      for (const row of rows) {
+        const created = yield* session.create({ location })
+        const admitted = yield* session.compact({ sessionID: created.id, instructions: row.instructions })
+        expect(admitted.payload).toEqual(row.payload)
+        expect((yield* session.inbox(created.id))[0]?.payload).toEqual(row.payload)
+      }
+      // A row stored before the field existed has an empty payload.
+      const older = yield* session.create({ location })
+      const inboxID = SessionMessage.ID.create()
+      yield* bus.publish(SessionEvent.InboxEnqueued, {
+        sessionID: older.id,
+        inboxID,
+        item: { type: "compaction", payload: {}, delivery: "steer" },
+      })
+      expect(yield* session.inbox(older.id)).toEqual([
+        expect.objectContaining({ id: inboxID, type: "compaction", payload: {} }),
+      ])
+    }),
+  )
+
+  it.effect("a later compaction with instructions replaces the pending one", () =>
+    Effect.gen(function* () {
+      const cancelled = yield* watchCancelled
+      const session = yield* Session.Service
+      const created = yield* session.create({ location })
+      const first = yield* session.compact({ sessionID: created.id })
+      const second = yield* session.compact({ sessionID: created.id, instructions: "focus" })
+      expect(second.id).not.toBe(first.id)
+      expect(yield* session.inbox(created.id)).toEqual([
+        expect.objectContaining({ id: second.id, payload: { instructions: "focus" } }),
+      ])
+      yield* Effect.yieldNow
+      expect(cancelled).toEqual([first.id])
+      // Other instructions replace again.
+      const third = yield* session.compact({ sessionID: created.id, instructions: "other" })
+      expect((yield* session.inbox(created.id)).map((item) => item.id)).toEqual([third.id])
+      yield* Effect.yieldNow
+      expect(cancelled).toEqual([first.id, second.id])
+    }),
+  )
+
+  it.effect("a later compaction without instructions joins the pending one and keeps its instructions", () =>
+    Effect.gen(function* () {
+      const cancelled = yield* watchCancelled
+      const session = yield* Session.Service
+      const created = yield* session.create({ location })
+      const first = yield* session.compact({ sessionID: created.id, instructions: "focus" })
+      const second = yield* session.compact({ sessionID: created.id })
+      expect(second.id).toBe(first.id)
+      expect(yield* session.inbox(created.id)).toEqual([
+        expect.objectContaining({ id: first.id, payload: { instructions: "focus" } }),
+      ])
+      yield* Effect.yieldNow
+      expect(cancelled).toEqual([])
+    }),
+  )
+
+  it.effect("a later compaction with the same instructions joins the pending one", () =>
+    Effect.gen(function* () {
+      const cancelled = yield* watchCancelled
+      const session = yield* Session.Service
+      const created = yield* session.create({ location })
+      const first = yield* session.compact({ sessionID: created.id, instructions: "focus" })
+      const second = yield* session.compact({ sessionID: created.id, instructions: "  focus " })
+      expect(second.id).toBe(first.id)
+      expect(yield* session.inbox(created.id)).toHaveLength(1)
+      yield* Effect.yieldNow
+      expect(cancelled).toEqual([])
+    }),
+  )
+
+  it.effect("a retried compaction ID keeps its first instructions", () =>
+    Effect.gen(function* () {
+      const cancelled = yield* watchCancelled
+      const session = yield* Session.Service
+      const created = yield* session.create({ location })
+      const id = SessionMessage.ID.create()
+      const first = yield* session.compact({ id, sessionID: created.id, instructions: "one" })
+      const retried = yield* session.compact({ id, sessionID: created.id, instructions: "two" })
+      expect(first.id).toBe(id)
+      expect(retried).toEqual(first)
+      expect(yield* session.inbox(created.id)).toEqual([
+        expect.objectContaining({ id, payload: { instructions: "one" } }),
+      ])
+      yield* Effect.yieldNow
+      expect(cancelled).toEqual([])
+    }),
+  )
+
+  it.effect("a compaction whose ID conflicts leaves the pending one and its instructions in place", () =>
+    Effect.gen(function* () {
+      const cancelled = yield* watchCancelled
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const created = yield* session.create({ location })
+      const delivered = SessionMessage.ID.create()
+      yield* bus.publish(SessionEvent.InboxEnqueued, {
+        sessionID: created.id,
+        inboxID: delivered,
+        item: { type: "user", payload: { text: "Already delivered." }, delivery: "steer" },
+      })
+      yield* bus.publish(SessionEvent.InboxDelivered, { sessionID: created.id, inboxID: delivered })
+      const pending = yield* session.compact({ sessionID: created.id, instructions: "one" })
+      expect(
+        yield* session.compact({ id: delivered, sessionID: created.id, instructions: "two" }).pipe(Effect.flip),
+      ).toMatchObject({ _tag: "Session.CompactionConflictError", inputID: delivered })
+      expect(yield* session.inbox(created.id)).toEqual([
+        expect.objectContaining({ id: pending.id, payload: { instructions: "one" } }),
+      ])
+      yield* Effect.yieldNow
+      expect(cancelled).toEqual([])
     }),
   )
 })

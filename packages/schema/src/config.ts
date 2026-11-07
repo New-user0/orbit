@@ -3,7 +3,7 @@ export * as Config from "./config.js"
 import { Schema } from "effect"
 import { ephemeral, inventory } from "./event.js"
 import { Permission } from "./permission.js"
-import { AbsolutePath, optional, PositiveInt } from "./schema.js"
+import { AbsolutePath, NonNegativeInt, optional, PositiveInt } from "./schema.js"
 import { ConfigAgent } from "./config/agent.js"
 import { ConfigMedia } from "./config/media.js"
 import { ConfigCompaction } from "./config/compaction.js"
@@ -14,6 +14,7 @@ import { ConfigFormatter } from "./config/formatter.js"
 import { ConfigHooks } from "./config/hooks.js"
 import { ConfigLSP } from "./config/lsp.js"
 import { ConfigMCP } from "./config/mcp.js"
+import { ConfigMemory } from "./config/memory.js"
 import { ConfigModel } from "./config/model.js"
 import { ConfigPlugin } from "./config/plugin.js"
 import { ConfigProvider } from "./config/provider.js"
@@ -94,6 +95,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   update: Schema.Literals(["disable", "notify", "auto"]).pipe(optional).annotate({
     description: "Disable updates, notify when one is available, or install updates automatically",
   }),
+  cleanup_period_days: NonNegativeInt.pipe(optional).annotate({
+    description:
+      "Days a session is kept after its last change before the cleanup pass removes it, together with its subagents, forks and saved files. A session that is shared, has queued work or is running is kept. 0 removes every session that can be removed at the next pass; sessions are still saved. A value that is not a whole number of 0 or more skips the cleanup instead of falling back to the default. Default 30",
+  }),
   share: Schema.Literals(["manual", "auto", "disabled"]).pipe(optional).annotate({
     description: "Control whether sessions may be shared manually, automatically, or not at all",
   }),
@@ -142,8 +147,13 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   shell_tool: ConfigShellTool.Info.pipe(optional).annotate({
     description: "Shell command timeouts",
   }),
+  background_tasks: Schema.Boolean.pipe(optional).annotate({
+    description:
+      "Whether shell commands and subagents may run in the background. On by default. false keeps shell commands and the subagents of the Agent and Workflow tools in the foreground: the background options are not offered, a shell command still running at its timeout is stopped, and moving running work to the background leaves them where they are. A command defined to run as a subagent still runs in the background. A project's or local value applies once the folder is trusted",
+  }),
   tool_output: ConfigToolOutput.Info.pipe(optional).annotate({
-    description: "Tool output truncation thresholds",
+    description:
+      "When a tool result is saved to a file, and how much of the start of a shell command's output its result keeps",
   }),
   tool_execution: ConfigToolExecution.Info.pipe(optional).annotate({
     description: "How the tool calls of one step are scheduled",
@@ -153,6 +163,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   compaction: ConfigCompaction.Info.pipe(optional).annotate({
     description: "Conversation compaction behavior",
+  }),
+  memory: ConfigMemory.Info.pipe(optional).annotate({
+    description: "The agent's memory of a project: notes it keeps across sessions in a folder of its own",
   }),
   compatibility: ConfigCompatibility.Info.pipe(optional).annotate({
     description: "Whether to read other agent products' settings, skills, output styles and instruction files",
@@ -196,6 +209,11 @@ export const Patch = Schema.Struct({
   shell: Schema.optionalKey(Schema.NullOr(Schema.String)),
   output_style: Schema.optionalKey(Schema.NullOr(Schema.String)),
   language: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  memory: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+    }),
+  ),
 }).annotate({ identifier: "Config.Patch" })
 export interface Patch extends Schema.Schema.Type<typeof Patch> {}
 
@@ -282,7 +300,7 @@ export class Document extends Schema.Class<Document>("Config.Document")({
   trusted,
   withheld: Schema.Array(Trust.Kind).pipe(optional).annotate({
     description:
-      "The kinds of configuration removed from info: all that the folder may not supply while it is not trusted, or only the kinds whose executable parts changed since the folder was trusted. Unset when nothing was removed.",
+      "The kinds of configuration removed from info because the folder that holds the file is not trusted. Set only on such a folder's entry; a trusted folder's entry applies as it is. Removed in a later release.",
   }),
   info: Info,
 }) {}
@@ -294,7 +312,7 @@ export class Directory extends Schema.Class<Directory>("Config.Directory")({
   trusted,
   withheld: Schema.Array(Trust.Kind).pipe(optional).annotate({
     description:
-      "The kinds of what the directory holds that are off although its folder is trusted, because their files changed since the folder was trusted. Unset when nothing is held back.",
+      "No longer set: a trusted folder's directory applies as it is, and an untrusted one's is marked by `trusted`. Kept so that older entries decode, and removed in a later release.",
   }),
 }) {}
 

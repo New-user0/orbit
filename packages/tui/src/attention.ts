@@ -21,7 +21,7 @@ import {
   subagentDoneSoundPath,
 } from "#attention-sounds"
 
-type FocusState = "unknown" | "focused" | "blurred"
+export type FocusState = "unknown" | "focused" | "blurred"
 
 type AttentionRenderer = {
   readonly isDestroyed: boolean
@@ -32,7 +32,9 @@ type AttentionRenderer = {
   off(event: "focus" | "blur" | "frame", listener: () => void): unknown
 }
 
-type AttentionHost = Attention & {
+export type AttentionHost = Attention & {
+  /** The focus the terminal last reported, for a listener that starts after a blur it would otherwise miss. */
+  focus(): FocusState
   dispose(): void
 }
 
@@ -169,6 +171,7 @@ export function createTuiAttention(input: {
   }
 
   return {
+    focus: () => focus,
     get idleReminder() {
       return input.config.attention.idle_reminder
     },

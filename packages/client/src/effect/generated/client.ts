@@ -20,6 +20,10 @@ import type {
   LocationInstructionNoteTargetsOutput,
   LocationInstructionNoteAddInput,
   LocationInstructionNoteAddOutput,
+  LocationMemoryListInput,
+  LocationMemoryListOutput,
+  LocationMemoryEnsureInput,
+  LocationMemoryEnsureOutput,
   LocationTrustListOutput,
   LocationTrustRevokeInput,
   LocationTrustRevokeOutput,
@@ -74,12 +78,18 @@ import type {
   SessionWaitOutput,
   SessionRevertStageInput,
   SessionRevertStageOutput,
+  SessionRevertFilesInput,
+  SessionRevertFilesOutput,
   SessionRevertClearInput,
   SessionRevertClearOutput,
   SessionRevertCommitInput,
   SessionRevertCommitOutput,
   SessionContextInput,
   SessionContextOutput,
+  SessionContextUsageInput,
+  SessionContextUsageOutput,
+  SessionCostInput,
+  SessionCostOutput,
   SessionDiffInput,
   SessionDiffOutput,
   SessionInboxListInput,
@@ -98,6 +108,12 @@ import type {
   SessionInstructionsEntryRemoveOutput,
   SessionGenerateInput,
   SessionGenerateOutput,
+  SessionRecapInput,
+  SessionRecapOutput,
+  SessionAssistLabelInput,
+  SessionAssistLabelOutput,
+  SessionAssistSuggestionInput,
+  SessionAssistSuggestionOutput,
   SessionLogInput,
   SessionLogOutput,
   SessionInterruptInput,
@@ -337,7 +353,7 @@ const EndpointLocationTrustUpdate = (raw: RawClient["server.location"]) => (inpu
   preserveEffect<LocationTrustUpdateOutput>()(
     raw["location.trust.update"]({
       query: { location: input["location"] },
-      payload: { trust: input["trust"], persist: input["persist"], holder: input["holder"] },
+      payload: { trust: input["trust"], persist: input["persist"] },
     }).pipe(Effect.mapError(mapClientError)),
   )
 
@@ -362,6 +378,22 @@ const EndpointLocationInstructionNoteAdd =
       ),
     )
 
+const EndpointLocationMemoryList = (raw: RawClient["server.location"]) => (input?: LocationMemoryListInput) =>
+  preserveEffect<LocationMemoryListOutput>()(
+    raw["memory.list"]({ query: { location: input?.["location"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointLocationMemoryEnsure = (raw: RawClient["server.location"]) => (input: LocationMemoryEnsureInput) =>
+  preserveEffect<LocationMemoryEnsureOutput>()(
+    raw["memory.ensure"]({ query: { location: input["location"] }, payload: { target: input["target"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
 const EndpointLocationTrustList = (raw: RawClient["server.location"]) => () =>
   preserveEffect<LocationTrustListOutput>()(raw["trust.list"]({}).pipe(Effect.mapError(mapClientError)))
 
@@ -382,6 +414,7 @@ const adaptGroupLocation = (raw: RawClient["server.location"]) => ({
   instruction: {
     note: { targets: EndpointLocationInstructionNoteTargets(raw), add: EndpointLocationInstructionNoteAdd(raw) },
   },
+  memory: { list: EndpointLocationMemoryList(raw), ensure: EndpointLocationMemoryEnsure(raw) },
 })
 
 const EndpointAgentList = (raw: RawClient["server.agent"]) => (input?: AgentListInput) =>
@@ -630,7 +663,7 @@ const EndpointSessionCompact = (raw: RawClient["server.session"]) => (input: Ses
   preserveEffect<SessionCompactOutput>()(
     raw["session.compact"]({
       params: { sessionID: input["sessionID"] },
-      payload: { id: input["id"], delivery: input["delivery"] },
+      payload: { id: input["id"], delivery: input["delivery"], instructions: input["instructions"] },
     }).pipe(
       Effect.mapError(mapClientError),
       Effect.map((value) => value.data),
@@ -647,6 +680,17 @@ const EndpointSessionRevertStage = (raw: RawClient["server.session"]) => (input:
     raw["session.revert.stage"]({
       params: { sessionID: input["sessionID"] },
       payload: { messageID: input["messageID"], files: input["files"] },
+    }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointSessionRevertFiles = (raw: RawClient["server.session"]) => (input: SessionRevertFilesInput) =>
+  preserveEffect<SessionRevertFilesOutput>()(
+    raw["session.revert.files"]({
+      params: { sessionID: input["sessionID"] },
+      payload: { messageID: input["messageID"], dryRun: input["dryRun"] },
     }).pipe(
       Effect.mapError(mapClientError),
       Effect.map((value) => value.data),
@@ -671,11 +715,27 @@ const EndpointSessionContext = (raw: RawClient["server.session"]) => (input: Ses
     ),
   )
 
+const EndpointSessionContextUsage = (raw: RawClient["server.session"]) => (input: SessionContextUsageInput) =>
+  preserveEffect<SessionContextUsageOutput>()(
+    raw["session.contextUsage"]({ params: { sessionID: input["sessionID"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointSessionCost = (raw: RawClient["server.session"]) => (input: SessionCostInput) =>
+  preserveEffect<SessionCostOutput>()(
+    raw["session.cost"]({ params: { sessionID: input["sessionID"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
 const EndpointSessionDiff = (raw: RawClient["server.session"]) => (input: SessionDiffInput) =>
   preserveEffect<SessionDiffOutput>()(
     raw["session.diff"]({
       params: { sessionID: input["sessionID"] },
-      query: { from: input["from"], to: input["to"], context: input["context"] },
+      query: { from: input["from"], to: input["to"], context: input["context"], scope: input["scope"] },
     }).pipe(
       Effect.mapError(mapClientError),
       Effect.map((value) => value.data),
@@ -743,6 +803,30 @@ const EndpointSessionInstructionsEntryRemove =
 const EndpointSessionGenerate = (raw: RawClient["server.session"]) => (input: SessionGenerateInput) =>
   preserveEffect<SessionGenerateOutput>()(
     raw["session.generate"]({ params: { sessionID: input["sessionID"] }, payload: { prompt: input["prompt"] } }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointSessionRecap = (raw: RawClient["server.session"]) => (input: SessionRecapInput) =>
+  preserveEffect<SessionRecapOutput>()(
+    raw["session.recap"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError)),
+  )
+
+const EndpointSessionAssistLabel = (raw: RawClient["server.session"]) => (input: SessionAssistLabelInput) =>
+  preserveEffect<SessionAssistLabelOutput>()(
+    raw["session.assist.label"]({
+      params: { sessionID: input["sessionID"] },
+      payload: { messageID: input["messageID"], toolCallIDs: input["toolCallIDs"] },
+    }).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointSessionAssistSuggestion = (raw: RawClient["server.session"]) => (input: SessionAssistSuggestionInput) =>
+  preserveEffect<SessionAssistSuggestionOutput>()(
+    raw["session.assist.suggestion"]({ params: { sessionID: input["sessionID"] } }).pipe(
       Effect.mapError(mapClientError),
       Effect.map((value) => value.data),
     ),
@@ -862,10 +946,13 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
   wait: EndpointSessionWait(raw),
   revert: {
     stage: EndpointSessionRevertStage(raw),
+    files: EndpointSessionRevertFiles(raw),
     clear: EndpointSessionRevertClear(raw),
     commit: EndpointSessionRevertCommit(raw),
   },
   context: EndpointSessionContext(raw),
+  contextUsage: EndpointSessionContextUsage(raw),
+  cost: EndpointSessionCost(raw),
   diff: EndpointSessionDiff(raw),
   inbox: {
     list: EndpointSessionInboxList(raw),
@@ -881,6 +968,8 @@ const adaptGroupSession = (raw: RawClient["server.session"]) => ({
     },
   },
   generate: EndpointSessionGenerate(raw),
+  recap: EndpointSessionRecap(raw),
+  assist: { label: EndpointSessionAssistLabel(raw), suggestion: EndpointSessionAssistSuggestion(raw) },
   log: EndpointSessionLog(raw),
   interrupt: EndpointSessionInterrupt(raw),
   background: EndpointSessionBackground(raw),
@@ -1241,7 +1330,7 @@ const EndpointPermissionReply = (raw: RawClient["server.permission"]) => (input:
   preserveEffect<PermissionReplyOutput>()(
     raw["session.permission.reply"]({
       params: { sessionID: input["sessionID"], requestID: input["requestID"] },
-      payload: { decision: input["decision"], message: input["message"] },
+      payload: { decision: input["decision"], message: input["message"], content: input["content"] },
     }).pipe(Effect.mapError(mapClientError)),
   )
 
@@ -1660,7 +1749,12 @@ const EndpointConfigShells = (raw: RawClient["server.config"]) => () =>
 const EndpointConfigUpdate = (raw: RawClient["server.config"]) => (input?: ConfigUpdateInput) =>
   preserveEffect<ConfigUpdateOutput>()(
     raw["config.update"]({
-      payload: { shell: input?.["shell"], output_style: input?.["output_style"], language: input?.["language"] },
+      payload: {
+        shell: input?.["shell"],
+        output_style: input?.["output_style"],
+        language: input?.["language"],
+        memory: input?.["memory"],
+      },
     }).pipe(Effect.mapError(mapClientError)),
   )
 

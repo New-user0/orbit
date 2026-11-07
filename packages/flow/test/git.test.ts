@@ -334,6 +334,53 @@ test("holder passes over a .git directory with no HEAD, as root does", async () 
   const inner = path.join(directory, "sub")
   await fs.mkdir(path.join(inner, ".git"), { recursive: true })
 
-  expect(Git.holder(inner)).toBe(directory)
+  expect(Git.holder(inner, directory)).toBe(await fs.realpath(directory))
   expect(await Git.root(inner, { directory, canonical: directory })).toEqual({ root: await fs.realpath(directory) })
+})
+
+// Class 3 and 4: the store lookup goes no higher than the folder whose trust was decided, and climbs the folders the
+// start really lies in. A repository above that folder, or above the link the start was reached through, is not taken;
+// the control is the same lookup bounded by the repository itself, which finds it.
+test("holder looks no higher than the folder trust was decided for, and walks up from where the folder really is", async () => {
+  const directory = await repository("bounded")
+  const inner = path.join(directory, "inner")
+  const elsewhere = path.join(root, "bounded-elsewhere", "start")
+  await fs.mkdir(inner, { recursive: true })
+  await fs.mkdir(elsewhere, { recursive: true })
+  const link = path.join(directory, "into-elsewhere")
+  await fs.symlink(elsewhere, link, process.platform === "win32" ? "junction" : "dir")
+
+  // Bounded by the inner folder, the repository above it is not taken.
+  expect(Git.holder(inner, inner)).toBeUndefined()
+  // Reached through a link that sits in the repository, the start really lies outside it, so no `.git` is found.
+  expect(Git.holder(link, directory)).toBeUndefined()
+  // The control: bounded by the repository, it is found.
+  expect(Git.holder(inner, directory)).toBe(await fs.realpath(directory))
+  // And `openStore` takes the same bound: the store opens in the folder itself, not in the repository above.
+  const { openStore } = await import("../src/runner")
+  const store = await openStore(inner, inner)
+  store.close()
+  expect(await Bun.file(path.join(inner, ".orbit", "runs.db")).exists()).toBe(true)
+  expect(await Bun.file(path.join(directory, ".orbit", "runs.db")).exists()).toBe(false)
+})
+
+// Class 3: on Windows a folder can be spelled with its 8.3 short name, as a temporary folder under a long user name is
+// (`C:\Users\RUNNER~1\...`). The server names the project by its long real path, so the walk has to write the start in
+// full too, or the start never lies within the bound and the run store above it is missed.
+test.skipIf(process.platform !== "win32")("holder reads a start spelled with an 8.3 short name as the server does", async () => {
+  const directory = await repository("short-name-repository")
+  const inner = path.join(directory, "inner")
+  await fs.mkdir(inner, { recursive: true })
+  // The system's own cmd.exe by its full path: a bare name would be looked up in the working folder first (class 10).
+  const cmd = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe")
+  const listing = Bun.spawnSync([cmd, "/d", "/c", "dir", "/x", root]).stdout.toString()
+  const short = listing
+    .split(/\r?\n/)
+    .find((line) => line.trimEnd().endsWith(" short-name-repository"))
+    ?.match(/\s([A-Z0-9_-]+~\d+)\s/)?.[1]
+  // A volume with 8.3 names turned off has no short spelling to test.
+  if (short === undefined) return
+  const real = await fs.realpath(directory)
+
+  expect(Git.holder(path.join(root, short, "inner"), real)).toBe(real)
 })

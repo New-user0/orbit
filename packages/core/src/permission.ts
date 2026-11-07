@@ -20,6 +20,11 @@ import { PluginHooks } from "./plugin/hooks.js"
 import { ManagedNetwork } from "./managed-network.js"
 import { ManagedPolicy } from "./managed-policy.js"
 import { ToolCurrentCall } from "./tool/current-call.js"
+import { MemoryStore } from "./memory/store.js"
+import { Bom } from "@orbit/util/bom"
+import { fileDiff } from "./tool/plugin/file-diff.js"
+import { MemoryTeam } from "./memory/team.js"
+import { MemoryAgent } from "./memory/agent.js"
 
 const PermissionEffect = Permission.Effect
 export { PermissionEffect as Effect }
@@ -66,6 +71,20 @@ export const AssertInput = Schema.Struct({
   // Set on the deny-only checks a shell command makes for the files it names: the rules that a mode puts on an agent
   // (`Agent.modeRule`) do not apply to them, since the mode asks about the command itself.
   probe: Schema.Boolean.pipe(Schema.optional),
+  // Set on the folder question a shell command asks for the places it names (`ShellGuard.prepare`). The memory folder is
+  // prompt-free for the file tools only, so a command that reaches into it is asked about as it would be anywhere else.
+  // It stays off the public Request.
+  shell: Schema.Boolean.pipe(Schema.optional),
+  // The file an Edit or Write question is about, as the tool read it before asking (`text` without its byte order mark),
+  // with the name and place its preview shows. Its presence makes the question revisable: a person may answer it once
+  // with their own version, which the server diffs against `text` and hands back to the tool (class 8). It stays off the
+  // public Request.
+  original: Schema.Struct({
+    file: Schema.String,
+    place: Schema.String,
+    text: Schema.String,
+    status: Schema.Literals(["added", "modified"]),
+  }).pipe(Schema.optional),
   agent: Agent.ID.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.AssertInput" })
 export type AssertInput = typeof AssertInput.Type
@@ -74,8 +93,15 @@ export const ReplyInput = Schema.Struct({
   requestID: ID,
   reply: Reply,
   message: Schema.String.pipe(Schema.optional),
+  // The person's own version of the file for a revisable question, given only with a "once" reply.
+  content: Schema.String.pipe(Schema.optional),
 }).annotate({ identifier: "Permission.ReplyInput" })
 export type ReplyInput = typeof ReplyInput.Type
+
+/** What a person approved instead of the proposal: the whole new text of the file, without a byte order mark. */
+export interface Revision {
+  readonly content: string
+}
 
 export const AskResult = Schema.Struct({
   id: ID,
@@ -105,6 +131,16 @@ export class BlockedError extends Schema.TaggedError<BlockedError>()("Permission
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()("Permission.NotFoundError", {
   requestID: ID,
 }) {}
+
+// A reply whose revised content the question cannot take. The question stays pending for another reply.
+export class RevisionError extends Schema.TaggedError<RevisionError>()("Permission.RevisionError", {
+  requestID: ID,
+  reason: Schema.String,
+}) {
+  override get message() {
+    return this.reason
+  }
+}
 
 export type Error = BlockedError | CorrectedError
 
@@ -165,7 +201,11 @@ export function merge(...rulesets: Permission.Ruleset[]): Permission.Ruleset {
 export interface Interface {
   readonly close: Effect.Effect<void>
   readonly ask: (input: AssertInput) => Effect.Effect<AskResult, SessionErrors.NotFoundError>
-  readonly assert: (input: AssertInput) => Effect.Effect<void, Error | SessionErrors.NotFoundError>
+  /**
+   * Decides the input and, when it asks, waits for the answer. A revisable question (`original`) answered once with the
+   * person's own version gives back that version; every other approval gives back nothing.
+   */
+  readonly assert: (input: AssertInput) => Effect.Effect<Revision | void, Error | SessionErrors.NotFoundError>
   /**
    * Whether `assert` would fail with a block for this input, decided by the configured deny rules (agent, session and
    * project), the managed rules and the managed denied domains, and nothing else. It asks nobody, creates no request,
@@ -174,7 +214,14 @@ export interface Interface {
    * a deny is not seen here; the later `assert` still honours it.
    */
   readonly denied: (input: AssertInput) => Effect.Effect<boolean, SessionErrors.NotFoundError>
-  readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError>
+  /**
+   * Whether `ask` would allow this input at once, with no question: the configured rules, the saved approvals and the
+   * managed rules decide, as they do for `ask`. Like `denied` it asks nobody, creates no request, publishes nothing and
+   * runs no plugin hook, so a hook that would turn the question into an allow is not seen and the answer stays false.
+   */
+  readonly allowed: (input: AssertInput) => Effect.Effect<boolean, SessionErrors.NotFoundError>
+  readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError | RevisionError>
+
   readonly get: (id: ID) => Effect.Effect<Request | undefined>
   readonly forSession: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Request>>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
@@ -191,7 +238,9 @@ interface Pending {
   readonly aliases?: AssertInput["aliases"]
   readonly escaped?: AssertInput["escaped"]
   readonly leads?: AssertInput["leads"]
-  readonly deferred: Deferred.Deferred<void, DeclinedError | CorrectedError>
+  readonly shell?: AssertInput["shell"]
+  readonly original?: AssertInput["original"]
+  readonly deferred: Deferred.Deferred<Revision | void, DeclinedError | CorrectedError>
   // The tool call that was executing when the request was made, for deciding and explaining it. Never on the public Request.
   readonly call?: ToolCurrentCall.Call
 }
@@ -208,6 +257,9 @@ const layer = Layer.effect(
     const managed = yield* ManagedPolicy.Service
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
+    const memory = yield* MemoryStore.Service
+    const teams = yield* MemoryTeam.Service
+    const agentMemory = yield* MemoryAgent.Service
     // The session folder and the project's worktree as written and as the disk has them. A session reached through a link
     // gets real-path leads, so a lead is also written in the project's own spelling before rules are matched against it.
     const spelled = [location.directory, path.resolve(location.project.directory)]
@@ -247,24 +299,86 @@ const layer = Layer.effect(
         ? [path.resolve(location.directory, resource)]
         : []
     }
+    const fileAction = (action: string) => {
+      const canonical = ToolNames.canonical(action)
+      return canonical === "external_directory" || canonical === "Read" || canonical === "Edit"
+    }
+    // The memory folders a request is decided against: the project's private folder, the team folder while team
+    // memory is on (context-memory-11), as `MemoryTeam` resolved it once for the Location (class 3), and the roots of
+    // every agent's memory that `MemoryAgent` accepted (context-memory-10). Only a file tool's request can be for one,
+    // so no other request asks about them.
+    const memoryFolders = Effect.fnUntraced(function* (action: string) {
+      if (!fileAction(action)) return [memory]
+      const team = yield* teams.current()
+      return [memory, ...(team === undefined ? [] : [team]), ...(yield* agentMemory.current())]
+    })
+    // The memory folder a file tool's request is for (context-memory-9), if any: the place it names is in the folder by
+    // one of its spellings, and every real place it leads to is in the real folder, so a link inside the folder that
+    // points out of it is not (class 4). A call that a link of an untrusted project leads in is the person's to decide
+    // (`escaped`). A shell command is never one, nor the folder question it asks: the shell's own rules decide it.
+    const inMemory = (
+      folders: readonly MemoryTeam.Folder[],
+      input: Pick<AssertInput, "action" | "escaped" | "leads" | "shell">,
+      resource: string,
+    ) => {
+      if (!fileAction(input.action)) return undefined
+      if (input.shell || input.escaped?.includes(resource)) return undefined
+      const place = path.isAbsolute(resource) ? resource : path.resolve(location.directory, resource)
+      return folders.find(
+        (memory) =>
+          [memory.folder, memory.real].some((folder) => FSUtil.contains(folder, place)) &&
+          (input.leads?.[resource] ?? [place]).every((lead) => FSUtil.contains(memory.real, lead)),
+      )
+    }
+    // A place in the real memory folder, named as the folder is spelled. The carve-out accepts either spelling of a folder
+    // that is a link, so a deny written with the link's spelling must also decide a call made by the real path (class 3).
+    // A call by the link's spelling brings its real place as a lead, which the deny of the real spelling meets already.
+    const memorySpelled = (memory: MemoryTeam.Folder, resource: string) => {
+      const inside = path.relative(
+        memory.real,
+        path.isAbsolute(resource) ? resource : path.resolve(location.directory, resource),
+      )
+      return inside.startsWith("..") || path.isAbsolute(inside) ? [] : [path.join(memory.folder, inside)]
+    }
     const decide = (
-      input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads">,
+      folders: readonly MemoryTeam.Folder[],
+      input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads" | "shell">,
       resource: string,
       rules: Permission.Ruleset,
       approvals: Permission.Ruleset = [],
     ) => {
-      // The allow for a scratchpad is written for the spelling that a call gives, and a link inside the folder can lead
-      // out of it, so the allow decides only a call whose real place is in the folder too. A link that points out is
-      // decided by the rules for the place it points to (class 4).
-      const scratch = (rule: Permission.Rule) => {
-        const folders = Agent.scratchpadFolders(rule)
+      // The allows for a scratchpad, for saved tool results and for the memory folder are written for the spelling that a
+      // call gives, and a link inside the folder can lead out of it, so such an allow decides only a call whose real place
+      // is in the folder too. A link that points out is decided by the rules for the place it points to (class 4). The
+      // memory allow is for the file tools, so it never decides the folder question of a shell command (class 8).
+      const contained = (rule: Permission.Rule) => {
+        const memoryFolders = Agent.memoryFolders(rule)
+        if (memoryFolders !== undefined && input.shell) return false
+        const folders = Agent.narrowedFolders(rule) ?? memoryFolders
         return (
           folders === undefined ||
           (input.leads?.[resource] ?? []).every((lead) => folders.some((folder) => FSUtil.contains(folder, lead)))
         )
       }
+      // A memory folder is written and read without a question, as the reference's file tools do: no ask of the
+      // person's, no default question for a place outside the project and no mode's deny reaches it, while a deny of the
+      // person's, the session's or an agent's own still decides, by the last rule that allows or denies (classes 4, 8).
+      const memoryFolder = inMemory(folders, input, resource)
+      if (memoryFolder !== undefined) {
+        const decisive = rules.filter((rule) => rule.effect !== "ask" && !Agent.isModeRule(rule))
+        const decided = evaluate(input.action, resource, decisive, [
+          ...(input.aliases?.[resource] ?? []),
+          ...resolved(input.action, resource),
+          ...respelled(input.action, resource),
+          ...memorySpelled(memoryFolder, resource),
+        ])
+        if (decided.effect === "deny") return decided
+        if (stricter(input.action, input.leads?.[resource], decisive).effect === "deny")
+          return { action: input.action, resource: "*", effect: "deny" } satisfies Permission.Rule
+        return { action: input.action, resource: "*", effect: "allow" } satisfies Permission.Rule
+      }
       const all = [
-        ...(input.escaped?.includes(resource) ? own(rules) : rules).filter(scratch),
+        ...(input.escaped?.includes(resource) ? own(rules) : rules).filter(contained),
         ...(steersProgram(input.action, resource)
           ? approvals.filter((rule) => rule.resource === resource && !/[*?]/.test(rule.resource))
           : approvals),
@@ -321,8 +435,17 @@ const layer = Layer.effect(
         // managed rules.
         agent: agent?.id ?? name,
         rules: merge(
-          // The allow for editing in a scratchpad names the scratchpad of this session's lineage and no other.
-          Agent.narrowScratchpad(agent?.permissions ?? missingAgentPermissions, SessionScratchpad.key(session)),
+          // The allow for editing in a scratchpad names the scratchpad of this session's lineage and no other, the allow for
+          // saved tool results names this session's own folder and no other, and the allow for the memory folder names the
+          // folder of this Location and the agent memory roots it accepted, so an agent that keeps Orbit's own folders
+          // after a deny of everything, as Explore does, can reach an agent's memory folder outside the project too.
+          Agent.placeMemory(
+            Agent.narrowToolOutput(
+              Agent.narrowScratchpad(agent?.permissions ?? missingAgentPermissions, SessionScratchpad.key(session)),
+              session.id,
+            ),
+            [memory, ...(yield* agentMemory.current())],
+          ),
           managed.current().restrictions.managed_permissions_only ? own.filter((rule) => rule.effect !== "allow") : own,
         ),
       }
@@ -330,14 +453,19 @@ const layer = Layer.effect(
 
     // The last managed rule that matches a resource decides it. No match leaves the resource to the hooks and the rest.
     function managedEffect(
-      input: Pick<AssertInput, "action" | "aliases" | "leads">,
+      folders: readonly MemoryTeam.Folder[],
+      input: Pick<AssertInput, "action" | "aliases" | "escaped" | "leads" | "shell">,
       resource: string,
-      rules: Permission.Ruleset,
+      written: Permission.Ruleset,
     ): Permission.Effect | undefined {
+      // A managed ask does not reach a memory folder either; a managed deny does, by either spelling of the folder.
+      const memoryFolder = inMemory(folders, input, resource)
+      const rules = memoryFolder === undefined ? written : written.filter((rule) => rule.effect !== "ask")
       const subjects = [
         resource,
         ...resolved(input.action, resource),
         ...respelled(input.action, resource),
+        ...(memoryFolder === undefined ? [] : memorySpelled(memoryFolder, resource)),
         ...(input.aliases?.[resource] ?? []),
       ]
       const own = rules.findLast(
@@ -389,26 +517,29 @@ const layer = Layer.effect(
     }
 
     function anyDenied(
-      input: Pick<AssertInput, "action" | "resources" | "aliases" | "escaped" | "leads">,
+      folders: readonly MemoryTeam.Folder[],
+      input: Pick<AssertInput, "action" | "resources" | "aliases" | "escaped" | "leads" | "shell">,
       rules: Permission.Ruleset,
     ) {
-      return input.resources.some((resource) => decide(input, resource, rules).effect === "deny")
+      return input.resources.some((resource) => decide(folders, input, resource, rules).effect === "deny")
     }
 
     function relevant(input: AssertInput, rules: Permission.Ruleset) {
       return rules.filter((rule) => actionMatches(input.action, rule.action))
     }
 
-    const evaluateInput = Effect.fnUntraced(function* (input: AssertInput) {
+    // `hooked` false leaves the plugin hooks out, for a check that must not reach plugin code (`allowed`).
+    const evaluateInput = Effect.fnUntraced(function* (input: AssertInput, hooked = true) {
       const current = managed.current()
       const only = current.restrictions.managed_permissions_only === true
       const configuredRules = yield* configured(input.sessionID, input.agent)
       const rules = configuredRules.rules
-      if (anyDenied(input, rules)) return { effect: "deny" as const, rules }
+      const folders = yield* memoryFolders(input.action)
+      if (anyDenied(folders, input, rules)) return { effect: "deny" as const, rules }
       // Saved approvals are grants; managed_permissions_only ignores every one of them.
       const approvals = only ? [] : yield* savedRules()
       const all = [...rules, ...approvals]
-      const decisions = input.resources.map((resource) => decide(input, resource, rules, approvals))
+      const decisions = input.resources.map((resource) => decide(folders, input, resource, rules, approvals))
       const effect: Permission.Effect = decisions.some((rule) => rule.effect === "ask") ? "ask" : "allow"
       // An ask that a rule wrote (yours, the project's, an agent's built-in `.env` ask) is explicit, and so is a lead onto
       // such a rule (a grant's lead onto the person's ask). A lead onto the built-in default ask is not.
@@ -416,23 +547,25 @@ const layer = Layer.effect(
       const explicit = decisions.some(
         (rule) => rule.effect === "ask" && !isFallthrough(rule) && !Agent.isDefaultAsk(rule),
       )
-      const event = yield* hooks.trigger("permission", "evaluate", {
-        sessionID: input.sessionID,
-        agent: input.agent,
-        action: input.action,
-        resources: input.resources,
-        aliases: input.aliases,
-        metadata: input.metadata,
-        source: input.source,
-        effect,
-      })
+      const event = hooked
+        ? yield* hooks.trigger("permission", "evaluate", {
+            sessionID: input.sessionID,
+            agent: input.agent,
+            action: input.action,
+            resources: input.resources,
+            aliases: input.aliases,
+            metadata: input.metadata,
+            source: input.source,
+            effect,
+          })
+        : { effect, message: undefined }
       // The managed layer runs last and in core, so no plugin hook (nor a later classifier) can override it. Order:
       // configured deny > managed rule > plugin hooks > grants and config rules > default ask.
       const layer = [
         ...current.rules,
         ...(configuredRules.agent === undefined ? [] : (current.agentRules[configuredRules.agent] ?? [])),
       ]
-      const decided = input.resources.map((resource) => managedEffect(input, resource, layer))
+      const decided = input.resources.map((resource) => managedEffect(folders, input, resource, layer))
       const blocked =
         current.organization === undefined
           ? "Blocked by managed settings"
@@ -471,7 +604,8 @@ const layer = Layer.effect(
       const decisive = input.probe
         ? configuredRules.rules.filter((rule) => !Agent.isModeRule(rule))
         : configuredRules.rules
-      if (anyDenied(input, decisive)) return true
+      const folders = yield* memoryFolders(input.action)
+      if (anyDenied(folders, input, decisive)) return true
       if (
         ManagedNetwork.bearsUrl(input.action) &&
         ManagedNetwork.denies(current.restrictions.network?.denied_domains ?? [], input.resources)
@@ -481,7 +615,11 @@ const layer = Layer.effect(
         ...current.rules,
         ...(configuredRules.agent === undefined ? [] : (current.agentRules[configuredRules.agent] ?? [])),
       ]
-      return input.resources.some((resource) => managedEffect(input, resource, layer) === "deny")
+      return input.resources.some((resource) => managedEffect(folders, input, resource, layer) === "deny")
+    })
+
+    const allowed = Effect.fn("Permission.allowed")(function* (input: AssertInput) {
+      return (yield* evaluateInput(input, false)).effect === "allow"
     })
 
     function request(input: AssertInput, message?: string): Request {
@@ -495,19 +633,25 @@ const layer = Layer.effect(
         metadata: input.metadata,
         source: input.source,
         message,
+        revisable: input.original ? true : undefined,
       }
     }
 
-    const create = (request: Request, input: Pick<AssertInput, "agent" | "aliases" | "escaped" | "leads">) =>
+    const create = (
+      request: Request,
+      input: Pick<AssertInput, "agent" | "aliases" | "escaped" | "leads" | "shell" | "original">,
+    ) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
-          const deferred = yield* Deferred.make<void, DeclinedError | CorrectedError>()
+          const deferred = yield* Deferred.make<Revision | void, DeclinedError | CorrectedError>()
           const item: Pending = {
             request,
             agent: input.agent,
             aliases: input.aliases,
             escaped: input.escaped,
             leads: input.leads,
+            shell: input.shell,
+            original: input.original,
             deferred,
             call: yield* ToolCurrentCall.Current,
           }
@@ -583,13 +727,18 @@ const layer = Layer.effect(
         Effect.gen(function* () {
           const existing = pending.get(input.requestID)
           if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
+          const revised = input.content === undefined ? undefined : yield* revise(existing, input.reply, input.content)
+          // A version equal to the file as it was read keeps nothing of the proposal, so it is a reject, as when the
+          // person undoes the proposal in the editor.
+          const decision = revised === null ? "reject" : input.reply
           yield* bus.publish(Permission.Event.Replied, {
             sessionID: existing.request.sessionID,
             requestID: existing.request.id,
-            reply: input.reply,
+            reply: decision,
+            ...(revised ? { files: revised.files } : {}),
           })
 
-          if (input.reply === "reject") {
+          if (decision === "reject") {
             yield* Deferred.fail(
               existing.deferred,
               input.message ? new CorrectedError({ feedback: input.message }) : new DeclinedError(),
@@ -613,7 +762,7 @@ const layer = Layer.effect(
           }
 
           // Under managed_permissions_only an "always" reply acts as "once": nothing is saved and no other ask is lifted.
-          const always = input.reply === "always" && !managed.current().restrictions.managed_permissions_only
+          const always = decision === "always" && !managed.current().restrictions.managed_permissions_only
           if (always && existing.request.save?.length) {
             yield* saved.add({
               projectID: location.project.id,
@@ -621,7 +770,7 @@ const layer = Layer.effect(
               resources: existing.request.save,
             })
           }
-          yield* Deferred.succeed(existing.deferred, undefined)
+          yield* Deferred.succeed(existing.deferred, revised ? { content: revised.content } : undefined)
           pending.delete(input.requestID)
           if (!always || !existing.request.save?.length) return
 
@@ -632,6 +781,7 @@ const layer = Layer.effect(
               aliases: item.aliases,
               escaped: item.escaped,
               leads: item.leads,
+              shell: item.shell,
             }).pipe(Effect.catchTag("Session.NotFoundError", () => Effect.undefined))
             if (result?.effect !== "allow") continue
             yield* bus.publish(Permission.Event.Replied, {
@@ -645,6 +795,29 @@ const layer = Layer.effect(
         }),
       ),
     )
+
+    // Checks a reply's revised content against its question. Only a "once" reply to a question the tool made revisable
+    // takes one; anything else is refused before anything is published, so the question stays. `null` means the content
+    // equals the file as the question read it.
+    const revise = Effect.fnUntraced(function* (existing: Pending, decision: Reply, revision: string) {
+      const original = existing.original
+      if (decision !== "once")
+        return yield* new RevisionError({
+          requestID: existing.request.id,
+          reason: "Revised content can only be given with a once reply",
+        })
+      if (!original)
+        return yield* new RevisionError({
+          requestID: existing.request.id,
+          reason: "This question does not take revised content: only an Edit or Write approval does",
+        })
+      const content = Bom.split(revision).text
+      if (content === original.text) return null
+      return {
+        content,
+        files: [{ ...fileDiff(original.file, original.text, content, original.status), place: original.place }],
+      }
+    })
 
     const list = Effect.fn("Permission.list")(function* () {
       return Array.from(pending.values(), (item) => item.request)
@@ -662,7 +835,7 @@ const layer = Layer.effect(
       return pending.get(id)?.call
     })
 
-    return Service.of({ ask, assert, denied, reply, get, forSession, list, callOf, close })
+    return Service.of({ ask, assert, denied, allowed, reply, get, forSession, list, callOf, close })
   }),
 )
 
@@ -679,5 +852,10 @@ export const node = makeLocationNode({
     ManagedPolicy.node,
     Global.node,
     FSUtil.node,
+    MemoryStore.node,
+    // Before `MemoryTeam`: with it after, a Location whose config cannot be read failed with an interruption in place
+    // of the config's own error (test/location-layer.test.ts, "retries after repairing config reference").
+    MemoryAgent.node,
+    MemoryTeam.node,
   ],
 })

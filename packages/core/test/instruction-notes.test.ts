@@ -52,6 +52,8 @@ type Setup = {
   readonly spelled?: string
   readonly vcs?: "git" | "hg"
   readonly filesystem?: Layer.Layer<FSUtil.Service>
+  /** Runs once, after the writer has looked at the file and just before it asks for the file's lock. */
+  readonly beforeLock?: Effect.Effect<void>
 }
 
 const layerFor = (input: Setup) => {
@@ -97,6 +99,7 @@ const layerFor = (input: Setup) => {
           ),
         ),
         ...(input.filesystem ? [FSUtil.node.replace(input.filesystem)] : []),
+        ...(input.beforeLock ? [FileMutation.node.replace(lockingAfter(input.beforeLock))] : []),
         Watcher.node.replace(watcher),
         ManagedSettings.node.replace(emptyManagedNode),
         Environment.node.replace(Layer.mock(Environment.Service, { files: {} as never, spawner: {} as never })),
@@ -107,6 +110,24 @@ const layerFor = (input: Setup) => {
     watcher,
   )
 }
+
+// The real file locks, with `before` run once in the gap between the writer's look at the file and its lock. A change
+// made there is one the writer can only meet under the lock, ordered without a clock.
+const lockingAfter = (before: Effect.Effect<void>) =>
+  Layer.effect(
+    FileMutation.Service,
+    Effect.gen(function* () {
+      const real = yield* FileMutation.Service
+      const first = yield* Effect.cached(before)
+      return FileMutation.Service.of({ ...real, withLock: (targets) => (effect) => first.pipe(Effect.andThen(real.withLock(targets)(effect))) })
+    }),
+  ).pipe(
+    Layer.provide(
+      LayerNode.compile(FileMutation.node, {
+        replacements: [Environment.node.replace(Layer.mock(Environment.Service, { files: {} as never, spawner: {} as never }))],
+      }),
+    ),
+  )
 
 const start = Effect.gen(function* () {
   yield* ConfigInstructionPlugin.Plugin.effect(host())
@@ -939,6 +960,127 @@ describe("InstructionNotes.add", () => {
       }),
     )
   })
+})
+
+// `/memory` opens the file a `#` note would be added to: one resolution, so the two never pick different files (class 3).
+describe("InstructionNotes.ensure", () => {
+  it.live("ensure creates and returns the file a note would be added to, and add then appends to it", () =>
+    Effect.gen(function* () {
+      for (const scope of ["project", "user"] as const) {
+        const where = yield* scratch
+        yield* Effect.gen(function* () {
+          const { notes } = yield* start
+          const named = (yield* notes.targets()).find((item) => item.scope === scope)!
+          expect(named.exists).toBe(false)
+          const ensured = yield* notes.ensure(scope)
+          expect(ensured).toEqual({ path: yield* Effect.promise(() => fs.realpath(named.path)), created: true })
+          expect(yield* read(ensured.path)).toBe("")
+          // A second call finds it and creates nothing.
+          expect(yield* notes.ensure(scope)).toEqual({ path: ensured.path, created: false })
+          const added = yield* notes.add({ scope, text: "after" })
+          expect(yield* Effect.promise(() => fs.realpath(added.path))).toBe(ensured.path)
+          expect(yield* read(ensured.path)).toBe("- after\n")
+        }).pipe(Effect.provide(layerFor(where)))
+      }
+
+      // With ORBIT.md at the root, both pick it and AGENTS.md is never made.
+      const both = yield* scratch
+      const orbit = path.join(both.root, "ORBIT.md")
+      yield* write(orbit, "orbit\n")
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect(yield* notes.ensure("project")).toEqual({ path: orbit, created: false })
+        expect((yield* notes.add({ scope: "project", text: "x" })).path).toBe(orbit)
+        expect(yield* read(orbit)).toBe("orbit\n- x\n")
+        expect(yield* exists(path.join(both.root, "AGENTS.md"))).toBe(false)
+      }).pipe(Effect.provide(layerFor(both)))
+    }),
+  )
+
+  // A file that appears after ensure looked and before it holds the file's lock (an edit tool writing it) is kept as it
+  // is, and ensure says it made nothing.
+  it.live("keeps a file that appears while ensure waits for its lock, and does not claim to have created it", () =>
+    Effect.gen(function* () {
+      const where = yield* scratch
+      const file = path.join(where.root, "AGENTS.md")
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect(yield* notes.ensure("project")).toEqual({ path: file, created: false })
+        expect(yield* read(file)).toBe("written meanwhile\n")
+      }).pipe(Effect.provide(layerFor({ ...where, beforeLock: write(file, "written meanwhile\n") })))
+    }),
+  )
+
+  // What ensure answers must really be in the folder the target named: a link to a file outside that appears after ensure
+  // looked and before it holds the lock is refused, in a trusted project as well, and the file it leads to is left alone
+  // (class 4). The control: with nothing appearing there, ensure makes the file in the project.
+  it.live("refuses a link to a file outside that appears while ensure waits for its lock", () =>
+    Effect.gen(function* () {
+      if (!canLinkFile) return
+      const where = yield* scratch
+      const file = path.join(where.root, "AGENTS.md")
+      const outside = path.join(where.base, "outside.md")
+      yield* write(outside, "secret\n")
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect(yield* outcome(notes.ensure("project"))).toBe("outside")
+      }).pipe(Effect.provide(layerFor({ ...where, beforeLock: Effect.promise(() => fs.symlink(outside, file)) })))
+      expect(yield* read(outside)).toBe("secret\n")
+
+      const control = yield* scratch
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect(yield* notes.ensure("project")).toEqual({
+          path: yield* Effect.promise(() => fs.realpath(path.join(control.root, "AGENTS.md"))),
+          created: true,
+        })
+      }).pipe(Effect.provide(layerFor({ ...control, beforeLock: Effect.void })))
+    }),
+  )
+
+  // `/memory` opens what ensure answers, so a file that leads out of a project that is not trusted is refused as a note
+  // there is, and the place it leads to is never named; a trusted project follows its own link (the control).
+  it.live("refuses a root file that leads outside an untrusted project, and answers the real file once trusted", () =>
+    Effect.gen(function* () {
+      if (!canLinkFile) return
+      const where = yield* scratch
+      const outside = path.join(where.base, "outside.md")
+      yield* write(outside, "secret\n")
+      yield* Effect.promise(() => fs.symlink(outside, path.join(where.root, "AGENTS.md")))
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect(yield* outcome(notes.ensure("project"))).toBe("outside")
+      }).pipe(Effect.provide(layerFor({ ...where, trusted: false })))
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect(yield* notes.ensure("project")).toEqual({ path: outside, created: false })
+      }).pipe(Effect.provide(layerFor({ ...where, trusted: true })))
+      expect(yield* read(outside)).toBe("secret\n")
+    }),
+  )
+
+  // An exclusive create on Windows follows a link at the file's own place, even one that leads nowhere, so neither ensure
+  // nor add may create through one, in a trusted project as well (class 4). The plain project is the control.
+  it.live("never creates through a dangling link at the file's place, in a trusted project", () =>
+    Effect.gen(function* () {
+      if (!canLinkFile) return
+      const where = yield* scratch
+      const outside = path.join(where.base, "outside.md")
+      yield* Effect.promise(() => fs.symlink(outside, path.join(where.root, "AGENTS.md"), "file"))
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect(yield* outcome(notes.ensure("project"))).toBe("outside")
+        expect(yield* outcome(notes.add({ scope: "project", text: "n" }))).toBe("outside")
+      }).pipe(Effect.provide(layerFor({ ...where, trusted: true })))
+      expect(yield* exists(outside)).toBe(false)
+
+      const control = yield* scratch
+      yield* Effect.gen(function* () {
+        const { notes } = yield* start
+        expect((yield* notes.ensure("project")).created).toBe(true)
+      }).pipe(Effect.provide(layerFor({ ...control, trusted: true })))
+    }),
+  )
 })
 
 describe("InstructionNotes.format", () => {

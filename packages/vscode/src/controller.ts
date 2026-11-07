@@ -3,12 +3,15 @@ import {
   type OrbitClient,
   type OrbitEvent,
   type SessionMessageInfo,
+  type SessionRewindFiles,
   type TrustStatus,
 } from "@orbit/client"
 import { plain } from "@orbit/flow/plain"
 import { PermissionView } from "@orbit/schema/permission-view"
+import path from "node:path"
 import type { FileChange, FormRequest, Item, Mode, Model, Todo, TrustView, WorkflowAgent } from "./protocol.js"
-import { aboveFolders, holdsBack, readStatus, trusted, view, type TrustGrant } from "./trust.js"
+import type { Folders, Outcome } from "./review.js"
+import { asksTrust, readStatus, trusted, view, type TrustGrant } from "./trust.js"
 import { legacyToolName } from "./tool-name.js"
 
 export type Update =
@@ -126,7 +129,8 @@ export class Controller {
     if (session.title) this.emit({ type: "title", title: session.title })
     if (session.agent === "build" || session.agent === "plan") this.agent = session.agent
     for (const message of await this.history(sessionID)) {
-      if (message.type === "user") this.update({ type: "user", id: `user:${message.id}`, text: message.text })
+      if (message.type === "user")
+        this.update({ type: "user", id: `user:${message.id}`, text: message.text, messageID: message.id })
       if (message.type === "synthetic") {
         const notice = loopNotice(message.metadata, message.description)
         if (notice) this.update({ type: "note", id: `notice:${message.id}`, text: notice, tone: "muted" })
@@ -196,6 +200,15 @@ export class Controller {
             JSON.stringify(text),
         tone: "error",
       })
+    // Nothing starts in a folder that is not trusted: no session, and no request to the model (trust-first, class 12).
+    // The server would refuse it too, with the same words.
+    if (this.status?.trusted !== true)
+      return this.update({
+        type: "note",
+        id: `trust:${crypto.randomUUID()}`,
+        text: `${plain(this.status?.directory ?? this.directory)} is not trusted, so the message was not sent: nothing a folder holds is read, and no work starts there, until it is trusted. Trust it from the banner above or with \`orb trust\`, then send it again.`,
+        tone: "error",
+      })
     const sessionID = this.session ?? (await this.create())
     // The editor context goes first, with no description so no client draws it, and without resuming so the prompt
     // below starts the work. One that cannot be admitted, or not soon enough, costs only itself.
@@ -208,23 +221,147 @@ export class Controller {
         .catch((error: unknown) =>
           this.emit({ type: "log", text: `Editor context was not sent: ${message(error)}` }),
         )
-    this.update({ type: "user", id: `user:${crypto.randomUUID()}`, text, context: shown })
+    const user = { type: "user" as const, id: `user:${crypto.randomUUID()}`, text, context: shown }
+    this.update(user)
     this.emit({ type: "busy", busy: true })
-    await this.client.session.prompt({ sessionID, text, delivery: "steer" }).catch((error: unknown) => {
-      this.emit({ type: "busy", busy: false })
-      this.update({ type: "note", id: `error:${crypto.randomUUID()}`, text: message(error), tone: "error" })
-    })
+    // The delivered message keeps the ID of the inbox item, so the prompt's changes can be asked for by it.
+    await this.client.session.prompt({ sessionID, text, delivery: "steer" }).then(
+      (admitted) => this.update({ ...user, messageID: admitted.id }),
+      (error: unknown) => {
+        this.emit({ type: "busy", busy: false })
+        this.update({ type: "note", id: `error:${crypto.randomUUID()}`, text: message(error), tone: "error" })
+      },
+    )
   }
 
   async stop() {
     if (this.session) await this.client.session.interrupt({ sessionID: this.session }).catch(() => undefined)
   }
 
-  async reply(id: string, decision: "once" | "always" | "reject") {
+  /**
+   * Answers a question; `content` is the person's own version of the file, which the server checks, diffs and writes.
+   * The answer takes at most `limits.grant`. A question that another answer already ended is `gone`; one the server
+   * refuses, or does not answer in time, stays pending, and the chat says why (classes 7 and 13).
+   */
+  async reply(id: string, decision: "once" | "always" | "reject", content?: string): Promise<Outcome> {
     const item = this.items.get(id)
-    if (item?.type !== "permission" || item.status !== "pending") return
-    await this.client.permission.reply({ sessionID: item.sessionID, requestID: item.id, decision })
-    this.update({ ...item, status: decision })
+    if (item?.type !== "permission" || item.status !== "pending") return "gone"
+    const outcome = await this.client.permission
+      .reply(
+        { sessionID: item.sessionID, requestID: item.id, decision, ...(content === undefined ? {} : { content }) },
+        { signal: AbortSignal.timeout(this.wait.grant) },
+      )
+      .then(
+        (): Outcome => "sent",
+        (error: unknown): Outcome => {
+          if (error instanceof Error && error.name === "PermissionNotFoundError") return "gone"
+          return { refused: refusal(error) }
+        },
+      )
+    if (typeof outcome === "object") this.note(outcome.refused, "error")
+    return outcome
+  }
+
+  /** One line in the chat. */
+  note(text: string, tone: "muted" | "error") {
+    this.update({ type: "note", id: `note:${crypto.randomUUID()}`, text, tone })
+  }
+
+  /**
+   * Marks a question as open for review in the editor, so its card says how to answer there; with `open` false, clears
+   * the mark once that tab is gone unanswered.
+   */
+  reviewing(id: string, open = true) {
+    const item = this.items.get(id)
+    if (item?.type === "permission" && item.status === "pending") this.update({ ...item, reviewing: open })
+  }
+
+  /**
+   * The folders a session's file tools work in, as the server names them: its Location's folder and its project's
+   * folder, read from the server for each action after a fresh trust read. Nothing else is asked of a folder that is not
+   * trusted, and a failure or a late answer names no folder (classes 1, 3 and 7). The session may work in another folder
+   * than the chat's, and its files are read from there, so that folder must be trusted too: the stricter answer wins.
+   */
+  async folders(sessionID: string): Promise<Folders> {
+    const status = await this.read(true)
+    if (status?.trusted !== true) return { refused: status ? "untrusted" : "unavailable" }
+    const limit = () => ({ signal: AbortSignal.timeout(this.wait.read) })
+    const session = await this.client.session.get({ sessionID }, limit()).catch(() => undefined)
+    if (!session) return { refused: "unavailable" }
+    const location = { directory: session.location.directory }
+    const own = await this.client.location.trust.get({ location }, limit()).then(readStatus, () => undefined)
+    if (own?.trusted !== true) return { refused: own ? "untrusted" : "unavailable" }
+    const found = await this.client.location.get({ location }, limit()).catch(() => undefined)
+    if (!found) return { refused: "unavailable" }
+    // The file tools leave out a project folder that is a filesystem root (`FileAccess`), and so does the review.
+    const project = found.project.directory
+    return { folders: project === path.parse(project).root ? [found.directory] : [found.directory, project] }
+  }
+
+  /** The files a prompt of this chat's session changed with the file tools, as whole-file patches. */
+  async changes(messageID: string) {
+    if (!(await this.trustedNow())) return undefined
+    if (!this.session) return void this.note("Send a message first: this chat has no session yet.", "error")
+    // Every refusal gets the server's own sentence: a prompt that moved into a worktree, for one, cannot be listed. A
+    // service older than `scope` ignores it and lists the whole turn instead (docs/upgrading.md).
+    return this.client.session
+      .diff(
+        { sessionID: this.session, from: messageID, scope: "prompt" },
+        { signal: AbortSignal.timeout(this.wait.grant) },
+      )
+      .catch((error: unknown) => {
+        this.note(
+          `Could not list the changes: ${late(error) ? "the Orbit service did not answer in time." : plain(message(error))}`,
+          "error",
+        )
+        return undefined
+      })
+  }
+
+  /**
+   * Puts the files a prompt changed back as they were before it, through the server, which checks every path (class
+   * 12). A dry run comes first; only when it can be done and `confirm` says yes does the restore itself go out.
+   */
+  async restore(messageID: string, confirm: (dry: SessionRewindFiles) => Promise<boolean>) {
+    if (!(await this.trustedNow())) return
+    if (!this.session) return this.note("Send a message first: this chat has no session yet.", "error")
+    const target = { sessionID: this.session, messageID }
+    // Each call takes at most `limits.grant`. A restore that gave up waiting may still finish on the server, so its note
+    // does not say that nothing changed.
+    const limit = () => ({ signal: AbortSignal.timeout(this.wait.grant) })
+    const fail = (slow: string) => (error: unknown) => {
+      this.note(late(error) ? slow : `Files not restored: ${plain(message(error))}`, "error")
+      return undefined
+    }
+    const dry = await this.client.session.revert
+      .files({ ...target, dryRun: true }, limit())
+      .catch(fail("Files not restored: the Orbit service did not answer in time."))
+    if (!dry) return
+    if (!dry.canRewind) return this.note(`Files not restored: ${plain(dry.error ?? "the server cannot restore them")}`, "error")
+    if (!(await confirm(dry))) return
+    const done = await this.client.session.revert
+      .files(target, limit())
+      .catch(
+        fail(
+          "The Orbit service did not answer the restore in time. It may still finish: look at the files before you restore again.",
+        ),
+      )
+    const count = dry.filesChanged?.length ?? 0
+    if (done)
+      this.note(`Restored ${count} ${count === 1 ? "file" : "files"} to how they were before this prompt.`, "muted")
+  }
+
+  // A fresh trust read before an action that reads a file or changes files; a folder that is not trusted gets one note.
+  private async trustedNow() {
+    const status = await this.read(true)
+    if (status?.trusted === true) return true
+    this.note(
+      status
+        ? `${plain(status.directory)} is not trusted, so nothing in it is read or changed. Trust it from the banner above or with \`orb trust\`.`
+        : "The server's trust could not be reached, so nothing was read or changed. Try again in a moment.",
+      "error",
+    )
+    return false
   }
 
   /** Answers a form, or dismisses it when there is no answer. */
@@ -269,15 +406,15 @@ export class Controller {
     return this.answered && !this.unchecked
   }
 
-  // Asks about trust before the first work in a folder that holds something back and that the person has not said "not
-  // now" to. The question is asked once however many prompts arrive meanwhile, and a grant that fails is reported in the
-  // chat: the prompt is not lost, it goes on without what the folder holds back, as it does after "not now".
+  // Asks about trust before the first work in a folder that is not trusted, and that the person has not said "not now"
+  // to. The question is asked once however many prompts arrive meanwhile, and a
+  // grant that fails is reported in the chat. A folder that is still not trusted afterwards gets no work (`send`).
   private async gate() {
     const grant = await this.decision(false).catch((error: unknown) => {
       this.update({
         type: "note",
         id: `trust:${crypto.randomUUID()}`,
-        text: `Could not trust the folder: ${message(error)} This chat goes on without what the folder holds back.`,
+        text: `Could not trust the folder: ${message(error)}`,
         tone: "error",
       })
       return undefined
@@ -294,7 +431,7 @@ export class Controller {
     // Asked of the server now, not of the last answer: someone may have trusted the folder, or ended its trust, with
     // `orb trust` since.
     const status = await this.read()
-    if (!status || !holdsBack(status) || (!forced && this.dismissed.has(status.directory))) return undefined
+    if (!status || !asksTrust(status) || (!forced && this.dismissed.has(status.directory))) return undefined
     if ((await this.ask(view(status, this.directory))) === "later") {
       this.dismissed.add(status.directory)
       return undefined
@@ -307,8 +444,7 @@ export class Controller {
   // Then the folder this chat works in is asked about again: both answers must say trusted, and the stricter one stands.
   private async grant(shown: TrustStatus): Promise<TrustGrant> {
     const granted = await this.client.location.trust.update(
-      // A grant that is stored stays stored when it is renewed after a change; one that lasts until Orbit restarts, too.
-      { location: { directory: shown.directory }, trust: true, persist: shown.trusted ? shown.source === "saved" : shown.persistent },
+      { location: { directory: shown.directory }, trust: true, persist: shown.persistent },
       { signal: AbortSignal.timeout(this.wait.grant) },
     )
     // Folder names are the repository's to choose, so they are written out wherever a person reads them.
@@ -321,7 +457,7 @@ export class Controller {
       throw new Error(
         `The server trusted ${plain(shown.directory)} but does not report ${plain(this.directory)} as trusted.`,
       )
-    return { directory: plain(confirmed.directory), persistent: confirmed.persistent, above: aboveFolders(confirmed) }
+    return { directory: plain(confirmed.directory), persistent: confirmed.persistent }
   }
 
   // Asks the server whether the folder VS Code opened is trusted, and returns the answer that stands afterwards. The
@@ -372,7 +508,7 @@ export class Controller {
   private publish() {
     this.emit({
       type: "trust",
-      trust: this.status && holdsBack(this.status) ? view(this.status, this.directory) : undefined,
+      trust: this.status && asksTrust(this.status) ? view(this.status, this.directory) : undefined,
       unchecked: this.unchecked,
     })
   }
@@ -536,7 +672,9 @@ export class Controller {
         return
       case "permission.replied": {
         const current = this.items.get(event.data.requestID)
-        if (current?.type === "permission") this.update({ ...current, status: event.data.reply })
+        // The server names the files only when it approved the person's own version (class 8).
+        if (current?.type === "permission")
+          this.update({ ...current, status: event.data.reply, revised: (event.data.files?.length ?? 0) > 0 })
         return
       }
       case "session.step.failed":
@@ -607,6 +745,7 @@ export function permissionItem(request: {
   readonly resources: ReadonlyArray<string>
   readonly save?: ReadonlyArray<string>
   readonly metadata?: Readonly<Record<string, unknown>>
+  readonly revisable?: boolean
 }): Extract<Item, { type: "permission" }> {
   return {
     type: "permission",
@@ -618,15 +757,24 @@ export function permissionItem(request: {
     canSave: (request.save?.length ?? 0) > 0,
     files: changes(request.metadata),
     status: "pending",
+    // A server older than the edited reply does not send it, and its questions are only previewed (class 7).
+    revisable: request.revisable === true,
   }
 }
 
+// The files of a request or a result. Each entry is checked here, where it enters, and one that is malformed costs only
+// itself (class 7).
 function changes(metadata: Readonly<Record<string, unknown>> | undefined): ReadonlyArray<FileChange> {
   const files = metadata?.files
   if (!Array.isArray(files)) return []
-  return files.flatMap((file: unknown) =>
-    typeof file === "object" && file !== null && "file" in file && "patch" in file ? [file as FileChange] : [],
-  )
+  const text = (value: unknown) => value === undefined || typeof value === "string"
+  return files.flatMap((file: unknown) => {
+    if (typeof file !== "object" || file === null) return []
+    const entry = file as Record<string, unknown>
+    if (typeof entry.file !== "string" || typeof entry.patch !== "string") return []
+    if (!text(entry.place) || !text(entry.from) || !text(entry.status)) return []
+    return [file as FileChange]
+  })
 }
 
 // A workflow's agents from its progress metadata; malformed entries are dropped.
@@ -673,6 +821,20 @@ function todos(value: unknown): ReadonlyArray<Todo> | undefined {
 
 function message(error: unknown) {
   return error instanceof Error ? error.message : String(error)
+}
+
+// Why an answer was not taken: the server's sentence, written out, or a fixed one when it did not answer in time. A late
+// answer may still be taken, since giving up on it here does not stop the server, so that sentence points to the card.
+function refusal(error: unknown) {
+  if (late(error))
+    return "The Orbit service did not answer in time. The card shows the question's state; answer again if it is still waiting."
+  return plain(message(error))
+}
+
+// The call gave up because the server did not answer within its time limit.
+function late(error: unknown) {
+  const cause = error instanceof ClientError ? error.cause : undefined
+  return typeof cause === "object" && cause !== null && "name" in cause && cause.name === "TimeoutError"
 }
 
 // A server older than workspace trust has no trust route, and answers 404.

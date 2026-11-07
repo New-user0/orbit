@@ -1,9 +1,12 @@
 import { SessionMessage } from "@orbit/schema/session-message"
 import { SessionInbox } from "@orbit/schema/session-inbox"
 import { SessionTurn } from "@orbit/schema/session-turn"
+import { SessionAssist } from "@orbit/schema/session-assist"
 import { PromptInput } from "@orbit/schema/prompt-input"
 import { Session } from "@orbit/schema/session"
 import { SessionStats } from "@orbit/schema/session-stats"
+import { SessionContextUsage } from "@orbit/schema/session-context-usage"
+import { SessionCost } from "@orbit/schema/session-cost"
 import { InstructionEntry } from "@orbit/schema/instruction-entry"
 import { Instruction } from "@orbit/schema/instruction"
 import { Project } from "@orbit/schema/project"
@@ -19,6 +22,7 @@ import { Event } from "@orbit/schema/event"
 import { Context, Effect, Encoding, Result, Schema, SchemaGetter, Struct } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import {
+  AgentNotFoundError,
   ConflictError,
   CommandExecutionError,
   CommandNotFoundError,
@@ -27,12 +31,15 @@ import {
   FormNotFoundError,
   InvalidCursorError,
   InvalidRequestError,
+  MainSessionOnlyError,
   MessageNotFoundError,
+  RewindFilesError,
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
   SkillNotFoundError,
   UnknownError,
+  UntrustedFolderError,
 } from "../errors.js"
 import { Agent } from "@orbit/schema/agent"
 import { Skill } from "@orbit/schema/skill"
@@ -231,7 +238,7 @@ export const makeSessionGroup = <
           permissions: Permission.Ruleset.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: PublicSessionInfo }),
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, UntrustedFolderError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "session.create",
@@ -248,7 +255,7 @@ export const makeSessionGroup = <
           location: Location.PublicRef.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: PublicSessionInfo }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, SessionNotFoundError, UntrustedFolderError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "experimental.session.import",
@@ -315,7 +322,7 @@ export const makeSessionGroup = <
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ before: SessionMessage.ID.pipe(Schema.optional) }),
         success: Schema.Struct({ data: PublicSessionInfo }),
-        error: [SessionNotFoundError, MessageNotFoundError, InvalidRequestError],
+        error: [SessionNotFoundError, MessageNotFoundError, InvalidRequestError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -368,7 +375,7 @@ export const makeSessionGroup = <
           permissions: Permission.Ruleset.pipe(Schema.optional),
         }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -384,12 +391,13 @@ export const makeSessionGroup = <
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ ...Location.PublicRef.fields, delivery: SessionInbox.Delivery.pipe(Schema.optional) }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, InvalidRequestError],
+        error: [SessionNotFoundError, InvalidRequestError, UntrustedFolderError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "session.move",
           summary: "Move session",
-          description: "Move a session to another project directory at the requested delivery boundary.",
+          description:
+            "Move a session to another project directory at the requested delivery boundary. A relative directory, or one that starts with ~, is read from the session's own folder, and the folder must be trusted.",
         }),
       ),
     )
@@ -405,7 +413,7 @@ export const makeSessionGroup = <
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInbox.User }),
-        error: [ConflictError, InvalidRequestError, SessionNotFoundError],
+        error: [ConflictError, InvalidRequestError, SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -425,7 +433,7 @@ export const makeSessionGroup = <
           delivery: SessionInbox.Delivery.pipe(Schema.optional),
         }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, CommandNotFoundError, CommandExecutionError],
+        error: [SessionNotFoundError, CommandNotFoundError, CommandExecutionError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -444,7 +452,7 @@ export const makeSessionGroup = <
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, SkillNotFoundError],
+        error: [SessionNotFoundError, SkillNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -467,7 +475,7 @@ export const makeSessionGroup = <
           resume: Schema.Boolean.pipe(Schema.optional),
         }),
         success: Schema.Struct({ data: SessionInbox.Synthetic }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -486,7 +494,7 @@ export const makeSessionGroup = <
           command: Schema.String,
         }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -504,9 +512,16 @@ export const makeSessionGroup = <
         payload: Schema.Struct({
           id: SessionMessage.ID.pipe(Schema.optional),
           delivery: SessionInbox.Delivery.pipe(Schema.optional),
+          instructions: Schema.String.pipe(
+            Schema.optional,
+            Schema.annotateKey({
+              description:
+                "Text added to this compaction's summary prompt. Blank counts as none. A request with instructions replaces a pending compaction; one without joins it.",
+            }),
+          ),
         }),
         success: Schema.Struct({ data: SessionInbox.Compaction }),
-        error: [ConflictError, SessionNotFoundError],
+        error: [ConflictError, SessionNotFoundError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -514,7 +529,7 @@ export const makeSessionGroup = <
             identifier: "session.compact",
             summary: "Compact session",
             description:
-              "Durably admit a session compaction request. Steers by default: it runs at the next step boundary instead of waiting behind queued prompts.",
+              "Durably admit a session compaction request. Steers by default: it runs at the next step boundary instead of waiting behind queued prompts. Optional instructions are added to the summary prompt; a request with instructions replaces a pending compaction, and one without joins it.",
           }),
         ),
     )
@@ -550,6 +565,28 @@ export const makeSessionGroup = <
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.revert.files", "/api/session/:sessionID/revert/files", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          messageID: SessionMessage.ID.annotate({ description: "The prompt whose checkpoint the files go back to." }),
+          dryRun: Schema.Boolean.pipe(Schema.optional).annotate({
+            description: "Report what a rewind would change without changing it.",
+          }),
+        }),
+        success: Schema.Struct({ data: Session.RewindFiles }),
+        error: [MessageNotFoundError, SessionNotFoundError, SessionBusyError, RewindFilesError, UntrustedFolderError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.revert.files",
+            summary: "Rewind session files",
+            description:
+              "Put the files that the session's own file tools (Edit, Write, Patch, NotebookEdit) changed back as they were when a prompt's work began, leaving shell edits, other edits and the conversation as they are. Takes effect at once and cannot be undone. A dry run lists the files that would change with their line totals, and answers a rewind that cannot happen with `canRewind: false`; a real run refuses one with RewindFilesError.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.delete("session.revert.clear", "/api/session/:sessionID/revert", {
         params: { sessionID: Session.ID },
         success: HttpApiSchema.NoContent,
@@ -578,7 +615,44 @@ export const makeSessionGroup = <
         OpenApi.annotations({
           identifier: "session.context",
           summary: "Get session context",
-          description: "Retrieve the active context messages for a session (all messages after the last compaction).",
+          description:
+            "Retrieve the active context messages for a session: the latest checkpoint, the messages it keeps and everything after it, in the order they were recorded.",
+        }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.contextUsage", "/api/session/:sessionID/context/usage", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: SessionContextUsage.Info }),
+        error: [
+          SessionNotFoundError,
+          MainSessionOnlyError,
+          AgentNotFoundError,
+          ServiceUnavailableError,
+          UntrustedFolderError,
+        ],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.contextUsage",
+            summary: "Get context usage",
+            description:
+              "Estimate what the session's next request would carry, by category: the system prompt, tools, MCP tools, custom agents, instruction files, skills and messages, with the reserve and free space of the model's window. The total is the newest response's measured prompt when there is one. Only a main session is answered (a child gets MainSessionOnlyError), and only in a trusted folder. It is read only: nothing is recorded and no model is asked.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.cost", "/api/session/:sessionID/cost", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: SessionCost.Info }),
+        error: SessionNotFoundError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "session.cost",
+          summary: "Get session cost",
+          description:
+            "Summarize what the session and its subagents have cost, by provider and model, over the whole history and not only the part a client has loaded: the cost, the tokens, the time the providers spent answering, the lines the edit tools changed (unset for a session from before they were counted), and the spend no row explains. It reads stored rows only: it opens no folder and sends nothing to a model.",
         }),
       ),
     )
@@ -594,6 +668,10 @@ export const makeSessionGroup = <
           }),
           context: Schema.NumberFromString.pipe(Schema.decodeTo(NonNegativeInt), Schema.optional).annotate({
             description: "Unchanged lines around each hunk. Omit for full-file patches.",
+          }),
+          scope: Schema.Literals(["turn", "prompt"]).pipe(Schema.optional).annotate({
+            description:
+              "`turn` (the default) diffs whole turns. `prompt` diffs from `from` to the next user message and keeps only what the session's file tools changed, a steered prompt's own edits included; it takes no `to`.",
           }),
         }),
         success: Schema.Struct({ data: Schema.Array(FileDiff.Info) }),
@@ -659,7 +737,7 @@ export const makeSessionGroup = <
             blocked: Schema.optional(Schema.Array(Schema.String)),
           }).annotate({ identifier: "SessionInstructionsPreview" }),
         }),
-        error: [SessionNotFoundError, ServiceUnavailableError],
+        error: [SessionNotFoundError, ServiceUnavailableError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -738,7 +816,7 @@ export const makeSessionGroup = <
         success: Schema.Struct({
           data: Schema.Struct({ text: Schema.String }),
         }).annotate({ identifier: "SessionGenerateResponse" }),
-        error: [SessionNotFoundError, ServiceUnavailableError],
+        error: [SessionNotFoundError, ServiceUnavailableError, UntrustedFolderError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -746,6 +824,62 @@ export const makeSessionGroup = <
             identifier: "session.generate",
             summary: "Generate text from session context",
             description: "Generate transient text from the current session context without mutating session history.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.recap", "/api/session/:sessionID/recap", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ recorded: Schema.Boolean }).annotate({ identifier: "SessionRecapResponse" }),
+        error: [SessionNotFoundError, UntrustedFolderError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.recap",
+            summary: "Record an away summary",
+            description:
+              "Ask the small model for a short recap of the session for a person returning to it, at most once per turn of their input. Answers recorded: false when no recap was due, another request is writing one, no small model is available, or the call failed.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.assist.label", "/api/session/:sessionID/assist/label", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({
+          messageID: SessionMessage.ID.annotate({ description: "The assistant message that made the calls." }),
+          toolCallIDs: Schema.NonEmptyArray(Schema.String)
+            .check(Schema.isMaxLength(64))
+            .annotate({ description: "The tool calls of the finished batch, at most 64." }),
+        }),
+        success: Schema.Struct({ data: SessionAssist.Label }).annotate({ identifier: "SessionAssistLabelResponse" }),
+        error: [SessionNotFoundError, UntrustedFolderError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.assist.label",
+            summary: "Label a batch of tool calls",
+            description:
+              "Ask the side model for a short label of a finished batch of the session's tool calls. Nothing is stored or sent to the session. The label is model text, so escape it before printing it. The session's folder must be trusted.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.assist.suggestion", "/api/session/:sessionID/assist/suggestion", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: SessionAssist.Suggestion }).annotate({
+          identifier: "SessionAssistSuggestionResponse",
+        }),
+        error: [SessionNotFoundError, UntrustedFolderError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.assist.suggestion",
+            summary: "Suggest the next prompt",
+            description:
+              "Ask the session's model, with the session's history, what the person might type next. Nothing is stored or sent to the session; a newer request or a prompt admitted meanwhile cancels it. The suggestion is model text, so escape it before printing it. The session's folder must be trusted.",
           }),
         ),
     )

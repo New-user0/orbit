@@ -32,7 +32,7 @@ export default Runtime.handler(
       )
     const repository = found.root
     if (!repository) return yield* Effect.fail(new Error("orb flow clean works inside a git repository"))
-    const store = yield* Effect.promise(() => openStore(directory()))
+    const store = yield* Effect.promise(() => openStore(directory(), project.directory))
     const runs = store.runs(1000)
     store.close()
     const target = Option.getOrUndefined(input.run)

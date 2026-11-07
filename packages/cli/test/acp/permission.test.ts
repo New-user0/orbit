@@ -644,7 +644,12 @@ describe("acp edit previews over the wire", () => {
           id,
           toolStarted(sessionID, "call_edit", "edit"),
           toolCalled(sessionID, "call_edit", { filePath: file, oldString: "before", newString: "after" }),
-          toolSucceeded(sessionID, "call_edit", { files: [{ file }] }, "edited"),
+          toolSucceeded(
+            sessionID,
+            "call_edit",
+            { files: [{ file, patch: "--- file.ts\n+++ file.ts\n@@ -1,1 +1,1 @@\n-before\n+after\n" }] },
+            "edited",
+          ),
         ),
     })
     await acp.initialize({ writeTextFile: true })

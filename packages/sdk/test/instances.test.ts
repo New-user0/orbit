@@ -11,6 +11,8 @@ const hostOptions = (directory: string) => ({
   config: { directory, project: false, content: "{}" },
   models: { fetch: false },
   fs: { filewatcher: false },
+  // The sessions work in temporary folders that nothing grants, so the host trusts every folder (trust-first).
+  trust: { implicit: true },
 })
 
 test("Promise instances are lazy, share by key and Location, and stay isolated between hosts", async () => {
@@ -51,6 +53,7 @@ test("Promise instances are lazy, share by key and Location, and stay isolated b
       ...hostOptions(directory.path),
       database: { path: join(directory.path, `${name}.sqlite`) },
       instances,
+      trust: { implicit: true },
     })
   }
 
@@ -181,6 +184,7 @@ test.each(["configuration", "plugin setup"])(
           }
         },
       },
+      trust: { implicit: true },
     })
     const healthy = await orbit.sessions.create({
       location: { directory: directory.path },
@@ -331,6 +335,7 @@ test("Promise instance plugin ID collisions reject admission and reconstruct on 
         }
       },
     },
+    trust: { implicit: true },
   })
   const session = await orbit.sessions.create({
     location: { directory: directory.path },

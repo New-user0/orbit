@@ -908,7 +908,17 @@ test("renders structured write finals once as code blocks", async () => {
             path: "src/a.ts",
             content: "const x = 1\nconst y = 2\n",
           },
-          metadata: {},
+          metadata: {
+            files: [
+              {
+                file: "src/a.ts",
+                status: "added",
+                patch: "--- src/a.ts\n+++ src/a.ts\n@@ -0,0 +1,2 @@\n+const x = 1\n+const y = 2\n",
+                additions: 2,
+                deletions: 0,
+              },
+            ],
+          },
           content: [{ type: "text", text: "" }],
         },
       }),
@@ -921,6 +931,75 @@ test("renders structured write finals once as code blocks", async () => {
       expect(output).toContain("# Wrote src/a.ts")
       expect(output).toMatch(/1\s+const x = 1/)
       expect(output).toMatch(/2\s+const y = 2/)
+    } finally {
+      destroy(commits)
+    }
+  } finally {
+    out.scrollback.destroy()
+  }
+})
+
+// What is shown is what ran (class 8): an approval answered with the person's own version writes that version, so a
+// completed Write is drawn from the diff the tool recorded, never from the model's `content`. Drawing from the input again
+// fails the revised rows, which would show PROPOSED.
+const writeRows = [
+  {
+    name: "a new file written with the person's revision",
+    files: [{ file: "src/a.ts", status: "added", patch: "--- src/a.ts\n+++ src/a.ts\n@@ -0,0 +1,1 @@\n+REVISED\n" }],
+    shows: ["# Wrote src/a.ts", "REVISED"],
+    hides: ["PROPOSED"],
+  },
+  {
+    name: "a file that was there, written with the person's revision",
+    files: [
+      {
+        file: "src/a.ts",
+        status: "modified",
+        patch: "--- src/a.ts\n+++ src/a.ts\n@@ -1,1 +1,1 @@\n-before\n+REVISED\n",
+      },
+    ],
+    shows: ["# Wrote src/a.ts", "before", "REVISED"],
+    hides: ["PROPOSED"],
+  },
+  {
+    name: "a new file written as proposed",
+    files: [{ file: "src/a.ts", status: "added", patch: "--- src/a.ts\n+++ src/a.ts\n@@ -0,0 +1,1 @@\n+PROPOSED\n" }],
+    shows: ["# Wrote src/a.ts", "PROPOSED"],
+    hides: [],
+  },
+  {
+    name: "a call that recorded no diff",
+    files: undefined,
+    shows: ["write completed"],
+    hides: ["PROPOSED", "# Wrote"],
+  },
+]
+
+test.each(writeRows)("a completed Write draws what ran: $name", async (row) => {
+  const out = await setup()
+
+  try {
+    await out.scrollback.append(
+      toolCommit({
+        tool: "write",
+        phase: "final",
+        toolState: "completed",
+        id: "tool-w",
+        messageID: "msg-w",
+        state: {
+          status: "completed",
+          input: { path: "src/a.ts", content: "PROPOSED\n" },
+          metadata: row.files ? { files: row.files } : {},
+          content: [{ type: "text", text: "" }],
+        },
+      }),
+    )
+
+    const commits = claim(out.renderer)
+    try {
+      const output = render(commits)
+      for (const text of row.shows) expect(output).toContain(text)
+      for (const text of row.hides) expect(output).not.toContain(text)
     } finally {
       destroy(commits)
     }

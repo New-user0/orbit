@@ -30,7 +30,7 @@ import { createSimpleContext } from "./helper"
 import { useConfig } from "../config"
 import { useStorageOptional } from "./storage"
 import { DevTools } from "../devtools"
-import { configDirectories } from "../util/config-directories"
+import { themeDirectories } from "../util/config-directories"
 
 const themePerformance = DevTools.register({ id: "theme-performance", title: "Theme performance" })
 export type ThemeError = { name: string; error: Error }
@@ -67,17 +67,43 @@ const themeErrors = createThemeErrors()
 export type ThemeSource = Readonly<{
   discover(): Promise<Record<string, unknown>>
   subscribeRefresh?(refresh: () => void): () => void
+  /** Calls `discover` back whenever what the source would find changes, such as when the start folder is trusted. */
+  subscribeDiscover?(discover: () => void): () => void
 }>
 
-export const createThemeSource = (config: string): ThemeSource => ({
-  async discover() {
-    return discoverThemes(configDirectories(config, process.cwd()))
-  },
-  subscribeRefresh(refresh) {
-    process.on("SIGUSR2", refresh)
-    return () => process.off("SIGUSR2", refresh)
-  },
-})
+/**
+ * The terminal UI's themes: the user's own from the start, and the project's (`.orbit/themes` from its root down to the
+ * start folder) only once `trust` says the start folder is trusted, as everything else a folder supplies waits (class 1).
+ * A custom theme replaces a built-in one of the same name, so a folder's theme could otherwise restyle the trust question
+ * itself before anyone answered it. An answer that was not read, or did not decode, is untrusted. `root` is the folder the
+ * server decided trust for, which bounds the walk (`themeDirectories`).
+ */
+export const createThemeSource = (input: { readonly config: string; readonly home: string }) => {
+  const listeners = new Set<() => void>()
+  let project: { readonly decided?: string } | undefined
+  let answered = "untrusted"
+  return {
+    async discover() {
+      return discoverThemes(await themeDirectories({ ...input, cwd: process.cwd(), project }))
+    },
+    subscribeRefresh(refresh: () => void) {
+      process.on("SIGUSR2", refresh)
+      return () => process.off("SIGUSR2", refresh)
+    },
+    subscribeDiscover(discover: () => void) {
+      listeners.add(discover)
+      return () => listeners.delete(discover)
+    },
+    trust(answer: { readonly trusted: boolean; readonly root?: string }) {
+      // The same answer read again finds the same themes.
+      const key = answer.trusted ? `trusted ${answer.root ?? ""}` : "untrusted"
+      if (key === answered) return
+      answered = key
+      project = answer.trusted ? { decided: answer.root } : undefined
+      for (const discover of listeners) discover()
+    },
+  }
+}
 
 export { discoverThemes } from "../theme/discovery"
 
@@ -173,14 +199,19 @@ const themeContext = createSimpleContext({
       if (mode === "system" && store.lock !== undefined) free(false)
     })
 
+    // A discovery that began before a newer one finished after it found what is no longer there, such as the themes of a
+    // folder whose trust was revoked in between, so only the newest one's themes are kept.
+    let discoveries = 0
     function syncCustomThemes() {
+      const attempt = ++discoveries
       return themes
         .discover()
         .then((themes) => {
-          setCustomThemes(themes)
+          if (attempt === discoveries) setCustomThemes(themes)
         })
         .catch(() => setStore("active", "orbit"))
     }
+    const unsubscribeDiscover = themes.subscribeDiscover?.(() => void syncCustomThemes())
 
     onMount(() => {
       // Terminal palette queries serialize with frame output. First paint uses the cached palette or built-in fallback.
@@ -300,6 +331,7 @@ const themeContext = createSimpleContext({
       renderer.off(CliRenderEvents.THEME_MODE, handleMode)
       renderer.removeInputHandler(handleThemeNotification)
       unsubscribeRefresh?.()
+      unsubscribeDiscover?.()
       for (const timeout of themeRefreshTimeouts) clearTimeout(timeout)
       themeRefreshTimeouts.length = 0
     })

@@ -1,19 +1,22 @@
 import type { TrustStatus } from "@orbit/client"
-import { isDeepEqual } from "remeda"
+import { Trust } from "@orbit/schema/trust"
+import { Option, Schema } from "effect"
 import { batch, createEffect, createMemo, createSignal, on, onCleanup, untrack } from "solid-js"
 import { DialogTrust } from "../component/dialog-trust"
 import { useDialog } from "../ui/dialog"
 import { useToast } from "../ui/toast"
 import { abbreviateHome } from "../util/path-format"
-import { groupWithheld, holdsBack, pluginTrust, trustCommands } from "../util/trust"
+import { asksTrust } from "../util/trust"
 import { useClient } from "./client"
 import { useData } from "./data"
+import { TrustDeclined, useExit } from "./exit"
 import { createSimpleContext } from "./helper"
 import { useLocation } from "./location"
 import { useLog } from "./log"
 import { useTuiPaths } from "./runtime"
 
 const DialogTrustKey = Symbol("DialogTrust")
+const decodeStatus = Schema.decodeUnknownOption(Trust.Status)
 
 /**
  * The trust status of the folder at `directory`, read again whenever the server reports that trust or config changed.
@@ -42,6 +45,11 @@ export function createTrustStatus(input: {
       // A server that takes the request and never answers would otherwise leave the terminal UI on its loading screen,
       // as nothing starts before the first answer. Two seconds, as `orb mini` allows; timing out is a failed read.
       .get({ location: { directory: directory() } }, { signal: AbortSignal.timeout(2_000) })
+      // An answer that is not a trust status is a failed read as well (class 7), not one to draw from.
+      .then((answer) => {
+        if (Option.isNone(decodeStatus(answer))) throw new Error("the answer is not a trust status")
+        return answer
+      })
       .then(
         (next) => {
           if (attempt === generation)
@@ -66,8 +74,11 @@ export function createTrustStatus(input: {
 
   createEffect(
     on(directory, () => {
-      // What was read for another folder says nothing about this one.
-      setStatus(undefined)
+      // What was read for another folder says nothing about this one, and nor does whether that read came back.
+      batch(() => {
+        setStatus(undefined)
+        setSettled(false)
+      })
       void refresh()
     }),
   )
@@ -78,7 +89,7 @@ export function createTrustStatus(input: {
   return { status, settled, refresh }
 }
 
-export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
+export const { use: useTrust, provider: TrustProvider, context: TrustContext } = createSimpleContext({
   name: "Trust",
   // `directory` is the folder the terminal UI was started in, which is where it looks for its project's plugins.
   init: (props: { directory: string }) => {
@@ -89,6 +100,7 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
     const toast = useToast()
     const paths = useTuiPaths()
     const log = useLog({ component: "trust" })
+    const exit = useExit()
     const directory = createMemo(() => (location.ref ?? data.location.default()).directory)
     // The plugins the terminal UI imports are the ones it finds from the folder it was started in, whichever session is
     // open, so what they may do follows that folder's trust and not that of the folder in view. That folder is asked
@@ -97,17 +109,39 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
     const current = createTrustStatus({ client, log, directory })
     // "Not now" holds for the rest of this run, by folder, so a refresh or a visit to another session asks no more.
     const [dismissed, setDismissed] = createSignal<ReadonlySet<string>>(new Set())
+    // What is known of the folder in view. A read that failed or timed out, with no answer before it, is taken as a
+    // folder that is not trusted, so the question opens anyway and names the folder it asked about (class 7). The
+    // server refuses work there whatever the terminal UI shows.
+    const asked = createMemo((): TrustStatus | undefined => {
+      const status = current.status()
+      if (status !== undefined || !current.settled()) return status
+      return { directory: directory(), trusted: false, persistent: true, withheld: [] }
+    })
+    // Whether a question about this folder is the one about the folder the terminal UI started in, which offers Exit in
+    // place of Not now: nothing can be done there until it is trusted, as the reference does.
+    // Home shows that folder, the server's default location, and a session shows its own unless the server names the
+    // same folder for both.
+    const starting = (status: TrustStatus) =>
+      directory() === data.location.default().directory || status.directory === startup.status()?.directory
+    // Whether the prompts take typing. Not until the folder in view has been read and, when it is the folder the terminal
+    // UI started in and is not trusted, the person has trusted it: the reference asks before it draws anything that takes
+    // input, so nothing typed ahead reaches a prompt or answers the question. A read that fails, times out or does not
+    // decode stands for a folder that is not trusted (`asked`), so it keeps the prompts closed too. Once open they stay
+    // open for the run.
+    const typing = createMemo((open: boolean) => {
+      if (open) return true
+      const status = asked()
+      return status !== undefined && (status.trusted || !starting(status))
+    }, false)
     // The folder to ask about, if any. A string, so that a fresh read of the same answer does not ask again.
     const pending = createMemo(() => {
-      const status = current.status()
-      if (!status || !holdsBack(status) || dismissed().has(status.directory)) return undefined
+      const status = asked()
+      if (!status || !asksTrust(status) || dismissed().has(status.directory)) return undefined
       return status.directory
     })
 
     // A choice is for `target`, the folder the dialog was opened for.
     const grant = async (target: string, persist: boolean) => {
-      // Asked before the grant, which clears it: whether this is a folder that was trusted and whose config changed.
-      const changed = current.status()?.trusted === true
       await client.api.location.trust
         .update({ location: { directory: target }, trust: true, persist })
         .then(async (status) => {
@@ -116,44 +150,42 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
           await Promise.all([current.refresh(), startup.refresh()])
           if (directory() === target && dialog.key === DialogTrustKey) dialog.clear()
           const folder = abbreviateHome(status.directory, paths.home)
-          // The grant lifts the folder's own config, so what is still held back sits above it, in folders of their own.
-          const above = groupWithheld(status.withheld).above
           toast.show({
             variant: "success",
-            message: [
-              changed
-                ? `Trusted the changes in ${folder}`
-                : status.persistent
-                  ? `Trusted ${folder}`
-                  : `Trusted ${folder} until Orbit restarts`,
-              ...(above.length === 0
-                ? []
-                : [`Config above it stays off until its own folder is trusted: ${trustCommands(above, target)}`]),
-            ].join(". "),
+            message: status.persistent ? `Trusted ${folder}` : `Trusted ${folder} until Orbit restarts`,
           })
         }, toast.error)
     }
 
     const open = () => {
-      const status = current.status()
+      const status = asked()
       if (!status) return
       // A dialog asks about one folder, the one in view now, and what is chosen in it is for that folder. When another
       // comes into view the dialog closes (below), so a choice is never made for a folder that was not on the screen.
       const folder = directory()
+      // The folder the terminal UI started in, while it is not trusted, is answered with Trust or Exit.
+      const leaving = !status.trusted && starting(status)
+      // Only a question that opens while the prompts are closed can start on Trust, because no keystroke meant for a
+      // prompt can reach it. One that opens later, such as after `orb trust --revoke`, starts on Exit or Not now.
+      const guarded = !typing()
       dialog.replace(
         () => (
           <DialogTrust
-            status={current.status() ?? status}
-            location={folder}
+            status={asked() ?? status}
+            leave={leaving ? "exit" : "later"}
+            guarded={guarded}
             onTrust={(persist) => grant(folder, persist)}
             onNotNow={() => dialog.clear()}
+            onDecline={() => exit(new TrustDeclined(0))}
           />
         ),
-        // However the dialog closes, unless the folder is trusted by then the answer is not now. The exception is a
-        // dialog that closes because another folder came into view: nobody answered it.
+        // However the dialog closes, unless the folder is trusted by then the answer is no: Exit for the folder the
+        // terminal UI started in, which ends it with status 1, and not now for any other. The exception is a dialog
+        // that closes because another folder came into view: nobody answered it.
         () => {
-          if (directory() === folder && holdsBack(current.status()))
-            setDismissed((previous) => new Set(previous).add(status.directory))
+          if (directory() !== folder || !asksTrust(asked())) return
+          if (leaving && asked()?.trusted !== true) return exit(new TrustDeclined(1))
+          setDismissed((previous) => new Set(previous).add(status.directory))
         },
         { key: DialogTrustKey },
       )
@@ -161,7 +193,7 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
     // Whoever trusts the folder first, here or with `orb trust`, settles the question.
     createEffect(() => {
       const status = current.status()
-      if (status !== undefined && !holdsBack(status) && dialog.key === DialogTrustKey) dialog.clear()
+      if (status !== undefined && !asksTrust(status) && dialog.key === DialogTrustKey) dialog.clear()
     })
     // Another folder coming into view ends the dialog, and `useTrustPrompt` asks about that folder once its status is
     // read.
@@ -174,7 +206,9 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
     return {
       /** The status of the folder in view: the current session's, or Home's. */
       status: current.status,
-      held: createMemo(() => holdsBack(current.status())),
+      held: createMemo(() => asksTrust(asked())),
+      /** Whether the prompts take typing: the folder in view was read, and is trusted unless it is another folder. */
+      typing,
       pending,
       open,
       /**
@@ -190,24 +224,10 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
         /** Whether the plugins in the project the terminal UI started in may load. */
         trusted: createMemo(() => startup.status()?.trusted === true),
         /**
-         * The folders above the project that the server still holds config back for, each until its own decision. The
-         * terminal UI finds its project's root without asking, so its plugins can lie in one of them. The same list is
-         * the same answer, so that a read that finds nothing new does not rebuild the plugins.
+         * The folder the server decided the startup folder's trust for. The terminal UI finds its project's root without
+         * asking, so this bounds its walk where the server's root is the narrower one (class 3).
          */
-        above: createMemo(
-          () => pluginTrust(startup.status()).above,
-          [],
-          { equals: isDeepEqual },
-        ),
-        /**
-         * The config directories whose plugins changed since their folder was trusted, which the server holds back until
-         * the changes are trusted. The terminal UI imports a project's plugins itself, so it leaves these out too.
-         */
-        changedPlugins: createMemo(
-          () => pluginTrust(startup.status()).changed,
-          [],
-          { equals: isDeepEqual },
-        ),
+        root: createMemo(() => startup.status()?.directory),
         /** Whether the first answer has come, whatever it was. */
         settled: startup.settled,
         /** Reads the status again now, for whoever is about to import a plugin and must not act on an older answer. */
@@ -218,8 +238,8 @@ export const { use: useTrust, provider: TrustProvider } = createSimpleContext({
 })
 
 /**
- * Asks whether to trust the folder in view when it holds something back and nobody has said not now. For the routes
- * that show a folder's work, which are Home and a session.
+ * Asks whether to trust the folder in view when it is not trusted and nobody has said not now. For the routes that show
+ * a folder's work, which are Home and a session.
  */
 export function useTrustPrompt() {
   const trust = useTrust()

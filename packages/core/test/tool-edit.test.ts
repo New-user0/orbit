@@ -897,6 +897,26 @@ describe("EditTool", () => {
     }),
   )
 
+  it.live("keeps a byte order mark that the replacement puts at the start of the file", () =>
+    withTempDir((tmp) => {
+      const target = path.join(tmp.path, "plain.txt")
+      return Effect.promise(() => fs.writeFile(target, "before\n")).pipe(
+        Effect.andThen(
+          withTool(tmp.path, makeEditFixture(), (registry) =>
+            executeTool(registry, call({ file_path: "plain.txt", old_string: "before", new_string: "\uFEFFafter" })),
+          ),
+        ),
+        Effect.andThen(() => Effect.promise(() => fs.readFile(target))),
+        Effect.tap((bytes) =>
+          Effect.sync(() => {
+            expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+            expect(bytes.subarray(3).toString("utf8")).toBe("after\n")
+          }),
+        ),
+      )
+    }),
+  )
+
   it.live("serializes concurrent edit transactions", () =>
     withTempDir((tmp) => {
       const edit = makeEditFixture()
@@ -1437,5 +1457,38 @@ describe("EditTool fidelity", () => {
         }),
       ),
     ),
+  )
+})
+
+// clients-ux-5: a code rewind learns which files the session's file tools changed from the calls it recorded. An Edit
+// that fails after it wrote (here a formatter leaves a folder that Edit cannot read back) still changed the file, so the
+// failed call names it too.
+describe("EditTool records the file it changed, for code rewind", () => {
+  it.live("names the file in a call that failed after writing", () =>
+    withTempDir((tmp) => {
+      const fixture = makeEditFixture()
+      fixture.formatFile = (target) =>
+        Effect.promise(async () => {
+          await fs.rm(target)
+          await fs.mkdir(target)
+          return true
+        })
+      return Effect.promise(() => fs.mkdir(path.join(tmp.path, "src"))).pipe(
+        Effect.andThen(Effect.promise(() => fs.writeFile(path.join(tmp.path, "src", "a.txt"), "one\n"))),
+        Effect.andThen(
+          withTool(tmp.path, fixture, (registry) =>
+            Effect.gen(function* () {
+              const failure = yield* registry.snapshot().pipe(
+                Effect.flatMap((tools) =>
+                  tools.execute(call({ file_path: "src/a.txt", old_string: "one", new_string: "two" })),
+                ),
+                Effect.flip,
+              )
+              expect(failure.metadata?.files).toEqual([{ file: "src/a.txt" }])
+            }),
+          ),
+        ),
+      )
+    }),
   )
 })

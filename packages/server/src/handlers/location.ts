@@ -1,6 +1,7 @@
 import { InstructionNotes } from "@orbit/core/instruction-notes"
 import { Location } from "@orbit/core/location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
+import { MemoryListing } from "@orbit/core/memory/listing"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { InvalidRequestError, ServiceUnavailableError } from "@orbit/protocol/errors"
@@ -8,6 +9,7 @@ import { AbsolutePath } from "@orbit/schema/schema"
 import { Cause, Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
+import { requireTrusted } from "./trust-error"
 
 export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (handlers) =>
   Effect.gen(function* () {
@@ -44,6 +46,8 @@ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (han
       .handle(
         "instruction.note.add",
         Effect.fn(function* (ctx) {
+          // A note changes an instruction file, and a folder nobody trusted stays as it is (class 12).
+          yield* requireTrusted()
           const notes = yield* InstructionNotes.Service
           return {
             data: yield* notes.add(ctx.payload).pipe(
@@ -57,6 +61,33 @@ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (han
           }
         }),
       )
+      .handle(
+        "memory.list",
+        Effect.fn(function* () {
+          // The listing reads the folder's instruction files and agents, so a folder nobody trusted is refused first (class 1).
+          yield* requireTrusted()
+          const memory = yield* MemoryListing.Service
+          return { data: yield* memory.list() }
+        }),
+      )
+      .handle(
+        "memory.ensure",
+        Effect.fn(function* (ctx) {
+          // Making a file or folder changes the folder, and a folder nobody trusted stays as it is (class 12).
+          yield* requireTrusted()
+          const memory = yield* MemoryListing.Service
+          return {
+            data: yield* memory.ensure(ctx.payload.target).pipe(
+              Effect.catchTags({
+                "MemoryListing.TargetError": (error) =>
+                  Effect.fail(new InvalidRequestError({ message: error.message, kind: error.reason, field: "target" })),
+                "MemoryListing.WriteError": (error) =>
+                  Effect.fail(new ServiceUnavailableError({ message: error.message, service: "memory" })),
+              }),
+            ),
+          }
+        }),
+      )
       .handle("location.trust.get", () => ProjectTrust.Service.use((trust) => trust.status()))
       .handle(
         "location.trust.update",
@@ -64,7 +95,7 @@ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (han
           const trust = yield* ProjectTrust.Service
           if (!ctx.payload.trust) return yield* trust.revoke()
           // The API does not know which client asked, so a grant says only that it came through here.
-          return yield* trust.grant({ persist: ctx.payload.persist ?? true, via: "api", holder: ctx.payload.holder })
+          return yield* trust.grant({ persist: ctx.payload.persist ?? true, via: "api" })
         }),
       )
       .handle("trust.list", () => workspaces.list())

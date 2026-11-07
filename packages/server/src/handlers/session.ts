@@ -1,7 +1,9 @@
 import { Session } from "@orbit/core/session"
+import { SessionRecap } from "@orbit/core/session/recap"
 import { SessionStats } from "@orbit/core/session/stats"
 import { SessionTitle } from "@orbit/core/session/title"
 import { SessionTransfer } from "@orbit/core/session/transfer"
+import { SessionAssist } from "@orbit/core/session/assist"
 import { InstructionEntry } from "@orbit/core/session/instruction-entry"
 import { Form } from "@orbit/core/form"
 import { DateTime, Effect, Stream } from "effect"
@@ -9,6 +11,7 @@ import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { SessionsCursor } from "@orbit/protocol/groups/session"
 import {
+  AgentNotFoundError,
   ConflictError,
   CommandExecutionError,
   CommandNotFoundError,
@@ -17,13 +20,19 @@ import {
   FormNotFoundError,
   InvalidRequestError,
   InvalidCursorError,
+  MainSessionOnlyError,
   MessageNotFoundError,
+  RewindFilesError,
   ServiceUnavailableError,
   SessionBusyError,
   SkillNotFoundError,
 } from "@orbit/protocol/errors"
 import { AbsolutePath } from "@orbit/core/schema"
+import { Project } from "@orbit/core/project"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { plain } from "@orbit/util/plain"
 import { failedMessageDecode, failedSnapshot, missingMessage, missingSession } from "./session-error"
+import { requireTrusted, requireTrustedAt, untrustedFolder } from "./trust-error"
 
 const DefaultSessionsLimit = 50
 
@@ -34,7 +43,11 @@ function missingForm(id: Form.ID) {
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
+    // What decides whether a folder is trusted, for the routes that act on a folder other than the request's own.
+    const folders = { projects: yield* Project.Service, trust: yield* WorkspaceTrust.Service }
     const transfer = yield* SessionTransfer.Service
+    const recap = yield* SessionRecap.Service
+    const assist = yield* SessionAssist.Service
     const requireOwnedForm = Effect.fnUntraced(function* (sessionID: Form.Info["sessionID"], formID: Form.ID) {
       const form = yield* Form.Service
       const info = yield* form.get(formID).pipe(Effect.catchTag("Form.NotFoundError", () => missingForm(formID)))
@@ -124,6 +137,13 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.create",
         Effect.fn(function* (ctx) {
+          // A session is created where it will work: the folder the request names, or its parent's folder.
+          const location =
+            ctx.payload.parentID === undefined
+              ? (ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) })
+              : (yield* session.get(ctx.payload.parentID).pipe(Effect.catchTag("Session.NotFoundError", missingSession)))
+                  .location
+          yield* requireTrustedAt(folders, location.directory)
           return {
             data: yield* session
               .create({
@@ -144,11 +164,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.import",
         Effect.fn(function* (ctx) {
+          // An imported session works where it lands, as a created one does, so that folder has to be trusted (class 12).
+          const location = ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) }
+          yield* requireTrustedAt(folders, location.directory)
           return {
             data: yield* transfer
               .import({
                 data: { info: ctx.payload.info, messages: ctx.payload.messages },
-                location: ctx.payload.location ?? { directory: AbsolutePath.make(process.cwd()) },
+                location,
               })
               .pipe(
                 Effect.catchTag("Session.NotFoundError", missingSession),
@@ -224,6 +247,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.fork",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           return {
             data: yield* session.fork({ sessionID: ctx.params.sessionID, before: ctx.payload.before }).pipe(
               // Only exact forks can fail this way, and the payload cannot ask for one.
@@ -266,6 +290,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 .rename({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
                 .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
             } else {
+              // An empty title asks the model for one, with the session's folder and its instructions.
+              yield* requireTrusted()
               const title = yield* SessionTitle.Service
               yield* title.generate(ctx.params.sessionID)
             }
@@ -284,6 +310,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.move",
         Effect.fn(function* (ctx) {
+          // `SessionMove` reads the destination from the session's own folder and refuses one that is not trusted, the
+          // same check a plugin's or the model's move meets (class 3).
           yield* session
             .move({
               sessionID: ctx.params.sessionID,
@@ -292,6 +320,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             })
             .pipe(
               Effect.catchTag("Session.NotFoundError", missingSession),
+              Effect.catchTag("WorkspaceTrust.UntrustedError", (error) => Effect.fail(untrustedFolder(error))),
               Effect.catchTag("Session.DestinationNotFoundError", (error) =>
                 Effect.fail(new InvalidRequestError({ message: `Directory does not exist: ${error.directory}` })),
               ),
@@ -308,6 +337,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           return {
             data: yield* session
               .prompt({
@@ -349,6 +379,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.command",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           yield* session
             .command({
               sessionID: ctx.params.sessionID,
@@ -384,6 +415,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.skill",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           yield* session
             .skill({
               sessionID: ctx.params.sessionID,
@@ -402,6 +434,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.synthetic",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           const data = yield* session
             .synthetic({
               id: ctx.payload.id,
@@ -429,6 +462,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.shell",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           yield* session
             .shell({ sessionID: ctx.params.sessionID, id: ctx.payload.id, command: ctx.payload.command })
             .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
@@ -438,9 +472,15 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.compact",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           return {
             data: yield* session
-              .compact({ sessionID: ctx.params.sessionID, id: ctx.payload.id, delivery: ctx.payload.delivery })
+              .compact({
+                sessionID: ctx.params.sessionID,
+                id: ctx.payload.id,
+                delivery: ctx.payload.delivery,
+                instructions: ctx.payload.instructions,
+              })
               .pipe(
                 Effect.catchTag("Session.NotFoundError", missingSession),
                 Effect.catchTag("Session.CompactionConflictError", (error) =>
@@ -483,6 +523,35 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.revert.files",
+        Effect.fn(function* (ctx) {
+          yield* Effect.log("session.revert.files", {
+            sessionID: ctx.params.sessionID,
+            messageID: ctx.payload.messageID,
+            dryRun: ctx.payload.dryRun,
+          })
+          // The busy and trust checks live in core, so an embedded host meets the same refusals (class 12).
+          return {
+            data: yield* session.revert.files({ ...ctx.params, ...ctx.payload }).pipe(
+              Effect.catchTag("Session.NotFoundError", missingSession),
+              Effect.catchTag("Session.MessageNotFoundError", missingMessage),
+              Effect.catchTag("Session.BusyError", busySession),
+              Effect.catchTag("WorkspaceTrust.UntrustedError", (error) => Effect.fail(untrustedFolder(error))),
+              Effect.catchTag(
+                "Session.RewindError",
+                (error) =>
+                  new RewindFilesError({
+                    sessionID: error.sessionID,
+                    messageID: error.messageID,
+                    reason: error.reason,
+                    message: error.message,
+                  }),
+              ),
+            ),
+          }
+        }),
+      )
+      .handle(
         "session.revert.clear",
         Effect.fn(function* (ctx) {
           yield* Effect.log("session.revert.clear", { sessionID: ctx.params.sessionID })
@@ -519,6 +588,42 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 Effect.catchTag("Session.NotFoundError", missingSession),
                 Effect.catchTag("Session.MessageDecodeError", failedMessageDecode),
               ),
+          }
+        }),
+      )
+      .handle(
+        "session.contextUsage",
+        Effect.fn(function* (ctx) {
+          // A session with no baseline yet has its folder's instruction sources read, and the `context` hooks read
+          // `system_prompt_file`, so nothing is analysed before the session's own folder is trusted (classes 1 and 12).
+          yield* requireTrusted()
+          const usage = yield* session.contextUsage(ctx.params.sessionID).pipe(
+            Effect.mapError((error) => {
+              if (error._tag === "Session.NotFoundError") return missingSession(error)
+              if (error._tag === "Session.MainSessionOnlyError")
+                return new MainSessionOnlyError({
+                  sessionID: error.sessionID,
+                  parentID: error.parentID,
+                  message: error.message,
+                })
+              if (error._tag === "Session.AgentNotFoundError")
+                return new AgentNotFoundError({ agentID: error.agent, message: plain(error.message) })
+              // The message names source keys, which `Instruction.Key` limits to lower-case letters, digits and `._/-`.
+              if (error._tag === "Instructions.InitializationBlocked")
+                return new ServiceUnavailableError({ service: "instructions", message: error.message })
+              // What is left is the session's model, which did not resolve.
+              return new ServiceUnavailableError({ service: "model", message: plain(error.message) })
+            }),
+          )
+          return { data: usage }
+        }),
+      )
+      .handle(
+        "session.cost",
+        Effect.fn(function* (ctx) {
+          // Database rows only: the route has no Location and opens no folder, so there is nothing to trust (class 12).
+          return {
+            data: yield* session.cost(ctx.params.sessionID).pipe(Effect.catchTag("Session.NotFoundError", missingSession)),
           }
         }),
       )
@@ -572,6 +677,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.instructions.preview",
         Effect.fn(function* (ctx) {
+          // The preview reads the folder's instruction files, and nothing of a folder is read before it is trusted.
+          yield* requireTrusted()
           const preview = yield* session
             .instructions(ctx.params.sessionID)
             .pipe(
@@ -610,6 +717,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.generate",
         Effect.fn(function* (ctx) {
+          yield* requireTrusted()
           const text = yield* session
             .generate({ sessionID: ctx.params.sessionID, prompt: ctx.payload.prompt })
             .pipe(
@@ -620,6 +728,40 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               ),
             )
           return { data: { text } }
+        }),
+      )
+      // Both assist routes ask the model about the folder's content (tool output, history and instruction files), so the
+      // folder is trusted first; the session's own Location is the one checked and the one asked in.
+      .handle(
+        "session.assist.label",
+        Effect.fn(function* (ctx) {
+          yield* requireTrusted()
+          const label = yield* assist
+            .label({ sessionID: ctx.params.sessionID, ...ctx.payload })
+            .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
+          return { data: label }
+        }),
+      )
+      .handle(
+        "session.assist.suggestion",
+        Effect.fn(function* (ctx) {
+          yield* requireTrusted()
+          const suggestion = yield* assist
+            .suggestion(ctx.params.sessionID)
+            .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
+          return { data: suggestion }
+        }),
+      )
+      .handle(
+        "session.recap",
+        Effect.fn(function* (ctx) {
+          // The recap reads the session's history into a model call, so the folder must still be trusted.
+          yield* requireTrusted()
+          // A client drops the request when the person comes back, which interrupts this and records nothing.
+          const recorded = yield* recap
+            .generate(ctx.params.sessionID)
+            .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
+          return { recorded: recorded !== undefined }
         }),
       )
       .handle(

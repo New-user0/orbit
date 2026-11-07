@@ -21,6 +21,17 @@ export const connect = Effect.fn("cli.flow.connect")(function* (input: {
   return Orbit.make({ baseUrl: server.endpoint.url, headers: Service.headers(server.endpoint) })
 })
 
+/**
+ * The run store of the folder the command runs in, opened once `requireTrust` let the folder through. It is found from
+ * the files no higher than the project's folder as the server resolved it, which is the folder the trust decision covers,
+ * so a store in a folder above that one is never opened (`Git.holder`, class 3).
+ */
+export const runStore = Effect.fn("cli.flow.store")(function* (client: OrbitClient) {
+  const project = yield* trustedProject(client, directory())
+  const { openStore } = yield* Effect.promise(() => import("@orbit/flow"))
+  return yield* Effect.promise(() => openStore(directory(), project?.directory ?? directory()))
+})
+
 // Shared by `orb flow run` and `orb flow resume`: load the workflow file and drive the run on the server `connect` gave.
 export const execute = Effect.fn("cli.flow.execute")(function* (
   client: OrbitClient,

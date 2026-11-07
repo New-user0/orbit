@@ -4,7 +4,8 @@ import { Effect } from "effect"
 import { EOL } from "node:os"
 import { Commands } from "../../commands"
 import { Runtime } from "../../../framework/runtime"
-import { directory } from "./execute"
+import { requireTrust } from "../../../util/trust"
+import { connect, directory, runStore } from "./execute"
 
 /**
  * A run, its nodes and team conversations, as `orb flow show` prints them. The run store is a file in the repository, so
@@ -49,8 +50,11 @@ const marks = { running: "…", waiting: "?", succeeded: "✓", failed: "✗" }
 export default Runtime.handler(
   Commands.commands.flow.commands.show,
   Effect.fn("cli.flow.show")(function* (input) {
-    const { openStore } = yield* Effect.promise(() => import("@orbit/flow"))
-    const store = yield* Effect.promise(() => openStore(directory()))
+    // The run store is a file that a clone can ship with any run in it, and finding it reads the folder's `.git`, so the
+    // folder has to be trusted before the store is opened (classes 1, 5 and 12; FU-M4-202).
+    const client = yield* connect(input)
+    yield* requireTrust(client, directory(), { grant: input.trust, strict: "recorded" })
+    const store = yield* runStore(client)
     const run = store.run(input.run)
     const nodes = [...store.nodes(input.run).values()]
     const events = store.events(input.run)

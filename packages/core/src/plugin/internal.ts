@@ -33,7 +33,6 @@ import { ConfigShellPlugin } from "../config/plugin/shell.js"
 import { ConfigSnapshotPlugin } from "../config/plugin/snapshot.js"
 import { ConfigSkillPlugin } from "../config/plugin/skill.js"
 import { ConfigCompatibilityPlugin } from "../config/plugin/compatibility.js"
-import { ConfigToolOutputPlugin } from "../config/plugin/tool-output.js"
 import { ConfigWebPlugin } from "../config/plugin/web.js"
 import { ConfigWebSearchPlugin } from "../config/plugin/websearch.js"
 import { ConfigWorktreePlugin } from "../config/plugin/worktree.js"
@@ -86,7 +85,6 @@ import { PlanModeTools } from "../tool/plugin/plan-mode.js"
 import { LspTool } from "../tool/plugin/lsp.js"
 import { TaskTools } from "../tool/plugin/tasks.js"
 import { WorktreeTools } from "../tool/plugin/worktree.js"
-import { MemoryTool } from "../tool/plugin/memory.js"
 import { GlobTool } from "../tool/plugin/glob.js"
 import { GrepTool } from "../tool/plugin/grep.js"
 import { McpResourceTools } from "../tool/plugin/mcp-resource.js"
@@ -282,7 +280,6 @@ const pre = [
   LspTool.Plugin,
   TaskTools.Plugin,
   WorktreeTools.Plugin,
-  MemoryTool.Plugin,
   GlobTool.Plugin,
   GrepTool.Plugin,
   OrbitTools.Plugin,
@@ -302,8 +299,6 @@ const pre = [
 
 const post = [
   ConfigInstructionPlugin.Plugin,
-  // Right after the instruction files, so the memory index renders last: the later a file, the more it outranks.
-  MemoryTool.IndexPlugin,
   LifecycleHooksPlugin.Plugin,
   LspPlugin.Plugin,
   ConfigReferencePlugin.Plugin,
@@ -316,7 +311,6 @@ const post = [
   ConfigLocationWatcherPlugin.Plugin,
   ConfigShellPlugin.Plugin,
   ConfigSnapshotPlugin.Plugin,
-  ConfigToolOutputPlugin.Plugin,
   ConfigCompatibilityPlugin.Plugin,
   ConfigSkillPlugin.Plugin,
   ConfigProviderPlugin.Plugin,

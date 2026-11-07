@@ -32,6 +32,7 @@ import { SessionEvent } from "@orbit/core/session/event"
 import { SessionTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
 import { SessionTransfer } from "@orbit/core/session/transfer"
+import { toLLMMessages } from "@orbit/core/session/runner/to-llm-message"
 import { Workspace } from "@orbit/core/workspace"
 import { Expected } from "./lib/session-message"
 import { testEffect } from "./lib/effect"
@@ -1478,6 +1479,126 @@ describe("SessionTransfer", () => {
         "user",
       ])
       expect(yield* Bus.latestSequence(db, sessionID)).toBe(4)
+    }),
+  )
+
+  // The away summary restates the person's task and next step, so a sanitized export redacts it like a prompt.
+  it.effect("a sanitized export redacts the away summary's text", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const transfer = yield* SessionTransfer.Service
+      const template = yield* session.create({ location })
+      const sessionID = Session.ID.create()
+      const recapID = SessionMessage.ID.create()
+      yield* transfer.import({
+        data: {
+          info: { ...template, id: sessionID },
+          messages: [
+            { id: recapID, type: "recap", text: "Shipping the secret plan. Next: deploy.", time: { created: DateTime.makeUnsafe(1) } },
+          ],
+        },
+        location,
+      })
+
+      expect((yield* transfer.export({ sessionID })).messages).toMatchObject([
+        { id: recapID, type: "recap", text: "Shipping the secret plan. Next: deploy." },
+      ])
+      expect((yield* transfer.export({ sessionID, sanitize: true })).messages).toMatchObject([
+        { id: recapID, type: "recap", text: `[redacted:recap:${recapID}]` },
+      ])
+    }),
+  )
+
+  // Class 9: an imported file is as untrusted as a clone, so a recap it carries is stored escaped, as SessionRecap
+  // stores one, and an SDK or API reader never gets the raw characters. Text already escaped is the control.
+  it.effect("an imported away summary's text is stored with its control and bidi characters written out", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const transfer = yield* SessionTransfer.Service
+      const template = yield* session.create({ location })
+      const sessionID = Session.ID.create()
+      const hostileID = SessionMessage.ID.create()
+      const escapedID = SessionMessage.ID.create()
+      const escaped = "a\\x1b]0;pwned\\x07b\\u{202e}c\\x9b2J\\x0dd\nNext: tests."
+      yield* transfer.import({
+        data: {
+          info: { ...template, id: sessionID },
+          messages: [
+            {
+              id: hostileID,
+              type: "recap",
+              text: "a\u001b]0;pwned\u0007b‮c\u009b2J\rd\nNext: tests.",
+              time: { created: DateTime.makeUnsafe(1) },
+            },
+            { id: escapedID, type: "recap", text: escaped, time: { created: DateTime.makeUnsafe(2) } },
+          ],
+        },
+        location,
+      })
+
+      expect(yield* session.messages({ sessionID, order: "asc" })).toMatchObject([
+        { id: hostileID, type: "recap", text: escaped },
+        { id: escapedID, type: "recap", text: escaped },
+      ])
+    }),
+  )
+
+  // A sanitized export redacts the result the override describes, so the override goes too: imported, it would show
+  // the model a wrapper for a file that is absent and a size that is wrong (classes 7 and 9).
+  it.effect("drops a tool result's override from a sanitized export", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const transfer = yield* SessionTransfer.Service
+      const template = yield* session.create({ location })
+      const sessionID = Session.ID.create()
+      const assistantID = SessionMessage.ID.create()
+      const model = Model.Ref.make({ id: Model.ID.make("model"), providerID: Provider.ID.make("provider") })
+      const override = { session: sessionID, name: `${assistantID}-call_budget-1a2b3c4d.txt`, format: 1 }
+      yield* transfer.import({
+        data: {
+          info: { ...template, id: sessionID },
+          messages: [
+            { id: SessionMessage.ID.create(), type: "user", text: "Search", time: { created: DateTime.makeUnsafe(1) } },
+            {
+              id: assistantID,
+              type: "assistant",
+              agent: Agent.ID.make("build"),
+              model,
+              content: [
+                {
+                  type: "tool",
+                  id: "call_budget",
+                  name: "grep",
+                  override,
+                  state: { status: "completed", input: {}, content: [{ type: "text", text: "g".repeat(45_000) }] },
+                  time: { created: DateTime.makeUnsafe(2), completed: DateTime.makeUnsafe(3) },
+                },
+              ],
+              time: { created: DateTime.makeUnsafe(2), completed: DateTime.makeUnsafe(3) },
+            },
+          ],
+        },
+        location,
+      })
+      const tools = (messages: ReadonlyArray<SessionMessage.Info>) =>
+        messages.flatMap((message) =>
+          message.type === "assistant" ? message.content.filter((part) => part.type === "tool") : [],
+        )
+      const root = path.join(path.sep === "\\" ? "C:\\" : "/", "orbit-data", "tool-output")
+      const lowered = (messages: ReadonlyArray<SessionMessage.Info>) =>
+        toLLMMessages(messages, model, undefined, [], { toolOutput: root } as never).flatMap((message) =>
+          message.role === "tool"
+            ? message.content.flatMap((part) => (part.type === "tool-result" ? [part.result] : []))
+            : [],
+        )
+
+      // The control: the plain export keeps the override, which lowers as the wrapper.
+      const exported = (yield* transfer.export({ sessionID })).messages
+      expect(tools(exported).map((part) => part.override)).toEqual([override])
+      expect(String(lowered(exported)[0]?.value).startsWith("<saved-output>\n")).toBe(true)
+      const sanitized = (yield* transfer.export({ sessionID, sanitize: true })).messages
+      expect(tools(sanitized).map((part) => part.override)).toEqual([undefined])
+      expect(lowered(sanitized)).toEqual([{ type: "text", value: `[redacted:tool-output:${assistantID}]` }])
     }),
   )
 

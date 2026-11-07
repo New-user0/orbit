@@ -496,7 +496,11 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file.txt"
+            "place": "{outside}/file.txt",
+            "link": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -553,7 +557,11 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file.txt"
+            "place": "{outside}/file.txt",
+            "link": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -6801,7 +6809,11 @@
             "status": "added",
             "additions": 1,
             "deletions": 0,
-            "place": "{outside}/file.txt"
+            "place": "{outside}/file.txt",
+            "link": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -6857,7 +6869,11 @@
             "status": "added",
             "additions": 1,
             "deletions": 0,
-            "place": "{outside}/file.txt"
+            "place": "{outside}/file.txt",
+            "link": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }

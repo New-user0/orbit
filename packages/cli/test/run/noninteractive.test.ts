@@ -2295,6 +2295,7 @@ describe("runNonInteractivePrompt limits and results", () => {
     ["limit.cost", "error_max_cost"],
     ["limit.cost-unknown", "error"],
     ["limit.tokens-unknown", "error"],
+    ["context.limit", "error"],
   ])("a %s failure carries the subtype %s on its error line in json and stream-json", async (type, subtype) => {
     for (const format of ["json", "stream-json"] as const) {
       const lines = await capture({ format, turn: limitFailure(type, "Reached it.") })
@@ -2350,6 +2351,7 @@ describe("runNonInteractivePrompt limits and results", () => {
             ["limit.cost", "error_max_cost"],
             ["limit.cost-unknown", "error"],
             ["limit.tokens-unknown", "error"],
+            ["context.limit", "error"],
           ] as const
         ).map(([type, subtype]) => ({
           name: type,

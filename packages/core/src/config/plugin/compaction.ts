@@ -17,6 +17,7 @@ export const Plugin = define({
         if (entry.type !== "document" || !entry.info.compaction) continue
         editor.configure({
           ...(entry.info.compaction.auto === undefined ? {} : { auto: entry.info.compaction.auto }),
+          ...(entry.info.compaction.clear === undefined ? {} : { clear: entry.info.compaction.clear }),
           ...(entry.info.compaction.buffer === undefined ? {} : { buffer: entry.info.compaction.buffer }),
           ...(entry.info.compaction.keep?.tokens === undefined ? {} : { keep: entry.info.compaction.keep.tokens }),
         })

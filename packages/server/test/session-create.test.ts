@@ -13,6 +13,7 @@ it.live("creates a child at its parent's location and lists it under the parent"
       app: { version: "test" },
       database: { path: ":memory:" },
       fs: { filewatcher: false },
+      trust: { implicit: true },
     })
     const create = (body: unknown) =>
       Effect.promise(async () => {
@@ -45,6 +46,7 @@ it.live("returns not found when creating a child of a missing session", () =>
       app: { version: "test" },
       database: { path: ":memory:" },
       fs: { filewatcher: false },
+      trust: { implicit: true },
     })
     const parentID = Session.ID.create()
     const response = yield* Effect.promise(() =>

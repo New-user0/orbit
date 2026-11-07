@@ -99,7 +99,8 @@ console.log("n=" + n + " " + JSON.stringify({
           })),
         })
       if (url.pathname === `/api/session/${session.id}`) return json({ data: session })
-      // One answer from `first`: 400 tokens against its limit of 1000.
+      // One answer from `first`: its prompt held 400 tokens (input, cache read and cache write) against a limit of 1000.
+      // Its own output and reasoning are not in the window yet, so `context.used` leaves them out (it would read 700).
       if (url.pathname === `/api/session/${session.id}/message`)
         return json({
           data: [
@@ -110,7 +111,7 @@ console.log("n=" + n + " " + JSON.stringify({
               model: { providerID: "demo", id: "first" },
               time: { created: 1 },
               content: [],
-              tokens: { input: 400, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              tokens: { input: 300, output: 250, reasoning: 50, cache: { read: 60, write: 40 } },
             },
           ],
           cursor: {},
