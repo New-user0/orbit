@@ -93,7 +93,7 @@ async function open(input: {
 }
 
 const answering = (info: Info) => () => json({ data: info })
-const drawn = (frame: string) => frame.includes("Estimated usage by category")
+const drawn = (frame: string) => frame.includes("Estimated share of the window")
 
 /** The grid's rows, each as its squares without the spaces between them. */
 function grid(frame: string) {
@@ -178,8 +178,8 @@ test("deferred rows are left out of the legend and take no square", async () => 
   })
   await using _ = result.setup
 
-  for (const hidden of ["(deferred)", "N/A", "5.0K", "4.0K"]) expect(result.frame).not.toContain(hidden)
-  expect(result.frame).toContain("Messages: 4.8K tokens (4.8%)")
+  for (const hidden of ["(on demand)", "N/A", "5.0K", "4.0K"]) expect(result.frame).not.toContain(hidden)
+  expect(result.frame).toContain("Conversation: 4.8K tokens (4.8%)")
   expect(grid(result.frame).join("")).toBe(
     `${FULL}${FULL}${PARTIAL}` + PARTIAL + FULL.repeat(5) + FREE.repeat(81) + BUFFER.repeat(10),
   )
@@ -193,12 +193,12 @@ test("the legend shows the model, total of window and percent, each category to 
   const at = (text: string) => lines.findIndex((line) => line.includes(text))
   const legend = [
     "provider/model · 17.7K/100.0K tokens (18%)",
-    "Estimated usage by category",
-    "System prompt: 2.6K tokens (2.6%)",
-    "System tools: 300 tokens (0.3%)",
-    "Messages: 4.8K tokens (4.8%)",
-    "Free space: 82.3K tokens (82.3%)",
-    "Autocompact buffer: 10.0K tokens (10.0%)",
+    "Estimated share of the window",
+    "Base prompt: 2.6K tokens (2.6%)",
+    "Built-in tools: 300 tokens (0.3%)",
+    "Conversation: 4.8K tokens (4.8%)",
+    "Room left: 82.3K tokens (82.3%)",
+    "Auto-compaction reserve: 10.0K tokens (10.0%)",
   ].map(at)
   expect(legend.every((index) => index >= 0)).toBe(true)
   expect(legend).toEqual(legend.toSorted((a, b) => a - b))
@@ -219,11 +219,11 @@ test("the legend shows the model, total of window and percent, each category to 
   })
   await using __ = manual.setup
   const manualLines = manual.frame.split("\n")
-  const compact = manualLines.findIndex((line) => line.includes("Compact buffer: 3.0K tokens (3.0%)"))
-  const free = manualLines.findIndex((line) => line.includes("Free space: 89.6K tokens (89.6%)"))
+  const compact = manualLines.findIndex((line) => line.includes("Compaction headroom: 3.0K tokens (3.0%)"))
+  const free = manualLines.findIndex((line) => line.includes("Room left: 89.6K tokens (89.6%)"))
   expect(compact).toBeGreaterThanOrEqual(0)
   expect(free).toBeGreaterThan(compact)
-  expect(manual.frame).not.toContain("Autocompact buffer")
+  expect(manual.frame).not.toContain("Auto-compaction reserve")
   // Drawn like a category: full squares at the end, after free space.
   expect(grid(manual.frame).join("")).toBe(`${FULL}${FULL}${PARTIAL}` + FULL.repeat(5) + FREE.repeat(89) + FULL.repeat(3))
 })
@@ -262,25 +262,25 @@ test("MCP tools (loaded and available), custom agents by scope, instruction file
   const lines = result.frame.split("\n")
   const at = (text: string) => lines.findIndex((line) => line.includes(text))
   const order = [
-    "MCP tools · /mcps",
-    "Loaded",
+    "MCP tool schemas · /mcps",
+    "Loaded now",
     "docs_search",
-    "Available",
+    "Loaded on demand",
     "docs_fetch",
-    "Custom agents · /agents",
+    "Agent definitions · /agents",
     "Project",
     "reviewer",
     "User",
     "helper",
-    "Instruction files · /memory",
+    "Instructions · /memory",
     "ORBIT.md",
-    "Skills · /skills",
+    "Skill listings · /skills",
     "release",
   ].map(at)
   expect(order.every((index) => index >= 0)).toBe(true)
   expect(order).toEqual(order.toSorted((a, b) => a - b))
   // Some tools are deferred, so the heading says that some are loaded on demand.
-  expect(lines[at("MCP tools · /mcps")]).toContain("MCP tools · /mcps (some are loaded on demand)")
+  expect(lines[at("MCP tool schemas · /mcps")]).toContain("MCP tool schemas · /mcps (some load on demand)")
   expect(lines[at("docs_search")]).toContain("2.0K")
   expect(lines[at("ORBIT.md")]).toContain("1.2K")
   for (const hidden of ["SysToolZed", "SectionQuux", "ToolBreakX", "AttachKindY"]) expect(result.frame).not.toContain(hidden)
@@ -319,12 +319,12 @@ test("suggestions are drawn under the view, warnings first, with their savings",
         },
       }),
     ),
-    done: (frame) => frame.includes("Suggestions"),
+    done: (frame) => frame.includes("Ways to free room"),
   })
   await using _ = result.setup
   const lines = result.frame.split("\n")
   const at = (text: string) => lines.findIndex((line) => line.includes(text))
-  const heading = at("Suggestions")
+  const heading = at("Ways to free room")
   const bash = lines.findIndex((line) => line.includes("Bash") && line.includes("8.0K"))
   const read = lines.findIndex((line) => line.includes("Read") && line.includes("9.0K"))
   expect(heading).toBeGreaterThan(at("release"))
@@ -345,12 +345,12 @@ test("the instruction files suggestion names each file by its path in the sessio
         ],
       }),
     ),
-    done: (frame) => frame.includes("Suggestions"),
+    done: (frame) => frame.includes("Ways to free room"),
   })
   await using _ = result.setup
-  const detail = result.frame.split("\n").find((line) => line.includes("The largest are"))
+  const detail = result.frame.split("\n").find((line) => line.includes("Most of it sits in"))
 
-  expect(detail).toContain("The largest are ORBIT.md (4.0K)")
+  expect(detail).toContain("Most of it sits in ORBIT.md (4.0K)")
   expect(detail).not.toContain(directory)
 })
 
@@ -404,7 +404,7 @@ test("every string from the payload is escaped in the frame", async () => {
         },
       }),
     ),
-    done: (frame) => frame.includes("Suggestions") && frame.includes("skill"),
+    done: (frame) => frame.includes("Ways to free room") && frame.includes("skill"),
   })
   await using _ = result.setup
 
@@ -443,11 +443,11 @@ test("an unknown window shows rows and the total without a grid, percentages, re
   await using _ = result.setup
 
   expect(result.frame).toContain("provider/model · 7.7K tokens")
-  expect(result.frame).toContain("System prompt: 2.6K tokens")
-  expect(result.frame).toContain("Messages: 4.8K tokens")
+  expect(result.frame).toContain("Base prompt: 2.6K tokens")
+  expect(result.frame).toContain("Conversation: 4.8K tokens")
   expect(grid(result.frame)).toEqual([])
   expect(result.frame).not.toContain("%")
-  for (const missing of ["Free space", "buffer", "Suggestions"]) expect(result.frame).not.toContain(missing)
+  for (const missing of ["Room left", "reserve", "headroom", "Ways to free room"]) expect(result.frame).not.toContain(missing)
 })
 
 // TD11, classes 7 and 13: each failure is one line, and the server's own message is escaped.
@@ -489,7 +489,7 @@ test("a refusal, a missing session, an old server, a body that does not decode a
     expect({ name: row.name, shown: result.frame.includes(row.line) }).toEqual({ name: row.name, shown: true })
     expect(/\p{C}/u.test(result.frame.replaceAll("\n", ""))).toBe(false)
     expect(grid(result.frame)).toEqual([])
-    expect(result.frame).not.toContain("Estimated usage")
+    expect(result.frame).not.toContain("Estimated share")
   }
 })
 
@@ -517,8 +517,8 @@ test("an entry that does not decode is left out with one log line, and the rest 
   })
   await using _ = result.setup
 
-  expect(result.frame).toContain("System prompt: 2.6K tokens (2.6%)")
-  expect(result.frame).toContain("Messages: 4.8K tokens (4.8%)")
+  expect(result.frame).toContain("Base prompt: 2.6K tokens (2.6%)")
+  expect(result.frame).toContain("Conversation: 4.8K tokens (4.8%)")
   expect(result.frame).toContain("release: 700 tokens")
   expect(result.frame).not.toContain("7.0K")
   expect(result.frame).not.toContain("could not be read")

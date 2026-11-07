@@ -1257,7 +1257,7 @@ transferred.effect("an exported and imported session keeps its retained checkpoi
     const first = yield* imported("")
     const texts = (messages: ReadonlyArray<SessionMessage.Info>) =>
       toLLMMessages(messages, fakeModel).map((message) => textOf(message).slice(0, 17))
-    const expected = ["Earlier messages ", "second", "second answer", "third"]
+    const expected = ["The conversation ", "second", "second answer", "third"]
     expect(texts(yield* SessionHistory.load(db, first.sessionID, "latest"))).toEqual(expected)
 
     // Exported, renamed (message IDs are global) and imported again: the reference travels with the document.

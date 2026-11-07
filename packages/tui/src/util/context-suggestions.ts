@@ -43,10 +43,10 @@ export function contextSuggestions(
   if (percentage >= NEAR_CAPACITY)
     found.push({
       severity: "warning",
-      title: `Context is ${percentage}% full`,
+      title: `${percentage}% of the window is in use`,
       detail: info.auto
-        ? "Automatic compaction will summarize the conversation soon; run /compact now to choose when."
-        : "Automatic compaction is off, so run /compact before the window fills, or turn it back on.",
+        ? "/compact runs it at a moment you pick; left alone, Orbit compacts the conversation by itself shortly."
+        : "Turning automatic compaction back on, or running /compact yourself, keeps the window from filling up, since with the setting off nothing summarizes the conversation for you.",
     })
 
   const large = new Set<string>()
@@ -59,8 +59,8 @@ export function contextSuggestions(
     const name = plain(tool.name)
     found.push({
       severity: advice?.severity ?? "info",
-      title: `${name} calls and results take ${Locale.number(tokens)} tokens (${share(tokens)}%)`,
-      detail: advice?.detail ?? `Ask for narrower ${name} calls, or for less of what each one returns.`,
+      title: `${name} uses ${Locale.number(tokens)} tokens across its calls and results (${share(tokens)}%)`,
+      detail: advice?.detail ?? `Call ${name} with tighter inputs, or have each call return less.`,
       savings: Math.floor(tokens * (advice?.savings ?? SAVINGS.other)),
     })
   })
@@ -74,8 +74,8 @@ export function contextSuggestions(
   )
     found.push({
       severity: "info",
-      title: `Read results take ${Locale.number(read.results)} tokens (${share(read.results)}%)`,
-      detail: "Read the part of a file you need, with an offset and a limit, instead of the whole file.",
+      title: `What Read returned holds ${Locale.number(read.results)} tokens (${share(read.results)}%)`,
+      detail: "Read a long file in pieces by giving an offset and a limit.",
       savings: Math.floor(read.results * SAVINGS.read),
     })
 
@@ -87,8 +87,8 @@ export function contextSuggestions(
       .map((file) => `${plain(display(file.path))} (${Locale.number(file.tokens)})`)
     found.push({
       severity: "info",
-      title: `Instruction files take ${Locale.number(files)} tokens (${share(files)}%)`,
-      detail: `The largest are ${largest.join(", ")}. Trim them with /memory.`,
+      title: `Instructions hold ${Locale.number(files)} tokens (${share(files)}%)`,
+      detail: `Most of it sits in ${largest.join(", ")}, which /memory opens for trimming.`,
       savings: Math.floor(files * SAVINGS.files),
     })
   }
@@ -96,8 +96,8 @@ export function contextSuggestions(
   if (!info.auto && percentage >= AUTO_OFF_FROM && percentage < NEAR_CAPACITY)
     found.push({
       severity: "info",
-      title: "Automatic compaction is off",
-      detail: "Nothing will summarize the conversation when the window fills; run /compact before then.",
+      title: "Auto-compaction is switched off",
+      detail: "A full window will not be summarized for you, so run /compact before it fills.",
     })
 
   return found.toSorted(
@@ -112,25 +112,25 @@ function toolAdvice(name: string) {
     return {
       severity: "warning" as const,
       savings: SAVINGS.shell,
-      detail: "Filter long command output, with head, tail or grep, before it reaches the conversation.",
+      detail: "Commands that print a lot fill the conversation. Cut their output down in the command itself, for example to the first or last lines or to the lines that match.",
     }
   if (name === "Read")
     return {
       severity: "info" as const,
       savings: SAVINGS.read,
-      detail: "Read the part of a file you need, with an offset and a limit, instead of the whole file.",
+      detail: "Read a long file in pieces by giving an offset and a limit.",
     }
   if (name === "Grep")
     return {
       severity: "info" as const,
       savings: SAVINGS.grep,
-      detail: "Narrow the pattern, or limit the search to a folder or a file type.",
+      detail: "Narrow what each search covers: a more exact pattern, a single folder or one file type.",
     }
   if (name === "WebFetch")
     return {
       severity: "info" as const,
       savings: SAVINGS.fetch,
-      detail: "Web pages are large; ask for the part of a page you need.",
+      detail: "Whole web pages cost many tokens. Name the part of the page you are after in the request.",
     }
   return undefined
 }

@@ -344,13 +344,13 @@ describe("ShellTool output cap", () => {
         Effect.gen(function* () {
           const result = yield* settled(registry, call({ command: blankHeadCommand("") }))
           expect(result.persisted).toMatchObject({ session: sessionID, parts: 1, size: blankHeadBytes })
-          expect(text(result.outcome)).not.toContain("returned no output")
+          expect(text(result.outcome)).not.toContain("ran and produced nothing")
           const saved = yield* Effect.promise(() => fs.readFile(result.saved ?? "", "utf8"))
           expect(saved).toEndWith("\ntail-marker")
           expect(saved.length).toBe(blankHeadBytes)
           const shown = lowered(result.outcome, result.root)
           expect(shown).toStartWith("<saved-output>")
-          expect(shown).toContain(`The full output is saved at: ${result.saved}`)
+          expect(shown).toContain(`so all of it went to a file: ${result.saved}`)
           expect(shown).toEndWith("</saved-output>")
         }),
       ),
@@ -618,6 +618,10 @@ describe("ShellTool output cap", () => {
         const off = yield* advertised({ background_tasks: false })
         expect(off.shell.properties).not.toContain("run_in_background")
         expect(off.shell.description).not.toMatch(/background/i)
+        // The foreground-only timeout sentence names the default and the maximum in their own places.
+        expect(off.shell.description).toContain(
+          "Without one, a command gets 120000 ms (2 minutes); no timeout may be longer than 600000 ms (10 minutes).",
+        )
         expect(off.agent.properties).not.toContain("background")
         expect(off.agent.description).not.toMatch(/background/i)
       }),
@@ -902,7 +906,7 @@ it.live(
         )
         yield* executeTool(registry, call({ command: floodCommand, run_in_background: true }))
         const notice = Array.from(yield* Fiber.join(delivered).pipe(Effect.timeout(Duration.seconds(30))))[0] ?? ""
-        expect(notice).toContain("Background command killed: output file exceeded")
+        expect(notice).toContain("to its output file, so Orbit ended it.")
       }),
     ).pipe(
       Effect.provide(

@@ -160,7 +160,7 @@ export const analyze = Effect.fn("SessionContextUsage.analyze")(function* (sessi
             skills.push({ id: skill.id, tokens: Token.estimate(SkillInstructions.line(skill)) }),
           )
         } else if (entry.key === AGENTS) {
-          // Only the lines of the agents that someone defined are the Custom agents row; the lead, the agents Orbit
+          // Only the lines of the agents that someone defined are the Agent definitions row; the lead, the agents Orbit
           // ships and the closing sentence belong to the Agent tool's own guidance.
           let cursor = 0
           const lines = Option.getOrElse(Schema.decodeUnknownOption(Agents)(value), () => []).flatMap((agent) => {

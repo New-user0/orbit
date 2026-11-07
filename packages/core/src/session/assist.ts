@@ -69,15 +69,15 @@ export const layer = Layer.effect(
         Effect.map((nested) => [sessionID, ...nested.flat()]),
       )
 
-    // The trimmed text a side query answered, or why there is none: a blank answer is empty, and a model that could not
+    // The trimmed text a side query answered, or why there is none: a blank answer has no text, and a model that could not
     // be asked is unavailable, which the client only sees as no text, so it is logged here (class 7).
     const ask = (input: SideQuery.TextInput) =>
       sideQuery.text(input).pipe(
         Effect.map((result) => ({ text: result.text.trim() })),
         Effect.catch(
-          (error): Effect.Effect<{ readonly reason: "empty" | "unavailable" }> =>
+          (error): Effect.Effect<{ readonly reason: "no_text" | "unavailable" }> =>
             error._tag === "SideQuery.InvalidOutputError"
-              ? Effect.succeed({ reason: "empty" as const })
+              ? Effect.succeed({ reason: "no_text" as const })
               : Effect.logWarning("assist side query unavailable", {
                   purpose: input.purpose,
                   message: error.message,
@@ -102,7 +102,7 @@ export const layer = Layer.effect(
       )
       if (settled.length < calls.length) return labelSkip("unsettled")
       if (settled.some((call) => call.state.status === "error" && call.state.error.type === "aborted"))
-        return labelSkip("aborted")
+        return labelSkip("interrupted")
       const intent = message?.content.findLast((part) => part.type === "text")?.text.slice(0, INTENT_LENGTH)
       const answer = yield* ask({
         sessionID: session.id,
@@ -119,20 +119,20 @@ export const layer = Layer.effect(
       const [last, previous] = yield* store
         .messages({ sessionID: session.id, type: "assistant", order: "desc", limit: 2 })
         .pipe(Effect.orDie)
-      if (!previous || last?.type !== "assistant") return "early_conversation" as const
-      if (last.error) return "last_response_error" as const
+      if (!previous || last?.type !== "assistant") return "too_early" as const
+      if (last.error) return "reply_failed" as const
       const tokens = last.tokens
       if (tokens && tokens.input + tokens.cache.write + tokens.output + tokens.reasoning > COLD_CACHE_TOKENS)
-        return "cache_cold" as const
+        return "cache_expired" as const
       const members = new Set<string>(yield* family(session.id))
       const asks = yield* Effect.gen(function* () {
         const permission = yield* Permission.Service
         const form = yield* Form.Service
         return { permissions: yield* permission.list(), forms: yield* form.list() }
       }).pipe(instances.provide(session))
-      if (asks.permissions.some((request) => members.has(request.sessionID))) return "pending_permission" as const
-      if (asks.forms.some((form) => members.has(form.sessionID))) return "elicitation_active" as const
-      if (session.agent === PlanMode.agent) return "plan_mode" as const
+      if (asks.permissions.some((request) => members.has(request.sessionID))) return "awaiting_approval" as const
+      if (asks.forms.some((form) => members.has(form.sessionID))) return "awaiting_form" as const
+      if (session.agent === PlanMode.agent) return "planning" as const
       if ((yield* execution.isActive(session.id)) || (yield* inbox.list(session.id)).length > 0) return "busy" as const
       return undefined
     })
@@ -168,7 +168,7 @@ export const layer = Layer.effect(
       )
       return yield* Effect.raceFirst(
         write(session),
-        Effect.raceFirst(Deferred.await(cancel), admitted).pipe(Effect.as(suggestionSkip("aborted"))),
+        Effect.raceFirst(Deferred.await(cancel), admitted).pipe(Effect.as(suggestionSkip("cancelled"))),
       ).pipe(
         Effect.ensuring(
           Effect.sync(() => {
@@ -213,7 +213,7 @@ type Settled = {
 
 const labelPrompt = (calls: ReadonlyArray<Settled>, intent: string | undefined) =>
   [
-    ...(intent?.trim() ? [`What the person wants, from the assistant's last message: ${intent}`, ""] : []),
+    ...(intent?.trim() ? [`Before running them, the assistant wrote: ${intent}`, ""] : []),
     "The tools that finished:",
     "",
     calls
@@ -226,131 +226,131 @@ const labelPrompt = (calls: ReadonlyArray<Settled>, intent: string | undefined) 
   ].join("\n")
 
 const LABEL_SYSTEM = [
-  "Write one short label that says what a batch of tool calls achieved. A coding assistant shows it as a single row that is cut off near 30 characters, so make it read like the subject line of a commit, not like a sentence.",
-  "Keep a past-tense verb and the noun that tells this batch apart. Drop articles, linking words and long paths before anything else.",
+  "Write a label for the tool calls below. Whoever reads it did not watch the calls run and sees only the label in their place, so it has to say at a glance what got done. It has room for roughly 30 characters, and anything past that is cut off.",
+  "Someone skimming a column of these labels has to tell one batch from the next, so the detail that singles this one out, often a file, a symbol or a package, matters more than grammar: drop articles and shorten a path to its file name before you lose it. Each label reads as something already done, opening on its verb.",
   [
     "Examples:",
-    "- Searched lib/billing for retries",
-    "- Fixed null check in TokenStore",
-    "- Added /status route",
-    "- Read vite.config.ts",
-    "- Ran the failing sync tests",
+    "- Listed the migrations folder",
+    "- Patched retry delay in queue.ts",
+    "- Renamed userId to accountId",
+    "- Checked CI logs for timeouts",
+    "- Installed zod",
   ].join("\n"),
 ].join("\n\n")
 
 const SUGGESTION_PROMPT = [
-  "[Suggestion mode: write what the person would most naturally type to Orbit next.]",
-  "Read the person's own recent messages and what they first asked for before anything else. The task is to predict the words they would type, not to propose what you think is best.",
-  'Check: if they saw the suggestion, would they think "that is what I was about to write"?',
+  "Draft the next message the person will probably send to Orbit, so they can send it without typing it.",
+  "Base the draft on what the person has written, above all their latest messages and the request that started the work. It speaks for them, so it carries on with their plan as they see it.",
+  "Keep a draft only if the person could send it unchanged.",
   [
-    "Examples:",
-    '- They asked for a fix and for tests, and the fix is done: "run the tests"',
-    '- New code was just written: "try it out"',
-    "- You offered choices: the one they would most likely pick",
-    '- You asked whether to go on: "yes"',
-    '- The work is done and the next step is plain: "commit this" or "push it"',
-    "- Something just failed, or you misread them: write nothing",
+    "For instance:",
+    '- They wanted a refactor and a changelog entry, and the refactor is in: "now the changelog"',
+    '- A script was just written: "run it on the sample data"',
+    "- You laid out options: the one they seem to lean towards",
+    '- You mentioned a second file with the same bug: "fix that one too"',
+    '- Everything is finished and the follow-up is plain: "open a PR"',
+    "- The last step errored, or you misread them: leave it empty",
   ].join("\n"),
-  'Be specific rather than general: "run the parser tests" is better than "test it".',
+  'A draft that names its object, such as "rerun the date parser tests", helps the person; a vague "check it" does not.',
   [
-    "Never write:",
-    '- praise or a verdict ("looks good", "thanks")',
-    "- a question",
-    '- your own voice ("Let me", "I\'ll")',
-    "- an idea they have not raised",
-    "- more than one sentence",
+    "Leave out:",
+    '- approval or thanks ("nice", "perfect")',
+    "- anything phrased as a question",
+    '- wording only the assistant would use ("I will", "Let me")',
+    "- topics the person has not brought up",
+    "- a second sentence",
   ].join("\n"),
-  "When the next step is not clear from what they wrote, write nothing.",
-  "Format: 2 to 12 words in the person's own style, or nothing at all. Reply with the suggestion alone, without quotes or explanation.",
+  "Answer with the draft alone, two to twelve words in the person's own register, with no quotes and no comment. An empty answer is right whenever what they wrote points to no particular next move.",
 ].join("\n\n")
 
-const AFFIRMATIONS = new Set([
-  "yes",
-  "yeah",
-  "yep",
-  "yea",
-  "yup",
-  "sure",
-  "ok",
-  "okay",
-  "push",
+// Lone words a person does send as a whole message, so the one-word rule keeps them.
+const SHORT_REPLIES = new Set([
   "commit",
+  "push",
   "deploy",
-  "stop",
   "continue",
   "check",
+  "stop",
   "exit",
   "quit",
+  "yes",
   "no",
+  "ok",
+  "okay",
+  "sure",
+  "yeah",
+  "yea",
+  "yep",
+  "yup",
 ])
 // Text about the suggestion rather than a suggestion, matched against the lower-cased text.
-const META_TEXT = [
-  /^nothing found\.?$/,
-  /^nothing to suggest/,
-  /^no suggestion/,
-  /\bsilence is\b|\bstay(s|ing)? silent\b/,
+const SELF_REFERENCE = [
   /^\W*silence\W*$/,
+  /\bsilence is\b|\bstay(s|ing)? silent\b/,
+  /^no suggestion/,
+  /^nothing to suggest/,
+  /^nothing found\.?$/,
 ]
 const ERROR_OPENINGS = [
-  "api error:",
-  "prompt is too long",
-  "request timed out",
   "invalid api key",
+  "request timed out",
+  "prompt is too long",
   "image was too large",
+  "api error:",
 ]
-const EVALUATIVE = [
-  "thanks",
-  "thank you",
+const VERDICTS = [
+  "awesome",
+  "excellent",
+  "great",
+  "nice",
+  "perfect",
   "looks good",
   "sounds good",
+  "makes sense",
   "that works",
   "that worked",
   "that's all",
-  "nice",
-  "great",
-  "perfect",
-  "makes sense",
-  "awesome",
-  "excellent",
+  "thank you",
+  "thanks",
 ]
 const ASSISTANT_OPENINGS = [
-  "let me",
-  "i'll",
-  "i've",
-  "i'm",
+  "certainly",
+  "of course",
+  "sure,",
+  "here are",
+  "here is",
+  "here's",
   "i can",
-  "i would",
   "i think",
   "i notice",
-  "here's",
-  "here is",
-  "here are",
+  "i would",
+  "i'll",
+  "i'm",
+  "i've",
+  "let me",
   "that's",
   "this is",
   "this will",
   "you can",
-  "you should",
   "you could",
-  "sure,",
-  "of course",
-  "certainly",
+  "you should",
 ]
 
 /** The first rule, in the reference's order, that drops a suggestion's trimmed text; undefined keeps it. */
 function filter(text: string): SessionAssist.SuggestionFilter | undefined {
   const lower = text.toLowerCase()
   const words = text.split(/\s+/).filter(Boolean)
-  if (lower === "done") return "done"
-  if (META_TEXT.some((pattern) => pattern.test(lower))) return "meta_text"
-  if (/^\(.*\)$|^\[.*\]$/s.test(text)) return "meta_wrapped"
-  if (ERROR_OPENINGS.some((opening) => lower.startsWith(opening))) return "error_message"
-  if (/^\w+:\s/.test(text)) return "prefixed_label"
-  if (words.length < 2 && !text.startsWith("/") && !AFFIRMATIONS.has(lower)) return "too_few_words"
-  if (words.length > 12) return "too_many_words"
-  if (text.length >= 100) return "too_long"
-  if (/[.!?]\s+[A-Z]/.test(text)) return "multiple_sentences"
-  if (/[\n*]/.test(text)) return "has_formatting"
-  if (EVALUATIVE.some((phrase) => lower.includes(phrase))) return "evaluative"
-  if (ASSISTANT_OPENINGS.some((opening) => lower.startsWith(opening))) return "assistant_voice"
+  if (lower === "done") return "just_done"
+  if (SELF_REFERENCE.some((pattern) => pattern.test(lower))) return "self_reference"
+  if (/^\(.*\)$|^\[.*\]$/s.test(text)) return "bracketed"
+  if (ERROR_OPENINGS.some((opening) => lower.startsWith(opening))) return "error_text"
+  if (/^\w+:\s/.test(text)) return "labelled"
+  if (words.length < 2 && !text.startsWith("/") && !SHORT_REPLIES.has(lower)) return "one_word"
+  if (words.length > 12) return "over_twelve_words"
+  if (text.length >= 100) return "too_many_characters"
+  if (/[.!?]\s+[A-Z]/.test(text)) return "several_sentences"
+  if (/[\n*]/.test(text)) return "markup"
+  if (VERDICTS.some((phrase) => lower.includes(phrase))) return "verdict"
+  if (ASSISTANT_OPENINGS.some((opening) => lower.startsWith(opening))) return "assistant_phrasing"
   return undefined
 }

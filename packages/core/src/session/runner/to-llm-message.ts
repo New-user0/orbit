@@ -649,11 +649,11 @@ function toLLMMessage(
             id: message.id,
             role: "user",
             content: [
-              "Earlier messages in this session were replaced by the summary below because the conversation outgrew the context window.",
+              "The conversation grew past the context window, so its earlier part now lives in the summary below.",
               ReminderText.neutralize(message.summary),
               ...(message.reason === "auto"
                 ? [
-                    "Keep working without checking in with the user. Go straight to the task that was underway, and say nothing about this summary or about having resumed.",
+                    "Your next message should already be work on the interrupted task: no question to the person, and no word about the summary or the restart.",
                   ]
                 : []),
             ].join("\n\n"),

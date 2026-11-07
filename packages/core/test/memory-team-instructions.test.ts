@@ -31,6 +31,7 @@ import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { readInitial, readUpdate } from "./lib/instructions"
+import COMBINED_GUIDE from "./fixture/prompt-text/memory-guide-team.txt"
 import { insertSession } from "./lib/session-row"
 
 const decodeInfo = Schema.decodeUnknownSync(Info)
@@ -43,14 +44,14 @@ const linkType = process.platform === "win32" ? "junction" : "dir"
 // The headings of today's guide, in the reference's section order, in Orbit's words; the combined guide adds the scope
 // section before the kinds.
 const HEADINGS = [
-  "## Kinds of memory",
-  "## What not to save",
-  "## How to save a memory",
-  "## When to use memory",
-  "## Before acting on a memory",
-  "## Memory, plans and tasks",
+  "## What a memory can be about",
+  "## Leave these out",
+  "## Writing a memory down",
+  "## Reading memory",
+  "## Check before you trust it",
+  "## What memory is not for",
 ]
-const SCOPE = "## Private and team memory"
+const SCOPE = "## Two folders"
 
 const configured = (scope: Scope, memory: Record<string, unknown>) =>
   new Document({
@@ -329,21 +330,47 @@ describe("the guide with team memory on", () => {
         expect(headings(on.text)).toEqual([SCOPE, ...HEADINGS])
         expect(scopeLines(on.text)).toHaveLength(4)
         const notToSave = on.text.slice(
-          on.text.indexOf("## What not to save"),
-          on.text.indexOf("## How to save a memory"),
+          on.text.indexOf("## Leave these out"),
+          on.text.indexOf("## Writing a memory down"),
         )
         expect(notToSave.toLowerCase()).toContain("team memory")
         expect(notToSave.toLowerCase()).toContain("secret")
+        // The combined guide keeps the question to the person about a left-out item they still want kept.
+        expect(notToSave).toContain(
+          "ask them which part a later conversation should know (usually a lesson rather than a record), and save only the part they name.",
+        )
         const howToSave = on.text.slice(
-          on.text.indexOf("## How to save a memory"),
-          on.text.indexOf("## When to use memory"),
+          on.text.indexOf("## Writing a memory down"),
+          on.text.indexOf("## Reading memory"),
         )
         expect(howToSave).toContain("MEMORY.md")
         expect(howToSave.toLowerCase()).toContain("team")
+        // With two folders, the first write goes to the one its scope picks; with one folder there is nothing to pick.
+        expect(howToSave).toContain("in the folder that its scope selects")
+        expect(off.text).not.toContain("in the folder that its scope selects")
+        // Each folder's index is cut at the same line, and reading memory covers both folders.
+        expect(howToSave).toContain("nothing from line 201 onward in either is ever seen")
+        expect(on.text).toContain("Two signals send you to memory, and both folders count")
+        expect(on.text).toContain("refers back to work done before, by them or by anyone else on the project.")
+        expect(howToSave).toContain(
+          "A team memory gets its entry in the team folder's `MEMORY.md`, and a private memory in the private folder's. Both indexes ride along in every conversation",
+        )
+        expect(off.text).toContain("nothing from line 201 onward is ever seen, so an entry placed late is an entry lost")
         // Off, the guide is today's.
         expect(headings(off.text)).toEqual(HEADINGS)
         expect(scopeLines(off.text)).toEqual([])
       }),
+  )
+
+  // The combined guide whole, so that dropping, softening or reversing any one of its rules fails here.
+  it.live("gives the combined guide word for word", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const text = (yield* initial(l, teamOn)).text
+        .replaceAll(l.memory, "<private folder>")
+        .replaceAll(l.team, "<team folder>")
+      expect(text).toBe(COMBINED_GUIDE)
+    }),
   )
 
   // The guide says both folders exist, so the team folder is made with the guide, and only then.

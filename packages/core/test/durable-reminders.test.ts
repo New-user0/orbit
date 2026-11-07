@@ -1820,7 +1820,12 @@ describe("the rebuild after a restart", () => {
       const rows = yield* h.changes(messages)
       expect(labels(rows)).toEqual([expect.stringContaining(read)])
       expect(rows[0].harness).not.toMatch(/you wrote/i)
-      expect(rows[0].harness).toContain("changed outside the conversation")
+      expect(rows[0].harness).toContain("something outside this conversation has edited it")
+      // The change is to be kept and built on, and left unmentioned.
+      expect(rows[0].harness).toContain(
+        "Treat the edit as deliberate: build on it from here on, and leave it in place unless the person asks you to revert it.",
+      )
+      expect(rows[0].harness).toContain("There is no need to bring it up with the person, who already knows.")
     }),
   )
 

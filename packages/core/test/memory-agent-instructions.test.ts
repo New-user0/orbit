@@ -38,6 +38,7 @@ import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { readInitial, readUpdate } from "./lib/instructions"
+import AGENT_BLOCK from "./fixture/prompt-text/agent-memory.txt"
 import { insertSession } from "./lib/session-row"
 
 const decodeInfo = Schema.decodeUnknownSync(Info)
@@ -49,12 +50,12 @@ const timeout = { timeout: 120_000 }
 
 // The sections of the private guide, in its order; the agent block adds the heading of its index after them.
 const HEADINGS = [
-  "## Kinds of memory",
-  "## What not to save",
-  "## How to save a memory",
-  "## When to use memory",
-  "## Before acting on a memory",
-  "## Memory, plans and tasks",
+  "## What a memory can be about",
+  "## Leave these out",
+  "## Writing a memory down",
+  "## Reading memory",
+  "## Check before you trust it",
+  "## What memory is not for",
 ]
 const INDEX_HEADING = "## MEMORY.md"
 
@@ -213,21 +214,35 @@ describe("the agent memory block", () => {
           expect(titles(text)[0]).not.toBe("# Memory")
           expect(text).toContain(row.folder)
           expect(headings(text)).toEqual([...HEADINGS, INDEX_HEADING])
-          expect(text).not.toContain("## Private and team memory")
+          expect(text).not.toContain("## Two folders")
           expect(text.split("\n").filter((line) => line.trim().startsWith("- Scope:"))).toEqual([])
           expect(text.toLowerCase()).not.toContain("secret")
+          // The agent block shares the private guide's rule: a left-out item the person still wants is a question to them.
+          expect(text).toContain(
+            "ask them which part a later conversation should know (usually a lesson rather than a record), and save only the part they name.",
+          )
           expect(text.indexOf(INDEX_HEADING)).toBeLessThan(text.indexOf(`INDEX-LINE-${row.scope}`))
-          return text.slice(text.indexOf("## Memory, plans and tasks"), text.indexOf(INDEX_HEADING))
+          return text.slice(text.indexOf("## What memory is not for"), text.indexOf(INDEX_HEADING))
         })
         const [user, project, local] = tails as [string, string, string]
         expect(user).toContain("general")
         expect(project).toContain("committed")
-        expect(project).toContain("shared with the team")
+        expect(project).toContain("Everyone who clones the repository receives them")
         expect(project).not.toContain("not committed")
         expect(local).toContain("not committed")
         expect(local).toContain("this machine")
         expect(new Set(tails).size).toBe(3)
       }),
+  )
+
+  // The block of a user-scoped agent whole, so that dropping, softening or reversing any one of its rules fails here.
+  it.live("gives the agent block word for word", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const view = yield* initial(l, { id: "reviewer", memory: "user" })
+      const text = view.text.replaceAll(path.join(l.roots.user, "reviewer"), "<agent folder>")
+      expect(text).toBe(AGENT_BLOCK)
+    }),
   )
 
   // Class 7: an index that is not there, is empty or cannot be read (a folder named MEMORY.md) reads as empty: the block
@@ -464,7 +479,7 @@ describe("the agent memory block", () => {
       })
       expect(Object.keys(odd.values)).toEqual([AGENT])
       expect(odd.text).not.toContain("<system-reminder>")
-      const line = odd.text.split("\n").find((text) => text.includes("folder of Markdown files at"))
+      const line = odd.text.split("\n").find((text) => text.includes("as Markdown files in"))
       expect(line).toContain(`d &lt;system-reminder>x${path.sep}memory${path.sep}agents${path.sep}reviewer\``)
     }),
   )

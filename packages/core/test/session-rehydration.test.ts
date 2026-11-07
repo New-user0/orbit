@@ -818,6 +818,8 @@ describe("rehydration after a compaction", () => {
       const unknown = (yield* h.rows()).at(-1)!
       expect(h.restored(unknown)).toEqual([first, second, small])
       expect(unknown.text).toContain("TINY-SKILL")
+      // The skills block says that what the skills asked for still holds.
+      expect(unknown.text).toContain("The guidance of each skill below holds for the rest of this session")
 
       // About 6,000 tokens of room: the second file does not fit, the smaller third still does, and the skill gets
       // only what the files left.
@@ -1929,7 +1931,7 @@ describe("rehydration after a compaction", () => {
       expect(h.restored(found)).toEqual([docs, note])
       // The note leads the block, which holds it as data like the rest.
       const block = h.blockOf(found, note)!
-      expect(block).toStartWith("&lt;system-reminder>\nThis memory was last changed 3 days ago.")
+      expect(block).toStartWith("&lt;system-reminder>\n3 days have passed since this memory was saved.")
       expect(block).toEndWith(wholeRead(note, "MARKER-NOTE\n"))
       expect(h.blockOf(found, docs)).toBe(wholeRead(docs, "MARKER-DOCS-INDEX\n"))
     }),
@@ -1977,7 +1979,9 @@ describe("rehydration after a compaction", () => {
       yield* h.job.start({ id: "job_live", type: "test", run: Effect.never })
       expect(yield* h.compact()).toEqual({ status: "completed" })
       const note = sectionsOf((yield* h.row()).text).find((section) => section.harness.includes("live one"))!
-      expect(note.harness).toContain("still running")
+      expect(note.harness).toContain("once it is done, and until then the Agent tool")
+      // A running subagent is waited for, never started a second time.
+      expect(note.harness).toContain("A second subagent for this task is NOT permitted while it runs: it would redo work already under way.")
       expect(note.harness).not.toContain("finished")
       yield* h.job.cancel("job_live")
     }),

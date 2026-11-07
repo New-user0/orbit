@@ -113,6 +113,18 @@ import fs from "fs/promises"
 import path from "path"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
 import { CodeModeInstructions } from "@orbit/core/codemode/instructions"
+import { Environment } from "@orbit/core/environment/index"
+import { FileAccess } from "@orbit/core/file-access"
+import { Mcp } from "@orbit/core/mcp/index"
+import { McpClient } from "@orbit/core/mcp/client"
+import { Ripgrep } from "@orbit/core/ripgrep"
+import { McpTool } from "@orbit/core/tool/mcp"
+import { GrepTool } from "@orbit/core/tool/plugin/grep"
+import { ConfigMCP } from "@orbit/schema/config/mcp"
+import { hostEnvironmentLayer } from "./fixture/environment"
+import { location } from "./fixture/location"
+import { tmpdirScoped } from "./fixture/tmpdir"
+import { registerToolPlugin } from "./lib/tool"
 
 const emptyCodeMode = `${CodeModeInstructions.render({ total: 0, shown: 0, namespaces: [] })}\n\n`
 type ToolBarrier = {
@@ -849,6 +861,7 @@ const scenarioOn =
   (
     name: string,
     body: (s: Scenario) => Effect.gen.Return<void, unknown, Layer.Success<typeof layer> | Scope.Scope>,
+    timeout?: number,
   ) =>
     on.effect(
       name,
@@ -856,6 +869,7 @@ const scenarioOn =
         const s = yield* setup
         return yield* body(s)
       }),
+      timeout,
     )
 const scenario = scenarioOn(it)
 const limitScenarios = [
@@ -1960,7 +1974,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.resume
     const prompt = userTexts(s.requests.at(-1)!).at(-1) ?? ""
     expect(prompt).toContain("Additional instructions for this handoff:\nfocus on tests")
-    expect(prompt.indexOf("Additional instructions for this handoff:")).toBeLessThan(prompt.lastIndexOf("Last word:"))
+    expect(prompt.indexOf("Additional instructions for this handoff:")).toBeLessThan(prompt.lastIndexOf("Once more:"))
     expect(yield* s.inbox).toEqual([])
 
     // Control: a bare /compact adds no block.
@@ -2886,7 +2900,7 @@ describe("SessionRunnerLLM", () => {
       expect((yield* s.messages).some((message) => message.type === "compaction")).toBe(false)
       yield* active.finish
 
-      expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
+      expect(userTexts(s.requests[1]).at(-1)).toContain("This reply must be plain text")
       expect(s.requests).toHaveLength(3)
       expect(userTexts(s.requests[1])).not.toContain("STEER_A")
       expect(userTexts(s.requests[1])).not.toContain("STEER_B")
@@ -2925,7 +2939,7 @@ describe("SessionRunnerLLM", () => {
     yield* Fiber.join(run)
 
     expect(s.requests).toHaveLength(3)
-    expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("This reply must be plain text")
     expect(s.requests[1].messages.some((message) => message.role === "tool")).toBe(true)
     expect(userTexts(s.requests[2]).slice(-2)).toEqual(["STEER_A", "STEER_B"])
     expect(yield* s.inbox).toEqual([])
@@ -2948,7 +2962,7 @@ describe("SessionRunnerLLM", () => {
     yield* Deferred.succeed(release, undefined)
     yield* Fiber.join(run)
     expect(s.requests).toHaveLength(3)
-    expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("This reply must be plain text")
     expect(userTexts(s.requests[2]).slice(-2)).toEqual(["STEER_A", "STEER_B"])
     expect(yield* s.inbox).toEqual([])
   })
@@ -2972,7 +2986,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(s.requests).toHaveLength(outcome === "cancelled" ? 2 : 4)
       if (outcome === "failed") {
-        expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
+        expect(userTexts(s.requests[1]).at(-1)).toContain("This reply must be plain text")
         expect((yield* s.messages).find((message) => message.id === compact.id)).toMatchObject({
           status: "failed",
           error: { type: "provider.error", message: "summary unavailable" },
@@ -2997,7 +3011,7 @@ describe("SessionRunnerLLM", () => {
     const summary = yield* s.llm.gate
     const compact = yield* s.session.compact({ sessionID })
     yield* summary.started
-    expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("This reply must be plain text")
     expect((yield* s.inbox).map((item) => item.id)).toEqual([first.id, second.id])
     yield* s.session.interrupt(sessionID)
     yield* s.session.wait(sessionID)
@@ -3037,7 +3051,7 @@ describe("SessionRunnerLLM", () => {
     yield* s.resume
     expect(s.requests).toHaveLength(3)
     expect(userTexts(s.requests[0])).toEqual(["STEER_A"])
-    expect(userTexts(s.requests[1]).at(-1)).toContain("IMPORTANT: Reply with text only")
+    expect(userTexts(s.requests[1]).at(-1)).toContain("This reply must be plain text")
     expect(userTexts(s.requests[2]).at(-1)).toBe("STEER_B")
     expect(
       (yield* recordedEventTypes(sessionID)).filter(
@@ -3639,7 +3653,7 @@ describe("SessionRunnerLLM", () => {
     expect(size(6)).toBeLessThan(size(4))
     expect((yield* s.messages).find((message) => message.id === compaction.id)).toMatchObject({
       status: "failed",
-      error: { type: "compaction.failed", message: expect.stringContaining("Go back a few messages") },
+      error: { type: "compaction.failed", message: expect.stringContaining("Rewind a few messages") },
     })
     yield* s.llm.push(TestLLM.text("Continued", "continued"))
     yield* s.runPrompt("Continue")
@@ -3810,7 +3824,7 @@ describe("SessionRunnerLLM", () => {
     expect(userTexts(s.requests[0])).toContain("Recent exact request ".repeat(180))
     expect(userTexts(s.requests[1])).toHaveLength(1)
     expect(userTexts(s.requests[1])[0]).toContain("## Objective\n- Preserve the task")
-    expect(userTexts(s.requests[1])[0]).toContain("Keep working without checking in with the user")
+    expect(userTexts(s.requests[1])[0]).toContain("Your next message should already be work on the interrupted task")
 
     const context = yield* store.context(sessionID)
     expect(context.map((message) => message.type)).toEqual(["compaction", "assistant"])
@@ -11452,7 +11466,7 @@ describe("SessionRunnerLLM saved tool results", () => {
     if (result?.result.type !== "text") return yield* Effect.die(new Error("Expected a text tool result"))
     const lines = String(result.result.value).split("\n")
     expect(lines[0]).toBe("<saved-output>")
-    const saved = /^Output too large to include \(58\.6KB\)\. The full output is saved at: (.+)$/.exec(
+    const saved = /^This result is 58\.6KB, too much to send here, so all of it went to a file: (.+)$/.exec(
       lines[1] ?? "",
     )?.[1]
     if (saved === undefined) return yield* Effect.die(new Error(`Expected the saved path, got ${lines[1]}`))
@@ -11462,7 +11476,7 @@ describe("SessionRunnerLLM saved tool results", () => {
     expect(yield* Effect.promise(() => fs.readFile(saved, "utf8"))).toBe("r".repeat(60_000))
     expect(lines.slice(2)).toEqual([
       "",
-      "Preview of the first 2,000 characters:",
+      "Its opening 2,000 characters:",
       "r".repeat(2_000),
       "...",
       "</saved-output>",
@@ -11513,8 +11527,8 @@ describe("SessionRunnerLLM saved tool results", () => {
     yield* s.resume
 
     expect(toolResults(s.requests[1])).toEqual([
-      { id: "call_silent", result: { type: "text", value: "(silent finished and returned no output)" } },
-      { id: "call_nulled", result: { type: "text", value: "(nulled finished and returned no output)" } },
+      { id: "call_silent", result: { type: "text", value: "(silent ran and produced nothing)" } },
+      { id: "call_nulled", result: { type: "text", value: "(nulled ran and produced nothing)" } },
     ])
   })
 
@@ -11541,6 +11555,139 @@ describe("SessionRunnerLLM saved tool results", () => {
     yield* s.resume
     expect(seen).toEqual([60_000])
   })
+
+  // The wrapper the next request carries in place of a saved result, read back into its parts.
+  const unwrap = (value: unknown) => {
+    const lines = String(value).split("\n")
+    const header = /^This result is ([0-9.]+KB), too much to send here, so all of it went to a file: (.+)$/.exec(lines[1] ?? "")
+    return { opening: lines[0], size: header?.[1], file: header?.[2], rest: lines.slice(2) }
+  }
+  const dataOf = (s: Scenario) =>
+    Effect.gen(function* () {
+      const scratchpad = (yield* SessionScratchpad.Service).path(yield* s.session.get(sessionID))
+      if (scratchpad === undefined) return yield* Effect.die(new Error("Expected the session to have a scratchpad"))
+      return path.join(path.dirname(path.dirname(path.dirname(scratchpad))), "data")
+    })
+  const storedContent = (s: Scenario, callID: string) =>
+    s.messages.pipe(
+      Effect.map((messages) =>
+        messages
+          .flatMap((message) => (message.type === "assistant" ? message.content : []))
+          .flatMap((part) =>
+            part.type === "tool" && part.id === callID && part.state.status === "completed" ? part.state.content : [],
+          )
+          .map((part) => (part.type === "text" ? part.text : "")),
+      ),
+    )
+
+  // The real Grep tool, on a folder of its own, with its 20,000-character limit on the way to the step. Its result
+  // here is about 26,000 characters, below the 50,000 ceiling, so only Grep's own declared limit saves it.
+  savedScenario("saves a Grep result over 20,000 characters and sends the wrapper in the next request", function* (s) {
+    const data = yield* dataOf(s)
+    const folder = (yield* tmpdirScoped()).path
+    yield* Effect.promise(() =>
+      fs.writeFile(
+        path.join(folder, "notes.txt"),
+        Array.from({ length: 100 }, (_, index) => `needle ${String(index).padStart(3, "0")} ${"n".repeat(240)}`).join("\n"),
+      ),
+    )
+    const registry = yield* Tool.Service
+    yield* Layer.build(
+      AppNodeBuilder.build(
+        makeLocationNode({
+          name: "test/session-runner-grep",
+          layer: Layer.effectDiscard(registerToolPlugin(GrepTool.Plugin)),
+          deps: [Tool.node, Environment.node, Ripgrep.node, Location.node, FileAccess.node, Permission.node],
+        }),
+        [
+          Tool.node.replace(Layer.succeed(Tool.Service, registry)),
+          Location.node.replace(
+            Layer.succeed(
+              Location.Service,
+              Location.Service.of(location(Location.Ref.make({ directory: AbsolutePath.make(folder) }))),
+            ),
+          ),
+          Permission.node.replace(permission),
+        ],
+      ),
+    )
+    yield* s.admit("Find the needles")
+    yield* s.llm.push(
+      TestLLM.tool("call_grep", "Grep", { pattern: "needle", path: path.join(folder, "notes.txt") }),
+      TestLLM.text("Found them", "done-grep"),
+    )
+    yield* s.resume
+
+    const [content] = yield* storedContent(s, "call_grep")
+    if (content === undefined) return yield* Effect.die(new Error("Expected the Grep call to complete"))
+    expect(content.startsWith("Found 100 matches\n")).toBe(true)
+    expect(content.length).toBeGreaterThan(20_000)
+    expect(content.length).toBeLessThan(50_000)
+    const [result] = toolResults(s.requests[1])
+    if (result?.result.type !== "text") return yield* Effect.die(new Error("Expected a text tool result"))
+    const wrapped = unwrap(result.result.value)
+    expect(wrapped.opening).toBe("<saved-output>")
+    expect(wrapped.size).toBe(`${(content.length / 1024).toFixed(1)}KB`)
+    if (wrapped.file === undefined) return yield* Effect.die(new Error(`Expected the saved path, got ${result.result.value}`))
+    expect(path.dirname(wrapped.file)).toBe(path.join(data, "tool-output", sessionID))
+    expect(yield* Effect.promise(() => fs.readFile(wrapped.file!, "utf8"))).toBe(content)
+    expect(wrapped.rest.slice(0, 3)).toEqual(["", "Its opening 2,000 characters:", "Found 100 matches"])
+    expect(wrapped.rest.at(-1)).toBe("</saved-output>")
+    expect(String(result.result.value)).not.toContain("needle 099")
+  }, 30_000)
+
+  // A real MCP server over stdio. An MCP tool declares 100,000 characters, so the 50,000 ceiling is what saves it.
+  // Starting the server is a process start, which a loaded Windows runner does not finish within the default 5 s.
+  savedScenario("saves an MCP result over 50,000 characters and sends the wrapper in the next request", function* (s) {
+    const data = yield* dataOf(s)
+    const server = Mcp.ServerName.make("traits")
+    const connection = yield* McpClient.connect(
+      "traits",
+      new ConfigMCP.Local({
+        type: "local",
+        command: [process.execPath, path.join(import.meta.dir, "fixture/mcp-traits.ts")],
+      }),
+      import.meta.dir,
+    ).pipe(Effect.provide(hostEnvironmentLayer))
+    const tools = (yield* connection.tools()).map((entry) => ({ ...entry, server, codemode: false }) satisfies Mcp.Tool)
+    const registry = yield* Tool.Service
+    // A fresh layer: the graph has built McpTool already, on a service with no servers.
+    const registration = yield* Layer.build(
+      Layer.fresh(McpTool.layer).pipe(
+        Layer.provide(
+          Layer.mock(Mcp.Service, {
+            tools: () => Effect.succeed(tools),
+            callTool: (input) =>
+              connection.callTool({ name: input.name, args: input.args }).pipe(
+                Effect.map((result) => ({ ...result, server, tool: input.name })),
+                Effect.orDie,
+              ),
+          }),
+        ),
+        Layer.provide(permission),
+        Layer.provide(Layer.succeed(Tool.Service, registry)),
+      ),
+    )
+    yield* Context.get(registration, McpTool.Service).flush
+    yield* s.admit("Look it up")
+    yield* s.llm.push(
+      TestLLM.tool("call_mcp", "traits_lookup", { chars: 60_000 }),
+      TestLLM.text("Looked up", "done-mcp"),
+    )
+    yield* s.resume
+
+    expect(yield* storedContent(s, "call_mcp")).toEqual(["x".repeat(60_000)])
+    const [result] = toolResults(s.requests[1])
+    if (result?.result.type !== "text") return yield* Effect.die(new Error("Expected a text tool result"))
+    const wrapped = unwrap(result.result.value)
+    expect(wrapped.opening).toBe("<saved-output>")
+    expect(wrapped.size).toBe("58.6KB")
+    if (wrapped.file === undefined) return yield* Effect.die(new Error(`Expected the saved path, got ${result.result.value}`))
+    expect(path.dirname(wrapped.file)).toBe(path.join(data, "tool-output", sessionID))
+    expect(path.basename(wrapped.file)).toMatch(/^msg_[A-Za-z0-9]{1,64}-call_mcp-[0-9a-f]{8}\.txt$/)
+    expect(yield* Effect.promise(() => fs.readFile(wrapped.file!, "utf8"))).toBe("x".repeat(60_000))
+    expect(wrapped.rest).toEqual(["", "Its opening 2,000 characters:", "x".repeat(2_000), "...", "</saved-output>"])
+  }, 30_000)
 })
 
 // tool-runtime-9 end to end: the message budget. Before each request the runner looks at the newest step's tool results
@@ -11626,7 +11773,7 @@ describe("SessionRunnerLLM message budget", () => {
       [41_000, 42_000, 43_000, 44_000].map((count, index) => ({ type: "text", value: letters[index]!.repeat(count) })),
     )
     const lines = String(results[4]!.result.value).split("\n")
-    const saved = /^Output too large to include \(47\.9KB\)\. The full output is saved at: (.+)$/.exec(
+    const saved = /^This result is 47\.9KB, too much to send here, so all of it went to a file: (.+)$/.exec(
       lines[1] ?? "",
     )?.[1]
     if (saved === undefined) return yield* Effect.die(new Error(`Expected the saved path, got ${lines[1]}`))
@@ -11636,7 +11783,7 @@ describe("SessionRunnerLLM message budget", () => {
     expect(yield* Effect.promise(() => fs.readFile(saved, "utf8"))).toBe("e".repeat(49_000))
     expect(lines.slice(2)).toEqual([
       "",
-      "Preview of the first 2,000 characters:",
+      "Its opening 2,000 characters:",
       "e".repeat(2_000),
       "...",
       "</saved-output>",
@@ -11774,7 +11921,7 @@ describe("SessionRunnerLLM message budget", () => {
 
     expect(wrapped(s.requests[1])).toEqual(["call_1"])
     const value = String(toolResults(s.requests[1])[0]?.result.value)
-    expect(value.split("\n").slice(3, 5)).toEqual(["Preview of the first 2,000 characters:", "&lt;saved-output>"])
+    expect(value.split("\n").slice(3, 5)).toEqual(["Its opening 2,000 characters:", "&lt;saved-output>"])
   })
 
   budgetScenario(
@@ -11881,7 +12028,7 @@ describe("SessionRunnerLLM message budget", () => {
     const lines = String(toolResults(request)[0]?.result.value).split("\n")
     expect(lines.slice(0, 2)).toEqual([
       "<saved-output>",
-      `Output too large to include (29.3KB). The full output is saved at: ${file}`,
+      `This result is 29.3KB, too much to send here, so all of it went to a file: ${file}`,
     ])
   })
 

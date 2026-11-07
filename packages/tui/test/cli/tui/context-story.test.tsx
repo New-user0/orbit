@@ -70,7 +70,7 @@ const fixture = (frame: string) => frame.match(/fixture: ([a-zA-Z0-9 ]+?)(?: ·|
 test.each([64, 120])("the story draws the real view for each fixture and resets, at %i columns", async (width) => {
   const app = await render(width)
   try {
-    const first = await app.waitForFrame((frame) => frame.includes("Estimated usage by category") && fixture(frame) === "typical")
+    const first = await app.waitForFrame((frame) => frame.includes("Estimated share of the window") && fixture(frame) === "typical")
     for (const control of ["ctrl+g", "ctrl+x"]) expect(first).toContain(control)
     expect(first).toContain("ORBIT.md")
 
@@ -82,7 +82,7 @@ test.each([64, 120])("the story draws the real view for each fixture and resets,
       const frame = await app.waitForFrame((frame) => fixture(frame) !== undefined && fixture(frame) !== last)
       last = fixture(frame)!
       seen.add(last)
-      if (last === "near full") expect(frame).toContain("Suggestions")
+      if (last === "near full") expect(frame).toContain("Ways to free room")
       if (last === "hostile names") {
         expect(controlFree(frame)).toBe(true)
         expect(frame).toContain("\\x1b")

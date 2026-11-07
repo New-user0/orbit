@@ -33,6 +33,7 @@ import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { readInitial, readUpdate } from "./lib/instructions"
 import { insertSession } from "./lib/session-row"
+import PRIVATE_GUIDE from "./fixture/prompt-text/memory-guide.txt"
 
 const decodeInfo = Schema.decodeUnknownSync(Info)
 const first = SessionSchema.ID.make("ses_memory_first")
@@ -42,12 +43,12 @@ const INDEX = "core/memory-index"
 
 // The headings of the guide, in the reference's section order, in Orbit's words.
 const HEADINGS = [
-  "## Kinds of memory",
-  "## What not to save",
-  "## How to save a memory",
-  "## When to use memory",
-  "## Before acting on a memory",
-  "## Memory, plans and tasks",
+  "## What a memory can be about",
+  "## Leave these out",
+  "## Writing a memory down",
+  "## Reading memory",
+  "## Check before you trust it",
+  "## What memory is not for",
 ]
 
 const configured = (scope: Scope, memory: Record<string, unknown>) =>
@@ -367,8 +368,51 @@ describe("the memory guide source", () => {
       expect(at).toEqual([...at].sort((a, b) => a - b))
       // The model is told the folder exists, so it never spends a step creating it.
       expect(yield* exists(l.memory)).toBe(true)
+      expect(out.text).toContain("Orbit created it before this conversation began")
+      // A request settles a memory both ways; a request to leave memory alone keeps it out; the present state outranks it.
+      expect(out.text).toContain("What they want kept is saved right then, and what they want gone is looked up")
+      expect(out.text).toContain("draw on none of it and do not bring it up")
+      expect(out.text).toContain("act on the present state, then bring the note up to date or remove it")
+      // The housekeeping and format rules the guide gives in its own words.
+      expect(out.text).toContain("Aim for one current note per point.")
+      expect(out.text).toContain("stays out, whoever proposes it")
+      // A person who still wants a left-out item kept is asked which part matters; the model does not pick it alone.
+      expect(out.text).toContain(
+        "ask them which part a later conversation should know (usually a lesson rather than a record), and save only the part they name.",
+      )
+      expect(out.text).toContain("Its dates are absolute ones")
+      expect(out.text).toContain('Two labelled lines come under it: "Reason:"')
+      expect(out.text).toContain("Having to repeat a correction is exactly what this memory exists to prevent.")
+      expect(out.text).toContain("- Use it: treat it as a standing rule for the kind of work it names.")
+      expect(out.text).toContain('and "Applies when:", naming the situations it covers.')
+      expect(out.text).toContain("- Format: the same three parts as feedback, with the fact or decision on the top line.")
+      expect(out.text).toContain("A deadline or an owner recorded here can change which approach you propose.")
+      // One note per point: an existing note is changed rather than joined by another, files carry their topic, and
+      // the front matter follows the content.
+      expect(out.text).toContain(
+        "Before you write, look for a memory on the same point and change it instead of adding another;",
+      )
+      expect(out.text).toContain("Name files after their topic, never after a date")
+      expect(out.text).toContain("when a file's content changes, make its front matter describe the new content.")
       // The removed tool is not named.
       expect(out.text).not.toMatch(/\bMemory tool\b|Memory read/)
+      // A request to check, recall or remember something makes reading memory a must.
+      expect(out.text).toContain(
+        '"Do you remember", "recall" and "check your notes" are requests to read memory: answer one only after reading.',
+      )
+    }),
+  )
+
+  // The private guide whole, so that dropping, softening or reversing any one of its rules fails here.
+  it.live("gives the private guide word for word", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const out = yield* Effect.gen(function* () {
+        yield* sessions(l)
+        return yield* readInitial(yield* load(first, { index: false }))
+      }).pipe(provide(l))
+      const text = out.text.replaceAll(l.memory, "<memory folder>")
+      expect(text).toBe(PRIVATE_GUIDE)
     }),
   )
 

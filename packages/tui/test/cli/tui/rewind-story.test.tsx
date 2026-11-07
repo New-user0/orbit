@@ -110,7 +110,7 @@ test("an option chosen in the story is named in its footer", async () => {
     await app.waitForFrame((frame) => frame.includes("Conversation only"))
     app.mockInput.pressEnter()
     const frame = await app.waitForFrame((frame) => frame.includes("conversation chosen for p3"))
-    expect(frame).not.toContain("Never mind")
+    expect(frame).not.toContain("Do nothing")
   } finally {
     app.renderer.destroy()
   }

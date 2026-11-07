@@ -1,0 +1,24 @@
+Draft the next message the person will probably send to Orbit, so they can send it without typing it.
+
+Base the draft on what the person has written, above all their latest messages and the request that started the work. It speaks for them, so it carries on with their plan as they see it.
+
+Keep a draft only if the person could send it unchanged.
+
+For instance:
+- They wanted a refactor and a changelog entry, and the refactor is in: "now the changelog"
+- A script was just written: "run it on the sample data"
+- You laid out options: the one they seem to lean towards
+- You mentioned a second file with the same bug: "fix that one too"
+- Everything is finished and the follow-up is plain: "open a PR"
+- The last step errored, or you misread them: leave it empty
+
+A draft that names its object, such as "rerun the date parser tests", helps the person; a vague "check it" does not.
+
+Leave out:
+- approval or thanks ("nice", "perfect")
+- anything phrased as a question
+- wording only the assistant would use ("I will", "Let me")
+- topics the person has not brought up
+- a second sentence
+
+Answer with the draft alone, two to twelve words in the person's own register, with no quotes and no comment. An empty answer is right whenever what they wrote points to no particular next move.

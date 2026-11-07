@@ -698,7 +698,7 @@ describe("compaction", () => {
     expect(summary).not.toContain("DERIVED-")
     // The first request after the checkpoint carries the second collection and the derived reminders again.
     const final = allTexts(s.requests[1])
-    expect(final.some((text) => text.includes("Earlier messages in this session were replaced by the summary"))).toBe(true)
+    expect(final.some((text) => text.includes("so its earlier part now lives in the summary"))).toBe(true)
     expect(final.join("\n")).not.toContain("MARK-1")
     expect(final).toContain(rendered(2))
     expect(final).toContain("<system-reminder>\nDERIVED-0\n</system-reminder>")
@@ -971,7 +971,7 @@ describe("lowering", () => {
     const history = [checkpoint(2), user(3, "P"), reminder(4)]
 
     expect(roles(history, [{ after: "start", text: "INS" }])).toEqual([
-      expect.stringContaining("Earlier messages in this session were replaced by the summary"),
+      expect.stringContaining("so its earlier part now lives in the summary"),
       "n",
       "INS",
       "P",
@@ -989,7 +989,7 @@ describe("lowering", () => {
     const history = [checkpoint(1), user(2, "kept"), checkpoint(3), user(4, "P")]
     const out = roles(history, [{ after: "start", text: "INS" }])
 
-    expect(out.map((text) => (text.includes("replaced by the summary") ? "CP" : text))).toEqual([
+    expect(out.map((text) => (text.includes("now lives in the summary") ? "CP" : text))).toEqual([
       "CP",
       "INS",
       "CP",

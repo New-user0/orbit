@@ -490,7 +490,7 @@ it.effect("a generation lowers a saved tool result as its wrapper", () =>
     const result = results[0]
     if (result?.type !== "tool-result" || result.result.type !== "text") throw new Error("Expected a text tool result")
     expect(String(result.result.value)).toStartWith("<saved-output>")
-    expect(String(result.result.value)).toContain(`The full output is saved at: ${path.join(toolOutput.root, sessionID, name)}`)
+    expect(String(result.result.value)).toContain(`so all of it went to a file: ${path.join(toolOutput.root, sessionID, name)}`)
     expect(String(result.result.value)).not.toContain("r".repeat(2_001))
   }),
 )

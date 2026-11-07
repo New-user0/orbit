@@ -75,13 +75,13 @@ const description = (shell: string | undefined, limit: ReturnType<typeof limits>
     "Rely on automatic truncation unless filtering the output is more useful.",
     ...(background
       ? [
-          `Commands accept an optional timeout in milliseconds, up to ${duration(limit.max)}. By default a foreground command waits ${duration(limit.timeout)}.`,
+          `The timeout is optional and given in milliseconds. Without one, a foreground command gets ${duration(limit.timeout)}; no timeout may be longer than ${duration(limit.max)}.`,
           "A foreground command still running at its timeout is not stopped: it moves to the background and a message reports back when it ends. A command made only of sleeps is stopped instead.",
           "Background commands have no timeout unless one is given.",
           "Background commands return at once and report back in a message when they end.",
         ]
       : [
-          `Commands accept an optional timeout in milliseconds, up to ${duration(limit.max)}. By default a command waits ${duration(limit.timeout)}.`,
+          `The timeout is optional and given in milliseconds. Without one, a command gets ${duration(limit.timeout)}; no timeout may be longer than ${duration(limit.max)}.`,
           "A command still running at its timeout is stopped.",
         ]),
   ].join(" ")

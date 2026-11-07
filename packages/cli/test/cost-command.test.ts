@@ -75,18 +75,18 @@ test('orb run "/cost" prints the block and sends nothing to the model; --format 
 
   const text = await orb(["run", "--standalone", "--continue", "--model", model, "/cost"])
   expect({ code: text.code, stderr: text.stderr }).toEqual({ code: 0, stderr: "" })
-  expect(text.stdout).toContain("Total cost:")
-  expect(text.stdout).toContain("Total API duration:")
-  expect(text.stdout).toContain("Total wall duration:")
-  expect(text.stdout).toContain("Total code changes:")
-  expect(text.stdout).toContain("Usage by model:")
+  expect(text.stdout).toContain("Spent:")
+  expect(text.stdout).toContain("Model time:")
+  expect(text.stdout).toContain("Elapsed:")
+  expect(text.stdout).toContain("Lines changed:")
+  expect(text.stdout).toContain("Per model:")
   expect(text.stdout).toContain("cost:1b")
-  expect(text.stdout).toMatch(/\d+ input, \d+ output/)
+  expect(text.stdout).toMatch(/in \d+ · out \d+/)
 
   // The alias the TUI also has.
   const usage = await orb(["run", "--standalone", "--continue", "--model", model, "/usage"])
   expect(usage.code).toBe(0)
-  expect(usage.stdout).toContain("Total cost:")
+  expect(usage.stdout).toContain("Spent:")
 
   const json = await orb(["run", "--standalone", "--continue", "--format", "json", "--model", model, "/cost"])
   expect(json.code).toBe(0)
@@ -110,7 +110,7 @@ test("an unknown session and an old server exit 1 with the message", async () =>
   const missing = await orb(["run", "--standalone", "--resume", "ses_cost_missing", "/cost"])
   expect(missing.code).toBe(1)
   expect(missing.stderr.toLowerCase()).toContain("not found")
-  expect(missing.stdout).not.toContain("Total cost")
+  expect(missing.stdout).not.toContain("Spent:")
   expect(chats).toEqual([])
 
   const { readCatalog, readSessionCost } = await import("../src/run/cost-report")
@@ -148,7 +148,7 @@ test('orb -p "/cost" prints the block, and --output-format json one result line'
   chats.length = 0
   const text = await orb(["-p", "--standalone", "--continue", "--model", model, "/cost"])
   expect({ code: text.code, stderr: text.stderr }).toEqual({ code: 0, stderr: "" })
-  expect(text.stdout).toContain("Total cost:")
+  expect(text.stdout).toContain("Spent:")
 
   const json = await orb(["-p", "--standalone", "--continue", "--output-format", "json", "--model", model, "/cost"])
   expect(json.code).toBe(0)
@@ -156,7 +156,7 @@ test('orb -p "/cost" prints the block, and --output-format json one result line'
   expect(lines.length).toBe(1)
   const result = JSON.parse(lines[0]!)
   expect(result).toMatchObject({ type: "result", is_error: false })
-  expect(result.result).toContain("Total cost:")
+  expect(result.result).toContain("Spent:")
   expect(chats).toEqual([])
 }, 300_000)
 
@@ -167,7 +167,7 @@ test("/cost with --file is refused", async () => {
     const result = await orb(["run", "--standalone", "--model", model, "--file", "notes.txt", command])
     expect(result.code).toBe(1)
     expect(result.stderr).toContain("--file")
-    expect(result.stdout).not.toContain("Total cost")
+    expect(result.stdout).not.toContain("Spent:")
   }
   expect(chats).toEqual([])
 }, 300_000)

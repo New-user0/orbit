@@ -112,7 +112,7 @@ test("a result the person interrupted asks for no suggestion; a finished one doe
 
   await period(h, "two", "succeeded")
   await waitFor(() => h.state.suggestions.length === 1)
-  h.state.suggestions[0].answer({ suggestion: null, reason: "early_conversation" })
+  h.state.suggestions[0].answer({ suggestion: null, reason: "too_early" })
   await finish(h)
 
   expect(suggestions(h)).toEqual([])
@@ -206,7 +206,7 @@ test("a batch is asked about once its step ended and every call settled, a faile
     // A second batch whose answer has no label writes nothing.
     batch("msg_b", "call_3").forEach((event) => h.emit(event))
     await waitFor(() => h.state.labels.length === 2)
-    h.state.labels[1].answer({ label: null, reason: "empty" })
+    h.state.labels[1].answer({ label: null, reason: "no_text" })
   })
   await finish(h)
 

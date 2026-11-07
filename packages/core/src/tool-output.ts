@@ -83,9 +83,9 @@ export const cutError = (message: string) =>
 export const wrapper = (input: { file: string; size: number; preview: string; more: boolean }) =>
   [
     "<saved-output>",
-    `Output too large to include (${formatSize(input.size)}). The full output is saved at: ${input.file}`,
+    `This result is ${formatSize(input.size)}, too much to send here, so all of it went to a file: ${input.file}`,
     "",
-    "Preview of the first 2,000 characters:",
+    "Its opening 2,000 characters:",
     input.preview,
     ...(input.more ? ["..."] : []),
     "</saved-output>",
@@ -299,7 +299,7 @@ const layer = Layer.effect(
           : yield* save({ ...input, extension: "txt", write: (target) => copyAdopted(offered, target) })
       if (adopted !== undefined) return { ...result, metadata: { ...metadata, persisted: { ...adopted, parts: 1 } } }
       if (result.content.every((part) => part.type === "text" && part.text.trim() === ""))
-        return { ...result, content: [{ type: "text" as const, text: `(${input.tool} finished and returned no output)` }] }
+        return { ...result, content: [{ type: "text" as const, text: `(${input.tool} ran and produced nothing)` }] }
       // An image, a PDF or any other file part goes whole, however large the text beside it.
       if (texts.length !== result.content.length) return result
       if (texts.reduce((sum, text) => sum + text.length, 0) <= input.limit) return result

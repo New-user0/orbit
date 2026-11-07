@@ -255,7 +255,7 @@ describe("retired wording in the source texts", () => {
       "tool/plugin/question.ts",
       /learn preferences|User has answered|answers in mind|free-form reply|It fits when an instruction is ambiguous|cannot see until then|never asked this way/,
     ],
-    ["tool/plugin/edit.ts", /No changes to apply|preserve the exact indentation|Multiple matches FAIL|such as renaming a variable|Add more surrounding context/],
+    ["tool/plugin/edit.ts", /No changes to apply|preserve the exact indentation|Multiple matches FAIL|such as renaming a variable|Add more surrounding context|not as you proposed/],
     ["tool/plugin/write.ts", /local filesystem|file to write to/],
     ["tool/plugin/glob.ts", /more specific path|are truncated/],
     ["tool/plugin/grep.ts", /more specific path|Consider using|More efficient than/],
@@ -273,6 +273,26 @@ describe("retired wording in the source texts", () => {
     ["plan/reminders.ts", /Plan mode remains on|full rules are earlier|You are in plan mode\. Edit nothing|Give a complete answer|single AskUserQuestion call at the start|Either way the file is updated|Finish each turn with/],
     ["session/verification.ts", /has just been marked done, and none of its items/],
     ["agent/instructions.ts", /putting multiple calls in a single message/],
+    // The M5 provenance pass (m5-provenance): the phrasings its first rewrite still shared with the reference's frames.
+    ["session/recap.ts", /stepped away|is now back|Skip finished steps/],
+    [
+      "memory/instructions.ts",
+      /forget something|The fix is in|behave as though|believe what you observe|without making (it|them) first|looking to see whether|shared with the team through|surprised them|Group memories by subject|These stay out even when|looking at memory is not optional|never need to say it again|Keep each file's name|anything after line 200|Open your memories|see why a request was made|Write any date as a calendar date|the rule first, then|"Reason:" line and an|keep (it|them) brief/,
+    ],
+    ["memory/store.ts", /present it as fact|Compare it with the code|describes things as they stood/],
+    ["session/context-usage.ts", /Custom agents/],
+    ["file-access.ts", /Remove the secret|appears to contain a secret/],
+    ["session/rehydration.ts", /you invoked the skills|is still at work|do not launch another/],
+    [
+      "session/assist.ts",
+      /Lead with a verb|beats|go-ahead|"go ahead"|cannot be read from what they wrote|"plan_mode"|about to type exactly that|not recommending the step|guessing their own words|Next-message guess|terse changelog entry|single line of a coding assistant|from the assistant's last message/,
+    ],
+    [
+      "session/runner/prompt/compaction.txt",
+      /Now write the handoff|Such a section could read|so that there is no doubt|explicit requests and your own actions|costly to find again|Precise account of the current work|a precise account of the work underway|especially a request to work differently|line of investigation that is still open|asked for a change of approach|Settled problems and open investigations/,
+    ],
+    ["session/runner/to-llm-message.ts", /Pick the interrupted task back up/],
+    ["shell/result.ts", /Stopped the background command|Background command killed/],
   ]
 
   test.each(sources)("%s keeps the retired wording out", async (file, pattern) => {

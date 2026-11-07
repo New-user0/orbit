@@ -78,11 +78,11 @@ export function DialogMemory(props: {
     if (value === undefined) return []
     const shown = new Set(value.files.map((file) => file.path))
     return [
-      { value: "toggle", title: `Auto memory: ${value.enabled ? "on" : "off"}` },
+      { value: "toggle", title: `Memory saving: ${value.enabled ? "on" : "off"}` },
       ...value.files.flatMap((file) => [
         {
           value: key({ type: "file", target: file.target, path: file.path }),
-          title: file.role === "user" ? "User memory" : file.role === "project" ? "Project memory" : indent(value, file.path) + display(file.path),
+          title: file.role === "user" ? "Personal instructions" : file.role === "project" ? "Project instructions" : indent(value, file.path) + display(file.path),
           description: here() ? describe(value, file) : unavailable,
         },
         ...warnings(value, file.path),
@@ -92,10 +92,10 @@ export function DialogMemory(props: {
         value: key({ type: "folder", target: folder.target, path: folder.path }),
         title:
           folder.type === "memory"
-            ? "Open memory folder"
+            ? "Browse saved memories"
             : folder.type === "team"
-              ? "Open team memory folder"
-              : `Open ${plain(folder.agent ?? "")} agent memory`,
+              ? "Browse team memories"
+              : `Browse memories of agent ${plain(folder.agent ?? "")}`,
         description: !here() ? unavailable : folder.type === "agent" ? `${plain(folder.scope ?? "")} scope` : display(folder.path),
       })),
     ]
@@ -130,8 +130,8 @@ export function DialogMemory(props: {
   // The reference's descriptions: a person's file says where it is saved, the project's file whether it is checked in,
   // an import that it is imported.
   const describe = (value: InstructionMemoryListing, file: InstructionMemoryListing["files"][number]) => {
-    if (file.kind === "user") return `Saved in ${display(file.path)}`
-    if (file.role === "project") return `${value.git ? "Checked in at" : "Saved in"} ${display(file.path)}`
+    if (file.kind === "user") return `File: ${display(file.path)}`
+    if (file.role === "project") return `${value.git ? "In the repository:" : "File:"} ${display(file.path)}`
     if (file.importedBy !== undefined) return "Imported"
     return undefined
   }

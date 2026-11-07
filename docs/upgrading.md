@@ -1897,7 +1897,7 @@ shell mode, because the server keeps no checkpoint for a shell command. To undo 
 on the row of the prompt after it. Sending the put-back command commits the staged rewind first, as sending a prompt
 does, so the command and its output stay in the conversation. Choosing a prompt asks the server what a code rewind would change on disk now and offers
 `Code and conversation`, `Conversation only` and `Code only` when at least one file would change, or only
-`Conversation only` otherwise; `Never mind` goes back. The server answers that question only for a session that is not
+`Conversation only` otherwise; `Do nothing` goes back. The server answers that question only for a session that is not
 running, so choosing a prompt while the session runs interrupts it and waits for it first. Every option also interrupts
 the session and waits for it before acting. A conversation rewind is staged as `/undo` stages one, so `/redo` brings it
 back until your next prompt, and puts the prompt back in the input; `Code only` puts the files back at once, with no
@@ -1926,8 +1926,8 @@ reconnects to its server. The confirm step keeps the prompt it was opened for; i
 that prompt out of the conversation, choosing an option sends nothing and shows `Could not rewind: that prompt is no
 longer in the conversation.`
 
-The confirm step quotes up to the first four lines of the prompt. Its options wrap: up on the first reaches `Never
-mind`, down on `Never mind` reaches the first. Page up and page down (`dialog.select.page_up`, `page_down`) go to the
+The confirm step quotes up to the first four lines of the prompt. Its options wrap: up on the first reaches `Do
+nothing`, down on `Do nothing` reaches the first. Page up and page down (`dialog.select.page_up`, `page_down`) go to the
 first and the last option, and Home and End do the same. Pressing a digit (also a full-width one) chooses that option
 at once without moving the highlight; Enter chooses the highlighted option and marks it with `✓`. While a chosen rewind
 runs no key moves the options and none is highlighted. `n` does nothing in the confirm step.
@@ -1937,7 +1937,7 @@ session shows no message, including when a staged revert has taken back every pr
 interrupting it as before.
 
 The message dialog's `Revert`, which staged a revert with its files at once, is now `Rewind`. It opens the picker on its
-confirm step for that prompt, where `Never mind` closes the picker instead of going back to the list. When only
+confirm step for that prompt, where `Do nothing` closes the picker instead of going back to the list. When only
 replies with nothing in them follow the prompt and no file would change, it rewinds the conversation at once and puts
 the prompt back in the input, without asking. While it finds that out (stopping a running session first) the picker
 already replaces the dialog and shows `Checking files…`; Esc then gives the rewind up, and a session it stopped stays
@@ -2037,21 +2037,22 @@ until the file watch caught up, or for good with watching off.
 
 The terminal UI's `/context` used to estimate the conversation from the messages it had loaded, at four characters a
 token, and draw one bar per row. It now asks the server, which counts what the session's next request would carry by
-category: the system prompt, system tools, MCP tools, custom agents, instruction files, skills and messages, with the
-reserve kept below the window (the autocompact buffer, or a 3,000-token compact buffer with automatic compaction off)
-and the free space. Deferred tools are counted in no total: the dialog leaves them out of its legend and its grid, and
-its MCP tools heading says when some are loaded on demand, while the report below lists them. The dialog draws a grid
+category: the base prompt, built-in tools, MCP tool schemas, agent definitions, instructions, skill listings and the
+conversation, with the reserve kept below the window (the auto-compaction reserve, or 3,000 tokens of compaction
+headroom with automatic compaction off) and the room left. Tools loaded on demand are counted in no total: the dialog
+leaves them out of its legend and its grid, and its MCP tool schemas heading says when some load on demand, while the
+report below lists them. The dialog draws a grid
 of squares beside a legend (10 by 10, 20 by 10 for a window of a million tokens or more, and 5 by 5 or 5 by 10 below
-80 columns), then lists the MCP tools, the custom agents by scope, the instruction files and the skills, then
-suggestions: the context is nearly full, one tool's calls and results take a large share, Read results are large,
-instruction files are large (named by their paths in the session's folder), or automatic compaction is off. Viewing a
+80 columns), then lists the MCP tool schemas, the agent definitions by scope, the instructions and the skill listings,
+then ways to free room: the window is nearly full, one tool's calls and results take a large share, what Read returned
+is large, the instructions are large (named by their paths in the session's folder), or automatic compaction is off. Viewing a
 subagent's session shows its main session's context. A model whose window is not known gets the rows and the total,
 with no grid, percentages or suggestions. A folder that is not trusted, a server older than this client, an answer
 that cannot be read and no answer in time each show one line; one entry of the answer that cannot be read, such as a
 category from a newer server, is left out with a log line and the rest is shown.
 
 `orb run "/context"` and `orb -p "/context"` used to send the text to the model as a prompt. They now print the same
-counts as a Markdown report, with every table (the system tools, the system prompt sections and the message breakdown
+counts as a Markdown report, with every table (the built-in tools, the base prompt parts and the conversation by kind
 too), and send nothing to the model. `--format result` and `orb -p --output-format json` print one result line whose
 `result` is the report; `orb run --format json` prints one `{"type":"context_usage","sessionID","usage"}` line. `--file`
 with `/context` is refused. The run's own session is reported (`--session`, `--continue`, `--resume`, or a new one), a
@@ -2073,23 +2074,23 @@ and SDK callers.
 The terminal UI's `/cost` (and `/usage`) used to total the responses its client had loaded, and said that the breakdown
 covered only the newest ones when older history was not loaded. It now asks the server, which sums the session and every
 subagent from stored rows, so the figures no longer depend on how much history was loaded. The dialog shows the total
-cost (cents above $0.50, four places below it, and "unknown" when no price is known), the subagents' share, the time the
-providers spent answering, the wall time, the lines the edit tools changed, then one row per provider and model with
-input, output, cache read and cache write tokens (and reasoning when there are any) and its cost. Spend that no row
+amount spent (cents above $0.50, four places below it, and "unknown" when no price is known), the subagents' share, the
+time the providers spent answering, the elapsed time, the lines the edit tools changed, then one row per provider and
+model with its cost and its tokens in, out, read from the cache and written to it (and reasoning when there are any). Spend that no row
 explains (responses a rewind removed, and usage records written before this version) shows as Other, so the total stays
 exact. Titles, side requests, discarded attempts and every compaction call (including one that failed or was cancelled) now
 record the model they used and appear under it; a session whose compactions all predate this version counts them from their messages, and once it compacts again the earlier compactions' spend shows as Other. A
 session with no model response yet shows a line of zero usage. Each row names its provider beside the model.
 
 Lines changed are counted from this version on, from the per-file counts of every finished Edit, Write and Patch
-(NotebookEdit does not count). A session from before this version shows no code changes line; a new session and a fork
+(NotebookEdit does not count). A session from before this version shows no lines changed row; a new session and a fork
 start at zero, and a session that was never counted stays uncounted.
 
 `orb run "/cost"` and `orb -p "/cost"` (and `/usage`) used to send the text to the model. They now print the same block
 of lines and send nothing to the model. `--format result` and `orb -p --output-format json` print one result line whose
 `result` is the block; `orb run --format json` prints one `{"type":"cost","sessionID","cost"}` line. `--file` with
 `/cost` is refused. The block reads the session's model catalog, so a model listed without a price reads "unknown" there
-as in the dialog (if the catalog cannot be read, one line says so and a recorded $0 stays $0). Token figures are compact (`1.2K input`), as in the dialog, and a session with no usage prints one `Usage:` line without the `Usage by model:` heading. An unknown session or a server older than this client ends the run with exit code 1 and its message.
+as in the dialog (if the catalog cannot be read, one line says so and a recorded $0 stays $0). Token figures are compact (`in 1.2K`), as in the dialog, and a session with no usage prints one `Tokens:` line without the `Per model:` heading. An unknown session or a server older than this client ends the run with exit code 1 and its message.
 
 The server answers at `GET /api/session/:sessionID/cost` (`client.session.cost`), reading stored rows only: it needs no
 trusted folder and answers an unknown session with `SessionNotFoundError` (404). `session.usage.recorded` and
@@ -5094,8 +5095,8 @@ window less the summary's room instead of the whole window; lower it if compacti
   lines collapse to one. A handoff that quotes an `<analysis>` tag is stored whole, with its later sections. A summary that a `compaction` hook supplies is formatted the same way, on a native-compaction model too, and one with nothing left outside the analysis fails as "Compaction produced no summary". A reply that is only an
   unfinished analysis fails as "Compaction produced no summary". A reply that stopped at the output limit is stored as
   it is, where it used to fail (`session-compaction.test.ts`, "analysis never stored").
-- **The next request.** A summary checkpoint reaches the model as one user message that says earlier messages
-  were replaced by the summary because the conversation outgrew the context window, followed by the summary. An automatic compaction adds a line telling the
+- **The next request.** A summary checkpoint reaches the model as one user message that says the conversation
+  grew past the context window and its earlier part now lives in the summary, followed by the summary. An automatic compaction adds a line telling the
   model to carry on without asking the user anything; a manual one does not
   (`session-runner-message.test.ts`).
 - **A reply with no text gets one more request.** The first request shares the main request's system prompt, tools and
@@ -5106,13 +5107,13 @@ window less the summary's room instead of the whole window; lower it if compacti
   The summary request asks for output sized for the room that request leaves in the window, never less than 3,000 tokens (`session-compaction.test.ts`, "sized for the room it leaves"). A reply with text and a tool call uses the text (same file, "a reply with text and a tool call").
 - **Too long to summarize.** A summary request is no longer shortened to fit before it is sent. When the fallback is
   rejected as too long, the oldest round groups are dropped (those that cover the gap the provider reports, or a fifth
-  of them), and the request is sent again, at most three times. Then the compaction fails with "The conversation is too
-  long to compact. Go back a few messages and try again." (`session-compaction.test.ts`, "prompt-too-long").
+  of them), and the request is sent again, at most three times. Then the compaction fails with "This conversation no
+  longer fits in a compaction request. Rewind a few messages, then compact again." (`session-compaction.test.ts`, "prompt-too-long").
 
 **Affects:** people who read the stored summary of a compaction, plugins and SDK callers that read
 `session.compaction.ended` or the compaction hook's summary, and anyone who relied on the text tail beside a summary.
 
-**What to do:** Nothing. A conversation that is too long to summarize in one request now asks you to go back a few
+**What to do:** Nothing. A conversation that is too long to summarize in one request now asks you to rewind a few
 messages, where it used to shrink the request in steps.
 
 ## `/compact` takes instructions, and a running compaction streams a count, not its reply
@@ -5302,3 +5303,49 @@ the model reads it after the summary. Before, the model saw only the summary.
 `synthetic` message after a completed checkpoint, with `metadata.rehydration`.
 
 **What to do:** Nothing. To keep a file out of this re-read, deny `Read` on it.
+
+## The wording added in this release was written again, and some labels and reason names changed
+
+The texts this release added were rewritten in Orbit's own sentences. What each one asks of the model, and what each
+screen shows, is unchanged; only the wording, some names and one line format moved.
+
+- **Model-facing text.** The compaction prompt and its closing line (the nine handoff sections are now Goal, Technical
+  ground, Code touched, Errors and corrections, Reasoning so far, The person's messages, Still to do, Where things stand
+  and What comes next; the `<analysis>` and `<handoff>` blocks and the `Compaction instructions` section name are kept),
+  the line after a summary, the away-summary request, the note about a file changed outside the conversation, the notes
+  for skills and running subagents after a compaction, the batch-label and next-message prompts, the memory guide (its
+  headings, and the `Reason:` and `Applies when:` lines it asks for in a feedback or project memory), the note on an old
+  memory file, the refusal of a secret in team memory, the note on an edit the person revised, the shell tool's timeout
+  sentence, the notice when a background command's output passes its size limit, the saved-output wrapper and the line
+  for a tool that returned nothing (`(<tool> ran and produced nothing)`). The compaction failure for a conversation too
+  long to summarize now reads "This conversation no longer fits in a compaction request. Rewind a few messages, then
+  compact again." (`session-compaction.test.ts`, "prompt-too-long").
+- **Suggestion and label reasons (API).** `POST …/assist/suggestion` answers with new reason names. The filters: `empty`
+  is now `no_text`, `done` `just_done`, `meta_text` `self_reference`, `meta_wrapped` `bracketed`, `error_message`
+  `error_text`, `prefixed_label` `labelled`, `too_few_words` `one_word`, `too_many_words` `over_twelve_words`, `too_long`
+  `too_many_characters`, `multiple_sentences` `several_sentences`, `has_formatting` `markup`, `evaluative` `verdict` and
+  `assistant_voice` `assistant_phrasing`. The session states: `early_conversation` is now `too_early`,
+  `last_response_error` `reply_failed`, `cache_cold` `cache_expired`, `pending_permission` `awaiting_approval`,
+  `elicitation_active` `awaiting_form`, `plan_mode` `planning` and `aborted` `cancelled` (`subagent`, `busy` and
+  `unavailable` stay). `POST …/assist/label` answers `no_text` where it answered `empty`, and `interrupted` where it
+  answered `aborted` (`packages/server/test/session-assist.test.ts`).
+- **`/context`.** The categories are Base prompt, Built-in tools, MCP tool schemas, Agent definitions, Instructions, Skill
+  listings, Conversation, Auto-compaction reserve, Compaction headroom and Room left, and a tool loaded on demand is
+  marked `(on demand)`. The report opens with `## Context window` and `**In use:**`, and its tables are Breakdown, MCP
+  tool schemas, Built-in tools, Base prompt parts, Agent definitions, Instructions, Skill listings, Conversation by kind,
+  Heaviest tools and Heaviest attachments. The dialog's suggestions are headed "Ways to free room"
+  (`packages/cli/test/run/context-report.test.ts`, `packages/tui/test/component/dialog-context.test.tsx`).
+- **`/cost`.** The rows are Spent, Subagents, Model time, Elapsed and Lines changed (`+12 / -3 lines`), then Per model,
+  and each model's tokens read `in 1.2K · out 300 · from cache 500 · to cache 60`, in the dialog and in
+  `orb run "/cost"` alike (`packages/cli/test/run/cost-run.test.ts`, `packages/tui/test/component/dialog-cost.test.tsx`).
+- **`/memory`.** The rows read Memory saving, Project instructions, Personal instructions, Browse saved memories, Browse
+  team memories and Browse memories of agent `<name>`, and a file's line reads `File:` or `In the repository:`.
+- **Rewind.** The picker asks "Roll back to just before which prompt?", the confirm step's last option is `Do nothing`,
+  and its warning reads "Restores what Orbit's edit tools changed; changes from shell commands or outside Orbit stay."
+  The message dialog describes Rewind as "roll back to just before this prompt", and the `session.rewind` key as "Roll
+  back to an earlier prompt".
+
+**Affects:** scripts and tests that match on any of these texts or labels, SDK callers that read a suggestion's
+`reason`, and every session's first request after the upgrade (prompt caches are cold once).
+
+**What to do:** Update matches on the old wording and on the old reason names. Nothing else.

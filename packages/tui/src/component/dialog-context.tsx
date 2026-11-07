@@ -30,18 +30,18 @@ const WIDE = 1_000_000
 const NARROW = 80
 
 const LABELS: Record<SessionContextUsage.CategoryKind, string> = {
-  system: "System prompt",
-  tools: "System tools",
-  mcp: "MCP tools",
-  "mcp-deferred": "MCP tools (deferred)",
-  "tools-deferred": "System tools (deferred)",
-  agents: "Custom agents",
-  instructions: "Instruction files",
-  skills: "Skills",
-  messages: "Messages",
-  "auto-buffer": "Autocompact buffer",
-  "compact-buffer": "Compact buffer",
-  free: "Free space",
+  system: "Base prompt",
+  tools: "Built-in tools",
+  mcp: "MCP tool schemas",
+  "mcp-deferred": "MCP tool schemas (on demand)",
+  "tools-deferred": "Built-in tools (on demand)",
+  agents: "Agent definitions",
+  instructions: "Instructions",
+  skills: "Skill listings",
+  messages: "Conversation",
+  "auto-buffer": "Auto-compaction reserve",
+  "compact-buffer": "Compaction headroom",
+  free: "Room left",
 }
 const DEFERRED = new Set<SessionContextUsage.CategoryKind>(["mcp-deferred", "tools-deferred"])
 const RESERVE = new Set<SessionContextUsage.CategoryKind>(["auto-buffer", "compact-buffer"])
@@ -142,7 +142,7 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
     const known = window()
     return known === undefined ? "" : ` (${((tokens / known) * 100).toFixed(1)}%)`
   }
-  // Counted categories take the theme's series colours in their order; free space and the buffers are muted.
+  // Counted categories take the theme's series colours in their order; Room left and the two reserves are muted.
   const colors = createMemo(() => {
     const counted = props.info.categories.filter(
       (item) => item.kind !== "free" && item.kind !== "auto-buffer" && item.kind !== "compact-buffer" && !DEFERRED.has(item.kind),
@@ -162,7 +162,7 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
       (item) => item.tokens > 0 && item.kind !== "free" && item.kind !== "auto-buffer" && !DEFERRED.has(item.kind),
     ),
   )
-  // Free space, then the autocompact buffer, as the reference lists them under the categories.
+  // Room left, then the Auto-compaction reserve, listed under the categories in the reference's order.
   const tail = createMemo(() =>
     (["free", "auto-buffer"] as const).flatMap((kind) =>
       props.info.categories.filter((item) => item.kind === kind && item.tokens > 0),
@@ -215,7 +215,7 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
         <box flexShrink={1}>
           <text fg={theme.text.muted}>{summary()}</text>
           <text fg={theme.text.muted} attributes={TextAttributes.ITALIC}>
-            Estimated usage by category
+            Estimated share of the window
           </text>
           <For each={legend()}>
             {(item) => (
@@ -240,26 +240,26 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
       <Show when={props.info.mcp.length > 0}>
         <box>
           <Heading
-            title="MCP tools"
+            title="MCP tool schemas"
             command="/mcps"
-            note={available().length > 0 ? "some are loaded on demand" : undefined}
+            note={available().length > 0 ? "some load on demand" : undefined}
           />
           {/* The two groups are named only when some tools are deferred; otherwise every tool is a loaded one. */}
           <Show when={available().length > 0 && loaded().length > 0}>
-            <text fg={theme.text.muted}>Loaded</text>
+            <text fg={theme.text.muted}>Loaded now</text>
           </Show>
           <For each={loaded()}>
             {(tool) => <Item text={`${plain(tool.name)} (${plain(tool.server)}): ${Locale.number(tool.tokens)} tokens`} />}
           </For>
           <Show when={available().length > 0}>
-            <text fg={theme.text.muted}>Available</text>
+            <text fg={theme.text.muted}>Loaded on demand</text>
             <For each={available()}>{(tool) => <Item text={`${plain(tool.name)} (${plain(tool.server)})`} />}</For>
           </Show>
         </box>
       </Show>
       <Show when={groups().length > 0}>
         <box>
-          <Heading title="Custom agents" command="/agents" />
+          <Heading title="Agent definitions" command="/agents" />
           <For each={groups()}>
             {(group) => (
               <>
@@ -274,7 +274,7 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
       </Show>
       <Show when={props.info.files.length > 0}>
         <box>
-          <Heading title="Instruction files" command="/memory" />
+          <Heading title="Instructions" command="/memory" />
           <For each={props.info.files}>
             {(file) => <Item text={`${display(file.path)}: ${Locale.number(file.tokens)} tokens`} />}
           </For>
@@ -282,7 +282,7 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
       </Show>
       <Show when={props.info.skills.length > 0}>
         <box>
-          <Heading title="Skills" command="/skills" />
+          <Heading title="Skill listings" command="/skills" />
           <For each={props.info.skills}>
             {(skill) => <Item text={`${plain(skill.id)}: ${Locale.number(skill.tokens)} tokens`} />}
           </For>
@@ -291,7 +291,7 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
       <Show when={suggestions().length > 0}>
         <box>
           <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
-            Suggestions
+            Ways to free room
           </text>
           <For each={suggestions()}>
             {(suggestion) => (
@@ -310,7 +310,7 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
                   <span style={{ attributes: TextAttributes.BOLD }}>{` ${suggestion.title}`}</span>
                   <Show when={suggestion.savings}>
                     {(savings) => (
-                      <span style={{ fg: theme.text.muted }}>{` · saves about ${Locale.number(savings())} tokens`}</span>
+                      <span style={{ fg: theme.text.muted }}>{` · frees about ${Locale.number(savings())} tokens`}</span>
                     )}
                   </Show>
                 </text>
@@ -349,7 +349,7 @@ const rank = (scope: string) => {
 /**
  * The reference's grid: 10 by 10 squares, 20 by 10 for a window of a million tokens or more, and 5 by 5 or 5 by 10
  * below 80 columns. Each counted category takes its share of the squares and one at least, in order; the square its
- * share ends in is drawn lighter when it is less than 70% full. Free space fills the middle, and the reserve (either
+ * share ends in is drawn lighter when it is less than 70% full. Room left fills the middle, and the reserve (either
  * buffer) the end. Deferred categories are in no sum, so they take no square.
  */
 export function grid(categories: ReadonlyArray<SessionContextUsage.Category>, window: number, narrow: boolean) {

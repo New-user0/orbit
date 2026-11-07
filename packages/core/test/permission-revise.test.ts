@@ -250,8 +250,8 @@ describe("an approval answered with the person's revised content", () => {
           Exit.isSuccess(settled.exit) ? (settled.exit.value as { metadata?: unknown }).metadata : undefined,
         )
         expect(ran && applyPatch("alpha\nbeta\n", ran.patch)).toBe("alpha\nREVISED\n")
-        // The reference tells the model that the person modified its proposal before accepting it.
-        expect(text(settled.exit)).toMatch(/modif/i)
+        // The model is told that the person changed its proposal on the way to approving it, as the reference tells it.
+        expect(text(settled.exit)).toMatch(/with a version the person adjusted while approving it, which differs from your proposal/)
       }),
     ),
   )

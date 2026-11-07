@@ -9,18 +9,18 @@ import { errorMessage } from "../util/error"
 // through `plain`, and a pipe is escaped so that it cannot add a column (classes 5 and 9).
 
 const LABELS: Record<SessionContextUsage.CategoryKind, string> = {
-  system: "System prompt",
-  tools: "System tools",
-  mcp: "MCP tools",
-  "mcp-deferred": "MCP tools (deferred)",
-  "tools-deferred": "System tools (deferred)",
-  agents: "Custom agents",
-  instructions: "Instruction files",
-  skills: "Skills",
-  messages: "Messages",
-  "auto-buffer": "Autocompact buffer",
-  "compact-buffer": "Compact buffer",
-  free: "Free space",
+  system: "Base prompt",
+  tools: "Built-in tools",
+  mcp: "MCP tool schemas",
+  "mcp-deferred": "MCP tool schemas (on demand)",
+  "tools-deferred": "Built-in tools (on demand)",
+  agents: "Agent definitions",
+  instructions: "Instructions",
+  skills: "Skill listings",
+  messages: "Conversation",
+  "auto-buffer": "Auto-compaction reserve",
+  "compact-buffer": "Compaction headroom",
+  free: "Room left",
 }
 
 const count = new Intl.NumberFormat("en-US")
@@ -36,59 +36,59 @@ export function contextMarkdown(info: SessionContextUsage.Info) {
       info.categories.filter((item) => item.kind === kind && item.tokens > 0),
     ),
   ]
-  const deferred = (value: number) => `${tokens(value)} (deferred)`
+  const deferred = (value: number) => `${tokens(value)} (on demand)`
   return [
-    "## Context usage",
+    "## Context window",
     "",
     `**Model:** ${cell(`${info.model.providerID}/${info.model.id}`)}`,
     window === undefined
-      ? `**Tokens:** ${tokens(info.total)}`
-      : `**Tokens:** ${tokens(info.total)} / ${tokens(window)} (${info.percentage ?? 0}%)`,
+      ? `**In use:** ${tokens(info.total)}`
+      : `**In use:** ${tokens(info.total)} of ${tokens(window)} (${info.percentage ?? 0}%)`,
     "",
     ...section(
-      "Usage by category",
-      window === undefined ? ["Category", "Tokens"] : ["Category", "Tokens", "Percentage"],
+      "Breakdown",
+      window === undefined ? ["Part", "Tokens"] : ["Part", "Tokens", "Share"],
       categories.map((item) => [LABELS[item.kind], tokens(item.tokens), ...share(item.tokens)]),
     ),
     ...section(
-      "MCP tools",
+      "MCP tool schemas",
       ["Tool", "Server", "Tokens"],
       info.mcp.map((tool) => [cell(tool.name), cell(tool.server), tool.deferred ? deferred(tool.tokens) : tokens(tool.tokens)]),
     ),
-    ...section("System tools", ["Tool", "Tokens"], [
+    ...section("Built-in tools", ["Tool", "Tokens"], [
       ...info.systemTools.map((tool) => [cell(tool.name), tokens(tool.tokens)]),
       ...info.deferredTools.map((tool) => [cell(tool.name), deferred(tool.tokens)]),
     ]),
     ...section(
-      "System prompt sections",
-      ["Section", "Tokens"],
+      "Base prompt parts",
+      ["Part", "Tokens"],
       info.sections.map((item) => [cell(item.name), tokens(item.tokens)]),
     ),
     ...section(
-      "Custom agents",
+      "Agent definitions",
       ["Agent", "Scope", "Tokens"],
       info.agents.map((agent) => [cell(agent.id), cell(agent.scope), tokens(agent.tokens)]),
     ),
     ...section(
-      "Instruction files",
-      ["Type", "Path", "Tokens"],
+      "Instructions",
+      ["Source", "File", "Tokens"],
       info.files.map((file) => [cell(file.type), cell(file.path), tokens(file.tokens)]),
     ),
-    ...section("Skills", ["Skill", "Tokens"], info.skills.map((skill) => [cell(skill.id), tokens(skill.tokens)])),
-    ...section("Message breakdown", ["Kind", "Tokens"], [
-      ["Tool calls", tokens(info.messages.toolCalls)],
-      ["Tool results", tokens(info.messages.toolResults)],
-      ["Attachments", tokens(info.messages.attachments)],
-      ["Assistant text", tokens(info.messages.assistant)],
-      ["User text", tokens(info.messages.user)],
+    ...section("Skill listings", ["Skill", "Tokens"], info.skills.map((skill) => [cell(skill.id), tokens(skill.tokens)])),
+    ...section("Conversation by kind", ["Kind", "Tokens"], [
+      ["Calls to tools", tokens(info.messages.toolCalls)],
+      ["What tools returned", tokens(info.messages.toolResults)],
+      ["Attached files", tokens(info.messages.attachments)],
+      ["Replies", tokens(info.messages.assistant)],
+      ["Prompts", tokens(info.messages.user)],
     ]),
     ...section(
-      "Top tools",
-      ["Tool", "Call tokens", "Result tokens"],
+      "Heaviest tools",
+      ["Tool", "In calls", "In results"],
       info.messages.tools.map((tool) => [cell(tool.name), tokens(tool.calls), tokens(tool.results)]),
     ),
     ...section(
-      "Top attachments",
+      "Heaviest attachments",
       ["Attachment", "Tokens"],
       info.messages.attachmentKinds.map((item) => [cell(item.name), tokens(item.tokens)]),
     ),

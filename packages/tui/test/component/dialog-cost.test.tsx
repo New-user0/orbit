@@ -77,7 +77,7 @@ async function open(input: {
   // The session route has loaded the session before the command is offered.
   if (input.loaded !== false) await setup.data.session.sync(ID)
   setup.dialog.replace(() => <DialogCost sessionID={ID} timeout={input.timeout} />)
-  const done = input.done ?? ((frame: string) => frame.includes("Total cost"))
+  const done = input.done ?? ((frame: string) => frame.includes("Spent"))
   for (let attempt = 0; attempt < 200 && !done(setup.captureCharFrame()); attempt++) {
     await Bun.sleep(25)
     await setup.renderOnce()
@@ -106,9 +106,9 @@ test("the dialog shows the whole session's rows, not the loaded page", async () 
   await using _ = setup
   expect(asked).toEqual([route])
   expect(flat(frame)).toContain("long-run")
-  expect(flat(frame)).toContain("123.5K input")
-  expect(flat(frame)).toContain("65.4K output")
-  expect(flat(frame)).toContain("2.0M cache read")
+  expect(flat(frame)).toContain("in 123.5K")
+  expect(flat(frame)).toContain("out 65.4K")
+  expect(flat(frame)).toContain("from cache 2.0M")
   expect(flat(frame)).toContain("$4.50")
   // Nothing of the loaded page, and no claim that the breakdown covers only part of the session.
   expect(frame).not.toContain("loaded-only")
@@ -133,7 +133,7 @@ test("money follows the reference's decimals, unknown prices read unknown, and n
       models: [priced("big")],
     })
     await using _ = setup
-    expect(flat(frame)).toMatch(new RegExp(`Total cost ${shown.replace("$", "\\$")}(?!\\d)`))
+    expect(flat(frame)).toMatch(new RegExp(`Spent ${shown.replace("$", "\\$")}(?!\\d)`))
   }
 
   // Failed response with no recorded cost (FU-M2-027, claim 1): the spend is unknown, not $0.
@@ -142,7 +142,7 @@ test("money follows the reference's decimals, unknown prices read unknown, and n
     models: [model("local")],
   })
   await using _unknown = unknown.setup
-  expect(flat(unknown.frame)).toMatch(/Total cost unknown/)
+  expect(flat(unknown.frame)).toMatch(/Spent unknown/)
   expect(unknown.frame).not.toContain("$0")
 
   // A model the catalog lists without a price: the server's recorded $0 is not a free model.
@@ -151,11 +151,11 @@ test("money follows the reference's decimals, unknown prices read unknown, and n
     models: [model("local")],
   })
   await using _free = free.setup
-  expect(flat(free.frame)).toMatch(/Total cost unknown/)
+  expect(flat(free.frame)).toMatch(/Spent unknown/)
   // A model the catalog does not list at all keeps the recorded $0.
   const unlisted = await open({ answer: () => json({ data: info({ rows: [row("elsewhere", { zero: 1 })] }) }), models: [] })
   await using _unlisted = unlisted.setup
-  expect(flat(unlisted.frame)).toMatch(/Total cost \$0\.0000/)
+  expect(flat(unlisted.frame)).toMatch(/Spent \$0\.0000/)
 
   // Some priced, some not: the figure is shown and flagged as incomplete.
   const mixed = await open({
@@ -174,7 +174,7 @@ test("money follows the reference's decimals, unknown prices read unknown, and n
     models: [priced("big")],
   })
   await using _family = family.setup
-  expect(flat(family.frame)).toMatch(/Total cost \$1\.30/)
+  expect(flat(family.frame)).toMatch(/Spent \$1\.30/)
   expect(flat(family.frame)).toMatch(/Subagents \$0\.80/)
 
   // Spend no row explains shows as Other.
@@ -188,7 +188,7 @@ test("money follows the reference's decimals, unknown prices read unknown, and n
   // No row at all: the usage line and Other still show.
   const bare = await open({ answer: () => json({ data: info({ cost: 0.3, own: 0.3, other: 0.3, rows: [] }) }) })
   await using _bare = bare.setup
-  expect(flat(bare.frame)).toMatch(/Usage: 0 input, 0 output/)
+  expect(flat(bare.frame)).toContain("Tokens: in 0 · out 0")
   expect(flat(bare.frame)).toMatch(/Other \$0\.3000 \u00b7 undone responses, older usage/)
 
   // Hostile names: a model ID in a record, and a name in the catalog.
@@ -206,15 +206,15 @@ test("money follows the reference's decimals, unknown prices read unknown, and n
 test("code changes show only when counted", async () => {
   const counted = await open({ answer: () => json({ data: info({ lines: { added: 12, removed: 1 } }) }) })
   await using _counted = counted.setup
-  expect(flat(counted.frame)).toMatch(/Code changes 12 lines added, 1 line removed/)
+  expect(flat(counted.frame)).toMatch(/Lines changed \+12 \/ -1 lines/)
 
   const zero = await open({ answer: () => json({ data: info({ lines: { added: 0, removed: 0 } }) }) })
   await using _zero = zero.setup
-  expect(flat(zero.frame)).toMatch(/Code changes 0 lines added, 0 lines removed/)
+  expect(flat(zero.frame)).toMatch(/Lines changed \+0 \/ -0 lines/)
 
   const older = await open({ answer: () => json({ data: info() }) })
   await using _older = older.setup
-  expect(older.frame).not.toContain("Code changes")
+  expect(older.frame).not.toContain("Lines changed")
 })
 
 // PT4, classes 7 and 13: each failure is one line, and none crashes the dialog.
@@ -242,7 +242,7 @@ test("each row names its provider, and an empty session draws a line of zeros", 
 
   const empty = await open({ answer: () => json({ data: info() }) })
   await using _empty = empty.setup
-  expect(flat(empty.frame)).toContain("Usage: 0 input, 0 output, 0 cache read, 0 cache write")
+  expect(flat(empty.frame)).toContain("Tokens: in 0 · out 0 · from cache 0 · to cache 0")
   expect(empty.frame).not.toContain("No model response")
 })
 
@@ -281,7 +281,7 @@ test("an old server and an unknown session each draw one line", async () => {
     })
     await using _ = setup
     expect(flat(frame), item.name).toContain(item.line)
-    expect(frame, item.name).not.toContain("Total cost")
+    expect(frame, item.name).not.toContain("Spent")
     // A failure replaces the waiting line.
     expect(frame, item.name).not.toContain("Reading the cost")
   }
@@ -312,7 +312,7 @@ test("reasoning tokens are named only when a model used them", async () => {
     models: [priced("thinker"), priced("plain")],
   })
   await using _used = used.setup
-  expect(flat(used.frame)).toContain("2.0K reasoning")
+  expect(flat(used.frame)).toContain("reasoning 2.0K")
   expect(flat(used.frame).match(/reasoning/g)).toHaveLength(1)
 })
 
@@ -327,7 +327,7 @@ test("a row that does not decode costs only itself", async () => {
   })
   await using _ = setup
   expect(flat(frame)).toContain("good")
-  expect(flat(frame)).toMatch(/Total cost \$0\.60/)
+  expect(flat(frame)).toMatch(/Spent \$0\.60/)
   // The two rows left out are named once in the log.
   expect(logged.filter((line) => line.message.startsWith("Left out cost rows"))).toEqual([
     expect.objectContaining({ tags: expect.objectContaining({ dropped: ["rows[1]", "rows[2]"] }) }),
@@ -365,6 +365,6 @@ test("a session that is not loaded draws the cost without a catalog", async () =
     loaded: false,
   })
   await using _ = setup
-  expect(flat(frame)).toContain("Total cost")
+  expect(flat(frame)).toContain("Spent")
   expect(flat(frame)).toContain("$1.50")
 })
