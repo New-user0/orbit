@@ -1981,7 +1981,7 @@ describe("rehydration after a compaction", () => {
       const note = sectionsOf((yield* h.row()).text).find((section) => section.harness.includes("live one"))!
       expect(note.harness).toContain("once it is done, and until then the Agent tool")
       // A running subagent is waited for, never started a second time.
-      expect(note.harness).toContain("Let it run: a second subagent for this task would only redo work that is under way.")
+      expect(note.harness).toContain("A second subagent for this task is NOT permitted while it runs: it would redo work already under way.")
       expect(note.harness).not.toContain("finished")
       yield* h.job.cancel("job_live")
     }),

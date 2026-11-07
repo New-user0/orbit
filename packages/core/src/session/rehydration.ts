@@ -408,7 +408,7 @@ const note = (recovery: Extract<Job.Recovery, { kind: "subagent" }>, status: Job
   const named = `session ${ReminderText.oneLine(recovery.childSessionID)} (agent ${ReminderText.oneLine(recovery.agent)}, task "${ReminderText.oneLine(recovery.description)}")`
   if (status === "running")
     return ReminderText.render({
-      text: `A message will bring the result of the background subagent in ${named} once it is done, and until then the Agent tool with sessionID ${ReminderText.oneLine(recovery.childSessionID)} reaches it. Let it run: a second subagent for this task would only redo work that is under way.`,
+      text: `A message will bring the result of the background subagent in ${named} once it is done, and until then the Agent tool with sessionID ${ReminderText.oneLine(recovery.childSessionID)} reaches it. A second subagent for this task is NOT permitted while it runs: it would redo work already under way.`,
     })
   if (status === "cancelled") return ReminderText.render({ text: `The background subagent in ${named} was stopped.` })
   const outcome = status === "error" ? "failed" : "finished"

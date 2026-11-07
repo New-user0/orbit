@@ -445,7 +445,7 @@ A note costs every later conversation the time to read it, so what is cheaper to
       : "\n- Secrets in team memory: API keys, tokens, passwords and other credentials. A write there that looks like one is refused, because that folder is open to everyone who has the repository."
   }
 
-A person who wants one of them kept is still telling you that something in it mattered. Work out which part a later conversation could use, usually a lesson rather than a record, and save that part alone.
+A person who wants one of them kept anyway has a reason you cannot see from here, so ask them which part a later conversation should know (usually a lesson rather than a record), and save only the part they name.
 
 ## Writing a memory down
 

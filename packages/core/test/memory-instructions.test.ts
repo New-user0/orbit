@@ -375,7 +375,10 @@ describe("the memory guide source", () => {
       // The housekeeping and format rules the guide gives in its own words.
       expect(out.text).toContain("Aim for one current note per point.")
       expect(out.text).toContain("stays out, whoever proposes it")
-      expect(out.text).toContain("save that part alone")
+      // A person who still wants a left-out item kept is asked which part matters; the model does not pick it alone.
+      expect(out.text).toContain(
+        "ask them which part a later conversation should know (usually a lesson rather than a record), and save only the part they name.",
+      )
       expect(out.text).toContain("Its dates are absolute ones")
       expect(out.text).toContain('Two labelled lines come under it: "Reason:"')
       expect(out.text).toContain("Having to repeat a correction is exactly what this memory exists to prevent.")

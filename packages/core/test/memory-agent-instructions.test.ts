@@ -216,6 +216,10 @@ describe("the agent memory block", () => {
           expect(text).not.toContain("## Two folders")
           expect(text.split("\n").filter((line) => line.trim().startsWith("- Scope:"))).toEqual([])
           expect(text.toLowerCase()).not.toContain("secret")
+          // The agent block shares the private guide's rule: a left-out item the person still wants is a question to them.
+          expect(text).toContain(
+            "ask them which part a later conversation should know (usually a lesson rather than a record), and save only the part they name.",
+          )
           expect(text.indexOf(INDEX_HEADING)).toBeLessThan(text.indexOf(`INDEX-LINE-${row.scope}`))
           return text.slice(text.indexOf("## What memory is not for"), text.indexOf(INDEX_HEADING))
         })

@@ -334,6 +334,10 @@ describe("the guide with team memory on", () => {
         )
         expect(notToSave.toLowerCase()).toContain("team memory")
         expect(notToSave.toLowerCase()).toContain("secret")
+        // The combined guide keeps the question to the person about a left-out item they still want kept.
+        expect(notToSave).toContain(
+          "ask them which part a later conversation should know (usually a lesson rather than a record), and save only the part they name.",
+        )
         const howToSave = on.text.slice(
           on.text.indexOf("## Writing a memory down"),
           on.text.indexOf("## Reading memory"),
