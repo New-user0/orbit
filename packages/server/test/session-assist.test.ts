@@ -6,6 +6,8 @@ import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
 import { startServer } from "./fixture/server"
+import LABEL_SYSTEM from "./fixture/prompt-text/assist-label-system.txt"
+import SUGGESTION_PROMPT from "./fixture/prompt-text/assist-suggestion.txt"
 
 // clients-ux-37: the two routes a client calls for a tool label and a prompt suggestion. Nothing they do is durable: they
 // ask the model beside the session, never through it, and answer with the text or with why there is none.
@@ -23,6 +25,10 @@ type Recorded = {
   readonly kind: "step" | "suggestion" | "other"
   readonly body: { model?: string; messages: Array<{ role: string; content?: unknown }>; tools?: unknown }
 }
+
+// The text of a recorded message, whether the provider protocol sent it as a string or as parts.
+const textOf = (content: unknown) =>
+  typeof content === "string" ? content : (content as Array<{ text?: string }>).map((part) => part.text).join("")
 
 // A model server that answers each step from a queue and every other request from a function, and keeps what each
 // request carried. A suggestion sends the session's history, so it carries the session's tools with
@@ -323,10 +329,8 @@ it.live(
         expect(asked[0].kind).toBe("other")
         expect(asked[0].body.model).toBe("small-model")
         expect(asked[0].body.messages.map((message) => message.role)).toEqual(["system", "user"])
-        // The system message carries the label's limits: the room it has and the verb it opens on.
-        const system = JSON.stringify(asked[0].body.messages[0].content)
-        expect(system).toContain("It has room for roughly 30 characters, and anything past that is cut off.")
-        expect(system).toContain("Each label reads as something already done, opening on its verb.")
+        // The system message whole, so that dropping, softening or reversing any one of its rules fails here.
+        expect(textOf(asked[0].body.messages[0].content)).toBe(LABEL_SYSTEM)
         const text = JSON.stringify(asked[0].body.messages[1].content)
         expect(text).toContain("Read")
         expect(text).toContain("notes.txt")
@@ -334,10 +338,7 @@ it.live(
         expect(text).toContain("...")
         expect(text).not.toContain("o".repeat(400))
         // The output is cut to exactly 300 characters of JSON, the last three of them the dots.
-        const sent = asked[0].body.messages[1].content
-        const promptText =
-          typeof sent === "string" ? sent : (sent as Array<{ text?: string }>).map((part) => part.text).join("")
-        const output = promptText
+        const output = textOf(asked[0].body.messages[1].content)
           .split("\n")
           .find((line) => line.startsWith("Output: "))
           ?.slice("Output: ".length)
@@ -476,13 +477,8 @@ it.live(
         const last = asked[0].body.messages.at(-1)
         expect(last?.role).toBe("user")
         expect(JSON.stringify(last?.content)).not.toContain("SECOND-USER-LINE")
-        // The instruction carries the draft's limits: sendable as it stands, no question, two to twelve words, bare.
-        const rules = [
-          "Keep a draft only if the person could send it unchanged.",
-          "- anything phrased as a question",
-          "two to twelve words in the person's own register, with no quotes and no comment.",
-        ]
-        rules.forEach((rule) => expect(JSON.stringify(last?.content)).toContain(rule))
+        // The instruction whole, so that dropping, softening or reversing any one of its rules fails here.
+        expect(textOf(last?.content)).toBe(SUGGESTION_PROMPT)
         // Nothing the request did reached the session's history.
         expect(await assistants(server, id)).toHaveLength(2)
       })

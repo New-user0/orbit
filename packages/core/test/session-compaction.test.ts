@@ -46,6 +46,7 @@ import { Context, DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { stubSnapshot } from "./lib/tool"
+import COMPACTION_TEXT from "./fixture/prompt-text/compaction.txt"
 
 let requests: LLMRequest[] = []
 const model = LanguageModel.make({
@@ -211,6 +212,11 @@ test("compaction prompt prohibits tool calls at both ends", () => {
   expect(prompt).toEndWith(
     "Once more: write plain text, the <analysis> block and then the <handoff> block, with no tool call. A tool call is refused, and then no handoff is saved.",
   )
+})
+
+// The whole request, closing reminder included, so that dropping, softening or reversing any one of its rules fails here.
+test("compaction prompt is pinned word for word", () => {
+  expect(SessionCompaction.buildPrompt()).toBe(COMPACTION_TEXT)
 })
 
 test("compaction prompt asks for names, choices and patterns copied exactly, and says why", () => {

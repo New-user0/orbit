@@ -38,6 +38,7 @@ import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { readInitial, readUpdate } from "./lib/instructions"
+import AGENT_BLOCK from "./fixture/prompt-text/agent-memory.txt"
 import { insertSession } from "./lib/session-row"
 
 const decodeInfo = Schema.decodeUnknownSync(Info)
@@ -232,6 +233,16 @@ describe("the agent memory block", () => {
         expect(local).toContain("this machine")
         expect(new Set(tails).size).toBe(3)
       }),
+  )
+
+  // The block of a user-scoped agent whole, so that dropping, softening or reversing any one of its rules fails here.
+  it.live("gives the agent block word for word", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const view = yield* initial(l, { id: "reviewer", memory: "user" })
+      const text = view.text.replaceAll(path.join(l.roots.user, "reviewer"), "<agent folder>")
+      expect(text).toBe(AGENT_BLOCK)
+    }),
   )
 
   // Class 7: an index that is not there, is empty or cannot be read (a folder named MEMORY.md) reads as empty: the block

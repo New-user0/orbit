@@ -33,6 +33,7 @@ import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { readInitial, readUpdate } from "./lib/instructions"
 import { insertSession } from "./lib/session-row"
+import PRIVATE_GUIDE from "./fixture/prompt-text/memory-guide.txt"
 
 const decodeInfo = Schema.decodeUnknownSync(Info)
 const first = SessionSchema.ID.make("ses_memory_first")
@@ -399,6 +400,19 @@ describe("the memory guide source", () => {
       expect(out.text).toContain(
         '"Do you remember", "recall" and "check your notes" are requests to read memory: answer one only after reading.',
       )
+    }),
+  )
+
+  // The private guide whole, so that dropping, softening or reversing any one of its rules fails here.
+  it.live("gives the private guide word for word", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const out = yield* Effect.gen(function* () {
+        yield* sessions(l)
+        return yield* readInitial(yield* load(first, { index: false }))
+      }).pipe(provide(l))
+      const text = out.text.replaceAll(l.memory, "<memory folder>")
+      expect(text).toBe(PRIVATE_GUIDE)
     }),
   )
 

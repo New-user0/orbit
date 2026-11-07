@@ -31,6 +31,7 @@ import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { readInitial, readUpdate } from "./lib/instructions"
+import COMBINED_GUIDE from "./fixture/prompt-text/memory-guide-team.txt"
 import { insertSession } from "./lib/session-row"
 
 const decodeInfo = Schema.decodeUnknownSync(Info)
@@ -359,6 +360,17 @@ describe("the guide with team memory on", () => {
         expect(headings(off.text)).toEqual(HEADINGS)
         expect(scopeLines(off.text)).toEqual([])
       }),
+  )
+
+  // The combined guide whole, so that dropping, softening or reversing any one of its rules fails here.
+  it.live("gives the combined guide word for word", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const text = (yield* initial(l, teamOn)).text
+        .replaceAll(l.memory, "<private folder>")
+        .replaceAll(l.team, "<team folder>")
+      expect(text).toBe(COMBINED_GUIDE)
+    }),
   )
 
   // The guide says both folders exist, so the team folder is made with the guide, and only then.
