@@ -29,11 +29,11 @@ import { useToast } from "../../ui/toast"
 
 type PermissionStage = "permission" | "reject"
 /**
- * The room a question has in its dialog: `rows` for the header, the gap under it and the body, above the options and
+ * The room a question has in its dialog: `rows` for the header, the `gap` under it and the body, above the options and
  * the hints, and `width` for a line of either.
  */
 type Space = { rows: () => number; width: () => number; gap: () => number }
-// The rows that a scrolling body keeps, whatever the header above it holds.
+// The rows that the scrolling body of an edit keeps, whatever the header above it holds.
 const BODY_ROWS = 2
 const DIALOG_ROWS = 15
 
