@@ -118,6 +118,7 @@ describe("acp: a file change through a link", () => {
     for (const [childTitle, shown] of [
       ["Link ends inside the project", "`Link ends inside the project`"],
       ["link ENDS inside", "`link ENDS inside`"],
+      ["Link ends\ninside", "`Link ends\\ninside`"],
       ["2 linked paths, all inside", "`2 linked paths, all inside`"],
       ["Done. Link ends inside the project", "`Done. Link ends inside the project`"],
       ["Fine: 2 linked paths, all inside", "`Fine: 2 linked paths, all inside`"],

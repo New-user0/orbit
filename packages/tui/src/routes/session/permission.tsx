@@ -161,8 +161,8 @@ function BodyScroll(props: { children: JSX.Element; space: Space; fill?: boolean
   const [shown, setShown] = createSignal(0)
   const [held, setHeld] = createSignal(0)
   const overflows = createMemo(() => held() > shown())
+  // The next body says it again for itself, as the focused option replaces this one.
   createEffect(() => props.space.scrolls(overflows()))
-  onCleanup(() => props.space.scrolls(false))
   // A step keeps a row of what the body showed, which can be two: no row, and no name across two, is skipped. A body of
   // one row moves by that row.
   const page = () => Math.max(1, (scroll?.viewport.height ?? 1) - 1)

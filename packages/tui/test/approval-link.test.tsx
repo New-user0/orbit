@@ -1757,3 +1757,13 @@ for (const height of [5, 6, 7, 8])
       expect(squash(shots[0]!)).toContain("Linkendsoutside")
       expect(squash(shots[0]!).includes("ReviewinginTestEditor")).toBe(height > 7)
     })
+
+test("a title is whole while that leaves the body a row, and is cut to leave an edit two", async () => {
+  const drawn = async (length: number) =>
+    dialog((await drawFull(ask([plainFile("n".repeat(length))]), "permission", { width: 80, height: 24 }))[0]!).join("")
+  // Eight rows beside the blank one: seven of a title and one of the diff, or six and two.
+  const seven = await drawn(460)
+  expect(seven).not.toContain("…")
+  expect(seven).toContain("1-old")
+  expect(await drawn(540)).toContain("…")
+})
