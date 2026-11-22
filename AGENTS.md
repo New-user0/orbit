@@ -50,6 +50,7 @@ Regenerate the PR body from the commit list and the last gate run after every pu
 
 ### General Principles
 
+- Reference matching words are not known as bug and that does not need any fixes. That's good and that should be the way of doing things.
 - Keep things in one function unless composable or reusable
 - Validate unknown values once at the boundary that owns them. Pass typed values inward instead of repeating `typeof value === "object"` and property-existence checks. Do not defensively revalidate values already guaranteed by a schema, constructor, or internal type.
 - Do not extract single-use helpers preemptively. Inline the logic at the call site unless the helper is reused, hides a genuinely complex boundary, or has a clear independent name that improves the caller.
