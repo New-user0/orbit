@@ -1933,7 +1933,7 @@ describe("rehydration after a compaction", () => {
       expect(h.restored(found)).toEqual([docs, note])
       // The note leads the block, which holds it as data like the rest.
       const block = h.blockOf(found, note)!
-      expect(block).toStartWith("&lt;system-reminder>\n3 days have passed since this memory was saved.")
+      expect(block).toStartWith("&lt;system-reminder>\nThis memory was last changed 3 days ago.")
       expect(block).toEndWith(wholeRead(note, "MARKER-NOTE\n"))
       expect(h.blockOf(found, docs)).toBe(wholeRead(docs, "MARKER-DOCS-INDEX\n"))
     }),

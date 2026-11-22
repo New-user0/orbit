@@ -411,6 +411,9 @@ describe("the agent memory block", () => {
       expect(out.scoped.changed).toBe(true)
       expect(out.scoped.text).toContain(project)
       expect(out.scoped.text).toContain("PROJECT-INDEX")
+      // That folder was there already and the block came mid-session, so it claims only that the folder exists.
+      expect(out.scoped.text).toContain("The folder already exists")
+      expect(out.scoped.text).not.toMatch(/Orbit created|before this conversation began/)
       expect(out.scoped.text).not.toContain("REVIEWER-INDEX")
       expect(out.switched.changed).toBe(true)
       expect(out.switched.text).toContain(writer)

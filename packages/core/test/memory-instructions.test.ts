@@ -368,7 +368,7 @@ describe("the memory guide source", () => {
       expect(at).toEqual([...at].sort((a, b) => a - b))
       // The model is told the folder exists, so it never spends a step creating it.
       expect(yield* exists(l.memory)).toBe(true)
-      expect(out.text).toContain("Orbit created it before this conversation began")
+      expect(out.text).toContain("The folder already exists")
       // A request settles a memory both ways; a request to leave memory alone keeps it out; the present state outranks it.
       expect(out.text).toContain("A request about memory is never left for later.")
       expect(out.text).toContain("must draw on none of it and must not bring it up")
@@ -426,6 +426,13 @@ describe("the memory guide source", () => {
         ["a request is saved at once", "as soon as they say so", /settles a memory either way/],
         ["a request stays inside the left-out list", 'within the limits under "Leave these out"', /settles a memory either way/],
         ["a request to forget waits no longer", "never left for later", /settles a memory either way/],
+        ["what is to be forgotten is found", "When they ask you to forget something, find it and remove it.", /delete the one that holds it/],
+        ["only that content is forgotten", "Remove only that content: edit it out of each memory file that holds it", /delete the one that holds it/],
+        ["the front matter forgets it too", "that holds it, front matter included", /delete the one that holds it/],
+        ["a file goes only when it is empty", "delete a file only when nothing but front matter would be left", /delete the one that holds it/],
+        ["the index entry is forgotten too", "Take it out of `MEMORY.md` as well: delete its entry", /delete the one that holds it/],
+        ["an entry keeps what stays", "reword the entry when it also covers what stays", /delete the one that holds it/],
+        ["no claim of who made the folder, or when", "The folder already exists", /Orbit created|before this conversation began/],
         ["the folder may be listed", "on creating it or on proving that it exists", /probing or listing/],
         ["the work you share", "the circumstances of the work you share", /circumstances of the project/],
         ["the next conversation carries on", "carry on where the last one stopped", /does not start from nothing/],

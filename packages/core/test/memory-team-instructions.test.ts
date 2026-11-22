@@ -393,6 +393,22 @@ describe("the guide with team memory on", () => {
     }),
   )
 
+  // The guide holds for every folder it is drawn with: here the clone brought the team folder, and team memory is
+  // switched on mid-session, so Orbit did not make that folder and the guide arrives after the conversation began.
+  it.live("says only that both folders exist when the clone brought one and team memory starts mid-session", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      yield* write(path.join(l.team, "MEMORY.md"), "- FROM-THE-CLONE\n")
+      const before = yield* initial(l, [])
+      const switched = yield* Effect.gen(function* () {
+        yield* sessions
+        return yield* readUpdate(yield* load(first), before)
+      }).pipe(provide(l, teamOn))
+      expect(switched.text).toContain("Both folders already exist")
+      expect(switched.text).not.toMatch(/Orbit created|before this conversation began/)
+    }),
+  )
+
   // The guide says both folders exist, so the team folder is made with the guide, and only then.
   it.live("makes the team folder when the guide is built with team memory on, and not otherwise", () =>
     Effect.gen(function* () {

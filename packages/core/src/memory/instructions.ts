@@ -334,9 +334,10 @@ function summary(text: string) {
 // The guide keeps the reference's section order and what each section asks of the model; every sentence is Orbit's.
 // With team memory on it is the combined guide: two folders, a section on scope, a scope line for each kind, a rule
 // against secrets in team memory and an index in each folder.
-// The service makes each folder before any guide names it, so the model is told why it need not.
-const CREATED_ONE =
-  "Orbit created it before this conversation began, so it is ready for a Write or an Edit on your first call: never spend a step on creating it or on proving that it exists."
+// The service makes a missing folder as the guide is read, which can be mid-session, and a folder can come with the
+// clone instead, so the guide says that a folder exists and never who made it or when.
+const EXISTS_ONE =
+  "The folder already exists, so it is ready for a Write or an Edit on your first call: never spend a step on creating it or on proving that it exists."
 
 const renderGuide = (value: Guide) => {
   const folder = typeof value === "string" ? value : value.folder
@@ -345,8 +346,8 @@ const renderGuide = (value: Guide) => {
 
 ${
   team === undefined
-    ? `What you learn here can outlast this conversation if you write it into \`${heading(folder)}\`, a folder of Markdown files that later conversations read. ${CREATED_ONE}`
-    : `What you learn here can outlast this conversation if you write it into one of two folders of Markdown files that later conversations read: \`${heading(folder)}\`, which is private, and \`${heading(team)}\`, which the team shares. Orbit created both before this conversation began, so either is ready for a Write or an Edit on your first call: never spend a step on creating them or on proving that they exist.`
+    ? `What you learn here can outlast this conversation if you write it into \`${heading(folder)}\`, a folder of Markdown files that later conversations read. ${EXISTS_ONE}`
+    : `What you learn here can outlast this conversation if you write it into one of two folders of Markdown files that later conversations read: \`${heading(folder)}\`, which is private, and \`${heading(team)}\`, which the team shares. Both folders already exist, so either is ready for a Write or an Edit on your first call: never spend a step on creating them or on proving that they exist.`
 }
 
 ${guideBody(team)}`
@@ -357,7 +358,7 @@ ${guideBody(team)}`
 // builds it. The index is the agent's to keep, so look-alikes of the reminder envelope in it are escaped (class 9).
 const renderAgentMemory = (value: AgentBlock) => `# Your agent memory
 
-As this agent you keep notes of your own that outlast each conversation, as Markdown files in \`${heading(value.folder)}\`. ${CREATED_ONE}
+As this agent you keep notes of your own that outlast each conversation, as Markdown files in \`${heading(value.folder)}\`. ${EXISTS_ONE}
 
 ${guideBody(undefined)}
 
@@ -382,7 +383,7 @@ const guideBody = (team: string | undefined) => {
   const scope = (text: string) => (team === undefined ? "" : `\n- Scope: ${text}`)
   return `Memory is how you get better at working with this person from one conversation to the next. A new conversation should be able to carry on where the last one stopped, so note the circumstances of the work you share, the approaches they want kept or dropped, and the person themselves, their background and working habits included.
 
-A request about memory is never left for later. Write down what the person wants kept as soon as they say so, within the limits under "Leave these out". For what they want gone, search the memory files and delete the one that holds it.
+A request about memory is never left for later. Write down what the person wants kept as soon as they say so, within the limits under "Leave these out". When they ask you to forget something, find it and remove it. Remove only that content: edit it out of each memory file that holds it, front matter included, and delete a file only when nothing but front matter would be left. Take it out of \`MEMORY.md\` as well: delete its entry, or reword the entry when it also covers what stays.
 ${
   team === undefined
     ? ""

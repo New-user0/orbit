@@ -319,9 +319,9 @@ describe("MemoryStore.freshnessNote", () => {
     expect(note.startsWith("<system-reminder>\n")).toBe(true)
     expect(note.endsWith("</system-reminder>\n")).toBe(true)
     expect(note).toContain("47 days")
-    // The note asks for the memory to be checked against the code before it is relied on.
+    // All the note says is checked against the code before it is relied on, also when it names no file.
     expect(note).toBe(
-      "<system-reminder>\n47 days have passed since this memory was saved. Anything it says about the code is only a claim: open the files it speaks of and verify it. Until then you must not rely on it or state it as true.\n</system-reminder>\n",
+      "<system-reminder>\nThis memory was last changed 47 days ago. It records what was true then, and the code may have changed since: check what it says against the current code, by opening or searching that code, before you rely on it or state it as fact.\n</system-reminder>\n",
     )
     expect(MemoryStore.freshnessNote(now - 2 * day, now)).toContain("2 days")
   })

@@ -158,7 +158,7 @@ describe("retired wording", () => {
 
 describe("retired wording in the upgrade notes", () => {
   // A quote can wrap over a line, so blanks are folded before the search.
-  test("docs/upgrading.md quotes none of the strings the M5 provenance pass retired", async () => {
+  test("docs/upgrading.md quotes none of four notices the M5 provenance pass retired", async () => {
     const notes = (await Bun.file(path.join(import.meta.dir, "../../../docs/upgrading.md")).text()).replace(/\s+/g, " ")
     expect(notes).not.toMatch(
       /Nothing to rewind yet|finished and returned no output|ran and produced nothing|modified its proposal before approving/,
@@ -285,7 +285,7 @@ describe("retired wording in the source texts", () => {
     ["session/recap.ts", /stepped away|is now back|Skip finished steps/],
     [
       "memory/instructions.ts",
-      /forget something|The fix is in|behave as though|believe what you observe|without making (it|them) first|looking to see whether|shared with the team through|surprised them|Group memories by subject|These stay out even when|looking at memory is not optional|never need to say it again|Keep each file's name|anything after line 200|Open your memories|see why a request was made|Write any date as a calendar date|the rule first, then|"Reason:" line and an|keep (it|them) brief|is empty\. It fills|how an old bug|in the project today outranks|settles a memory either way|statistician|never mock the database/,
+      /The fix is in|behave as though|believe what you observe|without making (it|them) first|looking to see whether|shared with the team through|surprised them|Group memories by subject|These stay out even when|looking at memory is not optional|never need to say it again|Keep each file's name|anything after line 200|Open your memories|see why a request was made|Write any date as a calendar date|the rule first, then|"Reason:" line and an|keep (it|them) brief|is empty\. It fills|how an old bug|in the project today outranks|settles a memory either way|statistician|never mock the database/,
     ],
     ["memory/store.ts", /present it as fact|Compare it with the code|describes things as they stood/],
     ["session/context-usage.ts", /Custom agents/],

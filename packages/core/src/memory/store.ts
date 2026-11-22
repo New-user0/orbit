@@ -145,7 +145,7 @@ export function freshnessNote(mtimeMs: number, now: number) {
   const days = ageDays(mtimeMs, now)
   if (days <= 1) return ""
   return `${envelope(
-    `${days} days have passed since this memory was saved. Anything it says about the code is only a claim: open the files it speaks of and verify it. Until then you must not rely on it or state it as true.`,
+    `This memory was last changed ${days} days ago. It records what was true then, and the code may have changed since: check what it says against the current code, by opening or searching that code, before you rely on it or state it as fact.`,
   )}\n`
 }
 
