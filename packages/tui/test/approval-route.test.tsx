@@ -3,7 +3,7 @@
 // and a body that scrolls by the keyboard are on screen in each stage, and a person reads the end of what is approved
 // with the keys alone (classes 8 and 14). The mouse is off.
 import { expect, test } from "bun:test"
-import { createAppFixture } from "./fixture/app"
+import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
 
@@ -273,14 +273,16 @@ test("the docks give an approval the rows it needs, from the bottom up, and pain
   expect(rows.slice(-2).join("")).toBe("")
 })
 
+test("an edit leaves the plan none of its rows on an 80x24 screen", async () => {
+  await using app = await open(80, 24, CASES.short.asked, { plan: 5 })
+  expect(app.first).not.toContain("step 0")
+  expect(options(app.first)).toEqual(["›1Allowonce", "2Alwaysallow", "3Reject"])
+})
+
 test("the route's two blank rows go to a question that has not its own fifteen with them", async () => {
   const last = async (height: number) => {
     await using app = await open(80, height, CASES.short.asked)
-    return app.first
-      .split("\n")
-      .map((row) => row.trim())
-      .filter((_, index) => index === height - 1)
-      .join("")
+    return app.first.split("\n")[height - 1]!.trim()
   }
   // The banner is one row under 24 high: the route has 16 rows at 80x17, and 17 at 80x18.
   expect(await last(17)).toMatch(/^╰─+╯$/)
@@ -329,7 +331,7 @@ test("the docks, the prompt and the route's blank rows come back once the questi
     type: "permission.replied",
     data: { sessionID: child.id, requestID: "per_route", reply: "once" },
   })
-  const frame = await app.until((shot) => !shot.includes("1 Allow once") && shot.includes("step 2"))
+  const frame = await app.until((shot) => !shot.includes("1 Allow once") && shot.includes("step 2") && promptReady(shot))
   expect(frame).toContain("plan")
   expect((await app.settled()).split("\n").filter((row) => row !== "").at(-1)!.trim()).toBe("")
 })
