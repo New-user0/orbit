@@ -88,7 +88,7 @@ test.each([64, 120])("the story draws the real picker for each fixture and reset
         expect(controlFree(frame)).toBe(true)
         expect(frame).toContain("\\x1b")
       }
-      if (label === "nothing to rewind") expect(frame).toContain("Nothing to rewind yet.")
+      if (label === "nothing to rewind") expect(frame).toContain("This conversation has no prompt to return to.")
     }
     expect(seen).toContain("hostile names")
     expect(seen).toContain("nothing to rewind")
@@ -110,7 +110,7 @@ test("an option chosen in the story is named in its footer", async () => {
     await app.waitForFrame((frame) => frame.includes("Conversation only"))
     app.mockInput.pressEnter()
     const frame = await app.waitForFrame((frame) => frame.includes("conversation chosen for p3"))
-    expect(frame).not.toContain("Never mind")
+    expect(frame).not.toContain("Do nothing")
   } finally {
     app.renderer.destroy()
   }

@@ -372,6 +372,8 @@ test("writes a template that applies nothing and lists every context with its co
     "prompt.clear",
   ]
   commands.forEach((command) => expect(listed.has(command)).toBe(true))
+  // A command's line carries its description, and one with no key by default says so.
+  expect(template).toContain('// "session.rewind": "", // Roll back to an earlier prompt (no key by default)')
 })
 
 test("writes a template whose examples are all valid once they are uncommented", () => {

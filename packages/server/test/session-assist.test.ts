@@ -6,6 +6,8 @@ import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
 import { startServer } from "./fixture/server"
+import LABEL_SYSTEM from "./fixture/prompt-text/assist-label-system.txt"
+import SUGGESTION_PROMPT from "./fixture/prompt-text/assist-suggestion.txt"
 
 // clients-ux-37: the two routes a client calls for a tool label and a prompt suggestion. Nothing they do is durable: they
 // ask the model beside the session, never through it, and answer with the text or with why there is none.
@@ -23,6 +25,10 @@ type Recorded = {
   readonly kind: "step" | "suggestion" | "other"
   readonly body: { model?: string; messages: Array<{ role: string; content?: unknown }>; tools?: unknown }
 }
+
+// The text of a recorded message, whether the provider protocol sent it as a string or as parts.
+const textOf = (content: unknown) =>
+  typeof content === "string" ? content : (content as Array<{ text?: string }>).map((part) => part.text).join("")
 
 // A model server that answers each step from a queue and every other request from a function, and keeps what each
 // request carried. A suggestion sends the session's history, so it carries the session's tools with
@@ -293,7 +299,7 @@ it.live("an unknown session is a typed not-found on either route; a known one is
 
       expect((await label(server, known, call)).body).toEqual({ data: { label: null, reason: "not_found" } })
       expect((await suggestion(server, known)).body).toEqual({
-        data: { suggestion: null, reason: "early_conversation" },
+        data: { suggestion: null, reason: "too_early" },
       })
       for (const answered of [await label(server, missing, call), await suggestion(server, missing)])
         expect(answered).toEqual({ status: 404, body: expect.objectContaining({ _tag: "SessionNotFoundError" }) })
@@ -323,6 +329,8 @@ it.live(
         expect(asked[0].kind).toBe("other")
         expect(asked[0].body.model).toBe("small-model")
         expect(asked[0].body.messages.map((message) => message.role)).toEqual(["system", "user"])
+        // The system message whole, so that dropping, softening or reversing any one of its rules fails here.
+        expect(textOf(asked[0].body.messages[0].content)).toBe(LABEL_SYSTEM)
         const text = JSON.stringify(asked[0].body.messages[1].content)
         expect(text).toContain("Read")
         expect(text).toContain("notes.txt")
@@ -330,18 +338,91 @@ it.live(
         expect(text).toContain("...")
         expect(text).not.toContain("o".repeat(400))
         // The output is cut to exactly 300 characters of JSON, the last three of them the dots.
-        const sent = asked[0].body.messages[1].content
-        const promptText =
-          typeof sent === "string" ? sent : (sent as Array<{ text?: string }>).map((part) => part.text).join("")
-        const output = promptText
+        const output = textOf(asked[0].body.messages[1].content)
           .split("\n")
           .find((line) => line.startsWith("Output: "))
           ?.slice("Output: ".length)
         expect({ length: output?.length, dots: output?.endsWith("...") }).toEqual({ length: 300, dots: true })
-        expect(text).toContain(`${"I".repeat(150)}INTENT-MARK${"J".repeat(39)}`)
+        expect(text).toContain(`The assistant's own words in the message that made these calls: ${"I".repeat(150)}INTENT-MARK${"J".repeat(39)}`)
         expect(text).not.toContain("J".repeat(40))
+        expect(text).toContain("The batch, one call after another:")
         // No history: the person's message is not sent.
         expect(JSON.stringify(asked[0].body.messages)).not.toContain("read the notes")
+      })
+    }),
+  60_000,
+)
+
+// The intent is the message's last text, which can follow its calls, so the header may not say that it came before them.
+it.live(
+  "a label's header claims no position for text that follows the calls",
+  () =>
+    Effect.gen(function* () {
+      const { folders, llm, notes } = yield* layout
+      const server = yield* startServer(folders.config)
+      yield* Effect.promise(async () => {
+        const batch = await withBatch(server, llm, notes, folders.repo)
+        const exported = (await request(server, "GET", `/api/experimental/session/${batch.id}/export`)).body?.data
+        const copy = JSON.parse(
+          JSON.stringify(exported).replace(/"((?:ses|msg|prt)_[A-Za-z0-9]+)"/g, '"$1after"'),
+        ) as { info: { id: string }; messages: Array<{ id: string; content?: Array<{ type: string; text?: string }> }> }
+        const messageID = `${batch.messageID}after`
+        copy.messages.find((message) => message.id === messageID)?.content?.push({ type: "text", text: "TRAILING-TEXT" })
+        const imported = await request(server, "POST", "/api/experimental/session/import", {
+          body: { ...copy, location: { directory: folders.repo } },
+        })
+        expect(imported.status).toBe(200)
+        const before = llm.requests.length
+
+        await label(server, copy.info.id, { messageID, toolCallIDs: [batch.toolCallID] })
+
+        const header = textOf(llm.requests.slice(before)[0].body.messages[1].content).split("\n")[0]
+        expect(header).toBe("The assistant's own words in the message that made these calls: TRAILING-TEXT")
+      })
+    }),
+  60_000,
+)
+
+// The header quotes words, so a message without any starts at the batch; the message with words is the control.
+it.live(
+  "a label quotes no words of a message whose text is blank or missing",
+  () =>
+    Effect.gen(function* () {
+      const { folders, llm, notes } = yield* layout
+      const server = yield* startServer(folders.config)
+      yield* Effect.promise(async () => {
+        const batch = await withBatch(server, llm, notes, folders.repo)
+        const exported = (await request(server, "GET", `/api/experimental/session/${batch.id}/export`)).body?.data
+        const texts: ReadonlyArray<readonly [string, string | undefined]> = [
+          ["blank", "  \n "],
+          ["missing", undefined],
+          ["words", "Reading the notes"],
+        ]
+        const seen: Array<readonly [string, string]> = []
+        for (const [name, text] of texts) {
+          const copy = JSON.parse(
+            JSON.stringify(exported).replace(/"((?:ses|msg|prt)_[A-Za-z0-9]+)"/g, `"$1${name}"`),
+          ) as { info: { id: string }; messages: Array<{ id: string; content?: Array<{ type: string; text?: string }> }> }
+          const messageID = `${batch.messageID}${name}`
+          const content = copy.messages.find((message) => message.id === messageID)?.content
+          const at = content?.findIndex((part) => part.type === "text") ?? -1
+          expect(at).toBeGreaterThanOrEqual(0)
+          content?.splice(at, 1, ...(text === undefined ? [] : [{ type: "text", text }]))
+          const imported = await request(server, "POST", "/api/experimental/session/import", {
+            body: { ...copy, location: { directory: folders.repo } },
+          })
+          expect(imported.status).toBe(200)
+          const before = llm.requests.length
+
+          await label(server, copy.info.id, { messageID, toolCallIDs: [batch.toolCallID] })
+
+          seen.push([name, textOf(llm.requests.slice(before)[0].body.messages[1].content).split("\n")[0]])
+        }
+        expect(seen).toEqual([
+          ["blank", "The batch, one call after another:"],
+          ["missing", "The batch, one call after another:"],
+          ["words", "The assistant's own words in the message that made these calls: Reading the notes"],
+        ])
       })
     }),
   60_000,
@@ -360,7 +441,7 @@ it.live(
         const own = { messageID: batch.messageID, toolCallIDs: [batch.toolCallID] }
 
         llm.script.other = () => ({ text: "   " })
-        expect((await ask(batch.id, own)).body).toEqual({ data: { label: null, reason: "empty" } })
+        expect((await ask(batch.id, own)).body).toEqual({ data: { label: null, reason: "no_text" } })
         llm.script.other = () => ({ status: 400 })
         expect((await ask(batch.id, own)).body).toEqual({ data: { label: null, reason: "unavailable" } })
         llm.script.other = () => ({ text: "Read the notes" })
@@ -396,7 +477,7 @@ it.live(
 // A call still waiting for its approval has not finished, and a call the interruption ended is not labelled, as in the
 // reference; the model is not asked for either. The finished batches above are the control.
 it.live(
-  "a label is null for a call that has not finished (unsettled) and for one an interruption ended (aborted)",
+  "a label is null for a call that has not finished (unsettled) and for one an interruption ended (interrupted)",
   () =>
     Effect.gen(function* () {
       const { folders, llm } = yield* layout
@@ -437,7 +518,7 @@ it.live(
         const ended = await call()
         expect(ended.status).toBe("error")
         expect((await label(server, id, { messageID: ended.messageID, toolCallIDs: ended.toolCallIDs })).body).toEqual({
-          data: { label: null, reason: "aborted" },
+          data: { label: null, reason: "interrupted" },
         })
         expect(llm.requests.length).toBe(asked)
       })
@@ -472,6 +553,19 @@ it.live(
         const last = asked[0].body.messages.at(-1)
         expect(last?.role).toBe("user")
         expect(JSON.stringify(last?.content)).not.toContain("SECOND-USER-LINE")
+        // The instruction whole, so that dropping, softening or reversing any one of its rules fails here.
+        expect(textOf(last?.content)).toBe(SUGGESTION_PROMPT)
+        // The banned items are judgements, and none of them covers the approval that the examples ask for.
+        const [examples, banned] = textOf(last?.content).split("A draft must have none of these:")
+        expect(examples).toContain('their short approval, as in "yep, keep at it"')
+        expect(banned).toContain("- praise, thanks or any other judgement of the work")
+        expect(banned).not.toMatch(/approv|affirm|agree|yep|plans that are yours alone/i)
+        // The other scopes: an idea is banned as a topic is, any failure leaves the draft empty, any new code counts as
+        // something to try, and the action is to be as specific as its object.
+        expect(banned).toContain("topics and ideas the person has not brought up")
+        expect(examples).toContain("something has just gone wrong: leave it empty")
+        expect(examples).toContain("Fresh code has yet to be exercised")
+        expect(examples).toContain("Make both the action and its object specific")
         // Nothing the request did reached the session's history.
         expect(await assistants(server, id)).toHaveLength(2)
       })
@@ -492,7 +586,7 @@ const suppressions: ReadonlyArray<{
 }> = [
   {
     name: "one assistant message",
-    reason: "early_conversation",
+    reason: "too_early",
     setup: async ({ server, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -502,7 +596,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "the last response failed",
-    reason: "last_response_error",
+    reason: "reply_failed",
     setup: async ({ server, llm, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -516,7 +610,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "the last response wrote 10,001 uncached tokens",
-    reason: "cache_cold",
+    reason: "cache_expired",
     setup: async ({ server, llm, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -540,7 +634,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "a permission request is waiting",
-    reason: "pending_permission",
+    reason: "awaiting_approval",
     setup: async ({ server, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -555,7 +649,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "a form is waiting",
-    reason: "elicitation_active",
+    reason: "awaiting_form",
     setup: async ({ server, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -569,7 +663,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "the session is in Plan mode",
-    reason: "plan_mode",
+    reason: "planning",
     setup: async ({ server, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -598,7 +692,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "a subagent's permission request is waiting",
-    reason: "pending_permission",
+    reason: "awaiting_approval",
     setup: async ({ server, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -614,7 +708,7 @@ const suppressions: ReadonlyArray<{
   },
   {
     name: "a subagent's form is waiting",
-    reason: "elicitation_active",
+    reason: "awaiting_form",
     setup: async ({ server, directory }) => {
       const id = await createSession(server, directory)
       await prompt(server, id, "one")
@@ -683,33 +777,123 @@ for (const row of suppressions)
 // the reference.
 const words = (count: number) => Array.from({ length: count }, (_, index) => `step${index}`).join(" ")
 const filters: ReadonlyArray<readonly [string, string | undefined]> = [
-  ["   ", "empty"],
-  ["done", "done"],
-  ["nothing to suggest right now", "meta_text"],
-  ["I would stay silent here", "meta_text"],
-  ["...silence...", "meta_text"],
-  ["Nothing found.", "meta_text"],
-  ["No suggestion this time", "meta_text"],
-  ["[no suggestion]", "meta_wrapped"],
-  ["(waiting for the user)", "meta_wrapped"],
-  ["API Error: 500 upstream", "error_message"],
-  ["Prompt is too long for this", "error_message"],
-  ["Suggestion: run the tests", "prefixed_label"],
-  ["refactor", "too_few_words"],
+  ["   ", "no_text"],
+  ["done", "just_done"],
+  ["nothing to suggest right now", "self_reference"],
+  ["I would stay silent here", "self_reference"],
+  ["...silence...", "self_reference"],
+  ["Nothing found.", "self_reference"],
+  ["No suggestion this time", "self_reference"],
+  ["[no suggestion]", "bracketed"],
+  ["(waiting for the user)", "bracketed"],
+  ["API Error: 500 upstream", "error_text"],
+  ["Prompt is too long for this", "error_text"],
+  ["Suggestion: run the tests", "labelled"],
+  ["refactor", "one_word"],
   ["yes", undefined],
+  // The approval that the suggestion prompt gives as its example when the assistant asked whether to go on.
+  ["yep, keep at it", undefined],
   ["/commit", undefined],
-  [words(13), "too_many_words"],
+  [words(13), "over_twelve_words"],
   [words(12), undefined],
-  [`${"b".repeat(20)} ${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)}`, "too_long"],
+  [`${"b".repeat(20)} ${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)}`, "too_many_characters"],
   [`${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)} ${"b".repeat(19)}`, undefined],
-  ["Run the tests. Then commit", "multiple_sentences"],
-  ["run the **tests** now", "has_formatting"],
-  ["run the\ntests now", "has_formatting"],
-  ["that works for me", "evaluative"],
-  ["thanks, run them", "evaluative"],
-  ["Let me run the tests", "assistant_voice"],
-  ["I'll commit this", "assistant_voice"],
+  ["Run the tests. Then commit", "several_sentences"],
+  ["run the **tests** now", "markup"],
+  ["run the\ntests now", "markup"],
+  ["that works for me", "verdict"],
+  ["thanks, run them", "verdict"],
+  ["Let me run the tests", "assistant_phrasing"],
+  ["I'll commit this", "assistant_phrasing"],
   ["run the tests", undefined],
+  // Where in the text a rule looks: a verdict anywhere, an opening only at the start, a whole text only as a whole.
+  ["run them, that works", "verdict"],
+  ["merge it if it looks good", "verdict"],
+  ["run it and let me know", undefined],
+  ["fix the invalid api key message", undefined],
+  ["mark it done", undefined],
+  ["DONE", "just_done"],
+  ["see why nothing found matches", undefined],
+  ["nothing found in the log", undefined],
+  ["explain the nothing to suggest case", undefined],
+  ["fix the no suggestion banner", undefined],
+  ["silence the noisy logger", undefined],
+  ["the model stays silent", "self_reference"],
+  ["(waiting\nfor the user)", "bracketed"],
+  ["(draft) run the tests", undefined],
+  ["update the parser (again)", undefined],
+  ["rename it to: parser", undefined],
+  // A label needs a space after its colon, so a script name that opens the text is kept.
+  ["test:e2e then commit", undefined],
+  ["run the tests. then commit", undefined],
+  ["Is it fixed? Then commit", "several_sentences"],
+  ["Stop it! Then commit", "several_sentences"],
+  ["Yes", undefined],
+  // A text that two rules drop gets the reason of the first of them.
+  ["[stay silent]", "self_reference"],
+  ["[Note: run it]", "bracketed"],
+  [`Note: ${words(13)}`, "labelled"],
+  ["**tests**", "one_word"],
+  [Array.from({ length: 13 }, () => "b".repeat(9)).join(" "), "over_twelve_words"],
+  ["Run it. Then *commit*", "several_sentences"],
+  ["thanks\nrun them", "markup"],
+  ["Let me say thanks", "verdict"],
+  // Every entry of each word list, so that dropping one from its list fails a row.
+  ["silence is best here", "self_reference"],
+  ["Invalid API key in the request", "error_text"],
+  ["Request timed out after a while", "error_text"],
+  ["Image was too large to read", "error_text"],
+  ...[
+    "commit",
+    "push",
+    "deploy",
+    "continue",
+    "check",
+    "stop",
+    "exit",
+    "quit",
+    "no",
+    "ok",
+    "okay",
+    "sure",
+    "yeah",
+    "yea",
+    "yep",
+    "yup",
+  ].map((word) => [word, undefined] as const),
+  ...[
+    "awesome",
+    "excellent",
+    "great",
+    "nice",
+    "perfect",
+    "looks good",
+    "sounds good",
+    "makes sense",
+    "that worked",
+    "that's all",
+    "thank you",
+  ].map((phrase) => [`${phrase}, run them`, "verdict"] as const),
+  ...[
+    "certainly",
+    "of course",
+    "sure,",
+    "here are",
+    "here is",
+    "here's",
+    "i can",
+    "i think",
+    "i notice",
+    "i would",
+    "i'm",
+    "i've",
+    "that's",
+    "this is",
+    "this will",
+    "you can",
+    "you could",
+    "you should",
+  ].map((opening) => [`${opening} run the tests`, "assistant_phrasing"] as const),
 ]
 
 it.live(
@@ -739,10 +923,10 @@ it.live(
 // it read. A provider decides which kinds it reports, so each row imports a copy of a finished session whose last
 // response reports one kind; the cache-read row is the control.
 const spends: ReadonlyArray<readonly [string, Message["tokens"], string | undefined]> = [
-  ["input", { input: 10_001, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, "cache_cold"],
-  ["output", { input: 0, output: 10_001, reasoning: 0, cache: { read: 0, write: 0 } }, "cache_cold"],
-  ["reasoning", { input: 0, output: 0, reasoning: 10_001, cache: { read: 0, write: 0 } }, "cache_cold"],
-  ["cache write", { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 10_001 } }, "cache_cold"],
+  ["input", { input: 10_001, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, "cache_expired"],
+  ["output", { input: 0, output: 10_001, reasoning: 0, cache: { read: 0, write: 0 } }, "cache_expired"],
+  ["reasoning", { input: 0, output: 0, reasoning: 10_001, cache: { read: 0, write: 0 } }, "cache_expired"],
+  ["cache write", { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 10_001 } }, "cache_expired"],
   ["cache read", { input: 0, output: 0, reasoning: 0, cache: { read: 50_000, write: 0 } }, undefined],
 ]
 
@@ -843,7 +1027,7 @@ it.live(
             .status,
         ).toBe(200)
 
-        expect((await pending).body?.data).toEqual({ suggestion: null, reason: "aborted" })
+        expect((await pending).body?.data).toEqual({ suggestion: null, reason: "cancelled" })
         expect(Date.now() - started).toBeLessThan(8_000)
       })
     }),
@@ -872,7 +1056,7 @@ it.live(
         const second = await suggestion(server, id)
 
         expect(second.body?.data).toEqual({ suggestion: "fresh suggestion here" })
-        expect((await first).body?.data).toEqual({ suggestion: null, reason: "aborted" })
+        expect((await first).body?.data).toEqual({ suggestion: null, reason: "cancelled" })
       })
     }),
   60_000,

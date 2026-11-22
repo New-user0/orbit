@@ -1,4 +1,5 @@
 import { afterAll, afterEach, expect, spyOn, test } from "bun:test"
+import path from "node:path"
 import { Orbit } from "@orbit/client/promise"
 import { costLine, costText, readCatalog, readSessionCost } from "../../src/run/cost-report"
 import { runNonInteractive, type RunCommandInput } from "../../src/run/run"
@@ -81,27 +82,40 @@ afterEach(() => {
 test("costText prints line counts without thousands separators", () => {
   const big = { ...full, lines: { added: 1234, removed: 0 } }
   const text = costText(big as never)
-  expect(text).toContain("1234 lines added, 0 lines removed")
+  expect(text).toContain("+1234 / -0 lines")
 })
 
 test("costText prints every part of a full summary, and drops the parts a bare one lacks", () => {
   const text = costText(full as never)
-  expect(text).toContain("Total cost:")
+  expect(text).toContain("Spent:")
   expect(text).toContain("Subagents:")
-  expect(text).toContain("Total API duration:")
-  expect(text).toContain("Total code changes:")
-  expect(text).toContain("1 line added, 2 lines removed")
+  expect(text).toContain("Model time:")
+  expect(text).toContain("Lines changed:")
+  expect(text).toContain("+1 / -2 lines")
   expect(text).toContain("Other:")
-  expect(text).toContain("40 reasoning")
+  expect(text).toContain("reasoning 40")
   // Token figures are compact, as in the dialog.
-  expect(text).toContain("1.2K input, 300 output, 500 cache read, 60 cache write")
+  expect(text).toContain("in 1.2K · out 300 · from cache 500 · to cache 60")
   expect(text).toContain("(undone responses, older usage)")
   expect(text).not.toContain("\u001b")
   // The total says so when some row is unpriced. Mutation: call `price(summary.cost)` without the partial flag.
-  expect(text.split("\n").find((line) => line.startsWith("Total cost:"))).toContain("+ unpriced")
+  expect(text.split("\n").find((line) => line.startsWith("Spent:"))).toContain("+ unpriced")
   // The row that is unpriced in part says so; the fully priced one does not.
   expect(text.split("\n").find((line) => line.includes("provider/free"))).toContain("+ unpriced")
   expect(text.split("\n").find((line) => line.includes("provider/big"))).not.toContain("unpriced")
+
+  // The whole block, so that each label keeps its own figure and the rows sit under their heading.
+  expect(text.split("\n")).toEqual([
+    "Spent:           $0.75 + unpriced",
+    "Subagents:       $0.2500 (included above)",
+    "Model time:      4.0s",
+    "Elapsed:         1m 5s",
+    "Lines changed:   +1 / -2 lines",
+    "Other:           $0.0100 (undone responses, older usage)",
+    "Per model:",
+    "  provider/big\\x1b[31m ($0.5000): in 1.2K · out 300 · from cache 500 · to cache 60 · reasoning 40",
+    "  provider/free ($0.0000 + unpriced): in 3 · out 0 · from cache 0 · to cache 0",
+  ])
 
   // The provider ID comes from a record or a config, so it is escaped like the model ID (class 9).
   const hostile = costText({ ...full, rows: [{ ...row, providerID: "evil\u001b]0;x\u0007\u009b2K‮name" }] } as never)
@@ -110,24 +124,45 @@ test("costText prints every part of a full summary, and drops the parts a bare o
 
   const empty = costText(bare as never)
   // An unknown duration reads as a dash.
-  expect(empty).toContain(`${"Total API duration:".padEnd(22)} -\n`)
+  expect(empty).toContain(`${"Model time:".padEnd(16)} -\n`)
   expect(empty).not.toContain("Subagents:")
   expect(empty).not.toContain("Other:")
-  expect(empty).not.toContain("Total code changes:")
-  expect(empty).not.toContain("Usage by model:")
-  expect(empty.split("\n").at(-1)).toBe(`${"Usage:".padEnd(22)} 0 input, 0 output, 0 cache read, 0 cache write`)
+  expect(empty).not.toContain("Lines changed:")
+  expect(empty).not.toContain("Per model:")
+  expect(empty.split("\n").at(-1)).toBe(`${"Tokens:".padEnd(16)} in 0 · out 0 · from cache 0 · to cache 0`)
   expect(JSON.parse(costLine("ses_x", bare as never))).toEqual({ type: "cost", sessionID: "ses_x", cost: bare })
+})
+
+// Class 15: the upgrade note gives each renamed row of the report old to new. Subagents and Other kept their names.
+test("the upgrade note lists every renamed row of the report, old to new", async () => {
+  const renamed = [
+    ["Total cost", "Spent"],
+    ["Total API duration", "Model time"],
+    ["Total wall duration", "Elapsed"],
+    ["Total code changes", "Lines changed"],
+    ["Usage by model", "Per model"],
+    ["Usage", "Tokens"],
+  ] as const
+  const notes = (await Bun.file(path.join(import.meta.dir, "../../../../docs/upgrading.md")).text()).replace(/\s+/g, " ")
+  for (const [before, now] of renamed) expect(notes).toContain(`\`${before}\` → \`${now}\``)
+
+  const drawn = [full, bare].flatMap((summary) =>
+    [...costText(summary as never).matchAll(/^(\S[^:]*):/gm)].map((match) => match[1]!),
+  )
+  expect([...new Set(drawn.filter((label) => label !== "Subagents" && label !== "Other"))].toSorted()).toEqual(
+    renamed.map(([, now]): string => now).toSorted(),
+  )
 })
 
 test("the default format prints the block, and a row the client cannot read is named once", async () => {
   const run = await capture({ format: "default" })
   expect(run.exitCode).toBe(0)
-  expect(run.stdout).toContain("Total cost:")
+  expect(run.stdout).toContain("Spent:")
   expect(run.stderr).toBe("")
 
   const dropped = await capture({ format: "default", session: "ses_dropped" })
   expect(dropped.exitCode).toBe(0)
-  expect(dropped.stdout).toContain("Total cost:")
+  expect(dropped.stdout).toContain("Spent:")
   expect(dropped.stderr.trimEnd().split("\n")).toEqual(["Left out cost rows this client could not read: rows[1]"])
 })
 
@@ -141,8 +176,8 @@ test("the JSON format prints one cost line", async () => {
 test("a model listed without a price whose responses recorded $0 reads unknown, and the JSON line keeps the row", async () => {
   const run = await capture({ format: "default", session: "ses_unpriced" })
   expect(run.exitCode).toBe(0)
-  expect(run.stdout).toContain("Total cost:            unknown")
-  expect(run.stdout).toContain("ollama/llama3:")
+  expect(run.stdout).toContain("Spent:           unknown")
+  expect(run.stdout).toContain("ollama/llama3 (unknown): in ")
   expect(run.stdout).toContain("(unknown)")
   expect(run.stdout).not.toContain("$0.0000")
 
@@ -206,12 +241,12 @@ test("--format result prints one result line whose result is the block", async (
   expect(run.exitCode).toBe(0)
   const line = JSON.parse(run.stdout)
   expect(line).toMatchObject({ type: "result", sessionID: SESSION, is_error: false })
-  expect(line.result).toContain("Total cost:")
+  expect(line.result).toContain("Spent:")
 })
 
 test("a reasoning count is printed only for a model that used reasoning", () => {
   const lines = costText(full as never).split("\n")
-  expect(lines.find((line) => line.includes("provider/big"))).toContain("40 reasoning")
+  expect(lines.find((line) => line.includes("provider/big"))).toContain("reasoning 40")
   expect(lines.find((line) => line.includes("provider/free"))).not.toContain("reasoning")
 })
 
@@ -249,7 +284,7 @@ test("a catalog failure's text is escaped, and the figures read without a catalo
 test("a leading space before /cost still reports", async () => {
   const run = await capture({ format: "default", message: ["  /cost"] })
   expect(run.exitCode).toBe(0)
-  expect(run.stdout).toContain("Total cost:")
+  expect(run.stdout).toContain("Spent:")
 })
 
 // Stream input answers its own requests, so the positional `/cost` of a stream run is the stream's first input and the run
@@ -259,7 +294,7 @@ test("stream input leaves /cost to the stream and does not ask the route", async
   const run = await capture({ format: "stream-json", envelope: true, stream: true })
   unexpected.length = 0
   expect(asked).toEqual([])
-  expect(run.stdout).not.toContain("Total cost:")
+  expect(run.stdout).not.toContain("Spent:")
   expect(run.stdout).not.toContain('"type":"cost"')
 })
 

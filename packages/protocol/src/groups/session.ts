@@ -638,7 +638,7 @@ export const makeSessionGroup = <
             identifier: "session.contextUsage",
             summary: "Get context usage",
             description:
-              "Estimate what the session's next request would carry, by category: the system prompt, tools, MCP tools, custom agents, instruction files, skills and messages, with the reserve and free space of the model's window. The total is the newest response's measured prompt when there is one. Only a main session is answered (a child gets MainSessionOnlyError), and only in a trusted folder. It is read only: nothing is recorded and no model is asked.",
+              "Estimate what the session's next request would carry, by category: the base prompt, tools outside MCP, MCP tool schemas, agent definitions, instructions, skill listings and the conversation, with the model window's reserve (for auto-compaction or as compaction headroom) and the room left. The total is the newest response's measured prompt when there is one. Only a main session is answered (a child gets MainSessionOnlyError), and only in a trusted folder. It is read only: nothing is recorded and no model is asked.",
           }),
         ),
     )

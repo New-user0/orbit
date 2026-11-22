@@ -37,7 +37,7 @@ const labels: Record<RewindOption | "never", string> = {
   both: "Code and conversation",
   conversation: "Conversation only",
   code: "Code only",
-  never: "Never mind",
+  never: "Do nothing",
 }
 
 /** The refusal when the chosen prompt left the conversation (another client's revert took it back) before acting. */
@@ -62,7 +62,7 @@ export function DialogRewind(props: {
   dryRun: (messageID: string) => Promise<RewindDryRun | undefined>
   act: (option: RewindOption, messageID: string) => Promise<void>
   onClose: () => void
-  /** Opens on step 2 for this prompt; Esc and Never mind then close instead of going back to the list. */
+  /** Opens on step 2 for this prompt; Esc and Do nothing then close instead of going back to the list. */
   preselected?: string
   /** Whether the client reaches its server; a drawn row whose stats failed asks again when it comes back. */
   connected?: boolean
@@ -384,7 +384,7 @@ export function DialogRewind(props: {
         ? names[0]
         : names.length === 2
           ? `${names[0]} and ${names[1]}`
-          : `${names[0]} and ${names.length - 1} other files`
+          : `${names.length} files, ${names[0]} among them`
     return `Files go back: +${code.insertions} -${code.deletions} in ${label}.`
   }
 
@@ -445,21 +445,21 @@ export function DialogRewind(props: {
               </Show>
               <Show when={state.code}>
                 <text fg={theme.text.feedback.warning.base}>
-                  ⚠ Only edits made by Orbit's file tools go back; shell commands and edits made outside Orbit stay.
+                  ⚠ Restores only what Orbit's edit tools changed; changes from shell commands or outside Orbit stay.
                 </text>
               </Show>
             </box>
           )}
         </Match>
         <Match when={prompts().length === 0}>
-          <text fg={theme.text.muted}>Nothing to rewind yet.</text>
+          <text fg={theme.text.muted}>This conversation has no prompt to return to.</text>
         </Match>
         <Match when={props.preselected}>
           <text fg={theme.text.muted}>Checking files…</text>
         </Match>
         <Match when={state.step === "list"}>
           <box flexDirection="column" gap={1}>
-            <text fg={theme.text.base}>Rewind the code, the conversation or both to just before…</text>
+            <text fg={theme.text.base}>Roll back to just before which prompt?</text>
             <box flexDirection="column">
               <For each={rows()}>{(index) => <Row index={index} />}</For>
             </box>

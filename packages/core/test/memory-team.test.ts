@@ -504,7 +504,10 @@ describe("an Edit in team memory", () => {
       )
       for (const error of [out.validated, out.executed]) {
         expect(error).toBeInstanceOf(ToolFailure)
-        expect(error.message).toContain("GitHub PAT")
+        // The whole message: what was refused, why, the ban, and the retry without the secret.
+        expect(error.message).toBe(
+          "Nothing was saved: team memory is open to everyone who has this repository, and this content looks like it holds a credential (GitHub PAT). That folder must never hold a secret: retry the write once you have deleted the credential from the content.",
+        )
         expect(error.message).not.toContain(pat)
       }
       expect(Exit.isSuccess(out.clean)).toBe(true)

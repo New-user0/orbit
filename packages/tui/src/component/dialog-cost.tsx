@@ -6,14 +6,13 @@ import { useClient } from "../context/client"
 import { useData } from "../context/data"
 import { useLog } from "../context/log"
 import { useTheme } from "../context/theme"
-import { costSummary, NO_USAGE, price, type CostSummary } from "../util/cost"
+import { costSummary, lineChanges, NO_USAGE, price, usageLine, type CostSummary } from "../util/cost"
 import { errorMessage } from "../util/error"
 import { Locale } from "../util/locale"
 
 const TIMEOUT = 30_000
 
 const span = (value: number | undefined) => (value === undefined ? "-" : Locale.duration(value))
-const lines = (count: number) => `${count} ${count === 1 ? "line" : "lines"}`
 
 type Answer = { readonly summary: CostSummary } | { readonly error: string }
 
@@ -87,33 +86,28 @@ export function CostView(props: { readonly summary?: CostSummary; readonly error
         {(value) => (
           <>
             <box>
-              <Row label="Total cost" value={price(value().cost, value().partial)} />
+              <Row label="Spent" value={price(value().cost, value().partial)} />
               <Show when={value().subagents !== undefined}>
                 <Row label="Subagents" value={`${price(value().subagents)} (included above)`} />
               </Show>
-              <Row label="API time" value={span(value().api)} />
-              <Row label="Wall time" value={span(value().wall)} />
+              <Row label="Model time" value={span(value().api)} />
+              <Row label="Elapsed" value={span(value().wall)} />
               <Show when={value().lines}>
-                {(changed) => (
-                  <Row
-                    label="Code changes"
-                    value={`${lines(changed().added)} added, ${lines(changed().removed)} removed`}
-                  />
-                )}
+                {(changed) => <Row label="Lines changed" value={lineChanges(changed())} />}
               </Show>
             </box>
             <Show
               when={value().models.length > 0}
               fallback={
                 <box>
-                  <text fg={theme.text.base}>By model</text>
-                  <text fg={theme.text.muted}>{`  Usage: ${NO_USAGE}`}</text>
+                  <text fg={theme.text.base}>Per model</text>
+                  <text fg={theme.text.muted}>{`  Tokens: ${NO_USAGE}`}</text>
                   <Other value={value().other} />
                 </box>
               }
             >
               <box>
-                <text fg={theme.text.base}>By model</text>
+                <text fg={theme.text.base}>Per model</text>
                 <For each={value().models}>
                   {(row) => (
                     <box>
@@ -124,7 +118,7 @@ export function CostView(props: { readonly summary?: CostSummary; readonly error
                         <text fg={theme.text.muted}>{`· ${plain(row.providerID)}`}</text>
                         <text fg={theme.text.muted}>{price(row.cost, row.unpriced > 0)}</text>
                       </box>
-                      <text fg={theme.text.muted}>{`  ${tokens(row.tokens)}`}</text>
+                      <text fg={theme.text.muted}>{`  ${usageLine(row.tokens)}`}</text>
                     </box>
                   )}
                 </For>
@@ -136,16 +130,6 @@ export function CostView(props: { readonly summary?: CostSummary; readonly error
       </Show>
     </box>
   )
-}
-
-function tokens(value: CostSummary["models"][number]["tokens"]) {
-  return [
-    `${Locale.number(value.input)} input`,
-    `${Locale.number(value.output)} output`,
-    `${Locale.number(value.cache.read)} cache read`,
-    `${Locale.number(value.cache.write)} cache write`,
-    ...(value.reasoning > 0 ? [`${Locale.number(value.reasoning)} reasoning`] : []),
-  ].join(", ")
 }
 
 function Other(props: { readonly value: number | undefined }) {

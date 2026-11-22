@@ -748,7 +748,7 @@ export type SessionAssistLabelOutput =
   | { readonly label: string }
   | {
       readonly label: null
-      readonly reason: "subagent" | "not_found" | "unsettled" | "aborted" | "empty" | "unavailable"
+      readonly reason: "subagent" | "not_found" | "unsettled" | "interrupted" | "no_text" | "unavailable"
     }
 export type SessionAssistLabelOperation<E = never> = (
   input: SessionAssistLabelInput,
@@ -761,28 +761,28 @@ export type SessionAssistSuggestionOutput =
       readonly suggestion: null
       readonly reason:
         | "subagent"
-        | "early_conversation"
-        | "last_response_error"
-        | "cache_cold"
-        | "pending_permission"
-        | "elicitation_active"
-        | "plan_mode"
+        | "too_early"
+        | "reply_failed"
+        | "cache_expired"
+        | "awaiting_approval"
+        | "awaiting_form"
+        | "planning"
         | "busy"
-        | "aborted"
+        | "cancelled"
         | "unavailable"
-        | "empty"
-        | "done"
-        | "meta_text"
-        | "meta_wrapped"
-        | "error_message"
-        | "prefixed_label"
-        | "too_few_words"
-        | "too_many_words"
-        | "too_long"
-        | "multiple_sentences"
-        | "has_formatting"
-        | "evaluative"
-        | "assistant_voice"
+        | "no_text"
+        | "just_done"
+        | "self_reference"
+        | "bracketed"
+        | "error_text"
+        | "labelled"
+        | "one_word"
+        | "over_twelve_words"
+        | "too_many_characters"
+        | "several_sentences"
+        | "markup"
+        | "verdict"
+        | "assistant_phrasing"
     }
 export type SessionAssistSuggestionOperation<E = never> = (
   input: SessionAssistSuggestionInput,

@@ -160,7 +160,7 @@ export const analyze = Effect.fn("SessionContextUsage.analyze")(function* (sessi
             skills.push({ id: skill.id, tokens: Token.estimate(SkillInstructions.line(skill)) }),
           )
         } else if (entry.key === AGENTS) {
-          // Only the lines of the agents that someone defined are the Custom agents row; the lead, the agents Orbit
+          // Only the lines of the agents that someone defined are the Agent definitions row; the lead, the agents Orbit
           // ships and the closing sentence belong to the Agent tool's own guidance.
           let cursor = 0
           const lines = Option.getOrElse(Schema.decodeUnknownOption(Agents)(value), () => []).flatMap((agent) => {
@@ -187,7 +187,7 @@ export const analyze = Effect.fn("SessionContextUsage.analyze")(function* (sessi
     })
 
     // Tools: an MCP tool is one the cached discovery lists under its registry name; every other advertised tool,
-    // Execute included, is a System tool. The deferred inventory is listed and counted in no sum.
+    // Execute included, is a tool outside MCP. The deferred inventory is listed and counted in no sum.
     const discovered = yield* mcp.tools()
     const direct = new Map(discovered.map((found) => [McpTool.name(found.server, found.name), found] as const))
     const systemTools: Array<{ name: string; tokens: number }> = []
@@ -266,7 +266,7 @@ export const analyze = Effect.fn("SessionContextUsage.analyze")(function* (sessi
       measured: usage !== undefined,
       auto: settings.auto,
       ...(settings.thresholds === undefined ? {} : { threshold: settings.thresholds.threshold }),
-      // A row with nothing in it is left out, except the reserve and the free space, which are always there with a window.
+      // A row with nothing in it is left out, except the reserve and the room left, which are always there with a window.
       categories: rows.filter(
         (row) => row.tokens > 0 || row.kind === "auto-buffer" || row.kind === "compact-buffer" || row.kind === "free",
       ),
