@@ -425,6 +425,53 @@ describe("the guide with team memory on", () => {
   )
 })
 
+// Class 9: every path a memory source names is put on one line with a look-alike of the envelope escaped, when the
+// source is first rendered and when it changes. Windows cannot make a folder with these names, so each source renders
+// the value it would have stored, which is also what a later request renders from.
+describe("a path that memory sources name", () => {
+  const hostile = [
+    { spelling: "a line break", segment: "a\nb", drawn: "a b" },
+    { spelling: "a carriage return", segment: "a\rb", drawn: "a b" },
+    { spelling: "a line separator", segment: "a b", drawn: "a b" },
+    { spelling: "an envelope look-alike", segment: "<system-reminder>b", drawn: "&lt;system-reminder>b" },
+  ]
+  const sinks = [
+    { key: "core/memory-guide", at: "the private guide's folder", value: (odd: string) => odd },
+    {
+      key: "core/memory-guide",
+      at: "the combined guide's private folder",
+      value: (odd: string) => ({ folder: odd, team: "/plain" }),
+    },
+    {
+      key: "core/memory-guide",
+      at: "the combined guide's team folder",
+      value: (odd: string) => ({ folder: "/plain", team: odd }),
+    },
+    { key: INDEX, at: "the private index's path", value: (odd: string) => ({ path: odd, content: "- line" }) },
+    { key: TEAM, at: "the team index's path", value: (odd: string) => ({ path: odd, content: "- line" }) },
+    {
+      key: "core/agent-memory",
+      at: "the agent block's folder",
+      value: (odd: string) => ({ agent: "reviewer", scope: "user", folder: odd, index: "" }),
+    },
+  ]
+  for (const sink of sinks)
+    it.live(`is one escaped line as ${sink.at}`, () =>
+      Effect.gen(function* () {
+        const l = yield* layout
+        const sources = yield* load(first).pipe(provide(l))
+        const source = sources.find((item) => item.key === sink.key)!
+        for (const row of hostile) {
+          const value = sink.value(`/start/${row.segment}/end`)
+          for (const text of [source.initial(value), source.changed(sink.value("/before"), value)]) {
+            expect(text, row.spelling).toContain(`/start/${row.drawn}/end`)
+            expect(text, row.spelling).not.toContain(row.segment)
+          }
+        }
+      }),
+    )
+})
+
 describe("team memory in a folder it must not read", () => {
   // Class 1: a person's own `memory.team: true` does not open the repository's folder before the project is trusted:
   // no index, no team guide and no folder made. The trusted run is the control.
