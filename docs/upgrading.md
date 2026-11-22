@@ -2202,8 +2202,9 @@ terminal UI from before this release; those keep the full dialog. To keep every 
 `"diffs": { "tool": "terminal" }` in `cli.json`, or choose Diff tool in `/config`, which lists it while an editor is
 linked.
 
-The approval of an Edit or Write whose file is reached through a link now says where the link leads, and says when
-that is outside the session's folder, in the full dialog and in the short prompt.
+The approval of an Edit or Write whose file is reached through a link now says where the link leads, and whether that
+is inside or outside the project, in the full dialog and in the short prompt (see "Every approval of a file change says
+where a link leads" under Permissions).
 
 **Affects:** terminal UI users running in a VS Code window with the Orbit extension, and scripts that read Edit and
 Write permission requests (a file entry may now carry `link`).
@@ -2700,6 +2701,33 @@ it was.
 **Affects:** clients, SDK callers and plugins that answer approvals; listeners of `permission.replied`; ACP clients; the terminal UI and Mini.
 
 **What to do:** Nothing. Send `content` only for a request marked `revisable`, with a `once` decision.
+
+### Every approval of a file change says where a link leads
+
+A file change whose path goes through a link now warns in every client that asks about it. Before, only the terminal UI
+warned, for an Edit or Write of one file, and the full dialog dropped the warning while Always allow was focused.
+
+- **Requests.** A Patch or NotebookEdit request carries `link` (`{ "place", "outside" }`) on each linked file entry, as
+  Edit and Write requests do, and a move also carries `fromLink` when the file it moves from is behind a link.
+- **Words.** The warning begins "Link ends outside the project" or "Link ends inside the project" and then names where
+  the link leads. Several are counted, for example "2 linked paths, 1 outside the project", and named one by one with the
+  ones that end outside first. These words replace the terminal UI's earlier ones.
+- **Terminal UI and Mini.** The warning stays while Always allow is chosen and while you type why you reject, and a
+  request of several files warns too.
+- **ACP.** The title of a permission request begins with the warning, for example
+  "Link ends outside the project: /srv/shared/a.txt", and the content names each link before the diffs.
+- **VS Code.** The chat's card lists the warnings above the diff, and the title of the chat's diff tab says
+  "behind a link", for example "Orbit: a.txt behind a link (k3x9qa)".
+- **File names.** A line break, control character or invisible formatting character in a file's name is written out
+  (`\n`, `\x1b`) in the title and paths of a file change's approval, and in the file an ACP permission title names.
+
+The warning changes no decision, rule or saved approval.
+
+**Affects:** people who approve file changes in a project with links; scripts and SDK callers that read Patch and
+NotebookEdit permission requests; ACP clients or scripts that match permission titles.
+
+**What to do:** Nothing, unless something matches an ACP permission title from its start: allow for the warning before
+it, or match on the call's `locations`.
 
 ## Plugins and SDK
 

@@ -2485,16 +2485,33 @@ runs" is a permission.
   `content` field, and `PluginHost` refuses a reply that carries one with `Permission.RevisionError`, because the
   promise adapter decodes a plugin's reply against the route's payload, which has the field (classes 7, 12 and 13;
   `packages/sdk/test/permission-revise.test.ts`, whose `@ts-expect-error` also pins the type).
-- An Edit or Write reached through a link says so on its request: the file entry carries `link: { place, outside }`,
-  where `place` is where the link really leads (`FileAccess.realPlace`) and `outside` says whether that is outside the
-  Location's folder and the project's folder, both by real path (`FileAccess.link`, `FSUtil.contains` on real paths, so a
-  sibling folder whose name starts with the project's is outside; class 4). A file below a project folder that is itself
-  reached through a system link names no link. The terminal UI draws its warning from this value alone, in the full
-  dialog and in the compact prompt of an editor review, with the place through the path formatter and `plain`, and never
-  from the tool's input (classes 8 and 9). Proof: `packages/core/test/edit-link.test.ts` (link inside, link and junction
-  out, a sibling with the project's name as its prefix, no link; for Edit and Write), the link rows of
-  `approval-matrix.json` and the T row "the link warning comes from the request" (a decoy link in the tool's input draws
-  nothing). Patch, NotebookEdit, Mini, ACP and the VS Code card do not show it yet.
+- A file change reached through a link says so on its request. Edit, Write, NotebookEdit and Patch (add, update, delete,
+  and both ends of a move) put `link: { place, outside }` on the file entry of each linked `place`, and a move puts
+  `fromLink` of the same shape on the entry whose `from` is linked. `place` is where the link really leads
+  (`FileAccess.realPlace`) and `outside` says whether that is outside the Location's folder and the project's folder, both
+  by real path (`FileAccess.link`, `FSUtil.contains` on real paths, so a sibling folder whose name starts with the
+  project's is outside; class 4). It is worked out from the targets the tool writes, never from another resolution
+  (class 3), and changes no decision, saved rule or grant. A file below a project folder that is itself reached through a
+  system link names no link. Proof: `packages/core/test/edit-link.test.ts` (each tool by each spelling, the edges, several
+  files, what "always" saves) and the link rows of `packages/core/test/approval-values.test.ts`.
+- Every client that shows that approval warns from `PermissionView.links` and the one set of words beside it, never from
+  the tool's input and never by resolving a path, so a share is named and not contacted for it (classes 4, 6 and 8). A
+  request without a link, or from an older server, is drawn without a warning; a malformed link costs only itself, and
+  where two entries disagree about one end, outside wins (classes 3 and 7; `packages/schema/test/permission-view.test.ts`).
+  One fixed line stands above what the request can make tall, and where there is room each linked end is named, the ones
+  that end outside first:
+  - the terminal UI's full dialog (the permission, always and reject stages, and fullscreen) and the compact prompt of an
+    editor review, and Mini's three stages in colour and mono (`packages/tui/test/approval-link.test.tsx`,
+    `approval-prompt.test.tsx`, `ide-diff.test.tsx`);
+  - ACP's permission title and content (`packages/cli/test/acp/approval-link.test.ts`);
+  - the VS Code chat's card, and the title of its review or preview tab, which can answer while the card is hidden
+    (`packages/vscode/test/approval-link.test.ts`, `webview-trust.test.ts`, `diff-review.test.ts`). A tab of the terminal
+    UI's bridge has no warning in its title: the compact prompt beside it has it.
+  stream-json and the SDK pass the request whole, link included (`packages/cli/test/run/stream.test.ts`,
+  `edit-link.test.ts`). Each warning writes its paths out with `plain`. So does the name of a changed file in the
+  approval's title and `Path:` lines in the terminal UI, Mini and the VS Code card, and the file an ACP permission title
+  names, so a line break in a name starts no line that reads as a warning (class 9; the "line break" rows of the three
+  `approval-link` files).
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob
@@ -2538,8 +2555,10 @@ runs" is a permission.
   any decoy: `packages/tui/test/approval-matrix.test.tsx` (the terminal UI's presentation, and Mini's drawn as the real
   component), `packages/cli/test/acp/approval-matrix.test.ts` (ACP over the wire, approval and later updates),
   `packages/vscode/test/approval-matrix.test.ts` (the item and card VS Code draws) and, over a real `orb acp` process in
-  an untrusted folder with a trusted control, `permission-files.subprocess.test.ts`. A new tool, client or path form
-  adds its row to these.
+  an untrusted folder with a trusted control, `permission-files.subprocess.test.ts`. Their link rows also check each
+  client's warning, and the stages, sizes and malformed links that the matrix cannot hold are in
+  `packages/tui/test/approval-link.test.tsx`, `packages/cli/test/acp/approval-link.test.ts` and
+  `packages/vscode/test/approval-link.test.ts`. A new tool, client or path form adds its row to these.
 
 **Review questions:**
 
