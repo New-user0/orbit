@@ -193,16 +193,16 @@ test("each piece of advice is Orbit's own wording", () => {
     ...detail({ window: 100_000, files: [1_000, 2_000, 1_500, 500] }),
   ]
   expect(advice).toEqual([
-    "/compact runs it at a moment you pick; left alone, Orbit compacts the conversation by itself shortly.",
+    "/compact summarizes the conversation at a moment you pick; left alone, Orbit will do so by itself shortly.",
     "Turning automatic compaction back on, or running /compact yourself, keeps the window from filling up, since with the setting off nothing summarizes the conversation for you.",
     "A full window will not be summarized for you, so run /compact before it fills.",
     "Commands that print a lot fill the conversation. Cut their output down in the command itself, for example to the first or last lines or to the lines that match.",
-    "Read a long file in pieces by giving an offset and a limit.",
+    "A long file seldom has to be read whole: give Read an offset and a limit to fetch just the lines in question.",
     "Narrow what each search covers: a more exact pattern, a single folder or one file type.",
     "Whole web pages cost many tokens. Name the part of the page you are after in the request.",
     "Call Search with tighter inputs, or have each call return less.",
-    "Read a long file in pieces by giving an offset and a limit.",
-    "Most of it sits in /repo/file-1.md (2.0K), /repo/file-2.md (1.5K), /repo/file-0.md (1.0K), which /memory opens for trimming.",
+    "A long file seldom has to be read whole: give Read an offset and a limit to fetch just the lines in question.",
+    "/memory opens instruction files for trimming; the biggest here are /repo/file-1.md (2.0K), /repo/file-2.md (1.5K), /repo/file-0.md (1.0K).",
   ])
   // The phrasings that the earlier rewrites still shared with the reference's sentences stay out.
   for (const text of advice)

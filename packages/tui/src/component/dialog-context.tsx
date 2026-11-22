@@ -88,7 +88,7 @@ export function DialogContext(props: { readonly sessionID: string; readonly time
   return (
     <box paddingLeft={2} paddingRight={2} paddingBottom={1} gap={1}>
       <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
-        Context usage
+        Context window
       </text>
       <Show when={answer()} fallback={<text fg={theme.text.muted}>Measuring the context…</text>}>
         {(value) => {

@@ -653,7 +653,7 @@ function toLLMMessage(
               ReminderText.neutralize(message.summary),
               ...(message.reason === "auto"
                 ? [
-                    "Your next message should already be work on the interrupted task: no question to the person, and no word about the summary or the restart.",
+                    "Your next message must already be work on the interrupted task: no question to the person, and no word about the summary or the restart.",
                   ]
                 : []),
             ].join("\n\n"),

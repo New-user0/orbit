@@ -820,7 +820,7 @@ describe("rehydration after a compaction", () => {
       expect(unknown.text).toContain("TINY-SKILL")
       // The skills block says that what the skills asked for still holds.
       expect(unknown.text).toContain(
-        "<system-reminder>\nThe guidance of each skill below holds for the rest of this session; these skills were loaded before the summary.\n</system-reminder>",
+        "<system-reminder>\nThe guidance of each skill below holds for the rest of this session, so you must go on obeying it; these skills were loaded before the summary.\n</system-reminder>",
       )
 
       // About 6,000 tokens of room: the second file does not fit, the smaller third still does, and the skill gets

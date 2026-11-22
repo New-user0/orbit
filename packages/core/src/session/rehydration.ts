@@ -63,7 +63,7 @@ export const SKILLS_TOKENS = 25_000
 const FILE_TEXT =
   "Before the conversation was summarized, the Read tool was called on the file named below. What follows is what Read returns for it now."
 const SKILLS_TEXT =
-  "The guidance of each skill below holds for the rest of this session; these skills were loaded before the summary."
+  "The guidance of each skill below holds for the rest of this session, so you must go on obeying it; these skills were loaded before the summary."
 
 export interface Fixed {
   /** The agent notes, then the plan, each a rendered section. */

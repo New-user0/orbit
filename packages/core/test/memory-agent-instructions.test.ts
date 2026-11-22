@@ -219,7 +219,7 @@ describe("the agent memory block", () => {
           expect(text.toLowerCase()).not.toContain("secret")
           // The agent block shares the private guide's rule: a left-out item the person still wants is a question to them.
           expect(text).toContain(
-            "ask them which part a later conversation should know (usually a lesson rather than a record), and save only the part they name.",
+            "An item on this list is never saved itself, however much of it the person wants kept. Only what was unexpected or far from obvious in it, usually a lesson rather than a record, may take its place. The person knows which part that is, so ask them for it, and save nothing else of the item.",
           )
           expect(text.indexOf(INDEX_HEADING)).toBeLessThan(text.indexOf(`INDEX-LINE-${row.scope}`))
           return text.slice(text.indexOf("## What memory is not for"), text.indexOf(INDEX_HEADING))

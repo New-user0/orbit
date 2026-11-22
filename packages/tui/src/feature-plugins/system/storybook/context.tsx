@@ -185,6 +185,6 @@ function ContextStory(props: { context: Plugin.Context }) {
 
 export const contextStory: Story = {
   id: "context",
-  title: "Context usage dialog",
+  title: "Context window dialog",
   render: (context) => <ContextStory context={context} />,
 }

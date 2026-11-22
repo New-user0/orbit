@@ -6,7 +6,8 @@ import { json } from "../fixture/tui-client"
 import { renderLocal, session } from "../fixture/local"
 
 // clients-ux-23: `/context` draws the server's analysis of the session's context window as the reference draws its own:
-// a square grid beside a legend, the lists of MCP tools, custom agents, instruction files and skills, and the suggestions.
+// a square grid beside a legend, the lists of MCP tool schemas, agent definitions, instructions and skill listings, and
+// the ways to free room.
 // The real dialog, the real client and a fetch handler that answers the route; what is asserted is the drawn frame.
 
 type Info = SessionContextUsage.Info
@@ -148,8 +149,8 @@ test("a window of 1M or more draws 20 by 10, and 5 by 10 below 80 columns", asyn
 })
 
 // TD3: squares in category order; every counted category gets one at least; a last square filled below 0.7 is the lighter
-// glyph; free space fills the middle and the reserve takes the end.
-test("each counted category gets at least one square in order, a partial last square uses the lighter glyph below 0.7, free space fills the middle and the reserve sits at the end", async () => {
+// glyph; the room left fills the middle and the reserve takes the end.
+test("each counted category gets at least one square in order, a partial last square uses the lighter glyph below 0.7, the room left fills the middle and the reserve sits at the end", async () => {
   const result = await open({ answer: answering(fixture()), done: drawn })
   await using _ = result.setup
 
@@ -185,8 +186,8 @@ test("deferred rows are left out of the legend and take no square", async () => 
   )
 })
 
-// TD5: the legend, and the compact buffer listed as a category when automatic compaction is off.
-test("the legend shows the model, total of window and percent, each category to one decimal, free space and the autocompact buffer, and the compact buffer as a category when auto compaction is off", async () => {
+// TD5: the legend, and the compaction headroom listed as a category when automatic compaction is off.
+test("the legend shows the model, total of window and percent, each category to one decimal, room left and the auto-compaction reserve, and the compaction headroom as a category when auto compaction is off", async () => {
   const auto = await open({ answer: answering(fixture()), done: drawn })
   await using _ = auto.setup
   const lines = auto.frame.split("\n")
@@ -224,7 +225,7 @@ test("the legend shows the model, total of window and percent, each category to 
   expect(compact).toBeGreaterThanOrEqual(0)
   expect(free).toBeGreaterThan(compact)
   expect(manual.frame).not.toContain("Auto-compaction reserve")
-  // Drawn like a category: full squares at the end, after free space.
+  // Drawn like a category: full squares at the end, after the room left.
   expect(grid(manual.frame).join("")).toBe(`${FULL}${FULL}${PARTIAL}` + FULL.repeat(5) + FREE.repeat(89) + FULL.repeat(3))
 })
 
@@ -257,7 +258,7 @@ test("the legend labels the MCP, agent, instruction and skill categories", async
 })
 
 // TD6, D5 and D6: the sections the reference shows, and not the ones it keeps for its report.
-test("MCP tools (loaded and available), custom agents by scope, instruction files and skills are listed, and system tools, prompt sections and the message breakdown are not", async () => {
+test("MCP tool schemas (loaded now and on demand), agent definitions by scope, instructions and skill listings are listed, and built-in tools, prompt parts and the conversation by kind are not", async () => {
   const result = await open({
     answer: answering(
       fixture({
@@ -380,10 +381,51 @@ test("the instruction files suggestion names each file by its path in the sessio
     done: (frame) => frame.includes("Ways to free room"),
   })
   await using _ = result.setup
-  const detail = result.frame.split("\n").find((line) => line.includes("Most of it sits in"))
+  // The advice wraps at the dialog's width, so the frame's blanks are folded.
+  const folded = result.frame.replace(/\s+/g, " ")
 
-  expect(detail).toContain("Most of it sits in ORBIT.md (4.0K)")
-  expect(detail).not.toContain(directory)
+  expect(folded).toContain("the biggest here are ORBIT.md (4.0K)")
+  expect(folded.slice(folded.indexOf("Ways to free room"))).not.toContain(directory)
+})
+
+// TD7c: three of twelve files of one size are a quarter of them, so the advice names the biggest without calling them
+// most of it; near capacity, the advice says what /compact does.
+test.each([100, 70])("near capacity with many files of one size the advice is true and readable at %i columns", async (width) => {
+  const directory = session(ROOT).location.directory
+  const files = Array.from({ length: 12 }, (_, index) => ({
+    path: `${directory}/rules/r${index}.md`,
+    type: "file",
+    tokens: 1_000,
+  }))
+  const result = await open({
+    width,
+    answer: answering(fixture({ window: 200_000, percentage: 85, total: 170_000, files })),
+    done: (frame) => frame.includes("Ways to free room"),
+  })
+  await using _ = result.setup
+  const folded = result.frame.replace(/\s+/g, " ")
+  const advice = folded.slice(folded.indexOf("Ways to free room"))
+
+  expect(advice).toContain(
+    "/compact summarizes the conversation at a moment you pick; left alone, Orbit will do so by itself shortly.",
+  )
+  // A figure can be broken at the line's end, so the list is compared without blanks.
+  expect(advice.replaceAll("\\", "/").replaceAll(" ", "")).toContain(
+    "/memory opens instruction files for trimming; the biggest here are rules/r0.md (1.0K), rules/r1.md (1.0K), rules/r2.md (1.0K).".replaceAll(
+      " ",
+      "",
+    ),
+  )
+  expect(advice).not.toMatch(/most of/i)
+})
+
+// The dialog carries the title of the report that `orb run "/context"` prints, at both widths and before any answer.
+test.each([100, 70])("the dialog's first line is its title, Context window, at %i columns", async (width) => {
+  const result = await open({ width, answer: answering(fixture()), done: drawn })
+  await using _ = result.setup
+
+  expect(result.frame.split("\n").find((line) => line.trim() !== "")?.trim()).toBe("Context window")
+  expect(result.frame).not.toContain("Context usage")
 })
 
 // TD8, D1 and D10: the figure is the payload's, not one worked out from the messages the store holds.
@@ -446,7 +488,7 @@ test("every string from the payload is escaped in the frame", async () => {
 })
 
 // TD10, D9: with no window there is nothing to be a share of.
-test("an unknown window shows rows and the total without a grid, percentages, reserve, free space or suggestions", async () => {
+test("an unknown window shows rows and the total without a grid, percentages, reserve, room left or suggestions", async () => {
   const result = await open({
     answer: answering(
       fixture({

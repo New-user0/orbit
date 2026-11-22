@@ -64,7 +64,7 @@ const TEXT =
   "Since you last worked with the file named below, something outside this conversation has edited it: the person, perhaps, or a formatter or another tool. " +
   "Its changed lines follow, with the line numbers the Read tool would give them. " +
   "Treat the edit as deliberate: build on it from here on, and leave it in place unless the person asks you to revert it. " +
-  "There is no need to bring it up with the person, who already knows."
+  "The edit is no news to the person, so you must not report it to them."
 
 export interface Services {
   readonly ledger: FileLedger.Interface

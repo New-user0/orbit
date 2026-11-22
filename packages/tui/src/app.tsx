@@ -998,7 +998,7 @@ function App() {
       },
       {
         name: "session.context",
-        title: "Context usage",
+        title: "Context window",
         category: "Session",
         slash: { name: "context" },
         enabled: () => route.data.type === "session",

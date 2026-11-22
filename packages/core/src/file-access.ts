@@ -552,7 +552,7 @@ const layer = Layer.effect(
       )
       if (!inTeam) return
       return yield* new ToolFailure({
-        message: `Nothing was saved: team memory is open to everyone who has this repository, and this content looks like it holds a credential (${found.map((match) => match.label).join(", ")}). The same content without it can be written.`,
+        message: `Nothing was saved: team memory is open to everyone who has this repository, and this content looks like it holds a credential (${found.map((match) => match.label).join(", ")}). That folder must never hold a secret: retry the write once you have deleted the credential from the content.`,
       })
     })
 

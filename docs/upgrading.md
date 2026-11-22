@@ -5306,8 +5306,12 @@ the model reads it after the summary. Before, the model saw only the summary.
 
 ## The wording added in this release was written again, and some labels and reason names changed
 
-The texts this release added were rewritten in Orbit's own sentences. What each one asks of the model, and what each
-screen shows, is unchanged; only the wording, some names and one line format moved.
+The texts this release added were rewritten in Orbit's own sentences. The prompts keep the rules of the wording they
+replace: among them, the handoff still describes the work in progress, the memory guide still bans secrets from team
+memory whoever asks and still wants a short index, and a project's compaction instructions are followed without outranking
+the prompt's own sections (`session-compaction.test.ts`, `memory-instructions.test.ts`,
+`memory-team-instructions.test.ts`). The screens show the same figures under new wording and names, and the usage line of
+`/cost` has a new format.
 
 - **Model-facing text.** The compaction prompt and its closing line (the nine handoff sections are now Goal, Technical
   ground, Code touched, Errors and corrections, Reasoning so far, The person's messages, Still to do, Where things stand
@@ -5333,12 +5337,14 @@ screen shows, is unchanged; only the wording, some names and one line format mov
   listings, Conversation, Auto-compaction reserve, Compaction headroom and Room left, and a tool loaded on demand is
   marked `(on demand)`. The report opens with `## Context window` and `**In use:**`, and its tables are Breakdown, MCP
   tool schemas, Built-in tools, Base prompt parts, Agent definitions, Instructions, Skill listings, Conversation by kind,
-  Heaviest tools and Heaviest attachments. The dialog's suggestions are headed "Ways to free room"
+  Heaviest tools and Heaviest attachments. The dialog and its entry in the command palette are titled Context window,
+  as the report is, and the dialog's suggestions are headed "Ways to free room"
   (`packages/cli/test/run/context-report.test.ts`, `packages/tui/test/component/dialog-context.test.tsx`).
 - **`/cost`.** The rows are Spent, Subagents, Model time, Elapsed and Lines changed (`+12 / -3 lines`), then Per model,
   and each model's tokens read `in 1.2K · out 300 · from cache 500 · to cache 60`, in the dialog and in
   `orb run "/cost"` alike (`packages/cli/test/run/cost-run.test.ts`, `packages/tui/test/component/dialog-cost.test.tsx`).
-- **`/memory`.** The rows read Memory saving, Project instructions, Personal instructions, Browse saved memories, Browse
+- **`/memory`.** The first row reads Memory across sessions, and still turns the whole of memory on or off, reading as
+  well as saving. The others read Project instructions, Personal instructions, Browse saved memories, Browse
   team memories and Browse memories of agent `<name>`, and a file's line reads `File:` or `In the repository:`.
 - **Rewind.** The picker asks "Roll back to just before which prompt?", the confirm step's last option is `Do nothing`,
   and its warning reads "Restores what Orbit's edit tools changed; changes from shell commands or outside Orbit stay."

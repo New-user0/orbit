@@ -45,7 +45,7 @@ export function contextSuggestions(
       severity: "warning",
       title: `${percentage}% of the window is in use`,
       detail: info.auto
-        ? "/compact runs it at a moment you pick; left alone, Orbit compacts the conversation by itself shortly."
+        ? "/compact summarizes the conversation at a moment you pick; left alone, Orbit will do so by itself shortly."
         : "Turning automatic compaction back on, or running /compact yourself, keeps the window from filling up, since with the setting off nothing summarizes the conversation for you.",
     })
 
@@ -75,7 +75,7 @@ export function contextSuggestions(
     found.push({
       severity: "info",
       title: `What Read returned holds ${Locale.number(read.results)} tokens (${share(read.results)}%)`,
-      detail: "Read a long file in pieces by giving an offset and a limit.",
+      detail: "A long file seldom has to be read whole: give Read an offset and a limit to fetch just the lines in question.",
       savings: Math.floor(read.results * SAVINGS.read),
     })
 
@@ -88,7 +88,7 @@ export function contextSuggestions(
     found.push({
       severity: "info",
       title: `Instructions hold ${Locale.number(files)} tokens (${share(files)}%)`,
-      detail: `Most of it sits in ${largest.join(", ")}, which /memory opens for trimming.`,
+      detail: `/memory opens instruction files for trimming; the biggest here are ${largest.join(", ")}.`,
       savings: Math.floor(files * SAVINGS.files),
     })
   }
@@ -118,7 +118,7 @@ function toolAdvice(name: string) {
     return {
       severity: "info" as const,
       savings: SAVINGS.read,
-      detail: "Read a long file in pieces by giving an offset and a limit.",
+      detail: "A long file seldom has to be read whole: give Read an offset and a limit to fetch just the lines in question.",
     }
   if (name === "Grep")
     return {

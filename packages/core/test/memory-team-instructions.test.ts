@@ -335,9 +335,9 @@ describe("the guide with team memory on", () => {
         )
         expect(notToSave.toLowerCase()).toContain("team memory")
         expect(notToSave.toLowerCase()).toContain("secret")
-        // The combined guide keeps the question to the person about a left-out item they still want kept.
+        // The combined guide keeps the gate on a left-out item the person still wants kept.
         expect(notToSave).toContain(
-          "ask them which part a later conversation should know (usually a lesson rather than a record), and save only the part they name.",
+          "An item on this list is never saved itself, however much of it the person wants kept. Only what was unexpected or far from obvious in it, usually a lesson rather than a record, may take its place. The person knows which part that is, so ask them for it, and save nothing else of the item.",
         )
         const howToSave = on.text.slice(
           on.text.indexOf("## Writing a memory down"),
@@ -350,16 +350,36 @@ describe("the guide with team memory on", () => {
         expect(off.text).not.toContain("in the folder that its scope selects")
         // Each folder's index is cut at the same line, and reading memory covers both folders.
         expect(howToSave).toContain("nothing from line 201 onward in either is ever seen")
-        expect(on.text).toContain("Two signals send you to memory, and both folders count")
+        expect(on.text).toContain("Turn to memory, in both folders, on either of two signals")
         expect(on.text).toContain("refers back to work done before, by them or by anyone else on the project.")
         expect(howToSave).toContain(
           "A team memory gets its entry in the team folder's `MEMORY.md`, and a private memory in the private folder's. Both indexes ride along in every conversation",
         )
-        expect(off.text).toContain("nothing from line 201 onward is ever seen, so an entry placed late is an entry lost")
+        expect(off.text).toContain("nothing from line 201 onward is ever seen")
+        expect(howToSave).toContain("so each has to stay short. Prune and merge their entries as they grow")
         // Off, the guide is today's.
         expect(headings(off.text)).toEqual(HEADINGS)
         expect(scopeLines(off.text)).toEqual([])
       }),
+  )
+
+  // The secrets ban is no item of the list that the asked-anyway rule speaks about: it follows that rule and has no
+  // exception, so the part a person names can never be a secret saved to the committed folder.
+  it.live("bans secrets from team memory after the asked-anyway rule, with no exception", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const on = (yield* initial(l, teamOn)).text
+      const off = (yield* initial(l, [])).text
+      const section = on.slice(on.indexOf("## Leave these out"), on.indexOf("## Writing a memory down"))
+      const gate = section.indexOf("An item on this list is never saved itself")
+      const ban = section.indexOf(
+        "Secrets have no such way in: never put one in team memory, be it an API key, a token, a password or any other credential, not even when the person names it as the part to keep.",
+      )
+      expect(gate).toBeGreaterThan(0)
+      expect(ban).toBeGreaterThan(gate)
+      expect(section.slice(0, gate)).not.toMatch(/secret|password/i)
+      expect(off).not.toContain("Secrets have no such way in")
+    }),
   )
 
   // The combined guide whole, so that dropping, softening or reversing any one of its rules fails here.

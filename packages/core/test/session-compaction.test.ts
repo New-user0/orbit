@@ -186,12 +186,22 @@ test("compaction prompt asks for the files, the work in progress and the next st
   expect(prompt).toContain("3. Code touched")
   expect(prompt).toContain("8. Where things stand")
   expect(prompt).toContain("9. What comes next")
-  // The sample's placeholder for section 8 asks for the files and code in hand, as the section's rule does.
-  expect(prompt).toMatch(/8\. Where things stand:\s+\[The files and code in hand when the handoff was asked for\]/)
-  // Section 8 asks for the place the last exchange reached, with its paths and lines; sections 4 and 5, and the
-  // analysis notes, keep a correction the person made and the questions still open.
+  // The sample's placeholder for section 8 asks for the work in progress, with files and code only where it has any.
+  expect(prompt).toMatch(
+    /8\. Where things stand:\s+\[What you were in the middle of and how far it had got, with any paths and code it involves\]/,
+  )
+  // Section 8 is about the work in progress, whether or not it touches a file, read from both sides' last messages;
+  // sections 4 and 5, and the analysis notes, keep a correction the person made and the questions still open.
   expect(prompt).toContain(
-    "8. Where things stand: the file and the code that the last exchange was about, and what had just happened to them. A successor turns here first to find their place, so give each path and quote the lines themselves.",
+    "tell them exactly what you were in the middle of when the handoff was asked for and how far it had got. Take that from the closing messages, the person's as well as yours.",
+  )
+  expect(prompt).toContain(
+    "just as well an investigation, a test run, a design discussion or a question the person has yet to answer. Where files or code are part of it, give each path and quote the lines themselves.",
+  )
+  // Section 9 continues that work, and never takes up another request unasked.
+  expect(prompt).toContain("9. What comes next: a single step, which must continue the work of section 8")
+  expect(prompt).toContain(
+    "Never bring back a side request, or an older one already finished, until the person has agreed to it.",
   )
   expect(prompt).toContain(
     "4. Errors and corrections: each failure you met and the fix that ended it. Where the person pushed back, put their words here too: a correction that drops out of the handoff gets made a second time.",
@@ -217,6 +227,15 @@ test("compaction prompt prohibits tool calls at both ends", () => {
 // The whole request, closing reminder included, so that dropping, softening or reversing any one of its rules fails here.
 test("compaction prompt is pinned word for word", () => {
   expect(SessionCompaction.buildPrompt()).toBe(COMPACTION_TEXT)
+})
+
+test("compaction prompt has a project's own directions followed beside its sections, without precedence over them", () => {
+  const prompt = SessionCompaction.buildPrompt()
+
+  expect(prompt).toContain(
+    "Where a project has left such directions, write the handoff so that it honours them alongside the sections listed earlier.",
+  )
+  expect(prompt).not.toMatch(/precedence|override|outrank/i)
 })
 
 test("compaction prompt asks for names, choices and patterns copied exactly, and says why", () => {

@@ -370,17 +370,17 @@ describe("the memory guide source", () => {
       expect(yield* exists(l.memory)).toBe(true)
       expect(out.text).toContain("Orbit created it before this conversation began")
       // A request settles a memory both ways; a request to leave memory alone keeps it out; the present state outranks it.
-      expect(out.text).toContain("What they want kept is saved right then, and what they want gone is looked up")
-      expect(out.text).toContain("draw on none of it and do not bring it up")
+      expect(out.text).toContain("you must carry it out right then: write down what they want kept, and for what they want gone")
+      expect(out.text).toContain("must draw on none of it and must not bring it up")
       expect(out.text).toContain("act on the present state, then bring the note up to date or remove it")
       // The housekeeping and format rules the guide gives in its own words.
-      expect(out.text).toContain("Aim for one current note per point.")
+      expect(out.text).toContain("Never have two notes on one point.")
       expect(out.text).toContain("stays out, whoever proposes it")
-      // A person who still wants a left-out item kept is asked which part matters; the model does not pick it alone.
+      // A left-out item stays out when the person asks for it; they are asked only for the unexpected part, saved in its place.
       expect(out.text).toContain(
-        "ask them which part a later conversation should know (usually a lesson rather than a record), and save only the part they name.",
+        "An item on this list is never saved itself, however much of it the person wants kept. Only what was unexpected or far from obvious in it, usually a lesson rather than a record, may take its place. The person knows which part that is, so ask them for it, and save nothing else of the item.",
       )
-      expect(out.text).toContain("Its dates are absolute ones")
+      expect(out.text).toContain("Its dates must be absolute ones")
       expect(out.text).toContain('Two labelled lines come under it: "Reason:"')
       expect(out.text).toContain("Having to repeat a correction is exactly what this memory exists to prevent.")
       expect(out.text).toContain("- Use it: treat it as a standing rule for the kind of work it names.")
@@ -392,13 +392,20 @@ describe("the memory guide source", () => {
       expect(out.text).toContain(
         "Before you write, look for a memory on the same point and change it instead of adding another;",
       )
-      expect(out.text).toContain("Name files after their topic, never after a date")
-      expect(out.text).toContain("when a file's content changes, make its front matter describe the new content.")
+      expect(out.text).toContain(
+        "Let the topic, never the date, decide how memories are split into files, what each file is called and how the index is ordered.",
+      )
+      // A note that was wrong from the start goes as an outdated one does, and the index is kept short.
+      expect(out.text).toContain(
+        "a note that was mistaken from the start, or that later work has overtaken, must be corrected or deleted as soon as you notice.",
+      )
+      expect(out.text).toContain("so it has to stay short. Prune and merge its entries as it grows")
+      expect(out.text).toContain("When a file's content changes, make its front matter describe the new content.")
       // The removed tool is not named.
       expect(out.text).not.toMatch(/\bMemory tool\b|Memory read/)
       // A request to check, recall or remember something makes reading memory a must.
       expect(out.text).toContain(
-        '"Do you remember", "recall" and "check your notes" are requests to read memory: answer one only after reading.',
+        "You must read memory before you answer any request to check, recall or remember, in whatever words it comes:",
       )
     }),
   )

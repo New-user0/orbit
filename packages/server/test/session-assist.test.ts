@@ -704,6 +704,8 @@ const filters: ReadonlyArray<readonly [string, string | undefined]> = [
   ["Suggestion: run the tests", "labelled"],
   ["refactor", "one_word"],
   ["yes", undefined],
+  // The approval that the suggestion prompt gives as its example when the assistant asked whether to go on.
+  ["yep, keep at it", undefined],
   ["/commit", undefined],
   [words(13), "over_twelve_words"],
   [words(12), undefined],

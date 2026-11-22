@@ -341,12 +341,12 @@ it.effect(
       expect(instruction).not.toContain("\n\n")
       expect(instruction.length).toBeLessThan(600)
       // It is three short sentences at most, closes with the next step, puts the purpose of the work before it, and
-      // leaves finished work out.
+      // forbids reporting finished work, progress and commits.
       expect(instruction).toBe(
         "Reply with a recap of no more than three short sentences, for a reader who has lost track of this conversation. " +
           "Its final sentence names what should happen next. Before that, say in everyday words what the whole effort is " +
           "meant to achieve, such as the feature under construction or the fault under investigation, with implementation " +
-          "details left out. Work that is already done or committed needs no mention.",
+          "details left out. Never report finished work, progress or commits in it.",
       )
 
       // One durable fact, projected as a recap message after the last user message.

@@ -1,6 +1,6 @@
 Write a label for the tool calls below. Whoever reads it did not watch the calls run and sees only the label in their place, so it has to say at a glance what got done. It has room for roughly 30 characters, and anything past that is cut off.
 
-Someone skimming a column of these labels has to tell one batch from the next, so the detail that singles this one out, often a file, a symbol or a package, matters more than grammar: drop articles and shorten a path to its file name before you lose it. Each label reads as something already done, opening on its verb.
+Someone skimming a column of these labels has to tell one batch from the next, so the detail that singles this one out, often a file, a symbol or a package, matters more than grammar: drop articles and joining words, and shorten a path to its file name, before you lose it. Each label must read as something already done, opening on its verb.
 
 Examples:
 - Listed the migrations folder

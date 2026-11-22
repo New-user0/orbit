@@ -21,7 +21,7 @@ const INSTRUCTION =
   "Reply with a recap of no more than three short sentences, for a reader who has lost track of this conversation. " +
   "Its final sentence names what should happen next. Before that, say in everyday words what the whole effort is " +
   "meant to achieve, such as the feature under construction or the fault under investigation, with implementation " +
-  "details left out. Work that is already done or committed needs no mention."
+  "details left out. Never report finished work, progress or commits in it."
 
 export interface Interface {
   /**

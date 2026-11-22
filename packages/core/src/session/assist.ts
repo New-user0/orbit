@@ -227,7 +227,7 @@ const labelPrompt = (calls: ReadonlyArray<Settled>, intent: string | undefined) 
 
 const LABEL_SYSTEM = [
   "Write a label for the tool calls below. Whoever reads it did not watch the calls run and sees only the label in their place, so it has to say at a glance what got done. It has room for roughly 30 characters, and anything past that is cut off.",
-  "Someone skimming a column of these labels has to tell one batch from the next, so the detail that singles this one out, often a file, a symbol or a package, matters more than grammar: drop articles and shorten a path to its file name before you lose it. Each label reads as something already done, opening on its verb.",
+  "Someone skimming a column of these labels has to tell one batch from the next, so the detail that singles this one out, often a file, a symbol or a package, matters more than grammar: drop articles and joining words, and shorten a path to its file name, before you lose it. Each label must read as something already done, opening on its verb.",
   [
     "Examples:",
     "- Listed the migrations folder",
@@ -241,26 +241,26 @@ const LABEL_SYSTEM = [
 const SUGGESTION_PROMPT = [
   "Draft the next message the person will probably send to Orbit, so they can send it without typing it.",
   "Base the draft on what the person has written, above all their latest messages and the request that started the work. It speaks for them, so it carries on with their plan as they see it.",
-  "Keep a draft only if the person could send it unchanged.",
+  "Keep a draft only if the person would send it unchanged.",
   [
     "For instance:",
     '- They wanted a refactor and a changelog entry, and the refactor is in: "now the changelog"',
     '- A script was just written: "run it on the sample data"',
     "- You laid out options: the one they seem to lean towards",
-    '- You mentioned a second file with the same bug: "fix that one too"',
+    '- Your reply ended by asking whether to proceed: their short approval, as in "yep, keep at it"',
     '- Everything is finished and the follow-up is plain: "open a PR"',
     "- The last step errored, or you misread them: leave it empty",
   ].join("\n"),
-  'A draft that names its object, such as "rerun the date parser tests", helps the person; a vague "check it" does not.',
+  'Name the object in the draft: "rerun the date parser tests" helps the person, and a vague "check it" does not.',
   [
-    "Leave out:",
+    "A draft must have none of these:",
     '- approval or thanks ("nice", "perfect")',
     "- anything phrased as a question",
     '- wording only the assistant would use ("I will", "Let me")',
-    "- topics the person has not brought up",
+    "- topics the person has not brought up, and plans that are yours alone",
     "- a second sentence",
   ].join("\n"),
-  "Answer with the draft alone, two to twelve words in the person's own register, with no quotes and no comment. An empty answer is right whenever what they wrote points to no particular next move.",
+  "Answer with the draft alone, two to twelve words in the person's own register, with no quotes and no comment. The answer must be empty whenever what they wrote points to no particular next move.",
 ].join("\n\n")
 
 // Lone words a person does send as a whole message, so the one-word rule keeps them.

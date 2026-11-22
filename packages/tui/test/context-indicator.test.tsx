@@ -162,6 +162,17 @@ test.each([40, 120])("nothing is drawn at %s columns before a report arrives", a
   expect(frame).not.toContain("before auto-compaction")
 })
 
+test("the command palette lists /context under the dialog's title", async () => {
+  await using state = await tmpdir()
+  await using setup = await render(state.path, 120)
+  await setup.waitForFrame(measured)
+  setup.mockInput.pressKey("p", { ctrl: true })
+  await setup.waitForFrame((frame) => frame.includes("Search"))
+  await setup.mockInput.typeText("context")
+
+  await setup.waitForFrame((frame) => frame.includes("Context window"))
+})
+
 // TF1, D10: the figure is what the response's prompt held, input plus cache read and cache write, as the reference's
 // status line and its /context agree; the response's own output and reasoning are not in the window yet. 100,000 input,
 // 20,000 cache read and 10,000 cache write of a 200,000-token window are 65%; with the 50,000 output and 20,000

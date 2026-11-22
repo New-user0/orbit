@@ -78,7 +78,7 @@ export function DialogMemory(props: {
     if (value === undefined) return []
     const shown = new Set(value.files.map((file) => file.path))
     return [
-      { value: "toggle", title: `Memory saving: ${value.enabled ? "on" : "off"}` },
+      { value: "toggle", title: `Memory across sessions: ${value.enabled ? "on" : "off"}` },
       ...value.files.flatMap((file) => [
         {
           value: key({ type: "file", target: file.target, path: file.path }),
