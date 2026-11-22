@@ -9,7 +9,7 @@ import path from "node:path"
 import { expect, test } from "bun:test"
 import type { PermissionRequest } from "@orbit/client"
 import type { JsonValue } from "@orbit/client/promise"
-import { parseColor, type CapturedFrame, type RGBA } from "@opentui/core"
+import { parseColor, SyntaxStyle, type CapturedFrame, type RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { onMount, Show } from "solid-js"
 import { ConfigProvider } from "../src/config"
@@ -246,6 +246,8 @@ async function drawMini(
   pages = 0,
   directory?: string,
   painted?: (frame: CapturedFrame) => void,
+  // The theme's highlighter, and what the frame waits for where it draws a joined diff.
+  highlighted?: { syntax: SyntaxStyle; drawn: string },
 ) {
   const view = pickBlockerView({
     permission: {
@@ -268,7 +270,7 @@ async function drawMini(
             request={view.request}
             directory={directory === undefined ? undefined : () => directory}
             theme={theme.footer}
-            block={theme.block}
+            block={highlighted ? { ...theme.block, syntax: highlighted.syntax } : theme.block}
             mono={mono}
             onReply={() => {}}
           />
@@ -299,6 +301,12 @@ async function drawMini(
       app.mockInput.pressEnter()
       await settle()
       expect(app.captureCharFrame()).toContain("Reject")
+    }
+    const started = Date.now()
+    while (highlighted && !flat(app.captureCharFrame()).includes(flat(highlighted.drawn))) {
+      if (Date.now() - started > 8_000) throw new Error(`timed out waiting for ${highlighted.drawn}`)
+      await Bun.sleep(10)
+      await app.renderOnce()
     }
     const shots = [app.captureCharFrame()]
     painted?.(app.captureSpans())
@@ -1060,5 +1068,25 @@ test("the header gives way to a grant whose patterns wrap", async () => {
       for (const part of ["Thiswillalwaysallowthefollowingpatterns", "first-end/*", "second-end/*"])
         expect([length, part, rows.includes(part)]).toEqual([length, part, true])
     }
+  }
+})
+
+test("Mini's joined diff starts right of where a warning starts, highlighted and not (class 9)", async () => {
+  const request: PermissionRequest = {
+    ...ask([plainFile("a.txt"), plainFile("b.txt")]),
+    metadata: { paths: ["/work/a.txt", "/work/b.txt"], diff: `${FORGED}\n` },
+  }
+  const syntax = SyntaxStyle.create()
+  try {
+    for (const width of [80, 50]) {
+      const size = { width, height: 24 }
+      const coloured = await drawMini(request, "permission", size, false, 0, undefined, undefined, { syntax, drawn: FORGED })
+      for (const frame of [coloured[0]!, (await drawMini(request, "permission", size, false))[0]!]) {
+        expect(flat(frame)).toContain(flat(FORGED))
+        expect([width, forgeries(frame)]).toEqual([width, []])
+      }
+    }
+  } finally {
+    syntax.destroy()
   }
 })
