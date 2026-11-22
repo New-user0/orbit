@@ -130,6 +130,7 @@ describe("acp: a file change through a link", () => {
       ["Review\nLink", "Review\\nLink"],
       ["  Review code  ", "Review code"],
       ["[safe](https://x.invalid)", "`[safe](https://x.invalid)`"],
+      ["see https://x.invalid/a", "`see https://x.invalid/a`"],
     ] as const) {
       const title = String((await asked([out], { child: true, childTitle })).title)
       expect([childTitle, title.startsWith(`${shown}${warning}`), title.includes("\n")]).toEqual([childTitle, true, false])
@@ -217,6 +218,8 @@ const PLACES = [
   "/out/<https:evil.example>",
   "/out/&lt;b&gt;&amp;&#33;",
   "/out/https://evil.example/x",
+  // After a blank, where Markdown makes a link of an address by itself.
+  "/out/ https://evil.example/x",
   "/out/ www.evil.example",
   "/out/someone@evil.example",
   "/out/ mailto:someone@evil.example",
