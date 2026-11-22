@@ -56,7 +56,6 @@ function fixture(input: { readonly auto: boolean; readonly window?: number; read
 }
 
 const lines = (text: string) => text.split("\n")
-const at = (text: string, line: string) => lines(text).findIndex((item) => item.startsWith(line))
 
 // A table row's cells, split as a GitHub Markdown table splits them: a backslash keeps the character after it in the cell.
 function cells(row: string) {
@@ -95,7 +94,7 @@ test("the report has the reference's sections in order, every one for everyone",
     "### Conversation by kind",
     "### Heaviest tools",
     "### Heaviest added context",
-  ].map((line) => at(auto, line))
+  ].map((line) => lines(auto).indexOf(line))
   expect(order.every((index) => index >= 0)).toBe(true)
   expect(order).toEqual(order.toSorted((a, b) => a - b))
   expect(auto.toLowerCase()).not.toContain("suggestion")

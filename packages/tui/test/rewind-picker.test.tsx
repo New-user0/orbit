@@ -110,13 +110,16 @@ test("step 2 offers the code options only when a dry run would change files, and
     expect(both).toContain(option)
   expect(both).toContain("Files go back: +3 -5 in a.ts and b.ts.")
   expect(both).toContain("The conversation goes back to this point.")
-  expect(both).toContain(
-    "Restores only what Orbit's edit tools changed; changes from shell commands or outside Orbit stay.",
+  const rows = both.split("\n").map((line) => line.trim())
+  expect(rows).toContain("4. Do nothing")
+  expect(rows).toContain(
+    "⚠ Restores only what Orbit's edit tools changed; changes from shell commands or outside Orbit stay.",
   )
 
   setup.mockInput.pressEscape()
   const list = await setup.waitForFrame((frame) => frame.includes(listHeading) && !frame.includes("Code only"))
   expect(list).toContain("(current)")
+  expect(list.split("\n").map((line) => line.trim())).toContain(listHeading)
 
   // "Add the parser": nothing on disk differs from its checkpoint, so only the conversation can go back.
   await selectPrompt(setup, 3)
@@ -524,6 +527,7 @@ test("a session with no prompts says there is nothing to rewind", async () => {
   await setup.mockInput.typeText("/rewind")
   setup.mockInput.pressEnter()
   const frame = await setup.waitForFrame((frame) => frame.includes("This conversation has no prompt to return to."))
+  expect(frame.split("\n").map((line) => line.trim())).toContain("This conversation has no prompt to return to.")
   expect(frame).not.toContain(listHeading)
   expect(setup.actions()).toEqual([])
 })

@@ -190,6 +190,17 @@ test("draws the toggle, the files in load order with imports indented, the user 
   expect(frame).toContain("Browse saved memories")
   expect(frame).toContain("Browse team memories")
   expect(frame).toContain("user scope")
+  // Each row is compared whole, its title with its description, so a word more in either fails.
+  const shown = lines.map((line) => flat(line.replace("●", "")).trim())
+  for (const row of [
+    "Memory across sessions: on",
+    `Project instructions In the repository: ${dot("AGENTS.md")}`,
+    `Personal instructions File: ~${path.sep}${path.join(".config", "orbit", "ORBIT.md")}`,
+    `Browse saved memories ${dot("data", "memory")}`,
+    `Browse team memories ${dot(".orbit", "team-memory")}`,
+    "Browse memories of agent review user scope",
+  ])
+    expect(shown).toContain(row)
   // Load order, then the folders, with the toggle above them all.
   const order = ["Memory across sessions", "Project instructions", path.join("docs", "a.md"), path.join("docs", "b.md"), "Personal instructions", "Browse saved memories", "Browse team memories", "Browse memories of agent review"].map(at)
   expect(order.every((index) => index >= 0)).toBe(true)

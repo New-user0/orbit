@@ -3538,7 +3538,7 @@ describe("ShellTool timeouts", () => {
           expect(configured.input.properties.timeout.description).toContain("300000")
           // The whole sentence: the unit, which commands get the default, the default and the maximum.
           expect(configured.tool?.description).toContain(
-            "The timeout is optional and given in milliseconds. Without one, a foreground command gets 90000 ms (1.5 minutes); no timeout may be longer than 300000 ms (5 minutes).",
+            "The timeout is optional and given in milliseconds. Without one, a foreground command gets 90000 ms (1.5 minutes); no timeout may be longer than 300000 ms (5 minutes). A foreground command still running at its timeout",
           )
         }),
       ),
@@ -3551,7 +3551,7 @@ describe("ShellTool timeouts", () => {
         Effect.sync(() => {
           expect(defaults.input.properties.timeout.maximum).toBe(600_000)
           expect(defaults.tool?.description).toContain(
-            "The timeout is optional and given in milliseconds. Without one, a foreground command gets 120000 ms (2 minutes); no timeout may be longer than 600000 ms (10 minutes).",
+            "The timeout is optional and given in milliseconds. Without one, a foreground command gets 120000 ms (2 minutes); no timeout may be longer than 600000 ms (10 minutes). A foreground command still running at its timeout",
           )
           expect(shared.properties.timeout).not.toHaveProperty("maximum")
         }),

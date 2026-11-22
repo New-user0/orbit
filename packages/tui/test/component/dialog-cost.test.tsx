@@ -206,7 +206,7 @@ test("money follows the reference's decimals, unknown prices read unknown, and n
 test("code changes show only when counted", async () => {
   const counted = await open({ answer: () => json({ data: info({ lines: { added: 12, removed: 1 } }) }) })
   await using _counted = counted.setup
-  expect(flat(counted.frame)).toMatch(/Lines changed \+12 \/ -1 lines/)
+  expect(counted.frame).toMatch(/Lines changed +\+12 \/ -1 lines *$/m)
 
   const zero = await open({ answer: () => json({ data: info({ lines: { added: 0, removed: 0 } }) }) })
   await using _zero = zero.setup
@@ -232,6 +232,8 @@ test("the timing rows and the per-model heading are drawn with and without rows"
     await using _ = setup
     expect(flat(frame)).toContain("Model time 4.0s Elapsed 1m 5s")
     expect(flat(frame)).toContain(expected)
+    // The line of figures ends its row.
+    expect(frame.split("\n").map((line) => line.trim())).toContain(rows.length ? used : `Tokens: ${none}`)
   }
 })
 

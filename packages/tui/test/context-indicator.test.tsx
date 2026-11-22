@@ -172,7 +172,8 @@ test("the command palette lists /context under the dialog's title", async () => 
   await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof InputRenderable)
   await setup.mockInput.typeText("context")
 
-  await setup.waitForFrame((frame) => frame.includes("Context window"))
+  const palette = await setup.waitForFrame((frame) => frame.includes("Context window"))
+  expect(palette).toMatch(/ Context window +Session *$/m)
 })
 
 // TF1, D10: the figure is what the response's prompt held, input plus cache read and cache write, as the reference's

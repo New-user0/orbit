@@ -203,6 +203,8 @@ test("the legend shows the model, total of window and percent, each category to 
   ].map(at)
   expect(legend.every((index) => index >= 0)).toBe(true)
   expect(legend).toEqual(legend.toSorted((a, b) => a - b))
+  // The subtitle ends its row: a word more could claim what the figures are not.
+  expect(lines[at("Estimated breakdown")]).toMatch(/ Estimated breakdown *$/)
 
   const manual = await open({
     answer: answering(
@@ -310,6 +312,7 @@ test("MCP tool schemas (loaded now and on demand), agent definitions by scope, i
   expect(order).toEqual(order.toSorted((a, b) => a - b))
   // Some tools are deferred, so the heading says that some are loaded on demand.
   expect(lines[at("MCP tool schemas · /mcps")]).toContain("MCP tool schemas · /mcps (some load on demand)")
+  for (const group of ["Loaded now", "Loaded on demand"]) expect(lines[at(group)]?.trim()).toBe(group)
   expect(lines[at("docs_search")]).toContain("2.0K")
   expect(lines[at("ORBIT.md")]).toContain("1.2K")
   for (const hidden of ["SysToolZed", "SectionQuux", "ToolBreakX", "AttachKindY"]) expect(result.frame).not.toContain(hidden)
@@ -359,11 +362,12 @@ test("suggestions are drawn under the view, warnings first, with their savings",
   expect(heading).toBeGreaterThan(at("release"))
   expect(bash).toBeGreaterThan(heading)
   expect(read).toBeGreaterThan(bash)
+  expect(lines[heading]?.trim()).toBe("Ways to free room")
   expect(lines[bash]).toContain("!")
   // The saving is said to be freed. The line wraps at the dialog's width, so the frame's blanks are folded.
   const folded = result.frame.replace(/\s+/g, " ")
-  expect(folded).toContain("· frees about 8.0K tokens")
-  expect(folded).toContain("· frees about 9.0K tokens")
+  expect(folded).toContain("· frees about 8.0K tokens Commands that print a lot")
+  expect(folded).toContain("· frees about 9.0K tokens A long file")
 })
 
 // TD7b: the instruction files suggestion names each file as the view's own list does, by its path in the session's folder.
