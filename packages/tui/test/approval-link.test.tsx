@@ -332,6 +332,8 @@ test("Mini still says a warning exists on a screen too narrow for the sentence, 
   for (const stage of stages) {
     const frame = flat((await drawMini(ask([out("a.txt")]), stage, { width: 24, height: 11 }, false))[0]!)
     expect([stage, frame.includes("Linkends")]).toEqual([stage, true])
+    // The middle is what is cut, with a mark where it was.
+    expect([stage, frame.includes("Linkends...theproject")]).toEqual([stage, true])
   }
 })
 

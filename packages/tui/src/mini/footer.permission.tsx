@@ -320,7 +320,7 @@ export function RunPermissionBody(props: {
         gap={compact() ? 0 : 1}
         flexShrink={0}
       >
-        <box flexDirection="column" flexShrink={0}>
+        <box flexDirection="column">
           <text height={1} fg={props.theme.text} wrapMode="none" truncate>
             <span style={{ fg: props.theme.permission }}>{props.mono ? "! " : "△ "}</span>
             {title()}

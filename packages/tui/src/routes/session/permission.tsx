@@ -274,7 +274,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           // The link warning is above the title, which names as many files as the request has, and outside the body,
           // which the focused option replaces.
           const header = () => (
-            <box flexDirection="column" flexShrink={0}>
+            <box flexDirection="column">
               <LinkNotice warning={notice()} />
               <box flexDirection="row" gap={1} flexShrink={0}>
                 <text fg={theme.text.feedback.warning.base}>{"▲"}</text>
@@ -443,11 +443,7 @@ function LinkNotice(props: { warning?: string }) {
   const theme = useTheme()
   return (
     <Show when={props.warning}>
-      {(line) => (
-        <text fg={theme.text.feedback.warning.base} flexShrink={0}>
-          {line()}
-        </text>
-      )}
+      {(line) => <text fg={theme.text.feedback.warning.base}>{line()}</text>}
     </Show>
   )
 }
@@ -571,7 +567,7 @@ function RejectPrompt(props: {
       customBorderChars={SplitBorder.customBorderChars}
     >
       <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
-        <box flexDirection="column" paddingLeft={1} flexShrink={0}>
+        <box flexDirection="column" paddingLeft={1}>
           <box flexDirection="row" gap={1}>
             <text fg={theme.text.feedback.error.base}>{"△"}</text>
             <text fg={theme.text.base}>Reject permission</text>
