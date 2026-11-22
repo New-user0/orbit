@@ -62,9 +62,9 @@ const CASES = {
 }
 
 type Asked = { action: string; resources: string[]; save: string[]; metadata: object }
-type Options = { plan?: number; queued?: boolean; messages?: object[] }
+type Options = { plan?: number; queued?: boolean; messages?: object[]; sessionID?: string }
 
-async function open(width: number, height: number, asked: Asked, options: Options = {}) {
+async function open(width: number, height: number, asked: Asked | undefined, options: Options = {}) {
   const state = await tmpdir()
   const pending: object[] = []
   const replies: string[] = []
@@ -96,7 +96,7 @@ async function open(width: number, height: number, asked: Asked, options: Option
     width,
     height,
     config: { animations: false, mouse: false, tabs: { mode: "off" }, session: { sidebar: "hide" } },
-    args: { sessionID: root.id },
+    args: { sessionID: options.sessionID ?? root.id },
     fetch: (url) => {
       if (url.pathname.endsWith("/reply")) {
         replies.push(url.pathname)
@@ -146,10 +146,12 @@ async function open(width: number, height: number, asked: Asked, options: Option
   await until((frame) => frame.includes("Orbit"))
   if (options.queued) await until((frame) => frame.includes("1 queued"))
   if (options.plan) await until((frame) => frame.includes("plan"))
-  const question = { id: "per_route", sessionID: child.id, ...asked }
-  pending.push(question)
-  setup.events.emit({ id: "evt_asked", created: 3, type: "permission.asked", data: question })
-  await until((frame) => frame.includes("1 Allow once"))
+  if (asked) {
+    const question = { id: "per_route", sessionID: child.id, ...asked }
+    pending.push(question)
+    setup.events.emit({ id: "evt_asked", created: 3, type: "permission.asked", data: question })
+    await until((frame) => frame.includes("1 Allow once"))
+  }
   return {
     setup,
     replies,
@@ -334,4 +336,24 @@ test("the docks, the prompt and the route's blank rows come back once the questi
   const frame = await app.until((shot) => !shot.includes("1 Allow once") && shot.includes("step 2") && promptReady(shot))
   expect(frame).toContain("plan")
   expect((await app.settled()).split("\n").filter((row) => row !== "").at(-1)!.trim()).toBe("")
+})
+
+// The composer is in the docks that give way to an approval; with none asked it opens and closes as before.
+test("the composer opens and closes in the session route, and a subagent's closes to its parent", async () => {
+  {
+    await using app = await open(80, 24, undefined)
+    expect(app.first).not.toContain("Subagents")
+    expect(await app.press("\x1b[B")).toContain("Subagents")
+    app.setup.mockInput.pressEscape()
+    const closed = await app.until((frame) => !frame.includes("Subagents"))
+    expect([closed.includes("Demo session"), promptReady(await app.settled())]).toEqual([true, true])
+  }
+  {
+    await using app = await open(80, 24, undefined, { sessionID: child.id })
+    expect(await app.until((frame) => frame.includes("Subagents"))).toContain("Subagent session")
+    app.setup.mockInput.pressEscape()
+    // Closed to the parent session, where the composer is closed.
+    const parent = await app.until((frame) => frame.includes("Demo session"))
+    expect([parent.includes("Subagent session"), (await app.settled()).includes("Subagents")]).toEqual([false, false])
+  }
 })

@@ -1638,11 +1638,7 @@ export function Session(props: {
                     {(_) => {
                       const request = promptedPermissions()[0]
                       return request ? (
-                        <PermissionPrompt
-                          request={request}
-                          directory={session()?.location.directory}
-                          rows={approvalRows()}
-                        />
+                        <PermissionPrompt request={request} rows={approvalRows()} />
                       ) : null
                     }}
                   </Show>
