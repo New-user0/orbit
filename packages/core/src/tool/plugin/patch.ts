@@ -257,7 +257,7 @@ export const Plugin = {
                                 new ToolFailure({
                                   message:
                                     hunk.type === "delete"
-                                      ? `patch verification failed: Failed to delete ${target.resource}: ${errorMessage(error)}`
+                                      ? `patch verification failed: Failed to delete ${changedName({ target, removes })}: ${errorMessage(error)}`
                                       : `patch verification failed: Failed to read file to update ${target.absolute}: ${errorMessage(error)}`,
                                 }),
                             ),
@@ -372,20 +372,19 @@ export const Plugin = {
                   (change) =>
                     Effect.gen(function* () {
                       if (change.type === "delete") {
-                        touched.push({ file: change.target.resource })
+                        // What is removed is named as the request named it: the link, and not the file it leads to (class 3).
+                        const removed = changedName(change)
+                        touched.push({ file: removed })
                         yield* environment.files
                           .remove(change.target.absolute)
-                          .pipe(Effect.mapError((error) => fail(`Failed to delete ${change.target.resource}`, error)))
-                        applied.push({
-                          type: change.type,
-                          resource: change.target.resource,
-                          target: change.target.absolute,
-                        })
+                          .pipe(Effect.mapError((error) => fail(`Failed to delete ${removed}`, error)))
+                        applied.push({ type: change.type, resource: removed, target: change.target.absolute })
                         return
                       }
                       if (change.type === "update" && change.moveTarget) {
                         const moveTarget = change.moveTarget
-                        touched.push({ file: moveTarget.resource, from: change.target.resource })
+                        const removed = changedName(change)
+                        touched.push({ file: moveTarget.resource, from: removed })
                         yield* environment.files
                           .write(moveTarget.absolute, new TextEncoder().encode(change.content))
                           .pipe(Effect.mapError((error) => fail(`Failed to write ${moveTarget.resource}`, error)))
@@ -393,10 +392,7 @@ export const Plugin = {
                           .remove(change.target.absolute)
                           .pipe(
                             Effect.mapError((error) =>
-                              fail(
-                                `Wrote ${moveTarget.resource} but failed to remove ${change.target.resource}`,
-                                error,
-                              ),
+                              fail(`Wrote ${moveTarget.resource} but failed to remove ${removed}`, error),
                             ),
                           )
                         applied.push({
@@ -528,13 +524,15 @@ function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info
   }
 }
 
+type Changed = { readonly target: FileAccess.Target; readonly removes?: string }
+
 // The place a change acts on: the target's, or the link itself where that is what is removed (class 3).
-function changed(change: Prepared) {
-  return ("removes" in change ? change.removes : undefined) ?? change.target.place
+function changed(change: Changed) {
+  return change.removes ?? change.target.place
 }
 
 // The name that goes with `changed`: the resource, unless that names the file a removed link leads to.
-function changedName(change: Prepared) {
+function changedName(change: Changed) {
   if (change.target.resource !== change.target.place.replaceAll("\\", "/")) return change.target.resource
   return changed(change).replaceAll("\\", "/")
 }

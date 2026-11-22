@@ -7,7 +7,7 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Exit, Layer } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import { Agent } from "@orbit/core/agent"
 import { Database } from "@orbit/core/database/database"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -38,6 +38,7 @@ import { WriteTool } from "@orbit/core/tool/plugin/write"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
+import { transformEnvironmentFiles } from "./fixture/environment"
 import { location } from "./fixture/location"
 import { untrustedProjectNodes } from "./fixture/project-trust"
 import { canLinkFile } from "./fixture/symlink"
@@ -84,6 +85,8 @@ const run = (
     trusted?: boolean
     // Each update of the call while it runs, as a client that follows it gets them.
     updates?: Tool.Metadata[]
+    // The file system refuses to remove, or to write, a file of this name.
+    refuse?: { act: "remove" | "write"; name: string }
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -142,11 +145,21 @@ const run = (
           ),
           Formatter.node.replace(Layer.mock(Formatter.Service, { file: () => Effect.succeed(false) })),
           Image.node.replace(imagePassthrough),
+          ...(options.refuse ? [Environment.node.replace(refusing(options.refuse))] : []),
           ...(options.trusted === false ? untrustedProjectNodes : []),
         ],
       ),
     ),
   )
+
+const refusing = (refuse: { act: "remove" | "write"; name: string }) =>
+  transformEnvironmentFiles((files) => {
+    const refused = (target: string) => new Environment.Failed({ path: target, cause: new Error("refused here") })
+    const named = (target: string) => path.basename(target) === refuse.name
+    if (refuse.act === "remove")
+      return { remove: (target) => (named(target) ? Effect.fail(refused(target)) : files.remove(target)) }
+    return { write: (target, bytes) => (named(target) ? Effect.fail(refused(target)) : files.write(target, bytes)) }
+  })
 
 const seed = (directory: string, effect: "ask" | "allow") =>
   Effect.gen(function* () {
@@ -798,11 +811,96 @@ describe("a file that is itself a link: what is shown is what runs", () => {
                 expect(entry.patch.split("\n").filter((line) => line.startsWith("--- ")).map(forward)).toEqual([
                   `--- ${forward(link)}`,
                 ])
+                // The result: what the model and the person are told was changed is what was.
+                if (!Exit.isSuccess(settled.exit)) return
+                const result = settled.exit.value as {
+                  content: Array<{ text?: string }>
+                  metadata: { files: Array<{ file: string; from?: string }> }
+                }
+                const removed = removedName(trusted, shape, link)
+                const said = act === "delete" ? `D ${removed}` : "M plain/moved.txt"
+                expect(result.content[0]?.text).toBe(`Success. Updated the following files:\n${said}`)
+                const changed = result.metadata.files[0]!
+                expect(act === "delete" ? changed.file : changed.from).toBe(removed)
               }),
             (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
           ),
         )
 })
+
+// Fix loop 2 (class 3): a failure says the same, in its message and in the names a code rewind reads from it.
+describe("a file that is itself a link: a failure names what was to be removed", () => {
+  const linkedFile = canLinkFile ? it.live : it.live.skip
+  const shapes = [
+    { name: "out", spelled: "shown", link: ["proj", "shown"], real: ["outside", "real"], outside: true },
+    { name: "inside", spelled: "shown", link: ["proj", "shown"], real: ["proj", "sub", "real"], outside: false },
+    { name: "in a linked folder out", spelled: "out/shown", link: ["outside", "shown"], real: ["farther", "real"], outside: true },
+    { name: "in a linked folder inside", spelled: "alias/shown", link: ["proj", "sub", "shown"], real: ["outside", "real"], outside: true },
+  ]
+  const failures = [
+    {
+      name: "a delete after a first write",
+      input: (at: string) => patched("*** Add File: first.txt\n+first", `*** Delete File: ${at}`),
+      refuse: { act: "remove", name: "shown.txt" } as const,
+      message: (removed: string) => `Failed to delete ${removed}: refused here. Completed before failure: first.txt`,
+      touched: (removed: string) => [{ file: "first.txt" }, { file: removed }],
+    },
+    {
+      name: "a move's source",
+      input: (at: string) => patched(update(at, "plain/moved.txt")),
+      refuse: { act: "remove", name: "shown.txt" } as const,
+      message: (removed: string) => `Wrote plain/moved.txt but failed to remove ${removed}: refused here`,
+      touched: (removed: string) => [{ file: "plain/moved.txt", from: removed }],
+    },
+    {
+      name: "a write after a delete",
+      input: (at: string) => patched(`*** Delete File: ${at}`, "*** Add File: second.txt\n+second"),
+      refuse: { act: "write", name: "second.txt" } as const,
+      message: (removed: string) => `Failed to write second.txt: refused here. Completed before failure: ${removed}`,
+      touched: (removed: string) => [{ file: removed }, { file: "second.txt" }],
+    },
+    {
+      name: "a delete of a link to nothing",
+      dangling: true,
+      input: (at: string) => patched(`*** Delete File: ${at}`),
+      message: (removed: string) => `patch verification failed: Failed to delete ${removed}: file does not exist`,
+    },
+  ]
+  for (const trusted of [true, false])
+    for (const failure of failures)
+      for (const shape of shapes)
+        linkedFile(`${failure.name}, ${shape.name}, in ${trusted ? "a trusted" : "an untrusted"} folder`, () =>
+          Effect.acquireUseRelease(
+            Effect.promise(() => tmpdir()),
+            (root) =>
+              Effect.gen(function* () {
+                const world = yield* Effect.promise(() => makeWorld(root.path))
+                const link = `${path.join(world.root, ...shape.link)}.txt`
+                const real = `${path.join(world.root, ...shape.real)}.txt`
+                yield* Effect.promise(async () => {
+                  await fs.writeFile(real, text)
+                  await fs.symlink(real, link, "file")
+                  if (failure.dangling) await fs.rm(real)
+                })
+                const settled = yield* run(world.project, "Patch", failure.input(`${shape.spelled}.txt`), {
+                  trusted,
+                  refuse: failure.refuse,
+                })
+                if (!Exit.isFailure(settled.exit)) throw new Error("the patch did not fail")
+                const error = Cause.squash(settled.exit.cause) as { message: string; metadata?: { files?: unknown } }
+                const removed = removedName(trusted, shape, link)
+                expect(error.message).toBe(failure.message(removed))
+                if (failure.touched) expect(error.metadata?.files).toEqual(failure.touched(removed))
+              }),
+            (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+          ),
+        )
+})
+
+// The name of a link that is removed: as it is spelled in the project, or where it is when an untrusted one leads out.
+function removedName(trusted: boolean, shape: { spelled: string; outside: boolean }, link: string) {
+  return !trusted && shape.outside ? forward(link) : `${shape.spelled}.txt`
+}
 
 // Fix loop 1 (class 9): a name with a break in it leaves a diff's header one line, so no client draws it as raw text.
 describe("the header of an approval's diff is one line", () => {
