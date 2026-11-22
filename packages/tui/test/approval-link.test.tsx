@@ -8,6 +8,7 @@ import path from "node:path"
 import { expect, test } from "bun:test"
 import type { PermissionRequest } from "@orbit/client"
 import type { JsonValue } from "@orbit/client/promise"
+import { parseColor, type CapturedFrame, type RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { onMount, Show } from "solid-js"
 import { ConfigProvider } from "../src/config"
@@ -16,7 +17,7 @@ import { DataProvider, useData } from "../src/context/data"
 import { InteractivityProvider } from "../src/context/interactivity"
 import { Keymap } from "../src/context/keymap"
 import { LocationProvider } from "../src/context/location"
-import { ThemeProvider } from "../src/context/theme"
+import { ThemeProvider, useTheme } from "../src/context/theme"
 import { RunPermissionBody } from "../src/mini/footer.permission"
 import { pickBlockerView } from "../src/mini/session-data"
 import { RUN_THEME_FALLBACK, RUN_THEME_MONO } from "../src/mini/theme"
@@ -116,7 +117,12 @@ async function drawFull(
   asks: PermissionRequest | ((directory: string) => PermissionRequest),
   stage: Stage,
   size: Size,
-  options: { scroll?: number; compact?: boolean; fullscreen?: boolean } = {},
+  options: {
+    scroll?: number
+    compact?: boolean
+    fullscreen?: boolean
+    painted?: (frame: CapturedFrame, warning: RGBA, text: RGBA) => void
+  } = {},
 ) {
   await using tmp = await tmpdir()
   const request = typeof asks === "function" ? asks(tmp.path) : asks
@@ -136,8 +142,11 @@ async function drawFull(
         },
       })
   }, createEventStream())
+  let colors: { warning: RGBA; text: RGBA } | undefined
   function Route() {
     const data = useData()
+    const theme = useTheme()
+    colors = { warning: theme.text.feedback.warning.base, text: theme.text.base }
     onMount(() => void data.session.sync("ses_link"))
     return (
       <Show when={data.session.get("ses_link")}>
@@ -207,6 +216,7 @@ async function drawFull(
     await Bun.sleep(0)
     await app.renderOnce()
     const shots = [app.captureCharFrame()]
+    options.painted?.(app.captureSpans(), colors!.warning, colors!.text)
     for (let step = 0; step < (options.scroll ?? 0); step++) {
       // The wheel over each row of the body, whichever row the list starts on.
       await app.mockMouse.scroll(10, 4 + (step % 8), "down")
@@ -219,7 +229,15 @@ async function drawFull(
   }
 }
 
-async function drawMini(request: PermissionRequest, stage: Stage, size: Size, mono: boolean, pages = 0, directory?: string) {
+async function drawMini(
+  request: PermissionRequest,
+  stage: Stage,
+  size: Size,
+  mono: boolean,
+  pages = 0,
+  directory?: string,
+  painted?: (frame: CapturedFrame) => void,
+) {
   const view = pickBlockerView({
     permission: {
       ...request,
@@ -274,6 +292,7 @@ async function drawMini(request: PermissionRequest, stage: Stage, size: Size, mo
       expect(app.captureCharFrame()).toContain("Reject")
     }
     const shots = [app.captureCharFrame()]
+    painted?.(app.captureSpans())
     for (let page = 0; page < pages; page++) {
       app.mockInput.pressKey("\x1b[6~")
       await settle()
@@ -527,4 +546,73 @@ test("the title is cut only while Always allow is focused", async () => {
   const seventh = flat(`${names[6]}`)
   expect(flat((await drawFull(request, "permission", size))[0]!)).toContain(seventh)
   expect(flat((await drawFull(request, "always", size))[0]!)).not.toContain(seventh)
+})
+
+// The colour that every piece of a warning is drawn in, where a wrapped one is several pieces.
+function warningColors(frame: CapturedFrame) {
+  return frame.lines
+    .flatMap((line) => line.spans)
+    .filter((span) => noWarning.test(squash(span.text)))
+    .map((span) => span.fg.toInts())
+}
+
+test("the terminal UI and Mini draw every warning in the warning colour, in each stage", async () => {
+  const mini = RUN_THEME_FALLBACK.footer
+  expect(parseColor(mini.warning).toInts()).not.toEqual(parseColor(mini.text).toInts())
+  for (const request of [ask([out("a.txt")]), ask([inside("b.txt"), out("a.txt")])]) {
+    const several = Array.isArray(request.metadata?.files) && request.metadata.files.length > 1
+    for (const compact of several ? [false] : [false, true])
+      for (const stage of compact ? (["permission", "always"] as const) : stages)
+        await drawFull(request, stage, { width: 200, height: 40 }, {
+          compact,
+          painted: (frame, warning, text) => {
+            expect(warning.toInts()).not.toEqual(text.toInts())
+            const drawn = warningColors(frame)
+            // Several are counted on the fixed line and named in the body.
+            expect([several, compact, stage, drawn.length]).toEqual([several, compact, stage, several && stage === "permission" ? 3 : 1])
+            for (const color of drawn) expect([several, compact, stage, color]).toEqual([several, compact, stage, warning.toInts()])
+          },
+        })
+    for (const stage of stages)
+      await drawMini(request, stage, { width: 200, height: 40 }, false, 0, undefined, (frame) => {
+        const drawn = warningColors(frame)
+        expect([several, stage, drawn.length]).toEqual([several, stage, stage === "reject" ? 1 : several ? 3 : 2])
+        for (const color of drawn) expect([several, stage, color]).toEqual([several, stage, parseColor(mini.warning).toInts()])
+      })
+  }
+})
+
+test("a long warning wraps, so the end of where it leads can be read", async () => {
+  const tail = `${"deep-folder/".repeat(7)}the-very-end.txt`
+  const place = `/elsewhere/${tail}`
+  const request = ask([{ ...out("a.txt"), place, link: { place, outside: true } }])
+  // Between the words and the tail is only the start of the place, which each system writes its own way.
+  const said = new RegExp(`${flat(OUT)},at.{0,24}${flat(tail).replaceAll(".", "\\.")}`)
+  for (const stage of ["permission", "always"] as const)
+    for (const frame of [
+      (await drawFull(request, stage, { width: 80, height: 24 }))[0]!,
+      (await drawFull(request, stage, { width: 80, height: 24 }, { compact: true }))[0]!,
+      (await drawMini(request, stage, { width: 60, height: 30 }, false))[0]!,
+    ])
+      expect([stage, said.test(flat(frame))]).toEqual([stage, true])
+})
+
+test("Mini's fixed line is right under its header, with no gap", async () => {
+  for (const stage of stages) {
+    const lines = (await drawMini(ask([out("a.txt")]), stage, { width: 200, height: 40 }, false))[0]!.split("\n").map(squash)
+    const header = lines.findIndex((line) => line.startsWith("△"))
+    expect([stage, header !== -1]).toEqual([stage, true])
+    expect([stage, lines[header + 1]]).toEqual([stage, squash(OUT)])
+  }
+})
+
+test("a title that names many files keeps three rows while Always allow is focused", async () => {
+  const names = Array.from({ length: 18 }, (_, index) => `${"long-folder-name-".repeat(3)}${index}.txt`)
+  for (const width of [120, 80]) {
+    const frame = (await drawFull(ask([...names.map(plainFile), out("last.txt")]), "always", { width, height: 40 }))[0]!
+    const rows = frame.split("\n").map(squash)
+    const title = rows.findIndex((row) => row.startsWith("▲"))
+    expect([width, title !== -1]).toEqual([width, true])
+    expect([width, rows.slice(title).indexOf("")]).toEqual([width, 3])
+  }
 })

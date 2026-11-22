@@ -1,6 +1,7 @@
 // m5-link-warning: the VS Code card says where a link leads, from the item the extension builds of the request alone
 // (class 8), with each place written out (class 9). A malformed link costs only that warning (class 7).
 import { expect, test } from "bun:test"
+import path from "node:path"
 import { permissionItem } from "../src/controller"
 import { approvalCard, type Card } from "../src/webview/approval"
 
@@ -70,4 +71,13 @@ test("no link, or a malformed one, warns of nothing and costs only itself (class
     expect(alone.title).toBe("Edit c.txt")
     expect(card([{ ...none, link }, out]).warnings).toEqual([OUT])
   }
+})
+
+// The card hides what overflows it, so a long place that does not wrap would be cut where nobody can read it.
+test("a warning is drawn in the warning colour and wraps anywhere", async () => {
+  const css = await Bun.file(path.join(import.meta.dir, "../src/webview/main.css")).text()
+  const rule = css.match(/^\.perm-warning \{([^}]*)\}/m)?.[1]
+  expect(rule).toContain("color: var(--vscode-editorWarning-foreground);")
+  expect(rule).toContain("overflow-wrap: anywhere;")
+  expect(rule).not.toMatch(/display|visibility|white-space|overflow:|max-height|opacity/)
 })
