@@ -274,6 +274,8 @@ it.live("watches a moved command at 5 GB every five seconds by default", () =>
     expect(Duration.toMillis(Shell.WATCH_INTERVAL)).toBe(5_000)
     expect(ShellResult.sizeNotice(Shell.BACKGROUND_LIMIT)).toBe("The background command wrote more than 5 GB to its output file, so Orbit ended it.")
     expect(ShellResult.sizeNotice(256 * 1024)).toBe("The background command wrote more than 256 KB to its output file, so Orbit ended it.")
+    // A limit between whole units keeps one decimal in the notice.
+    expect(ShellResult.sizeNotice(1.25 * 1024 ** 2)).toBe("The background command wrote more than 1.3 MB to its output file, so Orbit ended it.")
   }),
 )
 
