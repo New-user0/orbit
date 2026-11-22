@@ -1,4 +1,5 @@
 import { afterAll, afterEach, expect, spyOn, test } from "bun:test"
+import path from "node:path"
 import { Orbit } from "@orbit/client/promise"
 import { costLine, costText, readCatalog, readSessionCost } from "../../src/run/cost-report"
 import { runNonInteractive, type RunCommandInput } from "../../src/run/run"
@@ -130,6 +131,27 @@ test("costText prints every part of a full summary, and drops the parts a bare o
   expect(empty).not.toContain("Per model:")
   expect(empty.split("\n").at(-1)).toBe(`${"Tokens:".padEnd(16)} in 0 · out 0 · from cache 0 · to cache 0`)
   expect(JSON.parse(costLine("ses_x", bare as never))).toEqual({ type: "cost", sessionID: "ses_x", cost: bare })
+})
+
+// Class 15: the upgrade note gives each renamed row of the report old to new. Subagents and Other kept their names.
+test("the upgrade note lists every renamed row of the report, old to new", async () => {
+  const renamed = [
+    ["Total cost", "Spent"],
+    ["Total API duration", "Model time"],
+    ["Total wall duration", "Elapsed"],
+    ["Total code changes", "Lines changed"],
+    ["Usage by model", "Per model"],
+    ["Usage", "Tokens"],
+  ] as const
+  const notes = (await Bun.file(path.join(import.meta.dir, "../../../../docs/upgrading.md")).text()).replace(/\s+/g, " ")
+  for (const [before, now] of renamed) expect(notes).toContain(`\`${before}\` → \`${now}\``)
+
+  const drawn = [full, bare].flatMap((summary) =>
+    [...costText(summary as never).matchAll(/^(\S[^:]*):/gm)].map((match) => match[1]!),
+  )
+  expect([...new Set(drawn.filter((label) => label !== "Subagents" && label !== "Other"))].toSorted()).toEqual(
+    renamed.map(([, now]): string => now).toSorted(),
+  )
 })
 
 test("the default format prints the block, and a row the client cannot read is named once", async () => {

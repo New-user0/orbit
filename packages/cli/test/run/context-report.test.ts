@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import path from "node:path"
 import type { SessionContextUsage } from "@orbit/schema/session-context-usage"
 import { contextMarkdown, contextUsageLine } from "../../src/run/context-report"
 
@@ -152,6 +153,66 @@ test("the report has the reference's sections in order, every one for everyone",
   expect(auto).toContain("| Prompts | 3,300 |")
   expect(auto).toContain("| Bash | 2,000 | 10,000 |")
   expect(auto).toContain("| todo | 2,000 |")
+})
+
+// What the report called each heading, column and row before the M5 rewording, then now.
+const RENAMED = [
+  ["Context usage", "Context window"],
+  ["Usage by category", "Breakdown"],
+  ["System prompt", "Base prompt"],
+  ["System tools", "Tools outside MCP"],
+  ["MCP tools", "MCP tool schemas"],
+  ["MCP tools (deferred)", "MCP tool schemas (on demand)"],
+  ["System tools (deferred)", "Tools outside MCP (on demand)"],
+  ["Custom agents", "Agent definitions"],
+  ["Instruction files", "Instructions"],
+  ["Skills", "Skill listings"],
+  ["Messages", "Conversation"],
+  ["Autocompact buffer", "Auto-compaction reserve"],
+  ["Compact buffer", "Compaction headroom"],
+  ["Free space", "Room left"],
+  ["System prompt sections", "Base prompt parts"],
+  ["Message breakdown", "Conversation by kind"],
+  ["Top tools", "Heaviest tools"],
+  ["Top attachments", "Heaviest added context"],
+  ["Category", "Part"],
+  ["Percentage", "Share"],
+  ["Server", "From server"],
+  ["Section", "Part"],
+  ["Scope", "Defined in"],
+  ["Type", "Source"],
+  ["Path", "File"],
+  ["Call tokens", "In calls"],
+  ["Result tokens", "In results"],
+  ["Attachment", "What was added"],
+  ["Tool calls", "Calls to tools"],
+  ["Tool results", "What tools returned"],
+  ["Attachments", "Added context"],
+  ["Assistant text", "Replies"],
+  ["User text", "Prompts"],
+] as const
+
+// Class 15: a script that parses the report finds in the upgrade note each cell it matched on, and the list above holds
+// every fixed label the report draws, apart from the five column names that stayed.
+test("the upgrade note lists every renamed heading, column and row of the report, old to new", async () => {
+  const notes = (await Bun.file(path.join(import.meta.dir, "../../../../docs/upgrading.md")).text()).replace(/\s+/g, " ")
+  for (const [before, now] of [...RENAMED, ["**Tokens:**", "**In use:**"], ["(deferred)", "(on demand)"]] as const)
+    expect(notes).toContain(`\`${before}\` → \`${now}\``)
+
+  const auto = contextMarkdown(fixture({ auto: true, window: 200_000 }))
+  const manual = contextMarkdown(fixture({ auto: false, window: 200_000 }))
+  const first = (table: string[] | undefined) => table!.slice(2).map((row) => row.split("|")[1]!.trim())
+  const drawn = [
+    ...[...auto.matchAll(/^##+ (.+)$/gm)].map((match) => match[1]!),
+    ...tables(auto).flatMap((table) => table[0]!.split("|").slice(1, -1).map((label) => label.trim())),
+    ...first(tables(auto)[0]),
+    ...first(tables(manual)[0]),
+    ...first(tables(auto)[7]),
+  ]
+  const kept = ["Tool", "Tokens", "Agent", "Skill", "Kind"]
+  expect([...new Set(drawn.filter((label) => !kept.includes(label)))].toSorted()).toEqual(
+    [...new Set<string>(RENAMED.map(([, now]) => now))].toSorted(),
+  )
 })
 
 // CR2, classes 5 and 9: every string is a label, written through `plain`, and a pipe (with or without a backslash before

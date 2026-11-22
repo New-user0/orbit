@@ -5312,8 +5312,11 @@ among those the tests named here pin: the handoff describes the work in progress
 concept that came up, and follows compaction instructions from your own or the project's instruction files or from your
 messages, beside its own sections (`session-compaction.test.ts`); the line after an automatic compaction bans questions
 for the whole continuation (`session-runner-message.test.ts`); the memory guide leaves out how any bug was fixed, gives
-what is seen now precedence over a note, saves on request at once within its left-out list, wants a short index and bans
-secrets from team memory whoever asks (`memory-instructions.test.ts`, `memory-team-instructions.test.ts`). One rule is
+what is seen now precedence over a note, saves on request at once within its left-out list, removes on request only
+what is to be forgotten (deleting a file only when nothing else is left in it) and takes it out of `MEMORY.md` too,
+wants a short index and bans secrets from team memory whoever asks (`memory-instructions.test.ts`,
+`memory-team-instructions.test.ts`); the note on an old memory file has what it says checked against the current code
+before it is relied on (`memory-store.test.ts`). One rule is
 narrower on purpose: when you ask to keep something from the left-out list, the guide has the model ask you only for
 what was unexpected in it, where it used to accept what was surprising or worth keeping. The screens show the same
 figures under new wording and names, and the usage line of `/cost` has a new format.
@@ -5340,18 +5343,42 @@ figures under new wording and names, and the usage line of `/cost` has a new for
   `elicitation_active` `awaiting_form`, `plan_mode` `planning` and `aborted` `cancelled` (`subagent`, `busy` and
   `unavailable` stay). `POST …/assist/label` answers `no_text` where it answered `empty`, and `interrupted` where it
   answered `aborted` (`packages/server/test/session-assist.test.ts`).
-- **`/context`.** The categories are Base prompt, Tools outside MCP, MCP tool schemas, Agent definitions, Instructions,
-  Skill listings, Conversation, Auto-compaction reserve, Compaction headroom and Room left, and a tool loaded on demand is
-  marked `(on demand)`. The report opens with `## Context window` and `**In use:**`, and its tables are Breakdown, MCP
-  tool schemas, Tools outside MCP, Base prompt parts, Agent definitions, Instructions, Skill listings, Conversation by kind,
-  Heaviest tools and Heaviest added context, with the columns From server, Defined in and What was added.
-  The dialog and its entry in the command palette are titled Context window,
-  as the report is, the legend is headed "Estimated breakdown", with or without a known window, and the dialog's
-  suggestions are headed "Ways to free room"
-  (`packages/cli/test/run/context-report.test.ts`, `packages/tui/test/component/dialog-context.test.tsx`).
-- **`/cost`.** The rows are Spent, Subagents, Model time, Elapsed and Lines changed (`+12 / -3 lines`), then Per model,
-  and each model's tokens read `in 1.2K · out 300 · from cache 500 · to cache 60`, in the dialog and in
-  `orb run "/cost"` alike (`packages/cli/test/run/cost-run.test.ts`, `packages/tui/test/component/dialog-cost.test.tsx`).
+- **`/context`.** Each renamed text, old to new:
+  - Title of the report, of the dialog and of its entry in the command palette: `Context usage` → `Context window`. The
+    report's total: `**Tokens:**` → `**In use:**`, whose figures now read `50,000 of 200,000 (25%)` where they
+    read `50,000 / 200,000 (25%)`.
+  - Categories, in the report and, where it draws them, the dialog: `System prompt` → `Base prompt`, `System tools` → `Tools outside MCP`,
+    `MCP tools` → `MCP tool schemas`, `MCP tools (deferred)` → `MCP tool schemas (on demand)`,
+    `System tools (deferred)` → `Tools outside MCP (on demand)`, `Custom agents` → `Agent definitions`,
+    `Instruction files` → `Instructions`, `Skills` → `Skill listings`, `Messages` → `Conversation`,
+    `Autocompact buffer` → `Auto-compaction reserve`, `Compact buffer` → `Compaction headroom` and
+    `Free space` → `Room left`. The report marks a tool's token count `(deferred)` → `(on demand)`.
+  - Tables of the report: `Usage by category` → `Breakdown`, `System prompt sections` → `Base prompt parts`,
+    `Message breakdown` → `Conversation by kind`, `Top tools` → `Heaviest tools` and
+    `Top attachments` → `Heaviest added context`. The tables named after a category take its new name.
+  - Columns: in Breakdown `Category` → `Part` and `Percentage` → `Share`; in MCP tool schemas
+    `Server` → `From server`; in Base prompt parts `Section` → `Part`; in Agent definitions
+    `Scope` → `Defined in`; in Instructions `Type` → `Source` and `Path` → `File`; in Heaviest tools
+    `Call tokens` → `In calls` and `Result tokens` → `In results`; in Heaviest added context
+    `Attachment` → `What was added`.
+  - Rows of Conversation by kind: `Tool calls` → `Calls to tools`, `Tool results` → `What tools returned`,
+    `Attachments` → `Added context`, `Assistant text` → `Replies` and `User text` → `Prompts`.
+  - The dialog alone: `Estimated usage by category` → `Estimated breakdown`, with or without a known window,
+    `Loaded` → `Loaded now`, `Available` → `Loaded on demand`, `some are loaded on demand` → `some load on demand`,
+    `Suggestions` → `Ways to free room` and `saves about` → `frees about`. Its headings take the categories' new names,
+    and each suggestion's title and advice are reworded.
+
+  (`packages/cli/test/run/context-report.test.ts`, `packages/tui/test/component/dialog-context.test.tsx`,
+  `packages/tui/test/context-suggestions.test.ts`).
+- **`/cost`.** The rows of `orb run "/cost"` are renamed, old to new: `Total cost` → `Spent`,
+  `Total API duration` → `Model time`, `Total wall duration` → `Elapsed`, `Total code changes` → `Lines changed`
+  (`+12 / -3 lines` where it read `12 lines added, 3 lines removed`), `Usage by model` → `Per model` and, with no
+  model yet, `Usage` → `Tokens`. The values start further left, and a model's cost moved from the end of its line to
+  just after its name. The dialog's rows take the same names (they were `Total cost`, `API time`, `Wall time`,
+  `Code changes`, `By model` and `Usage`). In both, each model's tokens read
+  `in 1.2K · out 300 · from cache 500 · to cache 60` where they read
+  `1.2K input, 300 output, 500 cache read, 60 cache write`
+  (`packages/cli/test/run/cost-run.test.ts`, `packages/tui/test/component/dialog-cost.test.tsx`).
 - **`/memory`.** The first row reads Memory across sessions, and still turns the whole of memory on or off, reading as
   well as saving. The others read Project instructions, Personal instructions, Browse saved memories, Browse
   team memories and Browse memories of agent `<name>`, and a file's line reads `File:` or `In the repository:`.
