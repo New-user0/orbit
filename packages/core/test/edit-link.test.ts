@@ -910,6 +910,7 @@ describe("the header of an approval's diff is one line", () => {
     ["a carriage return", "\r", "\\x0d"],
     ["a line separator", "\u2028", "\\u{2028}"],
     ["a paragraph separator", "\u2029", "\\u{2029}"],
+    ["several breaks", "\nb.txt\r\nc.txt\n", "\\nb.txt\\nc.txt\\n"],
   ] as const) {
     it.live(`fileDiff of a name with ${name}`, () =>
       Effect.sync(() => {

@@ -548,4 +548,19 @@ describe("FileAccess.link", () => {
       expect(performance.now() - before).toBeLessThan(100)
     }).pipe(provide([])),
   )
+
+  // Only the same place is no link (class 4): one that holds the spelled place, or is held by it, is not that place.
+  it.live("names a link for a place above or below the spelled one, and none for the same place", () =>
+    Effect.gen(function* () {
+      const access = yield* FileAccess.Service
+      const location = yield* Location.Service
+      const root = yield* Effect.promise(() => fs.realpath(location.directory))
+      const absolute = AbsolutePath.make(path.join(location.directory, "a", "b"))
+      const linked = (...parts: string[]) =>
+        access.link({ absolute, place: absolute, leads: AbsolutePath.make(path.join(root, ...parts)), resource: "a/b" })
+      expect(linked("a", "b")).toBeUndefined()
+      for (const parts of [["a"], ["a", "b", "below"], ["other"]])
+        expect(linked(...parts)).toEqual({ place: AbsolutePath.make(path.join(root, ...parts)), outside: false })
+    }).pipe(provide([])),
+  )
 })
