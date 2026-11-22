@@ -823,6 +823,8 @@ const filters: ReadonlyArray<readonly [string, string | undefined]> = [
   ["(draft) run the tests", undefined],
   ["update the parser (again)", undefined],
   ["rename it to: parser", undefined],
+  // A label needs a space after its colon, so a script name that opens the text is kept.
+  ["test:e2e then commit", undefined],
   ["run the tests. then commit", undefined],
   ["Is it fixed? Then commit", "several_sentences"],
   ["Stop it! Then commit", "several_sentences"],
