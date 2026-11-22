@@ -497,3 +497,34 @@ test("the fullscreen dialog keeps the fixed line", async () => {
     ])
   }
 })
+
+// The title names every file, and how many rows that takes differs with the length of the system's paths.
+test("a long list of files leaves what Always allow grants inside the dialog, under the link line", async () => {
+  for (const count of [8, 12, 18, 40]) {
+    const names = Array.from({ length: count }, (_, index) => `${"long-folder-name-".repeat(3)}${index}.txt`)
+    for (const size of [
+      { width: 120, height: 40 },
+      { width: 80, height: 24 },
+      { width: 70, height: 24 },
+    ]) {
+      const frame = flat((await drawFull(ask([...names.map(plainFile), out("last.txt")]), "always", size))[0]!)
+      const grant = frame.indexOf("Thiswillalwaysallow")
+      expect([count, size, frame.indexOf(flat(OUT)) < grant, grant < frame.indexOf("Allowonce")]).toEqual([
+        count,
+        size,
+        true,
+        true,
+      ])
+    }
+  }
+})
+
+test("the title is cut only while Always allow is focused", async () => {
+  const names = Array.from({ length: 8 }, (_, index) => `${"long-folder-name-".repeat(3)}${index}.txt`)
+  const request = ask([...names.map(plainFile), out("last.txt")])
+  const size = { width: 120, height: 40 }
+  // The seventh name is past the three rows, and within those that the dialog has for a title.
+  const seventh = flat(`${names[6]}`)
+  expect(flat((await drawFull(request, "permission", size))[0]!)).toContain(seventh)
+  expect(flat((await drawFull(request, "always", size))[0]!)).not.toContain(seventh)
+})

@@ -272,11 +272,12 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               { additions: 0, deletions: 0 },
             )
           // The link warning is above the title, which names as many files as the request has, and outside the body,
-          // which the focused option replaces.
-          const header = () => (
+          // which the focused option replaces. While Always allow is focused the title is cut to three rows, so that
+          // however many files it names it does not push what the grant is out of the dialog (class 8).
+          const header = (granting: boolean) => (
             <box flexDirection="column">
               <LinkNotice warning={notice()} />
-              <box flexDirection="row" gap={1} flexShrink={0}>
+              <box flexDirection="row" gap={1} flexShrink={0} maxHeight={granting ? 3 : undefined}>
                 <text fg={theme.text.feedback.warning.base}>{"▲"}</text>
                 <text fg={theme.text.base} flexShrink={1}>
                   {view() !== "shell" && current.title ? current.title : "Permission required"}
@@ -296,7 +297,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title="Permission required"
               semanticLabel={permissionSemanticLabel(props.request.action, current.title)}
               instance={props.request.id}
-              header={header()}
+              header={(option) => header(option === "always")}
               body={(option) => (
                 <Show when={option === "always"} fallback={presentationBody()}>
                   <box paddingLeft={1} gap={1}>
@@ -661,7 +662,7 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
   id?: string
   group?: string
   choicesLabel?: string
-  header?: JSX.Element
+  header?: JSX.Element | ((option: keyof T) => JSX.Element)
   body: JSX.Element | ((option: keyof T) => JSX.Element)
   options: T
   escapeKey?: keyof T
@@ -791,7 +792,7 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
           }
         >
           <box paddingLeft={1} flexShrink={0}>
-            {props.header}
+            {typeof props.header === "function" ? props.header(store.selected) : props.header}
           </box>
         </Show>
         {typeof props.body === "function" ? props.body(store.selected) : props.body}
