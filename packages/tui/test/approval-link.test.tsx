@@ -121,6 +121,8 @@ async function drawFull(
   size: Size,
   options: {
     scroll?: number
+    // Scrolls to the end, with the wheel over the row above the options, which is the last of what scrolls.
+    read?: boolean
     // The prompt in a column narrower than the screen, as beside a sidebar.
     column?: number
     compact?: boolean
@@ -206,6 +208,16 @@ async function drawFull(
       await Bun.sleep(10)
     }
   }
+  // A scroll bar that comes or goes is a column for the text beside it, which a later render gives it.
+  const settled = async () => {
+    const seen: string[] = []
+    while (seen.length < 3 || seen.at(-1) !== seen.at(-2)) {
+      if (seen.length > 50) throw new Error("the frame does not settle")
+      await app.renderOnce()
+      seen.push(app.captureCharFrame())
+    }
+    return seen.at(-1)!
+  }
   try {
     app.renderer.start()
     await until(options.compact ? "Reviewing in" : "Allow once")
@@ -224,13 +236,22 @@ async function drawFull(
     if (options.drawn) await until(options.drawn)
     await Bun.sleep(0)
     await app.renderOnce()
-    const shots = [app.captureCharFrame()]
+    const shots = [await settled()]
     options.painted?.(app.captureSpans(), colors!.warning, colors!.text)
     for (let step = 0; step < (options.scroll ?? 0); step++) {
       // The wheel over each row of the body, whichever row the list starts on.
       await app.mockMouse.scroll(10, 4 + (step % 8), "down")
       await app.renderOnce()
       shots.push(app.captureCharFrame())
+    }
+    if (!options.read) return shots
+    const over = shots[0]!.split("\n").findIndex((row) => squash(row).endsWith("1Allowonce")) - 1
+    while (true) {
+      await app.mockMouse.scroll(10, over, "down")
+      const next = await settled()
+      if (next === shots.at(-1)) break
+      if (shots.length > 600) throw new Error("the scroll has no end")
+      shots.push(next)
     }
     return shots
   } finally {
@@ -555,14 +576,14 @@ test("a long list of files leaves what Always allow grants inside the dialog, un
   }
 })
 
-test("the title is cut shorter while Always allow is focused", async () => {
+test("while Always allow is focused the title takes the rows that the grant leaves", async () => {
   const names = Array.from({ length: 8 }, (_, index) => `${"long-folder-name-".repeat(3)}${index}.txt`)
   const request = ask([...names.map(plainFile), out("last.txt")])
   const size = { width: 120, height: 40 }
-  // The seventh name is past the three rows, and within those that the dialog has for a title.
+  // The seventh name is past three rows, and within those that the dialog has for a title.
   const seventh = flat(`${names[6]}`)
   expect(flat((await drawFull(request, "permission", size))[0]!)).toContain(seventh)
-  expect(flat((await drawFull(request, "always", size))[0]!)).not.toContain(seventh)
+  expect(flat((await drawFull(request, "always", size))[0]!)).toContain(seventh)
 })
 
 // The colour that every piece of a warning is drawn in, where a wrapped one is several pieces.
@@ -585,8 +606,8 @@ test("the terminal UI and Mini draw every warning in the warning colour, in each
           painted: (frame, warning, text) => {
             expect(warning.toInts()).not.toEqual(text.toInts())
             const drawn = warningColors(frame)
-            // Several are counted on the fixed line and named in the body.
-            expect([several, compact, stage, drawn.length]).toEqual([several, compact, stage, several && stage === "permission" ? 3 : 1])
+            // Several are counted on the fixed line and named in the body, under the grant while Always allow is focused.
+            expect([several, compact, stage, drawn.length]).toEqual([several, compact, stage, several && stage !== "reject" ? 3 : 1])
             for (const color of drawn) expect([several, compact, stage, color]).toEqual([several, compact, stage, warning.toInts()])
           },
         })
@@ -623,14 +644,16 @@ test("Mini's fixed line is right under its header, with no gap", async () => {
   }
 })
 
-test("a title that names many files keeps three rows while Always allow is focused", async () => {
+test("a title that names many files takes every row but the grant's while Always allow is focused", async () => {
   const names = Array.from({ length: 18 }, (_, index) => `${"long-folder-name-".repeat(3)}${index}.txt`)
   for (const width of [120, 80]) {
     const frame = (await drawFull(ask([...names.map(plainFile), out("last.txt")]), "always", { width, height: 40 }))[0]!
     const rows = frame.split("\n").map(squash)
     const title = rows.findIndex((row) => row.startsWith("▲"))
     expect([width, title !== -1]).toEqual([width, true])
-    expect([width, rows.slice(title).indexOf("")]).toEqual([width, 3])
+    // Nine rows: the fixed line, six of the title, the gap and the grant.
+    expect([width, rows.slice(title).indexOf("")]).toEqual([width, 6])
+    expect([width, rows[title + 7]?.includes(squash("This will always allow Edit for this project."))]).toEqual([width, true])
   }
 })
 
@@ -805,20 +828,23 @@ test("the fullscreen dialog does not cut a title it has room for", async () => {
   expect(flat(frame)).toContain(flat(component(18)))
 })
 
-test("the title of a question that is not an edit is cut only while Always allow is focused", async () => {
+test("the long title of a question that is not an edit is cut with a mark, and is whole where it scrolls", async () => {
+  const path = Array.from({ length: 300 }, (_, index) => `part${index}`).join("/")
   const request: PermissionRequest = {
     id: "per_link",
     sessionID: "ses_link",
     action: "WebFetch",
-    resources: [`https://host.example/${"p".repeat(1500)}`],
+    resources: [`https://host.example/${path}`],
     save: ["*"],
     metadata: {},
   }
   const size = { width: 120, height: 24 }
-  expect(flat((await drawFull(request, "permission", size))[0]!)).not.toContain("…")
-  const focused = flat((await drawFull(request, "always", size))[0]!)
-  expect(focused).toContain("…")
-  expect(focused).toContain("Thiswillalwaysallow")
+  for (const stage of ["permission", "always"] as const) {
+    const shots = await drawFull(request, stage, size, { read: true })
+    expect([stage, flat(shots[0]!).includes("…")]).toEqual([stage, true])
+    if (stage === "always") expect(flat(shots[0]!)).toContain("Thiswillalwaysallow")
+    expect([stage, readAll(shots).includes(`host.example/${path}`)]).toEqual([stage, true])
+  }
 })
 
 const MINI_SIZES = [
@@ -919,12 +945,18 @@ const named = (place: string, header = "a.txt"): Array<[string, PermissionReques
 type Sink = { name: string; only?: string[]; draw: (request: PermissionRequest) => Promise<string[]> }
 const SINKS: Sink[] = [
   { name: "dialog", draw: (request) => drawFull(request, "permission", { width: 80, height: 24 }, { scroll: 24 }) },
-  { name: "dialog, always", draw: (request) => drawFull(request, "always", { width: 80, height: 24 }) },
+  { name: "dialog, always", draw: (request) => drawFull(request, "always", { width: 80, height: 24 }, { read: true }) },
+  { name: "dialog, low", draw: (request) => drawFull(request, "always", { width: 80, height: 7 }, { read: true }) },
   { name: "dialog, reject", only: ["a change"], draw: (request) => drawFull(request, "reject", { width: 80, height: 24 }) },
   {
     name: "compact",
     only: ["a change"],
     draw: (request) => drawFull(request, "permission", { width: 80, height: 24 }, { compact: true, scroll: 24 }),
+  },
+  {
+    name: "compact, always",
+    only: ["a change"],
+    draw: (request) => drawFull(request, "always", { width: 80, height: 24 }, { compact: true, read: true }),
   },
   { name: "Mini", draw: (request) => drawMini(request, "permission", { width: 80, height: 14 }, false, 4) },
   { name: "Mini, mono", draw: (request) => drawMini(request, "permission", { width: 80, height: 14 }, true, 4) },
@@ -1089,4 +1121,246 @@ test("Mini's joined diff starts right of where a warning starts, highlighted and
   } finally {
     syntax.destroy()
   }
+})
+
+// Fix loop 2 (class 8, with 9 beside it): what a question holds is drawn in whole rows and can be read to its end, with
+// or without a link, and what Always allow grants is in sight on a low screen too.
+const trimEmpty = (rows: string[]) => rows.filter((row) => row !== "")
+// The rows of a dialog above its options.
+function above(frame: string) {
+  const rows = frame.split("\n").map(flat)
+  return rows.slice(1, rows.findIndex((row) => row.endsWith("1Allowonce")))
+}
+// What scrolling shows: the rows that stay, and once each those that move, as each frame overlaps the one before it.
+function scrolled(shots: string[]) {
+  const frames = shots.map(above)
+  if (frames.length === 1) return frames[0]!
+  const first = frames[0]!
+  const fixed = first.findIndex((row, index) => frames.some((frame) => frame[index] !== row))
+  const moved = frames
+    .map((frame) => frame.slice(fixed))
+    .reduce((all, frame) => {
+      const shared = Array.from({ length: frame.length + 1 }, (_, index) => frame.length - index).find(
+        (count) => all.slice(all.length - count).join("\n") === frame.slice(0, count).join("\n"),
+      )!
+      return [...all, ...frame.slice(shared)]
+    })
+  return [...first.slice(0, fixed), ...moved]
+}
+function readAll(shots: string[]) {
+  return scrolled(shots).join("")
+}
+// Words that are each one of a kind, so that no row reads as another.
+const words = (id: string, count: number, between = " ") =>
+  Array.from({ length: count }, (_, index) => `${id}w${index}`).join(between)
+
+const ACTIONS = ["Bash", "external_directory", "Skill", "Edit"]
+for (const action of ACTIONS)
+  for (const wraps of [false, true])
+    for (const width of WIDTHS)
+      test(`every row of ${action}'s question and grant is a whole row in order, ${wraps ? "wrapped" : "short"} at ${width} columns`, async () => {
+        for (let count = 1; count <= 12; count++)
+          for (const linked of [false, true])
+            for (const stage of ["permission", "always"] as const) {
+              const values = Array.from({ length: count }, (_, index) =>
+                action === "external_directory"
+                  ? `/o/${wraps ? `${words(`f${index}`, 22, "/")}/` : ""}folder${index}/*`
+                  : `tool${index} ${wraps ? `${words(`t${index}`, 22)} ` : ""}end${index}`,
+              )
+              const file = linked ? out("a.txt") : plainFile("a.txt")
+              const diff = `--- a.txt\n+++ a.txt\n@@ -0,0 +1,${count} @@\n${values.map((value) => `+${value}\n`).join("")}`
+              const request: PermissionRequest =
+                action === "Edit"
+                  ? { ...ask([{ ...file, patch: diff }]), save: values }
+                  : {
+                      id: "per_link",
+                      sessionID: "ses_link",
+                      action,
+                      resources: values,
+                      save: values,
+                      metadata: {
+                        ...(action === "external_directory" ? { parentDir: "/o" } : {}),
+                        // Any request that carries a link is drawn with it.
+                        ...(linked ? { files: [file] } : {}),
+                      },
+                    }
+              const lines =
+                stage === "always"
+                  ? permissionAlwaysLines(request)
+                  : action === "Edit"
+                    ? values
+                    : permissionPresentation(request).lines
+              const heads = stage === "permission" && action === "external_directory" ? ["Patterns"] : []
+              const expected = [...heads, ...lines].map(flat).join("")
+              const shots = await drawFull(request, stage, { width, height: 24 }, { read: true })
+              dialog(shots[0]!)
+              const body = (rows: string[]) =>
+                trimEmpty(rows.slice(rows.indexOf("")))
+                  // The gutter of an Edit's diff.
+                  .map((row) => (stage === "permission" && action === "Edit" ? row.replace(/^\d+\+/, "") : row))
+                  .join("")
+              const first = body(above(shots[0]!))
+              const cell = [count, linked, stage]
+              expect([...cell, "in order", first.length > 0 && expected.startsWith(first)]).toEqual([...cell, "in order", true])
+              if (stage === "always") expect([...cell, "heading", first.startsWith(flat(lines[0]!))]).toEqual([...cell, "heading", true])
+              expect([...cell, body(scrolled(shots))]).toEqual([...cell, expected])
+              // What is out of sight is not out of mind: the bar says that there is more.
+              if (first !== expected) expect([...cell, "bar", /[█▀▄]/.test(shots[0]!)]).toEqual([...cell, "bar", true])
+            }
+      }, 120_000)
+
+const SWEPT: Array<{ kind: string; request: (value: string) => PermissionRequest }> = [
+  { kind: "command", request: (value) => asked("Bash", [value]) },
+  { kind: "pattern", request: (value) => asked("external_directory", [`${value}/*`], { parentDir: "/o" }) },
+  { kind: "resource", request: (value) => asked("Skill", [value]) },
+  { kind: "read path", request: (value) => asked("Read", [value], { paths: [value] }) },
+  { kind: "folder", request: (value) => asked("Glob", ["*.ts"], { path: value }) },
+  { kind: "grant", request: (value) => ({ ...asked("Bash", ["tool x"]), save: [value] }) },
+]
+function asked(action: string, resources: string[], metadata: Record<string, JsonValue> = {}): PermissionRequest {
+  return { id: "per_link", sessionID: "ses_link", action, resources, save: ["*"], metadata }
+}
+for (const swept of SWEPT)
+  for (const width of WIDTHS)
+    test(`the end of a long ${swept.kind} can be read at ${width} columns, and no row of it passes for a warning`, async () => {
+      for (let count = 2; count <= 120; count += 3) {
+        const value =
+          swept.kind === "command" || swept.kind === "grant"
+            ? `tool ${words("a", count)} ${FORGED} ENDMARK`
+            : `srv/${words("a", count, "/")}/${FORGED}/ENDMARK`
+        const request = swept.request(swept.kind === "command" || swept.kind === "grant" ? value : `/${value}`)
+        const shots = await drawFull(request, swept.kind === "grant" ? "always" : "permission", { width, height: 24 }, { read: true })
+        expect([count, readAll(shots).includes(flat(value))]).toEqual([count, true])
+        for (const shot of shots) expect([count, forgeries(shot)]).toEqual([count, []])
+      }
+    }, 120_000)
+
+const FOCUSED = ["permission", "always"] as const
+// A long link whose rows are each one of a kind, as `scrolled` needs.
+const farLink = (length: number): Entry => {
+  const place = `/elsewhere/${words("d", 300, "/").slice(0, length).replace(/\/$/, "")}/${END}`
+  return { ...out("a.txt"), place, link: { place, outside: true } }
+}
+for (const width of [60, ...WIDTHS])
+  for (const stage of FOCUSED) {
+    test(`every name and target of 2 to 20 files can be read at ${width} columns, ${stage} stage`, async () => {
+      for (const total of [2, 3, 4, 6, 8, 10, 14, 20])
+        for (const linked of [false, true]) {
+          const names = Array.from({ length: total }, (_, index) => component(index))
+          const files = [...names.map(plainFile), ...(linked ? [out("last-linked.txt"), inside("b.txt")] : [])]
+          const shots = await drawFull(ask(files), stage, { width, height: 24 }, { read: true })
+          const all = readAll(shots)
+          const parts = linked
+            ? [...names, `${OUT}, at`, "real/last-linked.txt", `${IN}:`, "alias/b.txt", "leads to", "src/b.txt"]
+            : names
+          for (const part of parts) expect([total, linked, part, all.includes(flat(part))]).toEqual([total, linked, part, true])
+          if (stage === "always") expect([total, linked, flat(shots[0]!).includes(GRANT)]).toEqual([total, linked, true])
+        }
+    }, 60_000)
+    for (const compact of [false, true]) {
+      const prompt = compact ? "compact prompt" : "dialog"
+      test(`one long name can be read whole in the ${prompt} at ${width} columns, ${stage} stage`, async () => {
+        for (const length of [40, 100, 160, 220, 300, 500, 1000])
+          for (const linked of [false, true]) {
+            const name = `${words("n", 300, "-").slice(0, length)}-the-only-name.txt`
+            const request = ask([linked ? out(name) : plainFile(name)])
+            const shots = await drawFull(request, stage, { width, height: 24 }, { compact, read: true })
+            expect([length, linked, readAll(shots).includes(flat(name))]).toEqual([length, linked, true])
+            if (stage === "always") expect([length, linked, flat(shots[0]!).includes(GRANT)]).toEqual([length, linked, true])
+          }
+      }, 60_000)
+      test(`a link's target of 40 to 1000 characters can be read whole in the ${prompt} at ${width} columns, ${stage} stage`, async () => {
+        for (const length of [40, 70, 100, 130, 160, 200, 260, 400, 700, 1000])
+          for (const outside of [true, false]) {
+            const place = `/elsewhere/${words("d", 300, "/").slice(0, length).replace(/\/$/, "")}/${END}`
+            const entry = { ...(outside ? { ...out("a.txt"), place } : inside("b.txt")), link: { place, outside } }
+            const shots = await drawFull(ask([entry]), stage, { width, height: 24 }, { compact, read: true })
+            const all = readAll(shots)
+            for (const part of [outside ? `${OUT}, at` : `${IN}:`, place.slice(1)])
+              expect([length, outside, part, all.includes(flat(part))]).toEqual([length, outside, part, true])
+            if (stage === "always") expect([length, outside, flat(shots[0]!).includes(GRANT)]).toEqual([length, outside, true])
+          }
+      }, 60_000)
+    }
+  }
+
+for (const compact of [false, true])
+  for (const height of compact ? [8, 9, 10, 11, 12, 13, 14, 16, 24] : [7, 8, 9, 10, 11, 12, 13, 14, 16, 24])
+    test(`what Always allow grants is in sight in the ${compact ? "compact prompt" : "dialog"} on a screen ${height} rows high, linked or not`, async () => {
+      const before = process.env.TERM_PROGRAM
+      try {
+        for (const program of compact ? ["vscode", "other"] : ["other"]) {
+          process.env.TERM_PROGRAM = program
+          for (const width of [60, 70, 80, 120])
+            for (const [kind, entry] of [
+              ["none", plainFile("c.txt")],
+              ["out", out("a.txt")],
+              ["inside", inside("b.txt")],
+              ["long", farLink(500)],
+            ] as const) {
+              const request = ask([entry])
+              const shots = await drawFull(request, "always", { width, height }, { compact, read: true })
+              const rows = dialog(shots[0]!)
+              const said = rows.join("")
+              const cell = [program, width, kind]
+              expect([...cell, said.includes(GRANT)]).toEqual([...cell, true])
+              const options = rows.findIndex((row) => row.endsWith("1Allowonce"))
+              expect([...cell, rows.slice(options + 1, options + 3)]).toEqual([...cell, ["›2Alwaysallow", "3Reject"]])
+              if (kind === "none") continue
+              const words = squash(kind === "inside" ? "Link ends inside" : "Link ends outside")
+              expect([...cell, said.includes(words)]).toEqual([...cell, true])
+              const whole = kind === "out" ? "real/a.txt" : kind === "inside" ? "src/b.txt" : END
+              expect([...cell, readAll(shots).includes(whole)]).toEqual([...cell, true])
+              // Asked, before any option is focused, the warning is in sight as well, and whole by scrolling.
+              const first = await drawFull(request, "permission", { width, height }, { compact, read: true })
+              expect([...cell, dialog(first[0]!).join("").includes(words)]).toEqual([...cell, true])
+              expect([...cell, readAll(first).includes(whole)]).toEqual([...cell, true])
+            }
+        }
+      } finally {
+        if (before === undefined) delete process.env.TERM_PROGRAM
+        if (before !== undefined) process.env.TERM_PROGRAM = before
+      }
+    }, 60_000)
+
+test("the hints and the blank row under the header give way only on a screen too low for them", async () => {
+  const rows = async (height: number, width: number) =>
+    dialog((await drawFull(ask([plainFile("c.txt")]), "always", { width, height }))[0]!)
+  for (const width of [70, 80])
+    for (const height of [14, 24]) {
+      const drawn = await rows(height, width)
+      expect([width, height, drawn.join("").includes("enterconfirm")]).toEqual([width, height, true])
+      expect([width, height, drawn[1]]).toEqual([width, height, ""])
+    }
+  // Three rows for the question: no blank one under the header, and the hints are still there.
+  const low = await rows(12, 70)
+  expect(low.join("")).toContain("enterconfirm")
+  expect(low[1]).toBe(GRANT)
+})
+
+test("the blank row between two lines of a grant is drawn while it pushes none of them out", async () => {
+  const grant = async (count: number) => {
+    const save = ["echo *", "rm *", "ls *", "cat *"].slice(0, count)
+    return dialog((await drawFull({ ...asked("Bash", ["echo x"]), save }, "always", { width: 80, height: 24 }))[0]!)
+  }
+  const heading = squash("This will always allow the following patterns for this project.")
+  expect((await grant(3)).slice(2, 9)).toEqual([heading, "", "-echo*", "", "-rm*", "", "-ls*"])
+  expect((await grant(4)).slice(2, 7)).toEqual([heading, "-echo*", "-rm*", "-ls*", "-cat*"])
+})
+
+test("a short question keeps a short dialog, and a diff fills it", async () => {
+  const height = async (request: PermissionRequest) =>
+    (await drawFull(request, "permission", { width: 100, height: 24 }))[0]!
+      .split("\n")
+      .findIndex((line) => line.startsWith("╰")) + 1
+  // The border, the title, the gap, the command, three options and the hints.
+  expect(await height(asked("Bash", ["echo x"]))).toBe(9)
+  expect(await height(ask([plainFile("c.txt")]))).toBe(15)
+})
+
+test("a line break in a title takes none of the body's rows (class 9)", async () => {
+  const pattern = `first${"\n".repeat(12)}${FORGED}`
+  const shots = await drawFull(asked("Grep", [pattern], { path: "/srv/in-this-folder" }), "permission", { width: 80, height: 24 }, { read: true })
+  expect(above(shots[0]!)[0]).toContain("\\n".repeat(2).replaceAll("\\", "/"))
+  expect(readAll(shots)).toContain("srv/in-this-folder")
 })
