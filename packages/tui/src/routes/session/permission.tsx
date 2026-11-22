@@ -144,8 +144,8 @@ function EditBody(props: {
               }
             >
               {(patch) => (
-                // Right of where a warning starts, since this text's rows are the request's.
-                <box paddingLeft={2} flexShrink={0}>
+                // Right of where a wrapped warning's first word ends, since this text's rows are the request's.
+                <box paddingLeft={3} flexShrink={0}>
                   <code
                     filetype="diff"
                     drawUnstyledText={false}
@@ -248,19 +248,21 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           // whole while that takes half the header at most, and summed up past that. An edit's title is cut, with a
           // mark, to the rows that are left; Always allow cuts any title, to three rows at most outside fullscreen.
           const layout = (granting: boolean, space: Space) => {
-            // A pattern follows a blank row, so each line of a grant takes two.
-            const kept = granting
-              ? Math.min(permissionAlwaysLines(props.request).length * 2, space.rows() - 3)
-              : BODY_ROWS
+            // A grant takes its lines, wrapped, and a blank row between two while those fit under a header of two rows.
+            const granted = granting ? permissionAlwaysLines(props.request) : []
+            const lines = granted.reduce((total, line) => total + wrappedRows(line, space.width() - 1), 0)
+            const gap = lines + granted.length - 1 <= space.rows() - 3 ? 1 : 0
+            const kept = granting ? lines + gap * (granted.length - 1) : BODY_ROWS
             const rows = Math.max(2, space.rows() - 1 - kept)
             const notice = fitLinks(links(), Math.floor(rows / 2), space.width())
-            if (!granting && view() !== "edit") return { notice, title: { text: title, rows: undefined, cut: false } }
+            if (!granting && view() !== "edit")
+              return { notice, gap, title: { text: title, rows: undefined, cut: false } }
             const left = Math.max(1, rows - notice.rows)
             const limit = granting && !space.expanded() ? Math.min(3, left) : left
             const counted = [changes().additions, changes().deletions]
               .filter((count) => count > 0)
               .reduce((total, count) => total + stringWidth(`+${count}`) + 1, 0)
-            return { notice, title: fitText(title, limit, space.width() - 2 - counted) }
+            return { notice, gap, title: fitText(title, limit, space.width() - 2 - counted) }
           }
 
           const presentationBody = (fitted: () => ReturnType<typeof layout>) =>
@@ -328,10 +330,10 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                   {fitted().title.text}
                 </text>
                 <Show when={changes().additions > 0}>
-                  <text fg={theme.diff.text.added} flexShrink={0}>{`+${changes().additions}`}</text>
+                  <text fg={theme.diff.text.added}>{`+${changes().additions}`}</text>
                 </Show>
                 <Show when={changes().deletions > 0}>
-                  <text fg={theme.diff.text.removed} flexShrink={0}>{`−${changes().deletions}`}</text>
+                  <text fg={theme.diff.text.removed}>{`−${changes().deletions}`}</text>
                 </Show>
               </box>
             </box>
@@ -348,10 +350,15 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                 return (
                   <Show when={option === "always"} fallback={presentationBody(fitted)}>
                     {/* The grant leads, and the whole of a warning that is only summed up above scrolls under it. */}
-                    <box paddingLeft={1} gap={1} flexShrink={links().lines.length > 0 ? 0 : 1}>
+                    <box paddingLeft={1} gap={fitted().gap} flexShrink={links().lines.length > 0 ? 0 : 1}>
                       <For each={permissionAlwaysLines(props.request)}>
                         {(line, index) => (
-                          <Hanging text={line} fg={index() === 0 ? theme.text.muted : theme.text.base} />
+                          <Hanging
+                            text={line}
+                            fg={index() === 0 ? theme.text.muted : theme.text.base}
+                            // Beside a link the header is fitted to the grant's rows, which are counted by the character.
+                            wrapMode={links().lines.length > 0 ? "char" : "word"}
+                          />
                         )}
                       </For>
                     </box>

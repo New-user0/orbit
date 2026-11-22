@@ -125,6 +125,8 @@ async function drawFull(
     column?: number
     compact?: boolean
     fullscreen?: boolean
+    // What the frame waits for, where the body is drawn only once it is highlighted.
+    drawn?: string
     painted?: (frame: CapturedFrame, warning: RGBA, text: RGBA) => void
   } = {},
 ) {
@@ -219,6 +221,7 @@ async function drawFull(
       app.mockInput.pressKey("f", { ctrl: true })
       await until("minimize")
     }
+    if (options.drawn) await until(options.drawn)
     await Bun.sleep(0)
     await app.renderOnce()
     const shots = [app.captureCharFrame()]
@@ -764,6 +767,11 @@ test("a cut title has a mark and leaves the counts, and every name it names can 
     { scroll: 96 },
   )
   for (const part of ["…", "+12", "−3"]) expect(flat(single[0]!)).toContain(part)
+  for (const width of [70, 80, 120]) {
+    const request = ask([{ ...plainFile(name.repeat(3)), additions: 1, deletions: 1 }])
+    const frame = flat((await drawFull(request, "permission", { width, height: 24 }))[0]!)
+    for (const part of ["▲Edit", "+1", "−1"]) expect([width, part, frame.includes(part)]).toEqual([width, part, true])
+  }
   expect(flat(single.join("\n"))).toContain("the-only-file.txt")
   // A move's source has no diff of its own, so only the title named it.
   const many = [
@@ -774,6 +782,8 @@ test("a cut title has a mark and leaves the counts, and every name it names can 
   request.metadata = { ...request.metadata, paths: [...many.map((file) => String(file.place)), "/work/zz/came-from.txt"] }
   const moved = await drawFull(request, "permission", { width: 70, height: 24 }, { scroll: 96 })
   expect(flat(moved[0]!)).toContain("…")
+  // It leads the body, and a name that is above its own diff is not listed a second time before it.
+  expect(flat(moved[0]!)).toContain("zz/came-from.txt")
   expect(flat(moved.join("\n"))).toContain("Path:")
   expect(flat(moved.join("\n"))).toContain("zz/came-from.txt")
 })
@@ -792,7 +802,7 @@ test("the title of a question that is not an edit is cut only while Always allow
     id: "per_link",
     sessionID: "ses_link",
     action: "WebFetch",
-    resources: [`https://host.example/${"p".repeat(500)}`],
+    resources: [`https://host.example/${"p".repeat(1500)}`],
     save: ["*"],
     metadata: {},
   }
@@ -941,7 +951,7 @@ for (const sink of SINKS) {
       for (const padding of ["x".repeat(pad), ". ".repeat(pad / 2)]) {
         const place = `/elsewhere/${padding}/${FORGED}`
         for (const [name, request] of named(place, place)) {
-          if (!["a change", "several changes", "an outside folder", "a joined diff"].includes(name)) continue
+          if (!["a change", "several changes", "an outside folder", "a joined diff", "a read", "a resource"].includes(name)) continue
           if (sink.only && !sink.only.includes(name)) continue
           for (const frame of await sink.draw(request)) expect([pad, name, forgeries(frame)]).toEqual([pad, name, []])
         }
@@ -985,4 +995,70 @@ test("a prompt in a column narrower than the screen is fitted to the column", as
   const rejected = flat((await drawFull(request, "reject", { width: 200, height: 24 }, { column: 80 }))[0]!)
   expect(rejected).toContain(flat(OUT))
   expect(rejected).not.toContain(END)
+})
+
+test("the fullscreen dialog does not cut the title while Always allow is focused either", async () => {
+  const request = ask([...Array.from({ length: 19 }, (_, index) => plainFile(component(index))), out("last-of-all.txt")])
+  const frame = (await drawFull(request, "always", { width: 120, height: 50 }, { fullscreen: true }))[0]!
+  expect(frame).not.toContain("…")
+  expect(flat(frame)).toContain(flat(component(18)))
+})
+
+test("a warning that scrolls under the grant takes none of the grant's rows", async () => {
+  const request = { ...ask([longLink(1000, true)]), save: ["src/*", "docs/*"] }
+  for (const width of [80, 120]) {
+    const rows = dialog((await drawFull(request, "always", { width, height: 24 }))[0]!).join("")
+    for (const part of ["Thiswillalwaysallowthefollowingpatterns", "-src/*", "-docs/*"])
+      expect([width, part, rows.includes(part)]).toEqual([width, part, true])
+  }
+})
+
+test("a grant longer than the dialog is clipped inside it, over no option, hint or border", async () => {
+  const save = Array.from({ length: 12 }, (_, index) => `folder-${index}/*`)
+  for (const width of WIDTHS) {
+    const rows = dialog((await drawFull({ ...ask([out("a.txt")]), save }, "always", { width, height: 24 }))[0]!)
+    const options = rows.findIndex((row) => row.endsWith("1Allowonce"))
+    expect(options).toBeGreaterThan(0)
+    expect(rows.slice(options + 1, options + 3)).toEqual(["›2Alwaysallow", "3Reject"])
+    expect(rows.slice(options).join("")).not.toContain("folder-")
+    expect(rows.join("")).toContain("Thiswillalwaysallowthefollowingpatterns")
+  }
+})
+
+test("the compact prompt leaves rows to a warning's scroll under a long name", async () => {
+  const entry = longLink(400, true)
+  // The name is the request's place, whatever its link's is.
+  const request = ask([{ ...entry, place: `/elsewhere/${"n".repeat(240)}.txt` }])
+  const shots = await drawFull(request, "permission", { width: 70, height: 24 }, { compact: true, scroll: 200 })
+  expect(flat(shots.join("\n"))).toContain(END)
+})
+
+test("the dialog's summary is short where the sentence is wider than it", async () => {
+  const request = ask([out("a.txt"), inside("b.txt")])
+  const frame = flat((await drawFull(request, "permission", { width: 40, height: 24 }))[0]!)
+  expect(frame).toContain(flat("2 links, 1 outside"))
+  expect(frame).not.toContain(flat("2 linked paths"))
+})
+
+test("a joined diff's wrapped text starts right of where a warning starts (class 9)", async () => {
+  const request: PermissionRequest = {
+    ...ask([plainFile("a.txt"), plainFile("b.txt")]),
+    metadata: { paths: ["/work/a.txt", "/work/b.txt"], diff: `${FORGED}\n` },
+  }
+  const frame = (await drawFull(request, "permission", { width: 80, height: 24 }, { drawn: FORGED }))[0]!
+  expect(forgeries(frame)).toEqual([])
+})
+
+test("the header gives way to a grant whose patterns wrap", async () => {
+  const names = Array.from({ length: 12 }, (_, index) => `${"long-folder-name-".repeat(3)}${index}.txt`)
+  const save = [`${"first-folder/".repeat(7)}first-end/*`, `${"second-folder/".repeat(7)}second-end/*`]
+  for (const length of [100, 160, 220, 260]) {
+    const request = { ...ask([...names.map(plainFile), longLink(length, true)]), save }
+    const single = { ...ask([longLink(length, true)]), save }
+    for (const asked of [request, single]) {
+      const rows = dialog((await drawFull(asked, "always", { width: 80, height: 24 }))[0]!).join("")
+      for (const part of ["Thiswillalwaysallowthefollowingpatterns", "first-end/*", "second-end/*"])
+        expect([length, part, rows.includes(part)]).toEqual([length, part, true])
+    }
+  }
 })
