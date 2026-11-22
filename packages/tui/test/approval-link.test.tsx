@@ -127,6 +127,8 @@ async function drawFull(
     // The prompt in a column narrower than the screen, as beside a sidebar.
     column?: number
     compact?: boolean
+    // What the compact prompt's editor calls itself.
+    editor?: string
     fullscreen?: boolean
     // What the frame waits for, where the body is drawn only once it is highlighted.
     drawn?: string
@@ -169,7 +171,7 @@ async function drawFull(
           }
         >
           <box width={options.column ?? "100%"}>
-            <EditorDiffPrompt request={request} editor="Test Editor" onSelect={() => {}} />
+            <EditorDiffPrompt request={request} editor={options.editor ?? "Test Editor"} onSelect={() => {}} />
           </box>
         </Show>
       </Show>
@@ -1369,6 +1371,64 @@ test("a line break in a title takes none of the body's rows (class 9)", async ()
   const shots = await drawFull(asked("Grep", [pattern], { path: "/srv/in-this-folder" }), "permission", { width: 80, height: 24 }, { read: true })
   expect(above(shots[0]!)[0]).toContain("\\n".repeat(2).replaceAll("\\", "/"))
   expect(readAll(shots)).toContain("srv/in-this-folder")
+})
+
+for (const compact of [false, true])
+  for (const stage of FOCUSED)
+    test(`a name listed under a cut one starts no row that reads as a warning: ${compact ? "compact prompt" : "dialog"}, ${stage} stage (class 9)`, async () => {
+      // The steps put the forged words on both sides of where the listed name wraps.
+      for (let pad = 0; pad < 76; pad += 4) {
+        const request = ask([plainFile(`${"x".repeat(600 + pad)} ${FORGED}`)])
+        const shots = await drawFull(request, stage, { width: 80, height: 24 }, { compact, read: true })
+        expect([pad, flat(shots[0]!).includes("…"), flat(shots.join("\n")).includes("Path:")]).toEqual([pad, true, true])
+        for (const shot of shots) expect([pad, forgeries(shot)]).toEqual([pad, []])
+      }
+    }, 120_000)
+
+test("a warning of characters two cells wide takes three rows at most in the reject stage (class 8)", async () => {
+  // On an odd width a cell of each row is left over, which a count of cells alone does not see.
+  for (const width of [70, 71])
+    for (let length = 40; length < 90; length++) {
+      const place = `/elsewhere/${"界".repeat(length)}`
+      const entry: Entry = { ...out("a.txt"), place, link: { place, outside: true } }
+      const rows = (await drawFull(ask([entry]), "reject", { width, height: 24 }))[0]!.split("\n").map(squash)
+      const said = rows.slice(rows.indexOf("△Rejectpermission") + 1)
+      expect([width, length, said.indexOf("") >= 1 && said.indexOf("") <= 3]).toEqual([width, length, true])
+    }
+}, 120_000)
+
+test("what does not fit is clipped inside the dialog, over no option or border, on a screen 24 columns by 7 rows", async () => {
+  for (const entry of [out("a.txt"), farLink(400)]) {
+    const rows = dialog((await drawFull(ask([entry]), "permission", { width: 24, height: 7 }))[0]!)
+    expect(rows.slice(-3)).toEqual(["›1Allowonce", "2Alwaysallow", "3Reject"])
+  }
+})
+
+test("the compact prompt's header and its row about saving take a row each, and none of the warning's or the grant's (class 8)", async () => {
+  const before = process.env.TERM_PROGRAM
+  try {
+    process.env.TERM_PROGRAM = "vscode"
+    // A screen too narrow for either row, and an editor whose name is too long for the first.
+    for (const [editor, width, height] of [
+      ["Test Editor", 30, 10],
+      ["Test Editor", 30, 24],
+      ["Test Editor ".repeat(8), 60, 8],
+      ["Test Editor ".repeat(8), 80, 24],
+    ] as const)
+      for (const entry of [plainFile("c.txt"), out("a.txt")])
+        for (const stage of FOCUSED) {
+          const shot = (await drawFull(ask([entry]), stage, { width, height }, { compact: true, editor }))[0]!
+          const rows = dialog(shot)
+          const cell = [width, height, stage, "link" in entry]
+          expect([...cell, rows.findIndex((row) => row === "" || /^(Save|Link|Make)/.test(row))]).toEqual([...cell, 1])
+          const said = rows.join("")
+          if ("link" in entry) expect([...cell, said.includes("Linkendsoutside")]).toEqual([...cell, true])
+          if (stage === "always") expect([...cell, said.includes("Thiswillalwaysallow")]).toEqual([...cell, true])
+        }
+  } finally {
+    if (before === undefined) delete process.env.TERM_PROGRAM
+    if (before !== undefined) process.env.TERM_PROGRAM = before
+  }
 })
 
 test("a line of an approval keeps its rows where the box is too low for all of them (class 8)", async () => {
