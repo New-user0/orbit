@@ -147,6 +147,12 @@ export interface Interface {
    * macOS's `/var`, is not reached through one of the repository's.
    */
   readonly link: (target: Target) => { readonly place: AbsolutePath; readonly outside: boolean } | undefined
+  /**
+   * What removing `target` removes when its last part is itself a link: that link, where it really is, and not the file
+   * it leads to, which stays (class 3). Undefined for any other target. It reads the link and follows only the folders
+   * above it, so it is asked after the target's external directory is.
+   */
+  readonly removedLink: (target: Target) => Effect.Effect<AbsolutePath | undefined>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileAccess") {}
@@ -556,15 +562,27 @@ const layer = Layer.effect(
       })
     })
 
+    // Whether `lead` is where `file` would be with no link of the repository on its way: its path under the folder's real
+    // path.
+    const unlinked = (file: string, lead: string) => {
+      const index = folders.findIndex((folder) => FSUtil.contains(folder, file))
+      const plainly = index === -1 ? file : path.join(real[index]!, path.relative(folders[index]!, file))
+      return FSUtil.contains(lead, plainly) && FSUtil.contains(plainly, lead)
+    }
+
     const link = (target: Target) => {
       const lead = realPlace(target)
-      const index = folders.findIndex((folder) => FSUtil.contains(folder, target.absolute))
-      // Where the target would be if no link of the repository were on its way: its path under the folder's real path.
-      const plainly =
-        index === -1 ? target.absolute : path.join(real[index]!, path.relative(folders[index]!, target.absolute))
-      if (FSUtil.contains(lead, plainly) && FSUtil.contains(plainly, lead)) return undefined
+      if (unlinked(target.absolute, lead)) return undefined
       return { place: lead, outside: !real.some((folder) => FSUtil.contains(folder, lead)) }
     }
+
+    const removedLink = Effect.fn("FileAccess.removedLink")(function* (target: Target) {
+      const itself = yield* fs.readLink(target.absolute).pipe(Effect.orElseSucceed(() => undefined))
+      if (itself === undefined) return undefined
+      const folder = path.dirname(target.absolute)
+      const lead = yield* trust.leads(folder)
+      return unlinked(folder, lead) ? target.absolute : AbsolutePath.make(path.join(lead, path.basename(target.absolute)))
+    })
 
     return Service.of({
       resolve,
@@ -576,6 +594,7 @@ const layer = Layer.effect(
       inMemory,
       refuseTeamSecrets,
       link,
+      removedLink,
     })
   }),
 )

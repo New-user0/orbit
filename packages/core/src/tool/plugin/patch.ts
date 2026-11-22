@@ -58,6 +58,8 @@ type Prepared =
     })
   | (Extract<Patch.Hunk, { readonly type: "delete" }> & {
       readonly target: FileAccess.Target
+      /** The link that is deleted, when the target's last part is one. */
+      readonly removes?: string
       readonly before: string
       readonly after: string
     })
@@ -67,6 +69,8 @@ type Prepared =
       readonly before: string
       readonly after: string
       readonly moveTarget?: FileAccess.Target
+      /** The link that a move removes, when its source's last part is one. */
+      readonly removes?: string
       /** The destination's text when a move replaces a file that already exists. */
       readonly replaced?: string
     })
@@ -214,6 +218,15 @@ export const Plugin = {
                 for (const hunk of hunks) {
                   yield* Effect.gen(function* () {
                     const target = yield* resolveTarget(hunk.path)
+                    // A delete, and a move's source, remove the path's last part, which can be a link to the file that was read.
+                    const removes =
+                      hunk.type === "delete" || (hunk.type === "update" && hunk.movePath)
+                        ? yield* access.removedLink(target)
+                        : undefined
+                    if (removes) {
+                      places[places.length - 1] = removes
+                      yield* context.progress({ places: [...new Set(places)] })
+                    }
                     const id = yield* identify(target, hunk.path)
                     if (hunk.type === "add") {
                       yield* ledger.assertRead(context.sessionID, target.absolute, hunk.path)
@@ -255,7 +268,7 @@ export const Plugin = {
                       if (!states.has(id)) states.set(id, { absolute: target.absolute, display: hunk.path, snapshot })
                     }
                     if (hunk.type === "delete") {
-                      prepared.push({ ...hunk, target, before: snapshot!.text, after: "" })
+                      prepared.push({ ...hunk, target, removes, before: snapshot!.text, after: "" })
                       return
                     }
                     const original = previous ?? Bom.join(snapshot!.text, snapshot!.bom)
@@ -290,6 +303,7 @@ export const Plugin = {
                       before,
                       after: update.content,
                       moveTarget,
+                      removes,
                       replaced: replaced?.text,
                     })
                     if (!moveTarget) updates.set(id, Patch.joinBom(update.content, update.bom))
@@ -315,19 +329,27 @@ export const Plugin = {
                   metadata: {
                     filepath: targets.map((target) => target.resource).join(", "),
                     // Every place the patch touches as resolved here, absolute: a move's source and its destination too.
-                    paths: [...new Set(targets.map((target) => target.place))],
+                    paths: [
+                      ...new Set(
+                        prepared.flatMap((change) => [
+                          changed(change),
+                          ...(change.type === "update" && change.moveTarget ? [change.moveTarget.place] : []),
+                        ]),
+                      ),
+                    ],
                     diff: patchFiles.map((file) => `${file.patch}\n`).join(""),
                     // `link` is where a link on the way to an entry's `place` really leads, and `fromLink` on the way to
-                    // its `from`, both of the targets that are written, for a client to warn about (class 3).
+                    // its `from`, both of the targets that are written, for a client to warn about (class 3). Where what
+                    // is removed is itself a link, that link is the `place` or `from` (`changed`).
                     files: prepared.flatMap((change) => {
                       const [file, ...replaced] = [patchFile(change), ...replacedFile(change)]
                       const link = access.link(change.target)
                       if (change.type !== "update" || !change.moveTarget)
-                        return [{ ...file!, place: change.target.place, ...(link && { link }) }]
+                        return [{ ...file!, place: changed(change), ...(link && { link }) }]
                       const moved = access.link(change.moveTarget)
                       const to = { place: change.moveTarget.place, ...(moved && { link: moved }) }
                       return [
-                        { ...file!, ...to, from: change.target.place, ...(link && { fromLink: link }) },
+                        { ...file!, ...to, from: changed(change), ...(link && { fromLink: link }) },
                         ...replaced.map((item) => ({ ...item, ...to })),
                       ]
                     }),
@@ -494,16 +516,27 @@ function errorMessage(error: unknown) {
 function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info.Type & { readonly from?: string } {
   const moved = change.type === "update" ? change.moveTarget : undefined
   const diff = fileDiff(
-    change.target.place,
+    changed(change),
     change.before,
     after,
     change.type === "add" && !change.existed ? "added" : change.type === "delete" ? "deleted" : "modified",
   )
   return {
     ...diff,
-    file: moved?.resource ?? change.target.resource,
-    ...(moved ? { from: change.target.resource } : {}),
+    file: moved?.resource ?? changedName(change),
+    ...(moved ? { from: changedName(change) } : {}),
   }
+}
+
+// The place a change acts on: the target's, or the link itself where that is what is removed (class 3).
+function changed(change: Prepared) {
+  return ("removes" in change ? change.removes : undefined) ?? change.target.place
+}
+
+// The name that goes with `changed`: the resource, unless that names the file a removed link leads to.
+function changedName(change: Prepared) {
+  if (change.target.resource !== change.target.place.replaceAll("\\", "/")) return change.target.resource
+  return changed(change).replaceAll("\\", "/")
 }
 
 /** A move onto an existing file replaces it, so the destination's current text is shown as removed beside the move. */

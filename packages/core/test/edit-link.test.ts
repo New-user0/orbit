@@ -33,11 +33,13 @@ import { Tool } from "@orbit/core/tool"
 import { EditTool } from "@orbit/core/tool/plugin/edit"
 import { NotebookEditTool } from "@orbit/core/tool/plugin/notebook-edit"
 import { PatchTool } from "@orbit/core/tool/plugin/patch"
+import { fileDiff } from "@orbit/core/tool/plugin/file-diff"
 import { WriteTool } from "@orbit/core/tool/plugin/write"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
 import { location } from "./fixture/location"
+import { untrustedProjectNodes } from "./fixture/project-trust"
 import { canLinkFile } from "./fixture/symlink"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
@@ -76,14 +78,25 @@ const run = (
   directory: string,
   name: string,
   input: Record<string, unknown>,
-  options: { effect?: "ask" | "allow"; reply?: "once" | "always" } = {},
+  options: {
+    effect?: "ask" | "allow"
+    reply?: "once" | "always"
+    trusted?: boolean
+    // Each update of the call while it runs, as a client that follows it gets them.
+    updates?: Tool.Metadata[]
+  } = {},
 ) =>
   Effect.gen(function* () {
     yield* seed(directory, options.effect ?? "ask")
     const tools = yield* Tool.Service
     const permission = yield* Permission.Service
     const fiber = yield* (yield* tools.snapshot())
-      .execute({ sessionID, ...identity, call: { type: "tool-call", id: `call-${name}`, name, input } })
+      .execute({
+        sessionID,
+        ...identity,
+        call: { type: "tool-call", id: `call-${name}`, name, input },
+        progress: (update) => Effect.sync(() => void options.updates?.push(update)),
+      })
       .pipe(Effect.forkScoped)
     const asked: Permission.Request[] = []
     const drive = (): Effect.Effect<Exit.Exit<unknown, unknown>> =>
@@ -129,6 +142,7 @@ const run = (
           ),
           Formatter.node.replace(Layer.mock(Formatter.Service, { file: () => Effect.succeed(false) })),
           Image.node.replace(imagePassthrough),
+          ...(options.trusted === false ? untrustedProjectNodes : []),
         ],
       ),
     ),
@@ -694,4 +708,132 @@ describe("the warning changes no decision and no grant", () => {
       ),
     )
   }
+})
+
+// Fix loop 1 (class 3): where the last part of the path is itself a link, a delete and a move's source remove that link,
+// and everything else writes through it. The request names what is changed, and the disk says the same.
+describe("a file that is itself a link: what is shown is what runs", () => {
+  const linkedFile = canLinkFile ? it.live : it.live.skip
+  const acts = ["delete", "move from", "update", "edit", "write", "notebook", "move to"] as const
+  // `link` is where the link is and `real` the file it leads to, both as they are on the disk.
+  const shapes = [
+    { name: "out", spelled: "shown", link: ["proj", "shown"], real: ["outside", "real"], outside: true },
+    { name: "inside", spelled: "shown", link: ["proj", "shown"], real: ["proj", "sub", "real"], outside: false },
+    { name: "in a linked folder out", spelled: "out/shown", link: ["outside", "shown"], real: ["farther", "real"], outside: true },
+    { name: "in a linked folder inside", spelled: "alias/shown", link: ["proj", "sub", "shown"], real: ["outside", "real"], outside: true },
+  ]
+  for (const trusted of [true, false])
+    for (const act of acts)
+      for (const shape of shapes)
+        linkedFile(`${act}, ${shape.name}, in ${trusted ? "a trusted" : "an untrusted"} folder`, () =>
+          Effect.acquireUseRelease(
+            Effect.promise(() => tmpdir()),
+            (root) =>
+              Effect.gen(function* () {
+                const world = yield* Effect.promise(() => makeWorld(root.path))
+                const suffix = act === "notebook" ? ".ipynb" : ".txt"
+                const link = `${path.join(world.root, ...shape.link)}${suffix}`
+                const real = `${path.join(world.root, ...shape.real)}${suffix}`
+                const before = act === "notebook" ? notebook : text
+                yield* Effect.promise(async () => {
+                  await fs.writeFile(real, before)
+                  await fs.symlink(real, link, "file")
+                  await fs.writeFile(path.join(world.project, "plain", "c.txt"), text)
+                })
+                const at = `${shape.spelled}${suffix}`
+                const updates: Tool.Metadata[] = []
+                const [tool, input] =
+                  act === "edit"
+                    ? (["Edit", { file_path: at, old_string: "beta", new_string: "BETA" }] as const)
+                    : act === "write"
+                      ? (["Write", { file_path: at, content: "written\n" }] as const)
+                      : act === "notebook"
+                        ? (["NotebookEdit", { notebook_path: at, mode: "replace", cellId: "calc", source: "print(2)" }] as const)
+                        : ([
+                            "Patch",
+                            patched(
+                              act === "delete"
+                                ? `*** Delete File: ${at}`
+                                : act === "move from"
+                                  ? update(at, "plain/moved.txt")
+                                  : act === "move to"
+                                    ? update("plain/c.txt", at)
+                                    : update(at),
+                            ),
+                          ] as const)
+                const settled = yield* run(world.project, tool, input, { trusted, updates })
+                expect(Exit.isSuccess(settled.exit)).toBe(true)
+                const metadata = settled.request?.metadata as {
+                  paths: string[]
+                  files: Array<{ file: string; place: string; from?: string; patch: string; link?: Link; fromLink?: Link }>
+                }
+                const entry = metadata.files[0]!
+                const removes = act === "delete" || act === "move from"
+                // A link is named wherever it is: the one that is removed, and the file that is written through one.
+                expect(act === "move from" ? entry.fromLink : entry.link).toEqual({ place: real, outside: shape.outside })
+                const [linkThere, content] = yield* Effect.promise(async () => [
+                  await fs.lstat(link).then((info) => info.isSymbolicLink(), () => false),
+                  await fs.readFile(real, "utf8"),
+                ])
+                // The disk: what was removed is the link, and what it led to is as it was.
+                expect(linkThere).toBe(!removes)
+                if (!removes) {
+                  expect(content).not.toBe(before)
+                  return
+                }
+                expect(content).toBe(before)
+                // The request: the link is the place that is changed, and the file it leads to is none of them.
+                const place = act === "move from" ? entry.from : entry.place
+                expect(place).toBe(link)
+                expect(metadata.paths).toContain(link)
+                expect(metadata.paths).not.toContain(real)
+                expect(updates.findLast((update) => Array.isArray(update.places))?.places).toContain(link)
+                expect(updates.findLast((update) => Array.isArray(update.places))?.places).not.toContain(real)
+                // Nor is it the file's name or the one in the header of its diff.
+                const name = forward(real)
+                if (act === "delete") expect(forward(entry.file)).not.toBe(name)
+                expect(entry.patch.split("\n").filter((line) => line.startsWith("--- ")).map(forward)).toEqual([
+                  `--- ${forward(link)}`,
+                ])
+              }),
+            (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+          ),
+        )
+})
+
+// Fix loop 1 (class 9): a name with a break in it leaves a diff's header one line, so no client draws it as raw text.
+describe("the header of an approval's diff is one line", () => {
+  for (const [name, value, shown] of [
+    ["a line feed", "\n", "\\n"],
+    ["CR and LF", "\r\n", "\\n"],
+    ["a carriage return", "\r", "\\x0d"],
+    ["a line separator", "\u2028", "\\u{2028}"],
+    ["a paragraph separator", "\u2029", "\\u{2029}"],
+  ] as const) {
+    it.live(`fileDiff of a name with ${name}`, () =>
+      Effect.sync(() => {
+        const file = `a.txt${value}Link ends inside the project`
+        const diff = fileDiff(file, "old\n", "new\n")
+        expect(diff.file).toBe(file)
+        const lines = diff.patch.split("\n")
+        expect(lines).toContain(`+++ a.txt${shown}Link ends inside the project`)
+        expect(lines.filter((line) => line.startsWith("Link ends"))).toEqual([])
+      }),
+    )
+  }
+  // NTFS takes the separators, so this runs on every system, through the real tool.
+  it.live("a Patch of a file with a line separator in its name", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (root) =>
+        Effect.gen(function* () {
+          const world = yield* Effect.promise(() => makeWorld(root.path))
+          const settled = yield* run(world.project, "Patch", patched("*** Add File: a\u2028Link ends inside.txt\n+new"))
+          const entry = entries(settled.request)[0] as { patch?: string } | undefined
+          expect(entry?.patch).toContain("a\\u{2028}Link ends inside.txt")
+          expect(entry?.patch).not.toContain("\u2028")
+        }),
+      (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+    ),
+  )
 })
