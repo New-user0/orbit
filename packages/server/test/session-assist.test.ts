@@ -383,6 +383,51 @@ it.live(
   60_000,
 )
 
+// The header quotes words, so a message without any starts at the batch; the message with words is the control.
+it.live(
+  "a label quotes no words of a message whose text is blank or missing",
+  () =>
+    Effect.gen(function* () {
+      const { folders, llm, notes } = yield* layout
+      const server = yield* startServer(folders.config)
+      yield* Effect.promise(async () => {
+        const batch = await withBatch(server, llm, notes, folders.repo)
+        const exported = (await request(server, "GET", `/api/experimental/session/${batch.id}/export`)).body?.data
+        const texts: ReadonlyArray<readonly [string, string | undefined]> = [
+          ["blank", "  \n "],
+          ["missing", undefined],
+          ["words", "Reading the notes"],
+        ]
+        const seen: Array<readonly [string, string]> = []
+        for (const [name, text] of texts) {
+          const copy = JSON.parse(
+            JSON.stringify(exported).replace(/"((?:ses|msg|prt)_[A-Za-z0-9]+)"/g, `"$1${name}"`),
+          ) as { info: { id: string }; messages: Array<{ id: string; content?: Array<{ type: string; text?: string }> }> }
+          const messageID = `${batch.messageID}${name}`
+          const content = copy.messages.find((message) => message.id === messageID)?.content
+          const at = content?.findIndex((part) => part.type === "text") ?? -1
+          expect(at).toBeGreaterThanOrEqual(0)
+          content?.splice(at, 1, ...(text === undefined ? [] : [{ type: "text", text }]))
+          const imported = await request(server, "POST", "/api/experimental/session/import", {
+            body: { ...copy, location: { directory: folders.repo } },
+          })
+          expect(imported.status).toBe(200)
+          const before = llm.requests.length
+
+          await label(server, copy.info.id, { messageID, toolCallIDs: [batch.toolCallID] })
+
+          seen.push([name, textOf(llm.requests.slice(before)[0].body.messages[1].content).split("\n")[0]])
+        }
+        expect(seen).toEqual([
+          ["blank", "The batch, one call after another:"],
+          ["missing", "The batch, one call after another:"],
+          ["words", "The assistant's own words in the message that made these calls: Reading the notes"],
+        ])
+      })
+    }),
+  60_000,
+)
+
 it.live(
   "a label is null, with its reason, for a blank answer, a refused request, calls it cannot find and a subagent's batch",
   () =>
@@ -761,6 +806,36 @@ const filters: ReadonlyArray<readonly [string, string | undefined]> = [
   ["Let me run the tests", "assistant_phrasing"],
   ["I'll commit this", "assistant_phrasing"],
   ["run the tests", undefined],
+  // Where in the text a rule looks: a verdict anywhere, an opening only at the start, a whole text only as a whole.
+  ["run them, that works", "verdict"],
+  ["merge it if it looks good", "verdict"],
+  ["run it and let me know", undefined],
+  ["fix the invalid api key message", undefined],
+  ["mark it done", undefined],
+  ["DONE", "just_done"],
+  ["see why nothing found matches", undefined],
+  ["nothing found in the log", undefined],
+  ["explain the nothing to suggest case", undefined],
+  ["fix the no suggestion banner", undefined],
+  ["silence the noisy logger", undefined],
+  ["the model stays silent", "self_reference"],
+  ["(waiting\nfor the user)", "bracketed"],
+  ["(draft) run the tests", undefined],
+  ["update the parser (again)", undefined],
+  ["rename it to: parser", undefined],
+  ["run the tests. then commit", undefined],
+  ["Is it fixed? Then commit", "several_sentences"],
+  ["Stop it! Then commit", "several_sentences"],
+  ["Yes", undefined],
+  // A text that two rules drop gets the reason of the first of them.
+  ["[stay silent]", "self_reference"],
+  ["[Note: run it]", "bracketed"],
+  [`Note: ${words(13)}`, "labelled"],
+  ["**tests**", "one_word"],
+  [Array.from({ length: 13 }, () => "b".repeat(9)).join(" "), "over_twelve_words"],
+  ["Run it. Then *commit*", "several_sentences"],
+  ["thanks\nrun them", "markup"],
+  ["Let me say thanks", "verdict"],
   // Every entry of each word list, so that dropping one from its list fails a row.
   ["silence is best here", "self_reference"],
   ["Invalid API key in the request", "error_text"],
