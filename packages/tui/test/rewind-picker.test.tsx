@@ -33,6 +33,9 @@ const selectPrompt = async (setup: Awaited<ReturnType<typeof rewindApp>>, upPres
   setup.mockInput.pressEnter()
 }
 
+// Step 2's warning, one constant for where it shows and where it must not, so a rewording cannot part the two.
+const warning = "⚠ Restores only what Orbit's edit tools changed; changes from shell commands or outside Orbit stay."
+
 // Step 2's option lines that draw the focus pointer.
 const pointed = (frame: string) =>
   frame
@@ -112,9 +115,7 @@ test("step 2 offers the code options only when a dry run would change files, and
   expect(both).toContain("The conversation goes back to this point.")
   const rows = both.split("\n").map((line) => line.trim())
   expect(rows).toContain("4. Do nothing")
-  expect(rows).toContain(
-    "⚠ Restores only what Orbit's edit tools changed; changes from shell commands or outside Orbit stay.",
-  )
+  expect(rows).toContain(warning)
 
   setup.mockInput.pressEscape()
   const list = await setup.waitForFrame((frame) => frame.includes(listHeading) && !frame.includes("Code only"))
@@ -129,7 +130,7 @@ test("step 2 offers the code options only when a dry run would change files, and
   expect(conversation).toContain("Rewind the conversation to just before this prompt:")
   expect(conversation).not.toContain("Code and conversation")
   expect(conversation).not.toContain("Code only")
-  expect(conversation).not.toContain("shell commands and edits made outside Orbit")
+  expect(conversation).not.toContain(warning)
   expect(conversation).toContain("Do nothing")
   expect(setup.actions()).toEqual([])
 })

@@ -277,8 +277,8 @@ describe("an approval answered with the person's revised content", () => {
         )
         expect(Exit.isSuccess(settled.exit)).toBe(true)
         expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("alpha\nBETA\n")
-        expect(text(settled.exit)).toContain("Edited a.txt (1 replacement)")
-        expect(text(settled.exit)).not.toMatch(/modif/i)
+        // The usual result and nothing after it, however a note of the person's change would be worded.
+        expect(text(settled.exit)).toBe(JSON.stringify([{ type: "text", text: "Edited a.txt (1 replacement)" }]))
       }),
     ),
   )

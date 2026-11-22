@@ -312,7 +312,8 @@ test("MCP tool schemas (loaded now and on demand), agent definitions by scope, i
   expect(order).toEqual(order.toSorted((a, b) => a - b))
   // Some tools are deferred, so the heading says that some are loaded on demand.
   expect(lines[at("MCP tool schemas · /mcps")]).toContain("MCP tool schemas · /mcps (some load on demand)")
-  for (const group of ["Loaded now", "Loaded on demand"]) expect(lines[at(group)]?.trim()).toBe(group)
+  const groups = ["Loaded now", "Loaded on demand"]
+  for (const group of groups) expect(lines[at(group)]?.trim()).toBe(group)
   expect(lines[at("docs_search")]).toContain("2.0K")
   expect(lines[at("ORBIT.md")]).toContain("1.2K")
   for (const hidden of ["SysToolZed", "SectionQuux", "ToolBreakX", "AttachKindY"]) expect(result.frame).not.toContain(hidden)
@@ -324,9 +325,7 @@ test("MCP tool schemas (loaded now and on demand), agent definitions by scope, i
   })
   await using __ = loaded.setup
   expect(loaded.frame).toContain("docs_search (docs): 2.0K tokens")
-  expect(loaded.frame).not.toContain("Loaded")
-  expect(loaded.frame).not.toContain("Available")
-  expect(loaded.frame).not.toContain("on demand")
+  for (const hidden of [...groups, "Loaded", "on demand"]) expect(loaded.frame).not.toContain(hidden)
 })
 
 // TD7: the suggestions, under everything else, warnings first, each with its saving.
@@ -583,7 +582,9 @@ test("a refusal, a missing session, an old server, a body that does not decode a
     expect({ name: row.name, shown: result.frame.includes(row.line) }).toEqual({ name: row.name, shown: true })
     expect(/\p{C}/u.test(result.frame.replaceAll("\n", ""))).toBe(false)
     expect(grid(result.frame)).toEqual([])
-    expect(result.frame).not.toContain("Estimated share")
+    // Every line the dialog draws, so that nothing else, whatever it is called, can stand beside the error.
+    const drawnLines = result.frame.split("\n").flatMap((line) => line.trim() || [])
+    expect(drawnLines, row.name).toEqual(["Context window", expect.stringContaining(row.line)])
   }
 })
 

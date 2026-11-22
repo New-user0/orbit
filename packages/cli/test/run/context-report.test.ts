@@ -95,10 +95,11 @@ test("the report has the reference's sections in order, every one for everyone",
     "### Conversation by kind",
     "### Heaviest tools",
     "### Heaviest added context",
-  ].map((line) => lines(auto).indexOf(line))
-  expect(order.every((index) => index >= 0)).toBe(true)
-  expect(order).toEqual(order.toSorted((a, b) => a - b))
-  expect(auto.toLowerCase()).not.toContain("suggestion")
+  ]
+  // Every line outside a table, so that advice under any name is a line too many. The dialog's section, which the
+  // report has none of, may not come as a table row either.
+  expect(lines(auto).filter((line) => line !== "" && !line.startsWith("|"))).toEqual(order)
+  expect(auto.toLowerCase()).not.toContain("ways to free room")
 
   // The category table: every counted row, deferred ones with their percentage, then free space, then the autocompact
   // buffer.
