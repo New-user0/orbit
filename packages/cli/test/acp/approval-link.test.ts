@@ -178,6 +178,8 @@ const PLACES = [
   "C:\\Users\\Om\\proj\\.orbit\\x.md",
   "C:\\Users\\Om\\proj\\_shared\\x.md",
   "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\x.md",
+  // Beside the one above, which its warning names too: their tildes pair.
+  "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\y.md",
   "C:\\Users\\Om\\proj\\(copy)\\[old]\\x.md",
   "\\\\orbit-test.invalid\\share\\x.md",
   "/out/![x](https:/evil.example/p.png)",
@@ -198,6 +200,8 @@ const PLACES = [
   "/out/__init__.py",
   "/out/_start",
   "/out/~struck~",
+  "/out/~opens",
+  "/out/closes~",
   "/out/~~struck~~",
   "/out/a|b|c",
   "/out/trailing\\",
@@ -269,7 +273,7 @@ describe("acp: paths are Markdown's literal text", () => {
   })
 
   test("a path that Markdown leaves alone is sent as it is", async () => {
-    for (const place of ["/workspace/src/a.ts", "C:\\Users\\Om\\proj\\src\\my_file-2.ts", "/out/My Files (2)/ä.txt"]) {
+    for (const place of ["/tmp/RUNNER~1/a.ts", "/workspace/src/a.ts", "C:\\Users\\Om\\proj\\src\\my_file-2.ts", "/out/My Files (2)/ä.txt"]) {
       const call = await asked([{ ...out, place, link: { place, outside: true } }])
       expect(texts(call)).toEqual([`Link ends outside the project, at ${place}`])
     }

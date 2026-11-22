@@ -111,15 +111,20 @@ const isEditFamily = (name: string) =>
 function linksContent(view: PermissionView.View): ToolCallContent[] {
   return view.links.map((link) => ({
     type: "content",
-    content: { type: "text", text: PermissionView.linkWarning(link, markdownPath) },
+    content: {
+      type: "text",
+      // A warning of two paths has a tilde of one that can pair with a tilde of the other, and strike out what is between.
+      text: PermissionView.linkWarning(link, (path) => markdownPath(path, link.file === link.place)),
+    },
   }))
 }
 
 // A path that Markdown draws letter for letter: it has no mark that pairs with another or takes what follows it as
-// markup, a backslash only before a letter or a digit, an underscore only inside a word, and it starts no block and
-// holds nothing that becomes a link by itself.
+// markup, a backslash only before a letter or a digit, an underscore only inside a word, at most the one tilde of a
+// short name such as `RUNNER~1` and that only where no other path shares the text, and it starts no block and holds
+// nothing that becomes a link by itself.
 const LITERAL =
-  /^(?:[\p{L}\p{M}\p{N} /.,:;=@+'"!?%$#(){}-]|\](?![([:])|(?<=[\p{L}\p{N}])_(?=[\p{L}\p{N}])|\\(?=[\p{L}\p{N}]))+$/u
+  /^(?:[\p{L}\p{M}\p{N} /.,:;=@+'"!?%$#(){}~-]|\](?![([:])|(?<=[\p{L}\p{N}])_(?=[\p{L}\p{N}])|\\(?=[\p{L}\p{N}]))+$/u
 const ACTIVE = /^(?:[-+=#]|\d+[.)])|:\/\/|www\.|@[^/\\]*\./i
 // A name that opens with the words of a warning would read as one, so it is quoted too.
 const WARNING = /^(?:link ends|\d+ linked paths)/i
@@ -129,9 +134,10 @@ const WARNING = /^(?:link ends|\d+ linked paths)/i
  * it is where Markdown shows it so, and otherwise in a code span with a longer fence than any in it. So the text a
  * person reads is the path, and no name a repository chose becomes a link, an image or a tag (classes 6, 8 and 9).
  */
-function markdownPath(value: string) {
+function markdownPath(value: string, alone = true) {
   const text = plainPath(value)
-  if (LITERAL.test(text) && !ACTIVE.test(text) && !WARNING.test(text)) return text
+  const tildes = text.split("~").length - 1
+  if (tildes <= (alone ? 1 : 0) && LITERAL.test(text) && !ACTIVE.test(text) && !WARNING.test(text)) return text
   const fence = "`".repeat(Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length)) + 1)
   const pad = text.startsWith("`") || text.endsWith("`") ? " " : ""
   return `${fence}${pad}${text}${pad}${fence}`
