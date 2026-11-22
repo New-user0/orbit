@@ -1,7 +1,7 @@
 import { createStore } from "solid-js/store"
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch, useContext } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
+import type { BorderSides, ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
 import { plain, plainPath } from "@orbit/util/plain"
 import { useTheme, useThemes } from "../../context/theme"
 import type { PermissionReply, PermissionRequest } from "@orbit/client"
@@ -29,13 +29,25 @@ import { useToast } from "../../ui/toast"
 
 type PermissionStage = "permission" | "reject"
 /**
- * The room a question has in its dialog: `rows` for the header, the `gap` under it and the body, above the options and
- * the hints, and `width` for a line of either.
+ * The room a question has in its dialog: `rows` for the header and the body, above the options and the hints and beside
+ * the blank row between them, and `width` for a line of either. `scrolls` is told whether the body holds more than is
+ * in sight.
  */
-type Space = { rows: () => number; width: () => number; gap: () => number }
-// The rows that the scrolling body of an edit keeps, whatever the header above it holds.
+type Space = { rows: () => number; width: () => number; scrolls: (value: boolean) => void }
+/**
+ * The rows of a header and a body at which a question has more of itself in sight: `whole` with a warning of several
+ * rows whole, which the blank row gives way to on any screen, and `more` with that or more, which the hints and the
+ * blank row give way to on a low or narrow one.
+ */
+type Wants = { whole: number; more: number[] }
+// What a name must not say on the fixed line of a warning.
+const WARNING_WORDS = /link ends|linked paths/i
+// The rows that the scrolling body of an edit keeps under a title too long to be said whole.
 const BODY_ROWS = 2
-const DIALOG_ROWS = 15
+/** The rows of an approval's dialog at most, where the screen has them. */
+export const DIALOG_ROWS = 15
+// Under this width a line of a question wraps so often that the hints give way to it, as on a low screen.
+const NARROW = 60
 
 function EditBody(props: {
   file?: string
@@ -46,6 +58,7 @@ function EditBody(props: {
   warnings: string[]
   /** The names that a cut title no longer shows whole. */
   names: string[]
+  space: Space
 }) {
   const theme = useTheme()
   const themes = useThemes()
@@ -67,7 +80,7 @@ function EditBody(props: {
   })
 
   return (
-    <BodyScroll fill={diffs().length > 0 || Boolean(props.patch)}>
+    <BodyScroll space={props.space} fill={diffs().length > 0 || Boolean(props.patch)}>
       {/* One box for all that scrolls, so the rows it can have are not split between two. */}
       <box flexDirection="column" flexShrink={0} gap={1}>
         <Show when={props.warnings.length > 0}>
@@ -141,22 +154,65 @@ function EditBody(props: {
  * which the bar beside it shows (class 8). It is as high as what it holds, so a short question keeps a short dialog,
  * unless it fills the dialog, as a diff's does.
  */
-function BodyScroll(props: { children: JSX.Element; fill?: boolean }) {
+function BodyScroll(props: { children: JSX.Element; space: Space; fill?: boolean }) {
   const theme = useTheme()
   const config = useConfig().data
   let scroll: ScrollBoxRenderable | undefined
-  // A step of the wheel keeps a row of what the body showed, which can be two: no row, and no name across two, is
-  // skipped. A body of one row moves by that row.
+  const [shown, setShown] = createSignal(0)
+  const [held, setHeld] = createSignal(0)
+  const overflows = createMemo(() => held() > shown())
+  createEffect(() => props.space.scrolls(overflows()))
+  onCleanup(() => props.space.scrolls(false))
+  // A step keeps a row of what the body showed, which can be two: no row, and no name across two, is skipped. A body of
+  // one row moves by that row.
+  const page = () => Math.max(1, (scroll?.viewport.height ?? 1) - 1)
+  // While there is more than is in sight these keys are the question's, over the session's of the same keys under it: a
+  // person without a mouse reads all that Enter approves (class 8).
+  Keymap.createLayer(() => ({
+    context: "permission",
+    mode: "base",
+    priority: 1,
+    enabled: overflows(),
+    commands: [
+      {
+        id: "permission.prompt.page.up",
+        title: "Scroll the question up",
+        group: "Permission",
+        run: () => scroll?.scrollBy(-page()),
+      },
+      {
+        id: "permission.prompt.page.down",
+        title: "Scroll the question down",
+        group: "Permission",
+        run: () => scroll?.scrollBy(page()),
+      },
+      {
+        id: "permission.prompt.first",
+        title: "Scroll to the start of the question",
+        group: "Permission",
+        run: () => scroll?.scrollTo(0),
+      },
+      {
+        id: "permission.prompt.last",
+        title: "Scroll to the end of the question",
+        group: "Permission",
+        run: () => scroll?.scrollTo(scroll.scrollHeight),
+      },
+    ],
+  }))
   const scrollAcceleration = createMemo(() => {
     const base = getScrollAcceleration(config)
     return {
-      tick: (now?: number) => Math.min(base.tick(now), Math.max(1, (scroll?.viewport.height ?? 1) - 1)),
+      tick: (now?: number) => Math.min(base.tick(now), page()),
       reset: () => base.reset(),
     }
   })
   return (
     <scrollbox
       flexShrink={1}
+      onSizeChange={function () {
+        setShown(this.height)
+      }}
       height={props.fill ? "100%" : undefined}
       contentOptions={{ minHeight: props.fill ? "100%" : 0 }}
       ref={(item: ScrollBoxRenderable) => (scroll = item)}
@@ -174,7 +230,16 @@ function BodyScroll(props: { children: JSX.Element; fill?: boolean }) {
         },
       }}
     >
-      {props.children}
+      {/* The scroll box measures its own content for the bar, so what it holds is measured in a box of its own. */}
+      <box
+        flexDirection="column"
+        flexShrink={0}
+        onSizeChange={function () {
+          setHeld(this.height)
+        }}
+      >
+        {props.children}
+      </box>
     </scrollbox>
   )
 }
@@ -192,7 +257,12 @@ function Listed(props: { warnings?: string[]; names?: string[]; lead?: string })
   )
 }
 
-export function PermissionPrompt(props: { request: PermissionRequest; directory?: string }) {
+export function PermissionPrompt(props: {
+  request: PermissionRequest
+  directory?: string
+  /** The rows there are for the question, where that is less than the screen. */
+  rows?: number
+}) {
   const data = useData()
   const toast = useToast()
   const [store, setStore] = createStore({
@@ -240,13 +310,14 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   return (
     <Switch>
       <Match when={store.stage === "permission" && review.open()}>
-        <EditorDiffPrompt request={props.request} editor={review.editor()} onSelect={select} />
+        <EditorDiffPrompt request={props.request} editor={review.editor()} rows={props.rows} onSelect={select} />
       </Match>
       <Match when={store.stage === "reject"}>
         <RejectPrompt
           action={props.request.action}
           instance={props.request.id}
           links={links()}
+          rows={props.rows}
           onConfirm={(message) => {
             reply("reject", message || undefined)
           }}
@@ -272,38 +343,63 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           const view = () => canonicalToolName(props.request.action)
           // A title is one line, whatever pattern, query or description is in it.
           const title = view() !== "shell" && current.title ? plain(current.title) : "Permission required"
-          // How the header is fitted (class 8): the body keeps what a person approves, which is the grant while Always
-          // allow is focused and otherwise rows to scroll in (two of an edit, one of another question, whose title often
-          // says what its body does), and the fixed line and the title take the rows that are left. One link is said whole
-          // while that takes half of those at most. Where the dialog has no row for both, the short summary shares the
-          // title's. What is cut or summed up is whole in the body, whichever option is focused.
+          // What a title can be wide, beside its icon and the counts.
+          const titleWidth = (width: number) =>
+            [changes().additions, changes().deletions]
+              .filter((count) => count > 0)
+              .reduce((left, count) => left - stringWidth(`+${count}`) - 1, width - 2)
+          const grantRows = (granting: boolean, width: number) =>
+            (granting ? permissionAlwaysLines(props.request) : []).reduce(
+              (total, line) => total + wrappedRows(line, width),
+              0,
+            )
+          // What the question would have in sight, for the rows that give way to it: the whole warning, the title and
+          // what the body keeps, the same with a title of one row, and the whole title under the summary.
+          const wants = (granting: boolean, width: number) => {
+            const warning = linkRows(links(), width)
+            const body = Math.max(1, grantRows(granting, width))
+            const named = fitText(title, Infinity, titleWidth(width)).used
+            return {
+              whole: warning > 1 ? warning + 1 + body : 0,
+              more: [warning + named + body, warning + 1 + body, Math.min(1, warning) + named + body],
+            }
+          }
+          // How the header is fitted (class 8): one link is said whole while that leaves a row to the title and one to
+          // what a person approves, which is all of the grant while Always allow is focused. The title is whole while it
+          // leaves the same, and is otherwise cut to leave an edit two rows to scroll in. Where the dialog has no row for
+          // both, the short summary shares the title's. What is cut or summed up is whole in the body, whichever option
+          // is focused.
           const layout = (granting: boolean, space: Space) => {
             const granted = granting ? permissionAlwaysLines(props.request) : []
-            const lines = granted.reduce((total, line) => total + wrappedRows(line, space.width()), 0)
-            const kept = granting ? lines : view() === "edit" ? BODY_ROWS : 1
+            const lines = grantRows(granting, space.width())
+            const least = granting ? lines : 1
             const beside = links().summary && space.rows() < 3 ? links().short : undefined
-            const rows = Math.max(links().summary && !beside ? 2 : 1, space.rows() - space.gap() - kept)
             const notice = beside
               ? { text: undefined, rows: 0, whole: false }
-              : fitLinks(links(), Math.floor(rows / 2), space.width())
-            const counted = [changes().additions, changes().deletions]
-              .filter((count) => count > 0)
-              .reduce((total, count) => total + stringWidth(`+${count}`) + 1, 0)
-            const shared = beside ? stringWidth(beside) + 1 : 0
-            const fitted = fitText(title, Math.max(1, rows - notice.rows), space.width() - 2 - counted - shared)
+              : fitLinks(links(), Math.max(1, space.rows() - 1 - least), space.width())
+            const left = space.rows() - notice.rows
+            const width = titleWidth(space.width()) - (beside ? stringWidth(beside) + 1 : 0)
+            const whole = fitText(title, Math.max(1, left - least), width)
+            const kept = !granting && view() === "edit" ? BODY_ROWS : least
+            const fitted = whole.cut ? fitText(title, Math.max(1, left - kept), width) : whole
             // A grant's blank row between two lines is drawn only while it pushes none of them out.
-            const free = space.rows() - space.gap() - notice.rows - fitted.used - lines
+            const free = left - fitted.used - lines
             return { notice, beside, title: fitted, gap: free >= granted.length - 1 ? 1 : 0 }
           }
 
-          const questionBody = (granting: boolean, fitted: () => ReturnType<typeof layout>) => {
+          const questionBody = (granting: boolean, space: Space, fitted: () => ReturnType<typeof layout>) => {
             const warnings = () => (links().lines.length > 1 || !fitted().notice.whole ? links().lines : [])
-            // An edit's title is the names of its files. Any other is listed as it is, under its icon.
-            const names = () => (fitted().title.cut ? (current.names ?? [title]) : [])
+            // An edit's title is the names of its files. Any other is listed as it is, under its icon. A name that the
+            // whole warning says is not listed again over the diff that it would push out of sight.
+            const names = () => {
+              if (!fitted().title.cut) return []
+              const said = fitted().notice.whole ? links().named : []
+              return (current.names ?? [title]).filter((name) => !said.includes(name))
+            }
             const lead = current.names ? "Path: " : `${current.icon} `
             if (granting)
               return (
-                <BodyScroll>
+                <BodyScroll space={space}>
                   {/* The grant leads, and what is summed up or cut above follows it in the same scroll. */}
                   <box paddingLeft={1} gap={fitted().gap} flexShrink={0}>
                     <For each={permissionAlwaysLines(props.request)}>
@@ -329,10 +425,11 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                   patch={current.patch}
                   warnings={warnings()}
                   names={names()}
+                  space={space}
                 />
               )
             return (
-              <BodyScroll>
+              <BodyScroll space={space}>
                 <Listed warnings={warnings()} />
                 {view() === "external_directory" ? (
                   <Show when={current.lines.length > 0}>
@@ -412,8 +509,10 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title="Permission required"
               semanticLabel={permissionSemanticLabel(props.request.action, current.title)}
               instance={props.request.id}
+              rows={props.rows}
+              wants={(option, width) => wants(option === "always", width)}
               header={(option, space) => header(() => layout(option === "always", space))}
-              body={(option, space) => questionBody(option === "always", () => layout(option === "always", space))}
+              body={(option, space) => questionBody(option === "always", space, () => layout(option === "always", space))}
               options={
                 props.request.save?.length
                   ? {
@@ -560,10 +659,25 @@ function LinkNotice(props: { warning?: string }) {
 // summary, in its short form where the sentence is wider than the line.
 function fitLinks(links: ReturnType<typeof permissionLinks>, rows: number, width: number) {
   if (!links.summary) return { text: undefined, rows: 0, whole: true }
-  const line = links.lines.length === 1 ? links.lines[0] : undefined
+  const line = fixedLine(links)
   const taken = line === undefined ? Infinity : wrappedRows(line, width)
   if (taken <= rows) return { text: line, rows: taken, whole: true }
   return { text: stringWidth(links.summary) <= width ? links.summary : links.short, rows: 1, whole: false }
+}
+
+// The rows of a request's fixed line where it says all that it can: one link's whole warning, or the summary.
+function linkRows(links: ReturnType<typeof permissionLinks>, width: number) {
+  if (!links.summary) return 0
+  const line = fixedLine(links)
+  return line === undefined ? 1 : wrappedRows(line, width)
+}
+
+// The warning that the fixed line can say whole: one link's, with no warning's words in what the repository named, which
+// a wrap could put at the start of a row of the line that is Orbit's own (class 9).
+function fixedLine(links: ReturnType<typeof permissionLinks>) {
+  if (links.lines.length !== 1) return undefined
+  const line = links.lines[0]!
+  return WARNING_WORDS.test(line.slice(hangingLead(line).length)) ? undefined : line
 }
 
 // `text` in `rows` rows of `width` at most, with a mark where it is cut, and the rows that it then takes.
@@ -595,6 +709,8 @@ function wrappedRows(line: string, width: number) {
 export function EditorDiffPrompt(props: {
   request: PermissionRequest
   editor: string
+  /** The rows there are for the question, where that is less than the screen. */
+  rows?: number
   onSelect: (option: string) => void
 }) {
   const theme = useTheme()
@@ -608,25 +724,50 @@ export function EditorDiffPrompt(props: {
   // It is only drawn for a request of one file, which has one linked end at most.
   const links = createMemo(() => permissionLinks(props.request, pathFormatter.format))
   const vscode = process.env.TERM_PROGRAM === "vscode"
-  const layout = (granting: boolean, space: Space) => {
+  // The header gives way where it would leave the question no row to scroll in.
+  const headed = (space: Space) => space.rows() >= 3
+  const asked = () => `Make this change to ${name()}?`
+  const askedWidth = (width: number) => width - hangingLead(asked()).length
+  const measured = (granting: boolean, width: number) => {
     const granted = granting
-      ? permissionAlwaysLines(props.request).reduce((total, line) => total + wrappedRows(line, space.width()), 0)
+      ? permissionAlwaysLines(props.request).reduce((total, line) => total + wrappedRows(line, width), 0)
       : 0
-    // Under the one row of the header and the gap. The row about saving gives way to the question and the grant.
-    const under = space.rows() - 1 - space.gap()
-    const saves = vscode && under >= 3
+    const warning = linkRows(links(), width)
+    const question = fitText(asked(), Infinity, askedWidth(width)).used
+    return { granted, warning, question, all: warning + question + granted }
+  }
+  // With the header's row: all of it, the whole warning over a question of one row, and the whole question under the
+  // summary, with a row to read the rest in.
+  const wants = (granting: boolean, width: number) => {
+    const { granted, warning, question, all } = measured(granting, width)
+    const summed = Math.min(1, warning)
+    const whole = 1 + warning + 1 + granted
+    return {
+      whole: warning > 1 ? whole : 0,
+      more: [1 + all, whole, 1 + summed + question + Math.max(summed, granted)],
+    }
+  }
+  const layout = (granting: boolean, space: Space) => {
+    const { granted, warning, all } = measured(granting, space.width())
+    // Under the one row of the header, where that is drawn. The row about saving is the first to give way: it is drawn
+    // only over the whole warning, question and grant.
+    const under = space.rows() - (headed(space) ? 1 : 0)
+    const saves = vscode && under > all
     const free = under - (saves ? 1 : 0)
-    const beside = links().summary && free < 3 ? links().short : undefined
-    const notice = beside
-      ? { text: undefined, rows: 0, whole: false }
-      : fitLinks(links(), Math.min(3, Math.max(1, free - granted - 1)), space.width())
+    const said = fixedLine(links()) !== undefined && warning + 1 + granted <= free
+    const beside = links().summary && free < 3 && !said ? links().short : undefined
+    if (beside) {
+      const question = fitText(asked(), 1, space.width() - stringWidth(beside) - 1)
+      return { notice: { text: undefined, rows: 0, whole: false }, beside, saves, question }
+    }
+    const notice = fitLinks(links(), Math.max(1, free - 1 - granted), space.width())
     const left = free - notice.rows - granted
-    const asked = `Make this change to ${name()}?`
-    const width = space.width() - (beside ? stringWidth(beside) + 1 : hangingLead(asked).length)
-    // What is summed up or cut leaves rows to read the whole of it in.
-    const reserved = granting ? 0 : BODY_ROWS
-    const whole = fitText(asked, Math.max(1, left - (notice.whole ? 0 : reserved)), width)
-    const question = whole.cut ? fitText(asked, Math.max(1, left - reserved), width) : whole
+    const width = askedWidth(space.width())
+    // The question is whole where it leaves a row for what was summed up, and is otherwise cut to leave rows to read in.
+    const whole = fitText(asked(), Math.max(1, left - (granting || notice.whole ? 0 : 1)), width)
+    // A name is in the whole of its link's warning: without one, a cut question leaves rows to read it in.
+    const kept = granting ? 0 : notice.whole ? (warning ? 0 : 1) : BODY_ROWS
+    const question = whole.cut ? fitText(asked(), Math.max(1, left - kept), width) : whole
     return { notice, beside, saves, question }
   }
   return (
@@ -634,15 +775,19 @@ export function EditorDiffPrompt(props: {
       title="Permission required"
       semanticLabel={permissionSemanticLabel(props.request.action, `Edit ${name()}`)}
       instance={props.request.id}
-      header={
-        <box flexDirection="row" gap={1} flexShrink={0}>
-          <text fg={theme.text.feedback.warning.base}>{"▲"}</text>
-          {/* The layout counts one row for it, and one for saving: each is cut in the middle rather than wrapped. */}
-          <text fg={theme.text.base} flexShrink={1} height={1} wrapMode="none" truncate>
-            {`Reviewing in ${plain(props.editor)}`}
-          </text>
-        </box>
-      }
+      rows={props.rows}
+      wants={(option, width) => wants(option === "always", width)}
+      header={(_, space) => (
+        <Show when={headed(space)}>
+          <box flexDirection="row" gap={1} flexShrink={0}>
+            <text fg={theme.text.feedback.warning.base}>{"▲"}</text>
+            {/* The layout counts one row for it, and one for saving: each is cut in the middle rather than wrapped. */}
+            <text fg={theme.text.base} flexShrink={1} height={1} wrapMode="none" truncate>
+              {`Reviewing in ${plain(props.editor)}`}
+            </text>
+          </box>
+        </Show>
+      )}
       // While Always allow is focused the prompt says what it grants, as the full dialog does, so the short prompt never
       // hides that the grant reaches past this one file.
       body={(option, space) => {
@@ -672,7 +817,7 @@ export function EditorDiffPrompt(props: {
                 )}
               </Show>
             </box>
-            <BodyScroll>
+            <BodyScroll space={space}>
               <Show when={option === "always"}>
                 <box paddingLeft={1} flexDirection="column" flexShrink={0}>
                   <For each={permissionAlwaysLines(props.request)}>
@@ -684,7 +829,7 @@ export function EditorDiffPrompt(props: {
               </Show>
               <Listed
                 warnings={fitted().notice.whole ? [] : links().lines}
-                names={fitted().question.cut ? [name()] : []}
+                names={fitted().question.cut && !(links().summary && fitted().notice.whole) ? [name()] : []}
                 lead="Path: "
               />
             </BodyScroll>
@@ -710,10 +855,13 @@ export function permissionSemanticLabel(action: string, title?: string) {
   return `Permission required: ${title ?? action}`
 }
 
+const TELL = "Tell Orbit what to do differently"
+
 function RejectPrompt(props: {
   action: string
   instance: string
   links: ReturnType<typeof permissionLinks>
+  rows?: number
   onConfirm: (message: string) => void
   onCancel: () => void
 }) {
@@ -724,6 +872,22 @@ function RejectPrompt(props: {
   const dimensions = useTerminalDimensions()
   const narrow = createMemo(() => dimensions().width < 80)
   const [width, setWidth] = createSignal(dimensions().width)
+  // Beside the border and the padding. The blank rows give way where there are too few for them, and the warning is
+  // summed up, so that the field and the hints stay on screen.
+  const fitted = createMemo(() => {
+    const rows = props.rows ?? dimensions().height
+    const inner = width() - 6
+    // The field's row, and on a narrow screen the hints' under it.
+    const answer = narrow() ? 2 : 1
+    const notice = fitLinks(props.links, 3, inner)
+    // Five blank rows, and one more between the field and hints that are stacked.
+    const blanks = narrow() ? 6 : 5
+    const full = 1 + notice.rows + wrappedRows(TELL, inner) + answer + blanks
+    if (full <= rows) return { notice, roomy: true, field: rows - full + 1 }
+    const low = fitLinks(props.links, Math.max(1, Math.min(3, rows - 2 - answer)), inner)
+    return { notice: low, roomy: false, field: Math.max(1, rows - 2 - low.rows - answer + 1) }
+  })
+  const blank = () => (fitted().roomy ? 1 : 0)
   Keymap.createLayer(() => ({
     context: "permission",
     mode: "base",
@@ -761,38 +925,42 @@ function RejectPrompt(props: {
       onSizeChange={function () {
         setWidth(this.width)
       }}
+      flexShrink={0}
       backgroundColor={theme.background.raised.base}
       border={["left"]}
       borderColor={theme.text.feedback.error.base}
       customBorderChars={SplitBorder.customBorderChars}
     >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
+      <box gap={blank()} paddingLeft={1} paddingRight={3} paddingTop={blank()} paddingBottom={blank()} flexShrink={0}>
         <box flexDirection="column" paddingLeft={1}>
           <box flexDirection="row" gap={1}>
             <text fg={theme.text.feedback.error.base}>{"△"}</text>
             <text fg={theme.text.base}>Reject permission</text>
           </box>
           {/* The field under it has no room to scroll: a warning of more than three rows is summed up. */}
-          <LinkNotice warning={fitLinks(props.links, 3, width() - 6).text} />
+          <LinkNotice warning={fitted().notice.text} />
         </box>
         <box paddingLeft={1}>
-          <text fg={theme.text.muted}>Tell Orbit what to do differently</text>
+          <text fg={theme.text.muted} maxHeight={fitted().roomy ? undefined : 1}>
+            {TELL}
+          </text>
         </box>
       </box>
       <box
         flexDirection={narrow() ? "column" : "row"}
         flexShrink={0}
-        paddingTop={1}
+        paddingTop={blank()}
         paddingLeft={2}
         paddingRight={3}
-        paddingBottom={1}
+        paddingBottom={blank()}
         backgroundColor={theme.decrease(theme.background.raised.base)}
         justifyContent={narrow() ? "flex-start" : "space-between"}
         alignItems={narrow() ? "flex-start" : "center"}
-        gap={1}
+        gap={narrow() ? blank() : 1}
       >
         <textarea
           id="session.permission.reject.message"
+          maxHeight={fitted().field}
           ref={(val: TextareaRenderable) => {
             input = val
             SimulationSemantics.bind(() => ({
@@ -867,6 +1035,9 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
   options: T
   escapeKey?: keyof T
   fullscreen?: boolean
+  /** The rows there are for the dialog, where that is less than the screen. */
+  rows?: number
+  wants?: (option: keyof T, width: number) => Wants
   onSelect: (option: keyof T) => void
 }) {
   const theme = useTheme()
@@ -959,20 +1130,50 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
   // The dialog can be narrower than the screen, beside a sidebar, so it measures itself.
   const [width, setWidth] = createSignal(dimensions().width)
   // What the border and the options leave of the dialog, for the question and for the hints, stacked on a narrow screen.
+  const [scrolls, setScrolls] = createSignal(false)
+  // Fullscreen keeps a row of the screen above and below it, where that leaves two to the header and the body.
+  const inset = () => (dimensions().height - 2 < keys.length + 2 ? 0 : 1)
   const room = createMemo(() => {
-    const height = store.expanded ? dimensions().height - 2 : Math.min(DIALOG_ROWS, dimensions().height)
+    const height = store.expanded
+      ? dimensions().height - 2 * inset()
+      : Math.min(DIALOG_ROWS, props.rows ?? dimensions().height)
+    // Every option is in the dialog, with a row of the header and one of the body above them: the border's top gives
+    // way to those first, and then its bottom, which names the keys that scroll.
+    const top = height - 2 - keys.length >= 2
+    const bottom = height - 1 - keys.length >= 2
+    const all = height - (top ? 1 : 0) - (bottom ? 1 : 0) - keys.length
     const hints = narrow() ? (keys.length > 1 ? 1 : 0) + 2 + (props.fullscreen ? 1 : 0) : 1
-    const all = height - 2 - keys.length
-    // The hints give way on a screen too low for them beside a row of the header, one of the question and the grant's.
-    const hinted = all - hints >= 3
-    return { hinted, rows: hinted ? all - hints : all }
+    const wants = props.wants?.(store.selected, width() - 6) ?? { whole: 0, more: [] }
+    const tight = width() < NARROW || height < DIALOG_ROWS
+    // Whether rows that give way put more of the question in sight, which only a low or a narrow screen needs.
+    const buys = (without: number, rows: number) => tight && wants.more.some((want) => want > without && want <= rows)
+    // The hints give way on a screen too low for them beside a row of the header, one of the question and the grant's,
+    // and on a low or narrow one to what they would push out of sight.
+    const hinted = all - hints >= 3 && !buys(all - hints, all)
+    const rows = hinted ? all - hints : all
+    // The blank row under the header gives way first: to a warning that is whole without it on any screen, and always
+    // where the question has three rows or fewer.
+    const gap = rows < 4 || wants.whole === rows || buys(rows - 1, rows) ? 0 : 1
+    return { height, top, bottom, hinted, gap, rows: rows - gap }
   })
   const space: Space = {
     rows: () => room().rows,
-    // The blank row under the header gives way where the question has three rows or fewer.
-    gap: () => (room().rows < 4 ? 0 : 1),
     // Less the border and the padding on both sides.
     width: () => width() - 6,
+    scrolls: setScrolls,
+  }
+  const sides = createMemo(() => {
+    if (room().top) return true
+    const open: BorderSides[] = room().bottom ? ["left", "right", "bottom"] : ["left", "right"]
+    return open
+  })
+  // Said on the border, so it takes no row of what it scrolls.
+  const scrollKeys = () => {
+    if (!scrolls()) return undefined
+    const keys = [shortcuts.get("permission.prompt.page.up"), shortcuts.get("permission.prompt.page.down")]
+      .filter((key) => key)
+      .join("/")
+    return keys ? ` ${keys} scroll ` : undefined
   }
 
   const content = () => (
@@ -988,14 +1189,17 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
         expanded: store.expanded,
       }))}
       backgroundColor={theme.background.base}
-      border
+      border={sides()}
       borderStyle="rounded"
       borderColor={theme.text.feedback.warning.base}
+      bottomTitle={scrollKeys()}
+      bottomTitleAlignment="right"
+      flexShrink={0}
       {...(store.expanded
-        ? { top: dimensions().height * -1 + 1, bottom: 1, left: 2, right: 2, position: "absolute" }
+        ? { top: dimensions().height * -1 + inset(), bottom: inset(), left: 2, right: 2, position: "absolute" }
         : {
             top: 0,
-            maxHeight: DIALOG_ROWS,
+            maxHeight: room().height,
             bottom: 0,
             left: 0,
             right: 0,
@@ -1003,7 +1207,7 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
           })}
     >
       {/* What does not fit is clipped here, so nothing is painted over the options, the hints or the border. */}
-      <box gap={space.gap()} paddingLeft={1} paddingRight={2} flexGrow={1} overflow="hidden">
+      <box gap={room().gap} paddingLeft={1} paddingRight={2} flexGrow={1} flexShrink={1} overflow="hidden">
         <Show
           when={props.header}
           fallback={

@@ -124,6 +124,10 @@ async function drawFull(
     scroll?: number
     // Scrolls to the end, with the wheel over the row above the options, which is the last of what scrolls.
     read?: boolean
+    // Scrolls to the end with page down alone, as a person without a mouse does.
+    keys?: boolean
+    // Keys pressed one after the other, each with the screen after it.
+    press?: Array<[string, { ctrl?: boolean; meta?: boolean }?]>
     // The prompt in a column narrower than the screen, as beside a sidebar.
     column?: number
     compact?: boolean
@@ -223,7 +227,7 @@ async function drawFull(
   }
   try {
     app.renderer.start()
-    await until(options.compact ? "Reviewing in" : "Allow once")
+    await until("Allow once")
     if (stage === "always") {
       app.mockInput.pressArrow("down")
       await until("This will always allow")
@@ -234,7 +238,13 @@ async function drawFull(
     }
     if (options.fullscreen) {
       app.mockInput.pressKey("f", { ctrl: true })
-      await until("minimize")
+      // Told by where it is drawn: the hint that says so gives way on a low or narrow screen.
+      const started = Date.now()
+      while (app.captureCharFrame().startsWith("╭")) {
+        if (Date.now() - started > 8_000) throw new Error("timed out waiting for fullscreen")
+        await Bun.sleep(1)
+        await app.renderOnce()
+      }
     }
     if (options.drawn) await until(options.drawn)
     await Bun.sleep(0)
@@ -246,6 +256,19 @@ async function drawFull(
       await app.mockMouse.scroll(10, 4 + (step % 8), "down")
       await app.renderOnce()
       shots.push(app.captureCharFrame())
+    }
+    for (const [key, modifiers] of options.press ?? []) {
+      app.mockInput.pressKey(key, modifiers)
+      await Bun.sleep(0)
+      shots.push(await settled())
+    }
+    while (options.keys) {
+      app.mockInput.pressKey("\x1b[6~")
+      await Bun.sleep(0)
+      const next = await settled()
+      if (next === shots.at(-1)) break
+      if (shots.length > 600) throw new Error("the scroll has no end")
+      shots.push(next)
     }
     if (!options.read) return shots
     const over = shots[0]!.split("\n").findIndex((row) => squash(row).endsWith("1Allowonce")) - 1
@@ -678,7 +701,8 @@ function dialog(frame: string) {
   const bottom = lines.findIndex((line) => line.startsWith("╰"))
   expect(lines[0]).toMatch(/^╭─+╮$/)
   expect(bottom).toBeGreaterThan(0)
-  expect(lines[bottom]).toMatch(/^╰─+╯$/)
+  // The bottom border names the keys that scroll while the body holds more than is in sight, and nothing else.
+  expect(lines[bottom]).toMatch(/^╰─+( pgup\/pgdn scroll ─)?╯$/)
   for (const line of lines.slice(1, bottom)) expect(line).toMatch(/^│.*│$/)
   expect(lines.slice(bottom + 1).join("")).toBe("")
   return lines.slice(1, bottom).map(squash)
@@ -763,10 +787,16 @@ test("the compact prompt cuts a long name with a mark, above what Always allow g
           const rows = dialog((await drawFull(request, "always", { width, height: 24 }, { compact: true }))[0]!).join("")
           expect([program, width, rows.includes(GRANT)]).toEqual([program, width, true])
           expect([program, width, rows.includes("Makethischangeto")]).toEqual([program, width, true])
-          expect([program, width, rows.includes("Saveintheeditortoanswer")]).toEqual([program, width, program === "vscode"])
+          // The row about saving gives way first: of these, only an unlinked name leaves a row for it, from 80 columns.
+          const saving = program === "vscode" && width >= 80 && !("link" in (request.metadata!.files as Entry[])[0]!)
+          expect([program, width, rows.includes("Saveintheeditortoanswer")]).toEqual([program, width, saving])
         }
       const cut = dialog((await drawFull(ask([out(name)]), "always", { width: 70, height: 24 }, { compact: true }))[0]!)
       expect(cut.join("")).toContain("…")
+      // A question that fits keeps it.
+      const kept = dialog((await drawFull(ask([plainFile(name)]), "always", { width: 120, height: 24 }, { compact: true }))[0]!)
+      expect(kept.join("")).not.toContain("…")
+      expect(kept.join("").includes("Saveintheeditortoanswer")).toBe(program === "vscode")
     }
   } finally {
     if (before === undefined) delete process.env.TERM_PROGRAM
@@ -1456,3 +1486,274 @@ test("a line of an approval keeps its rows where the box is too low for all of t
     }
   }
 })
+
+// Fix loop 3 (class 8): a person without a mouse reads the whole of what Enter approves, and on a narrow screen the
+// name, the target, the grant and the diff that the prompt could show before its fixed line are still on its first
+// screen. Nothing here uses the mouse.
+const END_OF: Array<{ kind: string; stages: ReadonlyArray<"permission" | "always">; request: (value: string) => PermissionRequest }> = [
+  {
+    kind: "link out",
+    stages: FOCUSED,
+    request: (value) => ask([{ ...out("a.txt"), place: `/e/${value}`, link: { place: `/e/${value}`, outside: true } }]),
+  },
+  {
+    kind: "link inside",
+    stages: FOCUSED,
+    request: (value) => ask([{ ...inside("b.txt"), link: { place: `/work/${value}`, outside: false } }]),
+  },
+  { kind: "name", stages: FOCUSED, request: (value) => ask([plainFile(value)]) },
+  {
+    kind: "move's source",
+    stages: FOCUSED,
+    request: (value) => ask([{ ...plainFile("to.txt"), from: `/e/${value}`, fromLink: { place: `/e/${value}`, outside: true } }]),
+  },
+  { kind: "last of twelve files", stages: FOCUSED, request: (value) => ask([...Array.from({ length: 11 }, (_, index) => out(`f${index}.txt`)), out(value)]) },
+  { kind: "command", stages: ["permission"], request: (value) => asked("Bash", [`run ${value}`]) },
+  { kind: "grant", stages: ["always"], request: (value) => ({ ...asked("Bash", ["run x"]), save: [`run ${value}`] }) },
+  {
+    kind: "folder",
+    stages: FOCUSED,
+    request: (value) => ({ ...asked("external_directory", [`/o/${value}/*`], { parentDir: `/o/${value}` }), save: [`/o/${value}/*`] }),
+  },
+  {
+    kind: "last of fourteen patterns",
+    stages: FOCUSED,
+    request: (value) => {
+      const all = [...Array.from({ length: 13 }, (_, index) => `/o/folder${index}/*`), `/o/${value}/*`]
+      return { ...asked("external_directory", all, { parentDir: "/o" }), save: all }
+    },
+  },
+  { kind: "read", stages: FOCUSED, request: (value) => asked("Read", [`/r/${value}`], { paths: [`/r/${value}`] }) },
+  { kind: "search", stages: FOCUSED, request: (value) => asked("Grep", [value], { path: `/r/${value}` }) },
+]
+const READ_SIZES = [
+  [80, 24],
+  [70, 24],
+  [60, 24],
+  [100, 30],
+  [80, 12],
+  [80, 16],
+  [50, 10],
+  [30, 12],
+] as const
+for (const value of END_OF)
+  for (const [width, height] of READ_SIZES)
+    test(`the end of a ${value.kind} is read with the keys alone at ${width}x${height}, in each prompt and stage`, async () => {
+      const edit = value.request("x").action === "Edit" && value.kind !== "last of twelve files"
+      const prompts = [{}, { fullscreen: true }, ...(edit ? [{ compact: true }] : [])]
+      for (const options of prompts)
+        for (const stage of value.stages)
+          for (const length of [30, 90, 150, 220, 320, 500]) {
+            const name = `${words("v", 120, "/").slice(0, length).replace(/\/$/, "")}/QEND`
+            const request = value.request(name)
+            // The compact prompt names a file by its last part, and a linked one's whole place in its warning.
+            if ("compact" in options && value.kind === "name") continue
+            const shots = await drawFull(request, stage, { width, height }, { ...options, keys: true })
+            const cell = [JSON.stringify(options), stage, length]
+            expect([...cell, readAll(shots).includes(flat(name))]).toEqual([...cell, true])
+            // Where more was out of sight, the first screen named the keys.
+            if (shots.length > 1) expect([...cell, shots[0]!.includes("pgup/pgdn scroll")]).toEqual([...cell, true])
+          }
+    }, 120_000)
+
+for (const stage of FOCUSED)
+  test(`one long name is read with the keys alone in the compact prompt, ${stage} stage`, async () => {
+    for (const [width, height] of READ_SIZES)
+      for (const length of [90, 220, 500]) {
+        const request = ask([plainFile(`${words("n", 300, "-").slice(0, length)}-QEND`)])
+        const all = readAll(await drawFull(request, stage, { width, height }, { compact: true, keys: true }))
+        expect([width, height, length, all.includes("QEND")]).toEqual([width, height, length, true])
+      }
+  }, 120_000)
+
+test("the keys page by a screen less a row, and go to the first and last row", async () => {
+  // Each row is named, so that a screen says which rows it holds.
+  const request = asked("Skill", Array.from({ length: 30 }, (_, index) => `row-${index}-end`))
+  const held = (frame: string) => [...flat(frame).matchAll(/row-(\d+)-end/g)].map((match) => Number(match[1]))
+  const [first, down, down2, up, last, home, ctrlDown, ctrlUp] = (
+    await drawFull(request, "permission", { width: 80, height: 24 }, {
+      press: [
+        ["\x1b[6~"],
+        ["\x1b[6~"],
+        ["\x1b[5~"],
+        ["\x1b[F"],
+        ["\x1b[H"],
+        ["f", { ctrl: true, meta: true }],
+        ["b", { ctrl: true, meta: true }],
+      ],
+    })
+  ).map(held)
+  expect(first![0]).toBe(0)
+  expect(down![0]).toBe(first!.at(-1)!)
+  expect(down2![0]).toBe(down!.at(-1)!)
+  expect(up).toEqual(down!)
+  expect(last!.at(-1)).toBe(29)
+  expect(home).toEqual(first!)
+  // The session's chords of the same commands.
+  expect(ctrlDown).toEqual(down!)
+  expect(ctrlUp).toEqual(first!)
+})
+
+test("the border names the keys only while more is out of sight", async () => {
+  for (const compact of [false, true]) {
+    const request = (length: number) => ask([plainFile(`${"n".repeat(length)}.txt`)])
+    const size = { width: 80, height: 24 }
+    expect([compact, (await drawFull(request(5), "permission", size, { compact }))[0]!.includes("scroll")]).toEqual([compact, false])
+    expect([compact, (await drawFull(request(1000), "permission", size, { compact }))[0]!.includes("pgup/pgdn scroll")]).toEqual([compact, true])
+  }
+  // The hint goes with what overflowed, when the focused option's body fits.
+  const command = asked("Bash", [words("c", 300)])
+  expect((await drawFull(command, "always", { width: 80, height: 24 }))[0]!).not.toContain("pgup/pgdn scroll")
+})
+
+// What fitted on the first screen at m5-integration (0b605881), which drew no fixed line: the parts, and the sizes at
+// which each was drawn. While Always allow is focused a screen on which it drew no grant at all is not one that fitted.
+const FITTED: Array<[string, string, string]> = [
+  ["none, dialog, permission", "name", "30x12 40x10 50x10 60x10"],
+  ["none, dialog, permission", "name diff", "30x16 30x24 40x12 40x16 40x24 50x12 50x16 50x24 60x12 60x16 60x24"],
+  ["inside, dialog, permission", "name", "30x12 40x10 40x12 50x10 60x10"],
+  ["inside, dialog, permission", "name target", "30x16 30x24 50x12 60x12"],
+  ["inside, dialog, permission", "name target diff", "40x16 40x24 50x16 50x24 60x16 60x24"],
+  ["inside, compact, permission", "name target", "30x12 30x16 30x24 40x12 40x16 40x24 50x12 50x16 50x24 60x12 60x16 60x24"],
+  ["inside, compact, permission", "name", "40x10"],
+  ["outs, dialog, permission", "name target", "30x12 30x16 30x24 40x12 40x16 40x24 50x10 50x12 50x16 50x24 60x10 60x12"],
+  ["outs, dialog, permission", "name target diff", "60x16 60x24"],
+  ["outs, compact, permission", "name", "30x12 40x10 50x10 60x10"],
+  ["outs, compact, permission", "name target", "30x16 30x24 40x12 40x16 40x24 50x12 50x16 50x24 60x12 60x16 60x24"],
+  ["outa, dialog, permission", "name target", "30x12 30x16 30x24 40x10 40x12 40x16 40x24 50x10 50x12 60x10 60x12"],
+  ["outa, dialog, permission", "name target diff", "50x16 50x24 60x16 60x24"],
+  ["outa, compact, permission", "name target", "30x12 30x16 30x24 40x12 40x16 40x24 50x12 50x16 50x24 60x12 60x16 60x24"],
+  ["outa, compact, permission", "name", "40x10 50x10 60x10"],
+  ["none, compact, permission", "name", "30x16 30x24 40x12 40x16 40x24 50x12 50x16 50x24 60x12 60x16 60x24"],
+  ["none, dialog, always", "name grant", "30x16 30x24 40x16 40x24 50x16 50x24 60x12 60x16 60x24"],
+  ["none, dialog, always", "name", "40x12 50x12"],
+  ["none, compact, always", "name", "30x16 30x24"],
+  ["none, compact, always", "name grant", "40x16 40x24 50x16 50x24 60x16 60x24"],
+  ["inside, dialog, always", "name grant", "30x16 30x24 40x16 40x24 50x16 50x24 60x12 60x16 60x24"],
+  ["inside, dialog, always", "name", "40x12 50x12"],
+  ["inside, compact, always", "name target", "40x16 40x24"],
+  ["inside, compact, always", "name target grant", "50x16 50x24 60x16 60x24"],
+  ["outs, dialog, always", "name target grant", "30x16 30x24 40x16 40x24 50x16 50x24 60x12 60x16 60x24"],
+  ["outs, dialog, always", "name target", "50x12"],
+  ["outs, compact, always", "name target grant", "60x16 60x24"],
+  ["outa, dialog, always", "name target grant", "30x16 30x24 40x16 40x24 50x16 50x24 60x12 60x16 60x24"],
+  ["outa, dialog, always", "name target", "40x12 50x12"],
+  ["outa, compact, always", "name target", "30x12 50x16 50x24"],
+  ["outa, compact, always", "name target grant", "60x16 60x24"],
+]
+const FITTING: Record<string, { entry: Entry; name: string; target?: string }> = {
+  none: { entry: plainFile("settings.json"), name: "settings.json" },
+  inside: { entry: inside("settings.json"), name: "settings.json", target: "src/settings.json" },
+  outs: { entry: out("settings.json"), name: "settings.json", target: "real/settings.json" },
+  outa: { entry: out("a.txt"), name: "a.txt", target: "elsewhere/real/a.txt" },
+}
+for (const [drawn, parts, sizes] of FITTED)
+  test(`what fitted before on a narrow screen is on the first screen: ${drawn}: ${parts}`, async () => {
+    const [kind, prompt, stage] = drawn.split(", ")
+    const fitting = FITTING[kind!]!
+    for (const at of sizes.split(" ")) {
+      const [width, height] = at.split("x").map(Number)
+      const focused = stage === "always" ? "always" : "permission"
+      const shot = (await drawFull(ask([fitting.entry]), focused, { width: width!, height: height! }, { compact: prompt === "compact", editor: "Ed" }))[0]!
+      const rows = dialog(shot)
+      const said = rows.join("").replaceAll("\\", "/")
+      for (const part of parts.split(" ")) {
+        const found =
+          part === "name"
+            ? said.includes(fitting.name)
+            : part === "target"
+              ? said.includes(fitting.target!)
+              : part === "grant"
+                ? said.includes(GRANT)
+                : said.includes("1-old")
+        expect([at, part, found]).toEqual([at, part, true])
+      }
+      // Beside every option.
+      expect([at, rows.filter((row) => /^›?[123](Allowonce|Alwaysallow|Reject)$/.test(row)).length]).toEqual([at, 3])
+    }
+  })
+
+test("one link's warning is whole while it leaves a row to the title and one to what is approved", async () => {
+  // At 70x24 the dialog has five rows under the hints and beside the blank one, and six without it.
+  const drawn = async (rows: number) => {
+    const place = `/elsewhere/${"d".repeat(58 * rows - 69)}/QEND`
+    const entry = { ...out("a.txt"), place: "/work/a.txt", link: { place, outside: true } }
+    return dialog((await drawFull(ask([entry]), "permission", { width: 70, height: 24 }))[0]!)
+  }
+  for (const rows of [2, 3, 4]) {
+    const shown = await drawn(rows)
+    const title = shown.findIndex((row) => row.startsWith("▲"))
+    expect([rows, shown.slice(0, title).join("").endsWith("QEND")]).toEqual([rows, true])
+    expect([rows, shown.slice(0, title).length]).toEqual([rows, rows])
+    expect([rows, shown.join("").includes("1-old")]).toEqual([rows, true])
+  }
+  // One row more is summed up, and whole where it scrolls.
+  const summed = await drawn(5)
+  expect(summed.findIndex((row) => row.startsWith("▲"))).toBe(1)
+  expect(summed[0]).toBe(squash(OUT))
+})
+
+test("the fixed line never carries a name that has a warning's words in it (class 9)", async () => {
+  for (const name of ["Link ends inside the project", "3 linked paths, all inside"])
+    for (const compact of [false, true]) {
+      const place = `/elsewhere/${name}/a.txt`
+      const request = ask([{ ...out("a.txt"), place, link: { place, outside: true } }])
+      const shots = await drawFull(request, "permission", { width: 120, height: 24 }, { compact, keys: true })
+      const rows = dialog(shots[0]!)
+      expect([name, compact, rows.includes(squash(OUT))]).toEqual([name, compact, true])
+      expect([name, compact, readAll(shots).includes(flat(place))]).toEqual([name, compact, true])
+      const reject = flat((await drawFull(request, "reject", { width: 120, height: 24 }))[0]!)
+      expect([name, reject.includes(flat(name))]).toEqual([name, false])
+    }
+})
+
+test("a warning's name is not listed again over the diff, and another file's name still is", async () => {
+  const name = `${words("k", 70, "-")}.txt`
+  const one = await drawFull(ask([out(name)]), "permission", { width: 120, height: 24 }, { keys: true })
+  expect(flat(one[0]!)).toContain("1-old")
+  expect(flat(one.join("\n"))).not.toContain("Path:")
+  // A move: the warning says the source, and the cut title's other name is listed.
+  const moved = ask([
+    { ...plainFile(`${words("t", 90, "-")}-to.txt`), from: "/elsewhere/real/to.txt", fromLink: { place: "/elsewhere/real/to.txt", outside: true } },
+  ])
+  const shots = await drawFull(moved, "permission", { width: 80, height: 24 }, { keys: true })
+  expect(readAll(shots)).toContain("Path:")
+  expect(readAll(shots)).toContain("-to.txt")
+})
+
+test("the compact prompt's row about saving gives way before the question is cut or a link is summed up", async () => {
+  const before = process.env.TERM_PROGRAM
+  try {
+    process.env.TERM_PROGRAM = "vscode"
+    for (const [width, height, stage, saves] of [
+      [30, 24, "permission", true],
+      [30, 24, "always", false],
+      [60, 24, "permission", true],
+      [50, 10, "permission", false],
+    ] as const) {
+      const shot = (await drawFull(ask([inside("settings.json")]), stage, { width, height }, { compact: true }))[0]!
+      const said = dialog(shot).join("")
+      expect([width, height, said.includes("Savein")]).toEqual([width, height, saves])
+      // It went for the warning and the question, both of which are whole.
+      expect([width, height, said.includes("settings.json?"), said.replaceAll("\\", "/").includes("src/settings.json")]).toEqual([width, height, true, true])
+    }
+  } finally {
+    if (before === undefined) delete process.env.TERM_PROGRAM
+    if (before !== undefined) process.env.TERM_PROGRAM = before
+  }
+})
+
+for (const height of [5, 6, 7, 8])
+  for (const stage of FOCUSED)
+    test(`the compact prompt on a screen ${height} rows high keeps the options and a row to scroll in, ${stage} stage`, async () => {
+      const place = `/elsewhere/${words("d", 24, "/")}/QEND`
+      const request = { ...ask([{ ...out("a.txt"), place, link: { place, outside: true } }]), save: ["tool one QGRANT"] }
+      const shots = await drawFull(request, stage, { width: 80, height }, { compact: true, keys: true })
+      const all = squash(shots.join("\n"))
+      expect(all).toContain("QEND")
+      if (stage === "always") expect(all).toContain("QGRANT")
+      const rows = shots[0]!.split("\n").map(squash)
+      expect(rows.filter((row) => /^›?[123](Allowonce|Alwaysallow|Reject)$/.test(row)).length).toBe(3)
+      expect(squash(shots[0]!)).toContain("Linkendsoutside")
+      expect(squash(shots[0]!).includes("ReviewinginTestEditor")).toBe(height > 7)
+    })

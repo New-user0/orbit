@@ -51,14 +51,16 @@ export function permissionPresentation(
 /**
  * What a prompt says of the links in a request, from the request alone (class 8): `summary` is one line whatever the
  * request holds, `short` is that line where it does not fit, and `lines` names each linked end on a line of its own, its
- * paths written out (class 9).
+ * paths written out (class 9). `named` is those paths as they are written.
  */
 export function permissionLinks(request: PermissionView.Request, formatPath: (value: string) => string) {
   const links = PermissionView.of(request).links
+  const show = (value: string) => plainPath(formatPath(value))
   return {
     summary: PermissionView.linkSummary(links),
     short: PermissionView.linkShort(links),
-    lines: links.map((link) => PermissionView.linkWarning(link, (value) => plainPath(formatPath(value)))),
+    lines: links.map((link) => PermissionView.linkWarning(link, show)),
+    named: links.flatMap((link) => [show(link.file), show(link.place)]),
   }
 }
 

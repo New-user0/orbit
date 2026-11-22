@@ -85,7 +85,7 @@ import { DialogRewind, REWIND_GONE, rewindPrompts, type RewindDryRun, type Rewin
 import { deduplicateVisibleImages } from "../../prompt/attachment"
 import { useEpilogue } from "../../context/epilogue"
 import { normalizePath } from "../../util/path"
-import { PermissionPrompt } from "./permission"
+import { DIALOG_ROWS, PermissionPrompt } from "./permission"
 import { FormPrompt } from "./form"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import { DialogExportResult } from "../../ui/dialog-export-result"
@@ -259,6 +259,8 @@ export function Session(props: {
   })
 
   const dimensions = useTerminalDimensions()
+  // The rows of the route, under the banner and the tabs.
+  const [routeRows, setRouteRows] = createSignal(dimensions().height)
   const thinkingMode = createMemo<ThinkingMode>(() => config.session?.thinking ?? "hide")
   const showScrollbar = createMemo(() => config.session?.scrollbar ?? false)
   const markdownMode = createMemo(() => config.session?.markdown ?? "rendered")
@@ -1483,6 +1485,13 @@ export function Session(props: {
   const terminalWidth = createMemo(() => dimensions().width)
   const terminalHeight = createMemo(() => dimensions().height)
 
+  const composing = () => composer.open || (!!session()?.parentID && forms().length === 0)
+  const approving = createMemo(() => !composing() && promptedPermissions().length > 0)
+  // An approval gets the route's two blank rows, the one of the jump to the latest and the one at the bottom, where it
+  // would not have all of its own with them (class 8).
+  const spareRows = () => !approving() || routeRows() >= DIALOG_ROWS + 2
+  const approvalRows = () => routeRows() - (spareRows() ? 2 : 0)
+
   return (
     <context.Provider
       value={{
@@ -1521,7 +1530,10 @@ export function Session(props: {
         <box
           flexGrow={1}
           minHeight={0}
-          paddingBottom={1}
+          onSizeChange={function () {
+            setRouteRows(this.height)
+          }}
+          paddingBottom={spareRows() ? 1 : 0}
           paddingLeft={dimensions().width < 44 ? 1 : 2}
           paddingRight={dimensions().width < 44 ? 1 : 2}
         >
@@ -1576,7 +1588,7 @@ export function Session(props: {
                 </Show>
               </scrollbox>
             </box>
-            <box height={1} flexShrink={0} flexDirection="row" justifyContent="flex-end">
+            <box height={1} visible={spareRows()} flexShrink={0} flexDirection="row" justifyContent="flex-end">
               <Show when={firstJump()}>
                 <text fg={theme.text.feedback.info.base}>Loading session history…</text>
               </Show>
@@ -1594,36 +1606,43 @@ export function Session(props: {
                 </box>
               </Show>
             </box>
-            <box flexShrink={0}>
-              <Show when={!composer.open && !disabled() && queuedPrompts().length > 0}>
-                <QueuedPromptDock prompts={queuedPrompts()} onOpen={openQueuedPrompts} />
-              </Show>
-              <Slot path="session.composer.top" input={{ sessionID: route.sessionID }} />
-              <Composer
-                sessionID={route.sessionID}
-                open={composer.open || (!!session()?.parentID && forms().length === 0)}
-                defaultTab={composer.tab ?? (session()?.parentID ? "subagents" : undefined)}
-                onClose={() => {
-                  const parent = session()?.parentID
-                  if (parent) {
-                    navigate({ type: "session", sessionID: parent })
-                    return
-                  }
-                  setComposer("open", false)
-                }}
-                visibleTerminalID={props.visibleTerminalID}
-              />
-              <Show when={!composer.open}>
-                <PlanDock sessionID={route.sessionID} />
-              </Show>
+            <box flexShrink={0} maxHeight={approving() ? approvalRows() : undefined}>
+              {/* What is docked above an approval gives it the rows that it needs, from the bottom up (class 8). */}
+              <box flexShrink={approving() ? 1 : 0} minHeight={0} overflow={approving() ? "hidden" : "visible"}>
+                <Show when={!composer.open && !disabled() && queuedPrompts().length > 0}>
+                  <QueuedPromptDock prompts={queuedPrompts()} onOpen={openQueuedPrompts} />
+                </Show>
+                <Slot path="session.composer.top" input={{ sessionID: route.sessionID }} />
+                <Composer
+                  sessionID={route.sessionID}
+                  open={composing()}
+                  defaultTab={composer.tab ?? (session()?.parentID ? "subagents" : undefined)}
+                  onClose={() => {
+                    const parent = session()?.parentID
+                    if (parent) {
+                      navigate({ type: "session", sessionID: parent })
+                      return
+                    }
+                    setComposer("open", false)
+                  }}
+                  visibleTerminalID={props.visibleTerminalID}
+                />
+                <Show when={!composer.open}>
+                  <PlanDock sessionID={route.sessionID} />
+                </Show>
+              </box>
               <Switch>
-                <Match when={composer.open || (!!session()?.parentID && forms().length === 0)}>{null}</Match>
+                <Match when={composing()}>{null}</Match>
                 <Match when={promptedPermissions().length > 0}>
                   <Show when={promptedPermissions()[0]?.id} keyed>
                     {(_) => {
                       const request = promptedPermissions()[0]
                       return request ? (
-                        <PermissionPrompt request={request} directory={session()?.location.directory} />
+                        <PermissionPrompt
+                          request={request}
+                          directory={session()?.location.directory}
+                          rows={approvalRows()}
+                        />
                       ) : null
                     }}
                   </Show>
