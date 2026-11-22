@@ -2717,28 +2717,39 @@ warned, for an Edit or Write of one file, and the full dialog dropped the warnin
   `fromLink` says where it leads, and that file is not removed. So do the call's result (`D shown.txt`, `applied` and
   `files`) and its error where it fails, which in an untrusted folder named the file outside.
 - **Terminal UI and Mini.** The warning stays while Always allow is chosen and while you type why you reject, and a
-  request of several files warns too. Where a warning is too long to stay whole, a summary stays and the warning is in
-  what scrolls, under the grant while Always allow is focused (the reject stage has the summary only). On a narrow
-  screen the summary is short, for example "Link ends outside" or "2 links, 1 outside". Mini puts the grant, and the
-  edit's title, above the lines of the links.
+  request of several files warns too. Where a warning is too long to stay whole, or a path in it holds a warning's own
+  words, a summary stays and the warning is in what scrolls, under the grant while Always allow is focused (the reject
+  stage has the summary only). On a narrow screen the summary is short, for example "Link ends outside" or
+  "2 links, 1 outside". Mini puts the grant, and the edit's title, above the lines of the links.
 - **Every question of the terminal UI's dialog, with a link or without one.**
-  - What does not fit under the title scrolls with the wheel, with a bar in the dialog's right padding, where a long
-    command, list of patterns or grant was clipped or drawn over the options. Fullscreen (ctrl+f) has more rows. The
-    wheel moves less than three rows a step in a body that is that short.
+  - What does not fit under the title scrolls, with a bar in the dialog's right padding, where a long command, list of
+    patterns or grant was clipped or drawn over the options. While there is more, page up and page down (or ctrl+alt+b
+    and ctrl+alt+f), home and end scroll the question, where they scrolled the conversation before, and the dialog's
+    bottom border says "pgup/pgdn scroll". The commands are `permission.prompt.page.up`, `permission.prompt.page.down`,
+    `permission.prompt.first` and `permission.prompt.last`, in the permission context of the keybindings file. The wheel
+    scrolls too, less than three rows a step in a body that is that short.
   - A wrapped line is indented under its first word, so a long command, folder or resource can take a row more than it
     did, and its end can need a scroll where it fitted before. A grant wraps by the character.
-  - A title is one line, with a line break written out as `\n`, wraps by the character, and is cut with "…" to leave
-    the body rows to scroll in, or the grant its rows while Always allow is focused. What was cut is whole in what
-    scrolls: an edit's names, or any other title under its icon. Fullscreen cuts only what does not fit.
+  - A title is one line, with a line break written out as `\n`, wraps by the character, and is cut with "…" where it
+    would leave the body no row, or the grant too few while Always allow is focused. What was cut is whole in what
+    scrolls: an edit's names, or any other title under its icon.
+  - The dialog is fitted to the rows the session has. While a question is asked, the plan and the other docks above it
+    show only in the rows it leaves them, which on an 80x24 screen can be none for an edit, and the session's blank row
+    at the bottom and the one of "Jump to latest" go where the dialog has fewer than 15 rows. On the lowest screens the
+    top of the border goes, and then its bottom, so that every option stays on screen. The reject stage drops its blank
+    rows there, and a long reason scrolls in its field.
   - The blank rows between the lines of a grant stay while they fit and go before a pattern would.
-  - On a low screen the blank row under the title goes first (a question with three rows or fewer, as at 70 columns by
-    12 rows), and on a lower one the hints go, and in the editor's short prompt the row about saving. The summary of a
-    link then shares a row with the title or the question.
-  - The short prompt's "Reviewing in" row and its row about saving are one row each, shortened in the middle where the
-    screen is too narrow for them or the editor's name is too long.
+  - Under 60 columns, or where the dialog has fewer than 15 rows, the blank row under the title and the key hints give
+    way to a warning, title or grant that fits without them. That can hide the "ctrl+f fullscreen" hint; the key still
+    works. The blank row also goes for a link's warning that fits whole without it.
+  - In the editor's short prompt, which has no fullscreen, the row about saving shows only where the question, the
+    warning and the grant fit whole with it. The "Reviewing in" row goes on the lowest screens. Each of the two is one
+    row, shortened in the middle where the screen is too narrow for it or the editor's name is too long.
 - **ACP.** The title of a permission request begins with the warning's summary, for example
   "Link ends outside the project: /srv/shared/a.txt". For a subagent's request the subagent's title comes before it, as
-  in "Review code: Link ends outside the project: /srv/shared/a.txt". The content names each link before the diffs.
+  in "Review code: Link ends outside the project: /srv/shared/a.txt". That title is now one line, cut to 40 characters
+  with "...", and in backticks where Markdown would change it or it holds a warning's words, also on a request with no
+  link. The content names each link before the diffs.
   Both are read as Markdown by some clients, so a path that Markdown would change, such as `C:\Users\me\.orbit` or
   `__init__.py`, is now in backticks there, also in the title of an edit, a read or an outside folder with no link.
 - **VS Code.** The chat's card lists the warnings above the diff, and the title of the chat's diff tab says

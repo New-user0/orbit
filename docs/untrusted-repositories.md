@@ -2500,32 +2500,50 @@ runs" is a permission.
   where two entries disagree about one end, outside wins (classes 3 and 7; `packages/schema/test/permission-view.test.ts`).
   A fixed line says that there is a link, above what scrolls. The repository chooses how long a path is and how many are
   linked, so that line is bounded. Each linked end is named, the ones that end outside first
-  (`packages/tui/test/approval-link.test.tsx` for both bullets below, at the sizes it draws):
+  (`packages/tui/test/approval-link.test.tsx` draws the components of the first six bullets below, and
+  `packages/tui/test/approval-route.test.tsx` the whole terminal UI, each at the sizes it names):
   - the terminal UI's full dialog and the compact prompt of an editor review fit the fixed line and the title to the
-    dialog, and all under them is one body that scrolls, in every question of those two, linked or not (class 8). No row
-    of a question or a grant is squeezed, painted over or narrowed by the scroll bar, which is in the dialog's padding
-    and shows where more follows, and the last row can be reached with the wheel (the "every row of", "the end of a
-    long" rows: four actions, 1 to 12 lines, wrapped or not, linked or not, both focused stages, 70 to 120 columns).
-    One link is said whole while that fits and summed up past that. A title is cut with a mark to leave the body its
-    rows: two of an edit, one of another question and, while Always allow is focused, those of the grant. What is summed
-    up or cut is whole in the body, under the grant while Always allow is focused (the "every name and target", "one
-    long name", "a link's target" and "long title" rows: 2 to 20 files, names and targets to 1000 characters, 60 to 120
-    columns). The reject stage has only the sum. On a low screen the header gives way before the grant does: the blank
-    row under it, the hints, the compact prompt's row about saving, and then the summary shares the title's row. So the
-    first row of an edit's grant, and the word outside or inside of its link, are in sight from 7 rows of screen in the
-    dialog and from 8 in the compact prompt (the "on a screen ... rows high" rows). The compact prompt's header, which
-    names the editor, and its row about saving are a row each and are cut in the middle, so neither takes the warning's
-    or the grant's rows on a narrow screen or under a long editor name (the "row about saving" row: 30, 60 and 80
-    columns);
+    rows they have, and all under them is one body that scrolls, in every question of those two, linked or not (class 8).
+    No row of a question or a grant is squeezed, painted over or narrowed by the scroll bar (the "every row of" and "the
+    end of a long" rows);
+  - those rows are the ones the session has, under the banner and beside the docks, and not the screen's. A dialog has
+    15 at most. Where it has fewer, the docks above it and the route's two blank rows give way to it, then the top of
+    its border and then the bottom. So the three options, the focused one's mark, a link's line and a body that scrolls
+    stay on screen while Allow once or Always allow is focused, and the field, its hints and the line in the reject
+    stage (the "the session route at" rows: 80 columns by 6 to 24 rows, 30x12 and 40x8, with a plan and a queued prompt
+    at 80x24, the mouse off; the resize, docks and "come back" rows of that file);
+  - no value needs a mouse (classes 8 and 14). While the body holds more than is in sight, page up and down, home and end
+    scroll it, where otherwise they are the session's, and the bottom border names them while it is drawn. With those
+    keys alone the whole of a target, a name, a move's source, a command, a grant, a folder, the last of 12 files or of
+    14 patterns, a read and a search of 30 to 500 characters can be read, in the stage that shows it, in the dialog, in
+    fullscreen and, for an edit of one file, in the compact prompt (the "read with the keys alone" rows: 8 sizes from
+    30x12 to 100x30; "the keys page"; "the keys are the session's"; "fullscreen at" for 80x6 to 80x24);
+  - one link is said whole on the fixed line while that leaves a row to the title and one to the body, or all of the
+    grant while Always allow is focused, and is summed up past that. It is summed up too where a name in it has a
+    warning's words, so that no row of that line is the repository's sentence (class 9; "the fixed line never carries").
+    A title is whole while that leaves the same, and is otherwise cut with a mark to leave an edit two rows to scroll
+    in. What is summed up or cut is whole in the body, under the grant while Always allow is focused, and a name that
+    the whole warning says is not listed again over the diff (the "every name and target", "a title is whole" and
+    "listed again" rows). The reject stage has three rows of warning at most, or the sum;
+  - on a screen narrower than 60 columns or a dialog with fewer than 15 rows, the blank row under the header and the
+    hints give way to a warning, a title or a grant that fits without them. The blank row gives way to a whole warning
+    at any size. In the compact prompt the row about saving goes before the question is cut or the link summed up, and
+    the header goes where no row would be left to scroll in. What fitted on the first screen of m5-integration at 30 to
+    60 columns (a short name, its link's target, the grant and the diff) is on the first screen (the "fitted before",
+    "gives way before" and "rows high" rows). While Always allow is focused that counts only screens on which the grant
+    was drawn: on the others the grant comes first now and the rest follows by scrolling. Longer values can need the
+    keys where a first screen showed their end before;
   - Mini's fixed line is the sum, or its short form, which keeps the word outside or inside, where the sentence does not
     fit (24 columns in the tests). The grant and the title come before the lines of the links, so both are on the first
     screen, and the links' lines follow by scrolling (the "Mini keeps the grant" and "24 columns" rows);
   - ACP's permission title and content (`packages/cli/test/acp/approval-link.test.ts`). The protocol has a client render
     content as Markdown, and some render titles so, so a path that Markdown would change is a code span: no path in a
     warning, or in the name of a file or folder that titles the request, becomes a link, an image or a tag, which a
-    client could contact a host for (classes 6 and 8; the "Markdown's literal text" rows). A description or command
+    client could contact a host for (classes 6 and 8; the "Markdown's literal text" rows). A subagent's title, which a
+    model chose and which comes before the summary, is one line of 40 characters at most and is quoted where it has a
+    warning's words anywhere (classes 8 and 9; the "subagent's title reads as no warning" row). A description or command
     that titles an `external_directory` question, other content of the call and the updates' titles are not rewritten
-    for Markdown;
+    for Markdown (FU-M5-009);
   - the VS Code chat's card, and the title of its review or preview tab, which can answer while the card is hidden
     (`packages/vscode/test/approval-link.test.ts`, `webview-trust.test.ts`, `diff-review.test.ts`). A tab of the terminal
     UI's bridge has no warning in its title: the compact prompt beside it has it.
