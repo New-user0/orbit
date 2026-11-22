@@ -2712,25 +2712,37 @@ warned, for an Edit or Write of one file, and the full dialog dropped the warnin
 - **Words.** The warning begins "Link ends outside the project" or "Link ends inside the project" and then names where
   the link leads. Several are counted, for example "2 linked paths, 1 outside the project", and named one by one with the
   ones that end outside first. These words replace the terminal UI's earlier ones.
+- **A link that is deleted or moved.** When Patch deletes or moves a path that is itself a link, the request, the diff's
+  header and the call's progress name the link, which is what is removed, where they named the file it leads to. `link` or
+  `fromLink` says where it leads, and that file is not removed.
 - **Terminal UI and Mini.** The warning stays while Always allow is chosen and while you type why you reject, and a
-  request of several files warns too.
-- **Long lists of files.** While Always allow is focused, the terminal UI's dialog now cuts a title that names many files
-  to three rows, so that what the grant allows stays in the dialog. Before, such a title could push it out. Focus another
-  option to read the names.
-- **ACP.** The title of a permission request begins with the warning, for example
-  "Link ends outside the project: /srv/shared/a.txt", and the content names each link before the diffs.
+  request of several files warns too. Where a warning is too long to stay whole, a summary stays and the warning scrolls
+  (the reject stage has the summary only). On a narrow screen the summary is short, for example "Link ends outside" or
+  "2 links, 1 outside".
+- **Long titles.** The terminal UI's dialog cuts the title of an edit with "…" so that the diff and the warnings keep
+  rows to scroll in, and lists the names it cut there. While Always allow is focused it cuts any title, to three rows at
+  most outside fullscreen, so that what the grant allows stays in the dialog. Fullscreen cuts only what does not fit.
+  The wheel moves less than three rows a step in a body that is that short. Mini puts the grant, and the edit's title,
+  above the lines of the links.
+- **ACP.** The title of a permission request begins with the warning's summary, for example
+  "Link ends outside the project: /srv/shared/a.txt". For a subagent's request the subagent's title comes before it, as
+  in "Review code: Link ends outside the project: /srv/shared/a.txt". The content names each link before the diffs.
+  Both are read as Markdown by some clients, so a path that Markdown would change, such as `C:\Users\me\.orbit` or
+  `__init__.py`, is now in backticks there, also in the title of an edit, a read or an outside folder with no link.
 - **VS Code.** The chat's card lists the warnings above the diff, and the title of the chat's diff tab says
   "behind a link", for example "Orbit: a.txt behind a link (k3x9qa)".
-- **File names.** A line break, control character or invisible formatting character in a file's name is written out
-  (`\n`, `\x1b`) in the title and paths of a file change's approval, and in the file an ACP permission title names.
+- **File names.** In the approval of an edit, read, list or outside folder, a name is one line: a line break or line
+  separator, a control or invisible character, a run of spaces, a space at either end and any other space are written
+  out (`\n`, `\x1b`, `\x20`, `\u{2028}`), and a wrapped name is indented. A diff's header writes out a line break in
+  a name too.
 
 The warning changes no decision, rule or saved approval.
 
 **Affects:** people who approve file changes in a project with links; scripts and SDK callers that read Patch and
 NotebookEdit permission requests; ACP clients or scripts that match permission titles.
 
-**What to do:** Nothing, unless something matches an ACP permission title from its start: allow for the warning before
-it, or match on the call's `locations`.
+**What to do:** Nothing, unless something matches an ACP permission title from its start or exactly: allow for the
+warning (and a subagent's title) before the name and for backticks around it, or match on the call's `locations`.
 
 ## Plugins and SDK
 

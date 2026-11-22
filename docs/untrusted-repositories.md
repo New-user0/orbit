@@ -2498,22 +2498,44 @@ runs" is a permission.
   the tool's input and never by resolving a path, so a share is named and not contacted for it (classes 4, 6 and 8). A
   request without a link, or from an older server, is drawn without a warning; a malformed link costs only itself, and
   where two entries disagree about one end, outside wins (classes 3 and 7; `packages/schema/test/permission-view.test.ts`).
-  One fixed line stands above what the request can make tall, and where there is room each linked end is named, the ones
-  that end outside first:
-  - the terminal UI's full dialog (the permission, always and reject stages, and fullscreen) and the compact prompt of an
-    editor review, and Mini's three stages in colour and mono (`packages/tui/test/approval-link.test.tsx`,
-    `approval-prompt.test.tsx`, `ide-diff.test.tsx`). While Always allow is focused the full dialog cuts its title to
-    three rows, so that a long list of files does not push what the grant is out of sight (the "is cut only while" and "leaves
-    what Always allow grants" rows of `approval-link.test.tsx`);
-  - ACP's permission title and content (`packages/cli/test/acp/approval-link.test.ts`);
+  A fixed line says that there is a link, above what scrolls, and the repository, which chooses how long a path is and
+  how many are linked, takes neither the grant nor the body's rows with it. Each linked end is named, the ones that end
+  outside first (`packages/tui/test/approval-link.test.tsx` for both bullets below, at the sizes it draws):
+  - the terminal UI's full dialog and the compact prompt of an editor review fit the fixed line and the title to the
+    dialog. One link is said whole while that fits and summed up past that, with the whole warning where it scrolls (the
+    reject stage has only the sum). An edit's title is cut with a mark to leave the body two rows, with the names it cut
+    in the body, and while Always allow is focused any title is cut, to three rows at most outside fullscreen. A step of
+    the wheel skips no row of that body, and what still does not fit is clipped inside the border (the "what Always allow
+    grants", "can be read", "cut title", "fullscreen dialog" and "clipped inside it" rows);
+  - Mini's fixed line is the sum, or its short form, which keeps the word outside or inside, where the sentence does not
+    fit (24 columns in the tests). The grant and the title come before the lines of the links, so both are on the first
+    screen, and the links' lines follow by scrolling (the "Mini keeps the grant" and "24 columns" rows);
+  - ACP's permission title and content (`packages/cli/test/acp/approval-link.test.ts`). The protocol has a client render
+    content as Markdown, and some render titles so, so a path that Markdown would change is a code span: no path in a
+    warning, or in the name of a file or folder that titles the request, becomes a link, an image or a tag, which a
+    client could contact a host for (classes 6 and 8; the "Markdown's literal text" rows). A description or command
+    that titles an `external_directory` question, other content of the call and the updates' titles are not rewritten
+    for Markdown;
   - the VS Code chat's card, and the title of its review or preview tab, which can answer while the card is hidden
     (`packages/vscode/test/approval-link.test.ts`, `webview-trust.test.ts`, `diff-review.test.ts`). A tab of the terminal
     UI's bridge has no warning in its title: the compact prompt beside it has it.
   stream-json and the SDK pass the request whole, link included (`packages/cli/test/run/stream.test.ts`,
-  `edit-link.test.ts`). Each warning writes its paths out with `plain`. So does the name of a changed file in the
-  approval's title and `Path:` lines in the terminal UI, Mini and the VS Code card, and the file an ACP permission title
-  names, so a line break in a name starts no line that reads as a warning (class 9; the "line break" rows of the three
-  `approval-link` files).
+  `edit-link.test.ts`).
+- A name in those approvals cannot pass for a warning (class 9). `plainPath` (`packages/util/src/plain.ts`) writes out
+  what `plain` does and every blank but one space between two words: runs of spaces, a space at either end, other
+  spaces, U+2028 and U+2029, fillers and blank Braille (`packages/util/test/plain-path.test.ts`). It is the sink for the
+  paths of a warning, and for the names in the titles, `Path:`, `Folder:`, pattern and resource lines of an edit, a read,
+  a list and an `external_directory` question, in the terminal UI, Mini and the VS Code card, for ACP's titles of those
+  and for the chat tab's title. A name that wraps is indented under its line's first word in the terminal UI and Mini,
+  and in the card's title and warnings, and raw diff text is indented, so printable padding draws no row where a warning
+  starts either (the "blank spelling", "length of padding" and "joined diff" rows of the TUI file, the "blank" rows of
+  the others). ACP quotes a name that opens with a warning's words. The server writes a line break in a name out in a
+  diff's header (`fileDiff`; `edit-link.test.ts`, "the header of an approval's diff is one line").
+- A delete, and the source of a move, remove the last part of the path. Where that is itself a link, the request, its
+  diff's header and the call's progress name the link, where it really is, as what is changed, and `link` or `fromLink`
+  says where it leads; that file stays. A write goes through such a link, and its request names the file written to as
+  before (`FileAccess.removedLink`; classes 3 and 8; `edit-link.test.ts`, "a file that is itself a link: what is shown
+  is what runs", which checks the request and the disk for each tool, trusted and not).
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob
