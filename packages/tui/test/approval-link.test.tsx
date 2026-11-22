@@ -116,7 +116,7 @@ async function drawFull(
   asks: PermissionRequest | ((directory: string) => PermissionRequest),
   stage: Stage,
   size: Size,
-  options: { scroll?: number; compact?: boolean } = {},
+  options: { scroll?: number; compact?: boolean; fullscreen?: boolean } = {},
 ) {
   await using tmp = await tmpdir()
   const request = typeof asks === "function" ? asks(tmp.path) : asks
@@ -141,7 +141,15 @@ async function drawFull(
     onMount(() => void data.session.sync("ses_link"))
     return (
       <Show when={data.session.get("ses_link")}>
-        <Show when={options.compact} fallback={<PermissionPrompt request={request} />}>
+        <Show
+          when={options.compact}
+          fallback={
+            // Fullscreen is placed from the bottom of a screen that the route fills, as the session does.
+            <box width="100%" height={options.fullscreen ? "100%" : undefined}>
+              <PermissionPrompt request={request} />
+            </box>
+          }
+        >
           <EditorDiffPrompt request={request} editor="Test Editor" onSelect={() => {}} />
         </Show>
       </Show>
@@ -191,6 +199,10 @@ async function drawFull(
     if (stage === "reject") {
       app.mockInput.pressKey("3")
       await until("Tell Orbit")
+    }
+    if (options.fullscreen) {
+      app.mockInput.pressKey("f", { ctrl: true })
+      await until("minimize")
     }
     await Bun.sleep(0)
     await app.renderOnce()
@@ -474,4 +486,14 @@ test("a warning shows its places from the session's folder, as the rest of the p
     expect(flat((await drawFull(here, "permission", { width: 220, height: 40 }, { compact }))[0]!)).toContain(said)
   await using tmp = await tmpdir()
   expect(flat((await drawMini(here(tmp.path), "permission", { width: 220, height: 40 }, false, 0, tmp.path))[0]!)).toContain(said)
+})
+
+test("the fullscreen dialog keeps the fixed line", async () => {
+  for (const kind of kinds) {
+    const shots = await drawFull(kind.request, "permission", { width: 120, height: 30 }, { fullscreen: true })
+    expect([kind.name, flat(shots[0]!).includes(flat(kind.lines.length === 1 ? kind.lines[0]![0]! : kind.fixed))]).toEqual([
+      kind.name,
+      true,
+    ])
+  }
 })
