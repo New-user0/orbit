@@ -37,7 +37,7 @@ const IN = "Link ends inside the project: /workspace/alias/b.txt leads to /works
 // Asks with `files`, from the session or from a subagent of it, and returns the call the client was asked about.
 async function asked(
   files: ReadonlyArray<Record<string, unknown>>,
-  options: { child?: true; action?: string; resources?: string[]; metadata?: Metadata } = {},
+  options: { child?: true; childTitle?: string; action?: string; resources?: string[]; metadata?: Metadata } = {},
 ) {
   await using acp = await startSession({
     onPrompt: ({ sessionID, id }) => {
@@ -46,7 +46,7 @@ async function asked(
         sessionID,
         id,
         ...(options.child
-          ? [childCreated("ses_child", sessionID, "Review code"), durableEvent("session.execution.started", { sessionID: "ses_child" })]
+          ? [childCreated("ses_child", sessionID, options.childTitle ?? "Review code"), durableEvent("session.execution.started", { sessionID: "ses_child" })]
           : []),
         toolStarted(asker, "call_link", "Patch"),
         // The model's own keys: none of them makes a warning.
@@ -111,6 +111,32 @@ describe("acp: a file change through a link", () => {
     const call = await asked([out], { child: true })
     expect(String(call.title)).toStartWith("Review code: Link ends outside the project: ")
     expect(texts(call)).toEqual([OUT])
+  })
+
+  test("a subagent's title reads as no warning and leaves the warning in a cut title (classes 8 and 9)", async () => {
+    const warning = ": Link ends outside the project: "
+    for (const [childTitle, shown] of [
+      ["Link ends inside the project", "`Link ends inside the project`"],
+      ["link ENDS inside", "`link ENDS inside`"],
+      ["2 linked paths, all inside", "`2 linked paths, all inside`"],
+      ["Done. Link ends inside the project", "`Done. Link ends inside the project`"],
+      ["Fine: 2 linked paths, all inside", "`Fine: 2 linked paths, all inside`"],
+      [`${"x".repeat(50)} link ends inside`, `\`${"x".repeat(37)}...\``],
+      ["a".repeat(150), `${"a".repeat(37)}...`],
+      [`${"a".repeat(36)} tail of it`, `${"a".repeat(36)}...`],
+      ["a".repeat(40), "a".repeat(40)],
+      ["\u{1F600}".repeat(50), `\`${"\u{1F600}".repeat(37)}...\``],
+      ["Review\nLink", "Review\\nLink"],
+      ["  Review code  ", "Review code"],
+      ["[safe](https://x.invalid)", "`[safe](https://x.invalid)`"],
+    ] as const) {
+      const title = String((await asked([out], { child: true, childTitle })).title)
+      expect([childTitle, title.startsWith(`${shown}${warning}`), title.includes("\n")]).toEqual([childTitle, true, false])
+      // What an editor that cuts a title at 80 characters still shows.
+      if (Array.from(shown).length <= 42)
+        expect([childTitle, Array.from(title).slice(0, 80).join("").includes("Link ends outside the project")]).toEqual([childTitle, true])
+    }
+    expect(String((await asked([out], { child: true, childTitle: "   " })).title)).toStartWith("Link ends outside the project: ")
   })
 
   test("a place with control, bidi and line-break characters is written out (class 9)", async () => {

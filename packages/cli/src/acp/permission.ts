@@ -71,7 +71,7 @@ const ask = Effect.fnUntraced(function* (input: Input) {
         state: {
           input: rawInput,
           title: prefixedTitle(
-            input.titlePrefix,
+            subagentName(input.titlePrefix),
             // An editor can fold a call's content, so the title too says that a link is on the way.
             prefixedTitle(
               PermissionView.linkSummary(view.links),
@@ -103,6 +103,20 @@ function prefixedTitle(prefix: string | undefined, title: string | undefined) {
   return `${prefix}: ${title}`
 }
 
+// A subagent's title, which a model chose, in front of a warning: one line, short enough that the warning stays in a
+// title that an editor cuts, and quoted where a warning's words are anywhere in it, so that it leads as none of Orbit's
+// (classes 8 and 9).
+function subagentName(title: string | undefined) {
+  if (!title?.trim()) return undefined
+  const whole = plainPath(title.trim())
+  const characters = Array.from(whole)
+  const text =
+    characters.length > NAME_LENGTH
+      ? `${characters.slice(0, NAME_LENGTH - 3).join("").trimEnd()}...`
+      : whole
+  return WARNING_WORDS.test(whole) ? codeSpan(text) : markdownPath(text)
+}
+
 // Only the edit family has files to show a diff of; the check is by canonical name and alias.
 const isEditFamily = (name: string) =>
   PermissionView.action(name) === "edit" || ["patch", "notebook_edit"].includes(PermissionView.action(name))
@@ -128,6 +142,9 @@ const LITERAL =
 const ACTIVE = /^(?:[-+=#]|\d+[.)])|:\/\/|www\.|@[^/\\]*\./i
 // A name that opens with the words of a warning would read as one, so it is quoted too.
 const WARNING = /^(?:link ends|\d+ linked paths)/i
+// A subagent's title stands before the warning itself, so its words are quoted wherever they are in it.
+const WARNING_WORDS = /link ends|linked paths/i
+const NAME_LENGTH = 40
 
 /**
  * A path in text that a client renders as Markdown, as the protocol has it do with content and some do with titles: as
@@ -138,6 +155,10 @@ function markdownPath(value: string, alone = true) {
   const text = plainPath(value)
   const tildes = text.split("~").length - 1
   if (tildes <= (alone ? 1 : 0) && LITERAL.test(text) && !ACTIVE.test(text) && !WARNING.test(text)) return text
+  return codeSpan(text)
+}
+
+function codeSpan(text: string) {
   const fence = "`".repeat(Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length)) + 1)
   const pad = text.startsWith("`") || text.endsWith("`") ? " " : ""
   return `${fence}${pad}${text}${pad}${fence}`
