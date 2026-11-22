@@ -1,5 +1,5 @@
-import type { PermissionView } from "@orbit/schema/permission-view"
-import { body } from "@orbit/flow/plain"
+import { PermissionView } from "@orbit/schema/permission-view"
+import { body, plain } from "@orbit/flow/plain"
 import type { FileChange } from "../protocol.js"
 import { excerpt } from "./present.js"
 
@@ -8,6 +8,8 @@ import { excerpt } from "./present.js"
 
 export interface Card {
   readonly title: string
+  /** Where the request's links lead: each on its own line, after their count when there are several. */
+  readonly warnings: ReadonlyArray<string>
   /** One line per value the card shows beside its title. */
   readonly lines: ReadonlyArray<string>
   /** The first changed lines of every file's diff, written out like the rest of the card. */
@@ -21,10 +23,13 @@ export function approvalCard(item: {
   readonly files: ReadonlyArray<FileChange>
 }): Card {
   const card = build(item)
+  const links = item.view.links
+  const warnings = links.map((link) => PermissionView.linkWarning(link, plain))
   // Every string here can come from a model or a file (a command, an MCP argument), so control characters, including the
   // ones that reorder text, are written out before the card is drawn (class 9).
   return {
     title: body(card.title),
+    warnings: links.length > 1 ? [PermissionView.linkSummary(links)!, ...warnings] : warnings,
     lines: card.lines.map(body),
     changes: item.files.flatMap((file) => excerpt(file.patch, 6)).map((line) => ({ ...line, text: body(line.text) })),
   }
@@ -44,15 +49,16 @@ function build(item: {
   readonly resources: ReadonlyArray<string>
   readonly view: PermissionView.View
   readonly files: ReadonlyArray<FileChange>
-}): Omit<Card, "changes"> {
+}): Omit<Card, "changes" | "warnings"> {
   const view = item.view
   const verb = verbOf(item.action)
   if (item.files.length > 0)
     return {
-      title: `${verb} ${item.files.map((file) => basename(file.place ?? file.file)).join(", ")}`,
+      // Each name is one line: a break in one starts no line that reads as a link warning (class 9).
+      title: `${verb} ${item.files.map((file) => plain(basename(file.place ?? file.file))).join(", ")}`,
       lines: [...new Set([...view.places, ...item.files.flatMap((file) => [file.from, file.place ?? file.file])])]
         .filter((place): place is string => place !== undefined)
-        .map((place) => `Path: ${place}`),
+        .map((place) => `Path: ${plain(place)}`),
     }
   if (view.url !== undefined)
     return {

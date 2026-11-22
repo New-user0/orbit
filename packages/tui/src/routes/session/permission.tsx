@@ -14,7 +14,7 @@ import { TrustContext } from "../../context/trust"
 import { isRecord } from "../../util/record"
 import { filetype } from "../../util/filetype"
 import { canonicalToolName } from "../../util/tool-display"
-import { permissionAlwaysLines, permissionOptionLabel, permissionPresentation } from "../../util/permission"
+import { permissionAlwaysLines, permissionLinks, permissionOptionLabel, permissionPresentation } from "../../util/permission"
 import { getScrollAcceleration } from "../../util/scroll"
 import { useConfig } from "../../config"
 import { Keymap } from "../../context/keymap"
@@ -31,8 +31,8 @@ function EditBody(props: {
   diff?: string
   diffs?: { file: string; diff: string }[]
   patch?: string
-  /** Where a link on the way leads, from the request. */
-  warning?: string
+  /** The warning of each link, when there are several: they lead what scrolls. */
+  warnings: string[]
 }) {
   const theme = useTheme()
   const themes = useThemes()
@@ -55,14 +55,7 @@ function EditBody(props: {
 
   return (
     <box flexDirection="column" gap={1}>
-      <Show when={props.warning}>
-        {(warning) => (
-          <box paddingLeft={1} flexShrink={0}>
-            <text fg={theme.text.feedback.warning.base}>{warning()}</text>
-          </box>
-        )}
-      </Show>
-      <Show when={diffs().length > 0}>
+      <Show when={diffs().length > 0 || props.warnings.length > 0}>
         <scrollbox
           height="100%"
           scrollAcceleration={scrollAcceleration()}
@@ -74,6 +67,13 @@ function EditBody(props: {
           }}
         >
           <box flexDirection="column" gap={1}>
+            <Show when={props.warnings.length > 0}>
+              <box paddingLeft={1} flexDirection="column" flexShrink={0}>
+                <For each={props.warnings}>
+                  {(warning) => <text fg={theme.text.feedback.warning.base}>{warning}</text>}
+                </For>
+              </box>
+            </Show>
             <For each={diffs()}>
               {(item) => (
                 <box flexDirection="column">
@@ -166,6 +166,9 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   })
 
   const theme = useTheme()
+  const links = createMemo(() => permissionLinks(props.request, pathFormatter.format))
+  // Said whole for one link and counted for several, since it is above all that the request can make tall.
+  const notice = () => (links().lines.length === 1 ? links().lines[0] : links().summary)
   const review = useEditorReview(props.request, () => session()?.location)
 
   function reply(value: PermissionReply, message?: string) {
@@ -197,6 +200,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
         <RejectPrompt
           action={props.request.action}
           instance={props.request.id}
+          warning={notice()}
           onConfirm={(message) => {
             reply("reject", message || undefined)
           }}
@@ -227,7 +231,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                 diff={current.diff}
                 diffs={current.diffs}
                 patch={current.patch}
-                warning={linkWarning(props.request, pathFormatter.format)}
+                warnings={links().lines.length > 1 ? links().lines : []}
               />
             ) : view() === "external_directory" ? (
               <Show when={current.lines.length > 0}>
@@ -267,18 +271,23 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               },
               { additions: 0, deletions: 0 },
             )
+          // The link warning is above the title, which names as many files as the request has, and outside the body,
+          // which the focused option replaces.
           const header = () => (
-            <box flexDirection="row" gap={1} flexShrink={0}>
-              <text fg={theme.text.feedback.warning.base}>{"▲"}</text>
-              <text fg={theme.text.base} flexShrink={1}>
-                {view() !== "shell" && current.title ? current.title : "Permission required"}
-              </text>
-              <Show when={changes().additions > 0}>
-                <text fg={theme.diff.text.added}>{`+${changes().additions}`}</text>
-              </Show>
-              <Show when={changes().deletions > 0}>
-                <text fg={theme.diff.text.removed}>{`−${changes().deletions}`}</text>
-              </Show>
+            <box flexDirection="column" flexShrink={0}>
+              <LinkNotice warning={notice()} />
+              <box flexDirection="row" gap={1} flexShrink={0}>
+                <text fg={theme.text.feedback.warning.base}>{"▲"}</text>
+                <text fg={theme.text.base} flexShrink={1}>
+                  {view() !== "shell" && current.title ? current.title : "Permission required"}
+                </text>
+                <Show when={changes().additions > 0}>
+                  <text fg={theme.diff.text.added}>{`+${changes().additions}`}</text>
+                </Show>
+                <Show when={changes().deletions > 0}>
+                  <text fg={theme.diff.text.removed}>{`−${changes().deletions}`}</text>
+                </Show>
+              </box>
             </box>
           )
 
@@ -429,20 +438,18 @@ function reviewable(request: PermissionRequest): Omit<EditorDiff, "id" | "roots"
   return { place: file.place, patch: file.patch, status }
 }
 
-/** The link the server says a request's one file is reached through: where it leads, and whether that is outside. */
-export function permissionLink(request: Pick<PermissionRequest, "metadata">) {
-  const files = request.metadata?.files
-  const link = Array.isArray(files) && files.length === 1 && isRecord(files[0]) ? files[0].link : undefined
-  if (!isRecord(link) || typeof link.place !== "string" || typeof link.outside !== "boolean") return undefined
-  return { place: link.place, outside: link.outside }
-}
-
-// The warning about a link, from the request alone (class 8), with its place written out (class 9).
-function linkWarning(request: Pick<PermissionRequest, "metadata">, format: (input?: string) => string) {
-  const link = permissionLink(request)
-  if (!link) return undefined
-  const place = plain(format(link.place))
-  return link.outside ? `This changes ${place}, outside the session's folder, through a link` : `The link leads to ${place}`
+// The one line about the request's links that never scrolls away.
+function LinkNotice(props: { warning?: string }) {
+  const theme = useTheme()
+  return (
+    <Show when={props.warning}>
+      {(line) => (
+        <text fg={theme.text.feedback.warning.base} flexShrink={0}>
+          {line()}
+        </text>
+      )}
+    </Show>
+  )
 }
 
 /**
@@ -463,7 +470,8 @@ export function EditorDiffPrompt(props: {
     const place = typeof file?.place === "string" ? file.place : (props.request.resources[0] ?? "")
     return plain(place.split(/[\\/]/).at(-1) ?? place)
   }
-  const warning = () => linkWarning(props.request, pathFormatter.format)
+  // It is only drawn for a request of one file, which has one linked end at most.
+  const warning = () => permissionLinks(props.request, pathFormatter.format).lines[0]
   return (
     <SessionQuestion
       title="Permission required"
@@ -479,7 +487,7 @@ export function EditorDiffPrompt(props: {
       // hides that the grant reaches past this one file.
       body={(option) => (
         <box paddingLeft={1} flexDirection="column" flexShrink={0}>
-          <Show when={warning()}>{(line) => <text fg={theme.text.feedback.warning.base}>{line()}</text>}</Show>
+          <LinkNotice warning={warning()} />
           <Show when={process.env.TERM_PROGRAM === "vscode"}>
             <text fg={theme.text.muted}>Save in the editor to answer</text>
           </Show>
@@ -513,6 +521,7 @@ export function permissionSemanticLabel(action: string, title?: string) {
 function RejectPrompt(props: {
   action: string
   instance: string
+  warning?: string
   onConfirm: (message: string) => void
   onCancel: () => void
 }) {
@@ -562,9 +571,12 @@ function RejectPrompt(props: {
       customBorderChars={SplitBorder.customBorderChars}
     >
       <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
-        <box flexDirection="row" gap={1} paddingLeft={1}>
-          <text fg={theme.text.feedback.error.base}>{"△"}</text>
-          <text fg={theme.text.base}>Reject permission</text>
+        <box flexDirection="column" paddingLeft={1} flexShrink={0}>
+          <box flexDirection="row" gap={1}>
+            <text fg={theme.text.feedback.error.base}>{"△"}</text>
+            <text fg={theme.text.base}>Reject permission</text>
+          </box>
+          <LinkNotice warning={props.warning} />
         </box>
         <box paddingLeft={1}>
           <text fg={theme.text.muted}>Tell Orbit what to do differently</text>

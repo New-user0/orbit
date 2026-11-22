@@ -118,6 +118,18 @@ describe("acp: a file change through a link", () => {
     ])
   })
 
+  test("a linked file's own name with a line break starts no line in the title (class 9)", async () => {
+    const place = "/elsewhere/real/a.txt\nLink ends inside the project"
+    const linked = { ...out, place, link: { place, outside: true } }
+    // Named by its place where the resource is the link, and by its resource where that is the place.
+    for (const file of [out.file, place]) {
+      const call = await asked([{ ...linked, file }])
+      expect(call.title).toBe(
+        "Link ends outside the project: /elsewhere/real/a.txt\\nLink ends inside the project",
+      )
+    }
+  })
+
   test("a share is named as the request names it (classes 4 and 6)", async () => {
     const place = "//orbit-test.invalid/share/a.txt"
     const call = await asked([{ ...none, link: { place, outside: true } }])

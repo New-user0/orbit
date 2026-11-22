@@ -26,6 +26,7 @@ import {
   permissionReject,
   permissionRun,
   permissionShift,
+  permissionWarnings,
   type PermissionOption,
 } from "./permission.shared"
 import { stringWidth } from "../util/string-width"
@@ -154,6 +155,7 @@ export function RunPermissionBody(props: {
   const [state, setState] = createSignal(createPermissionBodyState(props.request))
   const stage = createMemo(() => state().stage)
   const info = createMemo(() => permissionInfo(props.request, props.directory?.(), props.mono))
+  const links = createMemo(() => permissionWarnings(props.request, props.directory?.()))
   // A patch that edits several files gets one diff per file, each under its own path.
   const diffs = createMemo(() => info().diffs ?? (info().diff ? [{ file: info().file ?? "", diff: info().diff! }] : []))
   let scroll: ScrollBoxRenderable | undefined
@@ -318,10 +320,20 @@ export function RunPermissionBody(props: {
         gap={compact() ? 0 : 1}
         flexShrink={0}
       >
-        <text height={1} fg={props.theme.text} wrapMode="none" truncate>
-          <span style={{ fg: props.theme.permission }}>{props.mono ? "! " : "△ "}</span>
-          {title()}
-        </text>
+        <box flexDirection="column" flexShrink={0}>
+          <text height={1} fg={props.theme.text} wrapMode="none" truncate>
+            <span style={{ fg: props.theme.permission }}>{props.mono ? "! " : "△ "}</span>
+            {title()}
+          </text>
+          {/* One line in every stage, above what scrolls. It is cut in the middle, so its first words stay. */}
+          <Show when={links().summary}>
+            {(summary) => (
+              <text height={1} fg={props.theme.warning} wrapMode="none" truncate>
+                {summary()}
+              </text>
+            )}
+          </Show>
+        </box>
         <Show when={!compact() && stage() === "reject"}>
           <text fg={props.theme.muted}>Tell Orbit what to do differently</text>
         </Show>
@@ -400,6 +412,23 @@ export function RunPermissionBody(props: {
               scroll = item
             }}
           >
+            <Show when={links().lines.length > 0}>
+              <box
+                width="100%"
+                flexDirection="column"
+                flexShrink={0}
+                paddingLeft={compact() ? 0 : 1}
+                marginBottom={compact() ? 0 : 1}
+              >
+                <For each={links().lines}>
+                  {(line) => (
+                    <text width="100%" fg={props.theme.warning} wrapMode="word" flexShrink={0}>
+                      {line}
+                    </text>
+                  )}
+                </For>
+              </box>
+            </Show>
             <Switch>
               <Match when={stage() === "permission"}>
                 <box width="100%" flexDirection="column" flexShrink={0} gap={compact() ? 0 : 1}>

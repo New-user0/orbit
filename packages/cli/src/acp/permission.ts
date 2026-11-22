@@ -2,6 +2,7 @@ import type { PermissionOption, ToolCallContent, ToolCallLocation } from "@agent
 import type { EventSubscribeOutput, OrbitClient, PermissionReplyInput } from "@orbit/client/promise"
 import { PermissionView } from "@orbit/schema/permission-view"
 import { ToolNames } from "@orbit/schema/tool-names"
+import { plain } from "@orbit/util/plain"
 import { Cause, Effect } from "effect"
 import { resolve } from "node:path"
 import type { ACPConnection } from "./connection"
@@ -59,7 +60,7 @@ const ask = Effect.fnUntraced(function* (input: Input) {
   const rawInput: ToolInput = caller
     ? declaredFields(caller.name, caller.input)
     : { ...request.metadata, resources: request.resources }
-  const previews = [...servedPreviews(view, input.cwd), ...argumentsContent(view)]
+  const previews = [...linksContent(view), ...servedPreviews(view, input.cwd), ...argumentsContent(view)]
   const toolCallID = input.event.data.source?.id ?? input.event.data.id
   const result = yield* input.connection.requestPermission({
     sessionId: input.clientSessionID,
@@ -71,7 +72,11 @@ const ask = Effect.fnUntraced(function* (input: Input) {
           input: rawInput,
           title: prefixedTitle(
             input.titlePrefix,
-            permissionTitle(toolName, view, caller?.input, previews, request, caller !== undefined, input.cwd),
+            // An editor can fold a call's content, so the title too says that a link is on the way.
+            prefixedTitle(
+              PermissionView.linkSummary(view.links),
+              permissionTitle(toolName, view, caller?.input, previews, request, caller !== undefined, input.cwd),
+            ),
           ),
         },
         cwd: input.cwd,
@@ -101,6 +106,14 @@ function prefixedTitle(prefix: string | undefined, title: string | undefined) {
 // Only the edit family has files to show a diff of; the check is by canonical name and alias.
 const isEditFamily = (name: string) =>
   PermissionView.action(name) === "edit" || ["patch", "notebook_edit"].includes(PermissionView.action(name))
+
+/** Where each link of the request leads, absolute as the locations are and written out on its line (class 9). */
+function linksContent(view: PermissionView.View): ToolCallContent[] {
+  return view.links.map((link) => ({
+    type: "content",
+    content: { type: "text", text: PermissionView.linkWarning(link, plain) },
+  }))
+}
 
 /**
  * The files of the request, drawn from their unified patches: the removed and context lines against the added ones. They
@@ -161,12 +174,17 @@ function permissionTitle(
     case "patch":
     case "notebook_edit":
     case "list":
-    case "lsp":
+    case "lsp": {
       // The file the server named for its rules: relative to the project inside it, absolute outside it. Whatever the
       // calling tool's input spelled changes nothing. A trusted link that leads out keeps its link spelling as the
       // resource, so when that resource is not the place the tool acts on, the real place is the title.
-      if (files.length === 1 && (view.places.length === 0 || samePlace(files[0], view.places[0], cwd))) return files[0]
-      return view.places[0] ?? files[0] ?? view.files[0]?.file
+      const named =
+        files.length === 1 && (view.places.length === 0 || samePlace(files[0], view.places[0], cwd))
+          ? files[0]
+          : (view.places[0] ?? files[0] ?? view.files[0]?.file)
+      // One line, so a break in a file's name starts no line that reads as a link warning (class 9).
+      return named === undefined ? undefined : plain(named)
+    }
     default:
       // A request whose caller is not its tool (an MCP call, a Workflow agent) names the action and what it reaches.
       return owned ? undefined : [toolName, ...request.resources.filter((resource) => resource !== "*")].join(" ")

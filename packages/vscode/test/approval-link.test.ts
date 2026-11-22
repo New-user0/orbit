@@ -46,6 +46,14 @@ test("a place with control, bidi and line-break characters is written out on one
   ])
 })
 
+test("a linked file's own name with a line break starts no line of the card (class 9)", () => {
+  const place = "/out/a.txt\nLink ends inside the project"
+  const shown = card([{ ...out, place, from: place, link: { place, outside: true } }])
+  expect(shown.title).toBe("Edit a.txt\\nLink ends inside the project")
+  expect(shown.lines).toContain("Path: /out/a.txt\\nLink ends inside the project")
+  for (const line of shown.lines) expect(line).not.toContain("\n")
+})
+
 test("a share is named as the request names it (classes 4 and 6)", () => {
   const place = "//orbit-test.invalid/share/a.txt"
   expect(card([{ ...none, link: { place, outside: true } }]).warnings).toEqual([

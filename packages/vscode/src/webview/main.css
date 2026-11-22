@@ -434,6 +434,13 @@ body.sidebar .starter {
   font-size: var(--vscode-font-size);
 }
 
+.perm-warning {
+  padding: 0 10px 6px;
+  color: var(--vscode-editorWarning-foreground);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .mini-diff {
   font-family: var(--mono);
   font-size: 11px;

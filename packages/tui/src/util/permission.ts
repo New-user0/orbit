@@ -1,5 +1,6 @@
 import { PermissionView } from "@orbit/schema/permission-view"
 import { ToolNames } from "@orbit/schema/tool-names"
+import { plain } from "@orbit/util/plain"
 import { Locale } from "./locale"
 import { bodyText } from "./renderer"
 import { canonicalToolName, legacyToolInput, webSearchProviderLabel } from "./tool-display"
@@ -45,6 +46,18 @@ export function permissionPresentation(
   }
 }
 
+/**
+ * What a prompt says of the links in a request, from the request alone (class 8): `summary` is one line whatever the
+ * request holds, and `lines` names each linked end on a line of its own, its paths written out (class 9).
+ */
+export function permissionLinks(request: PermissionView.Request, formatPath: (value: string) => string) {
+  const links = PermissionView.of(request).links
+  return {
+    summary: PermissionView.linkSummary(links),
+    lines: links.map((link) => PermissionView.linkWarning(link, (value) => plain(formatPath(value)))),
+  }
+}
+
 function present(source: PermissionPresentationInput, formatPath: (value: string) => string): PermissionPresentation {
   const action = canonicalToolName(source.action)
   // The source call is not always the call the request is about: a Code Mode fetch, a Workflow agent and a Patch edit
@@ -61,6 +74,8 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
 
   if (action === "edit") {
     const files = view.files
+    // Each name is one line: a break in one starts no line that reads as a link warning of Orbit's (class 9).
+    const named = (value: string) => plain(formatPath(value))
     const file = view.places[0] ?? files[0]?.place ?? files[0]?.file ?? ""
     // A patch asks once for every file it changes, so the prompt names all of them and shows every file's diff: showing
     // only the first would hide part of what is approved. A moved file's source is only in the places, and each
@@ -70,12 +85,12 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
       const each = files.length > 0
       return {
         icon: "→",
-        title: `Edit ${targets.length} files: ${targets.map(formatPath).join(", ")}`,
-        lines: targets.map((target) => `Path: ${formatPath(target)}`),
+        title: `Edit ${targets.length} files: ${targets.map(named).join(", ")}`,
+        lines: targets.map((target) => `Path: ${named(target)}`),
         // The diff view draws one file's patch, so each file keeps its own; without them the joined text is shown as
         // plain text, never through the diff view.
         diffs: each
-          ? files.map((item) => ({ file: formatPath(item.place ?? item.file), diff: item.patch }))
+          ? files.map((item) => ({ file: named(item.place ?? item.file), diff: item.patch }))
           : undefined,
         patch: each ? undefined : view.diff,
         file,
@@ -84,7 +99,7 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
     const diff = files[0]?.patch || view.diff || undefined
     return {
       icon: "→",
-      title: `Edit ${formatPath(file)}`,
+      title: `Edit ${named(file)}`,
       lines: [],
       diff,
       file,

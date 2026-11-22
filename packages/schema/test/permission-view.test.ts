@@ -125,6 +125,13 @@ test("the links of a request are one per linked end, the ones that end outside f
   ).toEqual([{ file: "/p/f", place: "/r/f", outside: true }])
 })
 
+test("two files with one link target, and one file with two, are two links", () => {
+  const shared = [{ place: "/p/one", link: inner }, { place: "/p/two", link: inner }]
+  expect(linksOf(shared)).toEqual([{ file: "/p/one", ...inner }, { file: "/p/two", ...inner }])
+  const split = [{ place: "/p/one", link: inner }, { place: "/p/one", link: { ...inner, place: "/p/src/c.txt" } }]
+  expect(linksOf(split)).toEqual([{ file: "/p/one", ...inner }, { file: "/p/one", place: "/p/src/c.txt", outside: false }])
+})
+
 test("a link is named from an entry with no patch or no place, so the warning never goes with them", () => {
   expect(linksOf([{ file: "a.txt", link: out }])).toEqual([{ file: "a.txt", ...out }])
   expect(linksOf([{ link: out }])).toEqual([{ file: out.place, ...out }])

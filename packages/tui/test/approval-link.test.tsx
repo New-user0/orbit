@@ -112,8 +112,14 @@ const flat = (value: string) => squash(value).replaceAll("\\", "/")
 type Stage = "permission" | "always" | "reject"
 type Size = { width: number; height: number }
 
-async function drawFull(request: PermissionRequest, stage: Stage, size: Size, options: { scroll?: number; compact?: boolean } = {}) {
+async function drawFull(
+  asks: PermissionRequest | ((directory: string) => PermissionRequest),
+  stage: Stage,
+  size: Size,
+  options: { scroll?: number; compact?: boolean } = {},
+) {
   await using tmp = await tmpdir()
+  const request = typeof asks === "function" ? asks(tmp.path) : asks
   const transport = createFetch((url) => {
     if (url.pathname === "/api/session/ses_link")
       return json({
@@ -201,7 +207,7 @@ async function drawFull(request: PermissionRequest, stage: Stage, size: Size, op
   }
 }
 
-async function drawMini(request: PermissionRequest, stage: Stage, size: Size, mono: boolean, pages = 0) {
+async function drawMini(request: PermissionRequest, stage: Stage, size: Size, mono: boolean, pages = 0, directory?: string) {
   const view = pickBlockerView({
     permission: {
       ...request,
@@ -219,7 +225,14 @@ async function drawMini(request: PermissionRequest, stage: Stage, size: Size, mo
     () => (
       <Keymap.Provider config={createTuiResolvedConfig({ animations: false })}>
         <box {...size}>
-          <RunPermissionBody request={view.request} theme={theme.footer} block={theme.block} mono={mono} onReply={() => {}} />
+          <RunPermissionBody
+            request={view.request}
+            directory={directory === undefined ? undefined : () => directory}
+            theme={theme.footer}
+            block={theme.block}
+            mono={mono}
+            onReply={() => {}}
+          />
         </box>
       </Keymap.Provider>
     ),
@@ -421,4 +434,42 @@ test("an older server, no link or a malformed one draws as today, and a malforme
       expect(frame).not.toContain("linkedpaths")
     }
   }
+})
+
+test("a linked file's own name with a line break starts no line that reads as a warning (class 9)", async () => {
+  const place = "/elsewhere/real/a.txt\nLink ends inside the project"
+  const linked = { ...out("a.txt"), place, link: { place, outside: true } }
+  for (const request of [ask([linked], ["linked/a.txt"]), ask([plainFile("c.txt"), linked], ["c.txt", "linked/a.txt"])])
+    for (const frame of [
+      (await drawFull(request, "permission", { width: 220, height: 40 }))[0]!,
+      (await drawMini(request, "permission", { width: 220, height: 40 }, false))[0]!,
+      (await drawMini(request, "permission", { width: 220, height: 40 }, true))[0]!,
+    ]) {
+      expect(flat(frame)).toContain(flat(OUT))
+      for (const line of frame.split("\n")) expect(squash(line).startsWith("Linkendsinside")).toBe(false)
+    }
+})
+
+test("the full dialog says one link once", async () => {
+  const frame = flat((await drawFull(ask([out("a.txt")]), "permission", { width: 200, height: 40 }))[0]!)
+  expect(frame.split(flat(OUT))).toHaveLength(2)
+})
+
+test("several links are each named where no file has a diff to draw", async () => {
+  const request = ask([out("a.txt"), inside("b.txt")].map(({ patch: _, ...entry }) => entry))
+  for (const frame of [
+    flat((await drawFull(request, "permission", { width: 200, height: 40 }))[0]!),
+    flat((await drawMini(request, "permission", { width: 200, height: 40 }, false))[0]!),
+  ])
+    for (const part of [OUT + ", at", IN + ":"]) expect(frame).toContain(flat(part))
+})
+
+test("a warning shows its places from the session's folder, as the rest of the prompt does", async () => {
+  const here = (directory: string) =>
+    ask([{ ...plainFile("b.txt"), place: path.join(directory, "alias", "b.txt"), link: { place: path.join(directory, "src", "b.txt"), outside: false } }])
+  const said = flat(`${IN}: alias/b.txt leads to src/b.txt`)
+  for (const compact of [false, true])
+    expect(flat((await drawFull(here, "permission", { width: 220, height: 40 }, { compact }))[0]!)).toContain(said)
+  await using tmp = await tmpdir()
+  expect(flat((await drawMini(here(tmp.path), "permission", { width: 220, height: 40 }, false, 0, tmp.path))[0]!)).toContain(said)
 })

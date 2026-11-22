@@ -477,6 +477,33 @@ test("the chat's review tab of a file behind a link says so in its title, and on
     }
 })
 
+test("of several previewed files only the one behind a link has it in its title, and so has a move from one", async () => {
+  const through = path.join(project, "alias", "b.txt")
+  const link = { place: path.join(project, "sub", "b.txt"), outside: false }
+  const rows = [
+    { files: [{ file: "a.txt", place: inside, patch, status: "modified" }, { file: "alias/b.txt", place: through, patch, status: "modified", link }], linked: ["b.txt"] },
+    { files: [{ file: "c.txt", place: path.join(project, "c.txt"), from: through, patch, status: "modified", fromLink: link }], linked: ["c.txt"] },
+  ]
+  for (const row of rows) {
+    const tabs: Tab[] = []
+    const host: ConstructorParameters<typeof Review>[0] = {
+      reply: async () => "sent",
+      folders: async () => ({ folders: [project] }),
+      workspace: () => [project],
+      show: async (tab) => void tabs.push(tab),
+      changes: async () => {},
+      close: async () => {},
+      reveal: async () => {},
+      note: () => {},
+      warn: () => {},
+      unmark: () => {},
+    }
+    await new Review(host).open(item(row.files, { revisable: false }), true)
+    expect(tabs).toHaveLength(row.files.length)
+    expect(tabs.filter((tab) => tab.title.includes(" behind a link (")).map((tab) => tab.title.split(" ")[1])).toEqual(row.linked)
+  }
+})
+
 test("a session or window folder spelled as a share or a relative path is dropped before the disk is touched", async () => {
   const relative = "orbit-relative-folder"
   const share = `//${host}/share`

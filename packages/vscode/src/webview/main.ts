@@ -428,6 +428,8 @@ function permission(item: Extract<Item, { type: "permission" }>) {
   if (totals.additions) head.append(element("span", "add", `+${totals.additions}`))
   if (totals.deletions) head.append(element("span", "del", `−${totals.deletions}`))
   card.append(head)
+  // Above the diff and outside the resources, so a long list of either leaves them in view.
+  shown.warnings.forEach((warning) => card.append(element("div", "perm-warning", warning)))
   if (shown.changes.length > 0) {
     const diff = element("div", "mini-diff")
     shown.changes.forEach((line) => diff.append(element("div", line.kind, `${line.kind === "add" ? "+" : "−"} ${line.text}`)))
