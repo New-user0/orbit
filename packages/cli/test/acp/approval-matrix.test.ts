@@ -135,7 +135,9 @@ describe("acp approvals show what the request carries", () => {
         expect(
           said.some(
             (line) =>
-              line.startsWith(`Link ends ${link.outside ? "outside" : "inside"} the project`) && line.endsWith(link.place),
+              line.startsWith(`Link ends ${link.outside ? "outside" : "inside"} the project`) &&
+              // As a client that renders it as Markdown shows it: a path can be in a code span.
+              Bun.markdown.html(line).replace(/<[^>]*>/g, "").trimEnd().endsWith(link.place),
           ),
         ).toBe(true)
       if (links.length > 0) expect(String(call.title)).toMatch(/^(Link ends|\d+ linked paths)/)

@@ -174,3 +174,12 @@ test("the words of the warning: where a link ends comes first, so a cut line sti
   expect(linked.linkSummary?.([ends, alias, { ...ends, file: "/p/other" }])).toBe("3 linked paths, 2 outside the project")
   expect(linked.linkSummary?.([alias, { ...alias, file: "/p/other" }])).toBe("2 linked paths, all inside the project")
 })
+
+test("the short summary keeps the word outside or inside", () => {
+  const link = (outside: boolean) => ({ file: "/p/a", place: "/r/a", outside })
+  expect(PermissionView.linkShort([])).toBeUndefined()
+  expect(PermissionView.linkShort([link(true)])).toBe("Link ends outside")
+  expect(PermissionView.linkShort([link(false)])).toBe("Link ends inside")
+  expect(PermissionView.linkShort([link(true), link(false), link(true)])).toBe("3 links, 2 outside")
+  expect(PermissionView.linkShort([link(false), link(false)])).toBe("2 links, all inside")
+})

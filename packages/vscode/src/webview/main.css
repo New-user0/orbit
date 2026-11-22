@@ -430,12 +430,17 @@ body.sidebar .starter {
   font-size: 12px;
 }
 
+/* What wraps in the title and in a warning is indented, so a wrapped name starts no line that reads as a warning. */
 .perm-head .strong {
   font-size: var(--vscode-font-size);
+  padding-left: 16px;
+  text-indent: -16px;
+  overflow-wrap: anywhere;
 }
 
 .perm-warning {
-  padding: 0 10px 6px;
+  padding: 0 10px 6px 26px;
+  text-indent: -16px;
   color: var(--vscode-editorWarning-foreground);
   font-size: 12px;
   overflow-wrap: anywhere;

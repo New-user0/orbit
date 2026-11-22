@@ -12,7 +12,7 @@
 // against the folders the terminal UI names for its session, and its answers go back to that terminal UI, which replies
 // to its server; a tab the extension closes itself tells it the review was dismissed.
 import type { SessionRewindFiles } from "@orbit/client"
-import { plain } from "@orbit/flow/plain"
+import { plain, plainPath } from "@orbit/flow/plain"
 import { FSUtil } from "@orbit/util/fs-util"
 import { LinkShare } from "@orbit/util/link-share"
 import { parsePatch } from "diff"
@@ -623,7 +623,7 @@ function hunks(patch: string) {
  * the chat knows it is, and six random characters.
  */
 export function tabTitle(file: string, linked = false) {
-  return `Orbit: ${plain(file.split(/[\\/]/).at(-1) ?? file)}${linked ? " behind a link" : ""} (${nonce()})`
+  return `Orbit: ${plainPath(file.split(/[\\/]/).at(-1) ?? file)}${linked ? " behind a link" : ""} (${nonce()})`
 }
 
 /**

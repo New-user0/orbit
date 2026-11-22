@@ -96,7 +96,7 @@ export function of(request: Request): View {
 }
 
 /**
- * The warning of one link. `show` is the client's: it formats a path and writes it out with `plain` (class 9). Where
+ * The warning of one link. `show` is the client's: it formats a path and writes it out with `plainPath` (class 9). Where
  * the link ends is said before any path, so a line that is cut still says it.
  */
 export function linkWarning(link: Link, show: (path: string) => string) {
@@ -111,8 +111,19 @@ export function linkSummary(all: ReadonlyArray<Link>) {
   return `${all.length} linked paths, ${outside === 0 ? "all inside" : `${outside} outside`} the project`
 }
 
+/** The summary for a screen too narrow for it. It keeps the word that matters: outside, or inside. */
+export function linkShort(all: ReadonlyArray<Link>) {
+  if (all.length < 2) return all[0] && `Link ends ${side(all[0])}`
+  const outside = all.filter((link) => link.outside).length
+  return `${all.length} links, ${outside === 0 ? "all inside" : `${outside} outside`}`
+}
+
 function ending(link: Link) {
-  return `Link ends ${link.outside ? "outside" : "inside"} the project`
+  return `Link ends ${side(link)} the project`
+}
+
+function side(link: Link) {
+  return link.outside ? "outside" : "inside"
 }
 
 // Read from every entry, also one the diff list drops for having no patch. A bad link costs only itself (class 7).

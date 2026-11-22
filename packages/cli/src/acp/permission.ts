@@ -2,7 +2,7 @@ import type { PermissionOption, ToolCallContent, ToolCallLocation } from "@agent
 import type { EventSubscribeOutput, OrbitClient, PermissionReplyInput } from "@orbit/client/promise"
 import { PermissionView } from "@orbit/schema/permission-view"
 import { ToolNames } from "@orbit/schema/tool-names"
-import { plain } from "@orbit/util/plain"
+import { plainPath } from "@orbit/util/plain"
 import { Cause, Effect } from "effect"
 import { resolve } from "node:path"
 import type { ACPConnection } from "./connection"
@@ -111,8 +111,30 @@ const isEditFamily = (name: string) =>
 function linksContent(view: PermissionView.View): ToolCallContent[] {
   return view.links.map((link) => ({
     type: "content",
-    content: { type: "text", text: PermissionView.linkWarning(link, plain) },
+    content: { type: "text", text: PermissionView.linkWarning(link, markdownPath) },
   }))
+}
+
+// A path that Markdown draws letter for letter: it has no mark that pairs with another or takes what follows it as
+// markup, a backslash only before a letter or a digit, an underscore only inside a word, and it starts no block and
+// holds nothing that becomes a link by itself.
+const LITERAL =
+  /^(?:[\p{L}\p{M}\p{N} /.,:;=@+'"!?%$#(){}-]|\](?![([:])|(?<=[\p{L}\p{N}])_(?=[\p{L}\p{N}])|\\(?=[\p{L}\p{N}]))+$/u
+const ACTIVE = /^(?:[-+=#]|\d+[.)])|:\/\/|www\.|@[^/\\]*\./i
+// A name that opens with the words of a warning would read as one, so it is quoted too.
+const WARNING = /^(?:link ends|\d+ linked paths)/i
+
+/**
+ * A path in text that a client renders as Markdown, as the protocol has it do with content and some do with titles: as
+ * it is where Markdown shows it so, and otherwise in a code span with a longer fence than any in it. So the text a
+ * person reads is the path, and no name a repository chose becomes a link, an image or a tag (classes 6, 8 and 9).
+ */
+function markdownPath(value: string) {
+  const text = plainPath(value)
+  if (LITERAL.test(text) && !ACTIVE.test(text) && !WARNING.test(text)) return text
+  const fence = "`".repeat(Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length)) + 1)
+  const pad = text.startsWith("`") || text.endsWith("`") ? " " : ""
+  return `${fence}${pad}${text}${pad}${fence}`
 }
 
 /**
@@ -151,12 +173,12 @@ function permissionTitle(
   switch (PermissionView.action(request.action)) {
     case "external_directory": {
       const directory = request.resources.find(isPath)
-      return (
-        stringValue(metadata.description) ??
-        stringValue(metadata.command) ??
-        stringValue(metadata.parentDir) ??
-        (directory && `Access external directory ${wildcardDirectory(directory)}`)
-      )
+      const called = stringValue(metadata.description) ?? stringValue(metadata.command)
+      // One line, since this question is asked just before a change through a link out (class 9).
+      if (called !== undefined) return plainPath(called.trim())
+      const parent = stringValue(metadata.parentDir)
+      if (parent !== undefined) return markdownPath(parent)
+      return directory && `Access external directory ${markdownPath(wildcardDirectory(directory))}`
     }
     case "webfetch": {
       // The method is part of what is approved: a Code Mode POST must not read like the GET that was allowed.
@@ -183,7 +205,7 @@ function permissionTitle(
           ? files[0]
           : (view.places[0] ?? files[0] ?? view.files[0]?.file)
       // One line, so a break in a file's name starts no line that reads as a link warning (class 9).
-      return named === undefined ? undefined : plain(named)
+      return named === undefined ? undefined : markdownPath(named)
     }
     default:
       // A request whose caller is not its tool (an MCP call, a Workflow agent) names the action and what it reaches.

@@ -1,5 +1,5 @@
 import { PermissionView } from "@orbit/schema/permission-view"
-import { body, plain } from "@orbit/flow/plain"
+import { body, plainPath } from "@orbit/flow/plain"
 import type { FileChange } from "../protocol.js"
 import { excerpt } from "./present.js"
 
@@ -24,7 +24,7 @@ export function approvalCard(item: {
 }): Card {
   const card = build(item)
   const links = item.view.links
-  const warnings = links.map((link) => PermissionView.linkWarning(link, plain))
+  const warnings = links.map((link) => PermissionView.linkWarning(link, plainPath))
   // Every string here can come from a model or a file (a command, an MCP argument), so control characters, including the
   // ones that reorder text, are written out before the card is drawn (class 9).
   return {
@@ -55,10 +55,10 @@ function build(item: {
   if (item.files.length > 0)
     return {
       // Each name is one line: a break in one starts no line that reads as a link warning (class 9).
-      title: `${verb} ${item.files.map((file) => plain(basename(file.place ?? file.file))).join(", ")}`,
+      title: `${verb} ${item.files.map((file) => plainPath(basename(file.place ?? file.file))).join(", ")}`,
       lines: [...new Set([...view.places, ...item.files.flatMap((file) => [file.from, file.place ?? file.file])])]
         .filter((place): place is string => place !== undefined)
-        .map((place) => `Path: ${plain(place)}`),
+        .map((place) => `Path: ${plainPath(place)}`),
     }
   if (view.url !== undefined)
     return {
@@ -67,14 +67,22 @@ function build(item: {
     }
   // The request's resources are what the rule matches: the command of a shell approval, the pattern of a search.
   const resources = item.resources.filter((resource) => resource !== "*")
+  // Those of a question about files or folders are names and are each one line (class 9). A command keeps its lines.
+  const named =
+    PermissionView.action(item.action) === "external_directory" || view.places.length > 0
+      ? plainPath
+      : (value: string) => value
   const lines = [
-    ...resources.filter((resource) => resource !== view.pattern && !view.places.includes(resource)).map((resource) => `Resource: ${resource}`),
-    ...view.places.map((place) => `Path: ${place}`),
+    ...resources
+      .filter((resource) => resource !== view.pattern && !view.places.includes(resource))
+      .map((resource) => `Resource: ${named(resource)}`),
+    ...view.places.map((place) => `Path: ${plainPath(place)}`),
     ...(view.pattern === undefined ? [] : [`Pattern: ${view.pattern}`]),
-    ...(view.folder === undefined ? [] : [`Folder: ${view.folder}`]),
+    ...(view.folder === undefined ? [] : [`Folder: ${plainPath(view.folder)}`]),
     ...(view.arguments === undefined ? [] : [`Arguments: ${view.arguments}`]),
   ]
-  const target = view.places[0] ?? view.pattern ?? (resources.length > 0 ? resources.join(", ") : "")
+  const target =
+    (view.places[0] === undefined ? view.pattern : plainPath(view.places[0])) ?? resources.map(named).join(", ")
   return {
     title: `${verb} ${target}`.trim(),
     lines: lines.length > 0 ? lines : item.resources,

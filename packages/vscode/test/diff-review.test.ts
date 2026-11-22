@@ -1981,3 +1981,7 @@ test("the changed-since-read notice names no file", async () => {
   expect(changedNotice).not.toContain("moved-on")
   expect(shown.notes.map((note) => note.text)).toEqual([changedNotice])
 })
+
+test("a tab's title writes out the blanks of a name (class 9)", () => {
+  expect(tabTitle("/out/a\u2028b  c.txt", true)).toMatch(/^Orbit: a\\u\{2028\}b\\x20\\x20c\.txt behind a link \([a-z0-9]{6}\)$/)
+})

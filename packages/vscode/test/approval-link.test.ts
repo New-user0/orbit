@@ -81,3 +81,49 @@ test("a warning is drawn in the warning colour and wraps anywhere", async () => 
   expect(rule).toContain("overflow-wrap: anywhere;")
   expect(rule).not.toMatch(/display|visibility|white-space|overflow:|max-height|opacity/)
 })
+
+// Fix loop 1 (class 9): every spelling of a blank, against every line of the card that draws a name.
+test("no blank of a name is left in the card's title, warnings or lines", () => {
+  const forged = "Link ends inside the project, at safe"
+  for (const [blank, written] of [
+    ["\n", "\\n"],
+    ["\r", "\\x0d"],
+    ["\t", "\\x09"],
+    ["\u2028", "\\u{2028}"],
+    ["\u2029", "\\u{2029}"],
+    ["\u00a0\u00a0", "\\xa0\\xa0"],
+    ["\u3164", "\\u{3164}"],
+    ["  ", "\\x20\\x20"],
+  ] as const) {
+    const place = `/out/a.txt${blank}${forged}`
+    const shown = `/out/a.txt${written}${forged}`
+    const changed = card([{ ...out, place, from: place, link: { place, outside: true } }])
+    expect(changed.warnings).toEqual([`Link ends outside the project, at ${shown}`])
+    expect(changed.title).toBe(`Edit a.txt${written}${forged}`)
+    expect(changed.lines).toContain(`Path: ${shown}`)
+    const asks = (action: string, resources: string[], metadata: Record<string, string | string[]>) =>
+      approvalCard(permissionItem({ id: "per_link", sessionID: "ses_link", action, resources, metadata }))
+    const read = asks("Read", ["rel.txt"], { paths: [place] })
+    expect(read.title).toBe(`Read ${shown}`)
+    expect(read.lines).toEqual(["Resource: rel.txt", `Path: ${shown}`])
+    expect(asks("Read", [place], { paths: ["/p/a.txt"] }).lines).toContain(`Resource: ${shown}`)
+    const folder = asks("external_directory", [place], {})
+    expect(folder.title).toBe(`external_directory ${shown}`)
+    expect(folder.lines).toEqual([`Resource: ${shown}`])
+    expect(asks("Grep", ["needle"], { path: place }).lines).toContain(`Folder: ${shown}`)
+  }
+  // A command keeps its lines.
+  const command = approvalCard(
+    permissionItem({ id: "per_link", sessionID: "ses_link", action: "shell", resources: ["one\ntwo  three"], metadata: {} }),
+  )
+  expect(command.title).toBe("Run one\ntwo  three")
+})
+
+test("what wraps in the card's title and warnings is indented, so a wrapped name starts no line as a warning does", async () => {
+  const css = await Bun.file(path.join(import.meta.dir, "../src/webview/main.css")).text()
+  const warning = css.match(/^\.perm-warning \{([^}]*)\}/m)?.[1]
+  expect(warning).toContain("padding: 0 10px 6px 26px;")
+  expect(warning).toContain("text-indent: -16px;")
+  const title = css.match(/^\.perm-head \.strong \{([^}]*)\}/m)?.[1]
+  for (const rule of ["padding-left: 16px;", "text-indent: -16px;", "overflow-wrap: anywhere;"]) expect(title).toContain(rule)
+})

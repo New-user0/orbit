@@ -1,6 +1,6 @@
 import { PermissionView } from "@orbit/schema/permission-view"
 import { ToolNames } from "@orbit/schema/tool-names"
-import { plain } from "@orbit/util/plain"
+import { plainPath } from "@orbit/util/plain"
 import { Locale } from "./locale"
 import { bodyText } from "./renderer"
 import { canonicalToolName, legacyToolInput, webSearchProviderLabel } from "./tool-display"
@@ -16,6 +16,8 @@ export type PermissionPresentation = {
   diffs?: { file: string; diff: string }[]
   patch?: string
   file?: string
+  // The files an Edit's title names, for a prompt that cuts the title and lists them where it scrolls.
+  names?: string[]
 }
 
 export type PermissionPresentationInput = {
@@ -48,13 +50,15 @@ export function permissionPresentation(
 
 /**
  * What a prompt says of the links in a request, from the request alone (class 8): `summary` is one line whatever the
- * request holds, and `lines` names each linked end on a line of its own, its paths written out (class 9).
+ * request holds, `short` is that line where it does not fit, and `lines` names each linked end on a line of its own, its
+ * paths written out (class 9).
  */
 export function permissionLinks(request: PermissionView.Request, formatPath: (value: string) => string) {
   const links = PermissionView.of(request).links
   return {
     summary: PermissionView.linkSummary(links),
-    lines: links.map((link) => PermissionView.linkWarning(link, (value) => plain(formatPath(value)))),
+    short: PermissionView.linkShort(links),
+    lines: links.map((link) => PermissionView.linkWarning(link, (value) => plainPath(formatPath(value)))),
   }
 }
 
@@ -71,11 +75,11 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
   // the caller's input can spell another place (`~/..` is not a folder in the project, filename recovery reads a
   // sibling) and can carry keys the model added.
   const view = PermissionView.of({ action: source.action, resources, metadata: dict(source.metadata) })
+  // Each name is one line with no blank to pad it: none starts a line that reads as a link warning of Orbit's (class 9).
+  const named = (value: string) => plainPath(formatPath(value))
 
   if (action === "edit") {
     const files = view.files
-    // Each name is one line: a break in one starts no line that reads as a link warning of Orbit's (class 9).
-    const named = (value: string) => plain(formatPath(value))
     const file = view.places[0] ?? files[0]?.place ?? files[0]?.file ?? ""
     // A patch asks once for every file it changes, so the prompt names all of them and shows every file's diff: showing
     // only the first would hide part of what is approved. A moved file's source is only in the places, and each
@@ -94,6 +98,7 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
           : undefined,
         patch: each ? undefined : view.diff,
         file,
+        names: targets.map(named),
       }
     }
     const diff = files[0]?.patch || view.diff || undefined
@@ -103,6 +108,7 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
       lines: [],
       diff,
       file,
+      names: [named(file)],
     }
   }
 
@@ -111,8 +117,8 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
     const title = action === "read" ? "Read" : "List"
     return {
       icon: "→",
-      title: `${title} ${formatPath(value)}`,
-      lines: value ? [`Path: ${formatPath(value)}`] : [],
+      title: `${title} ${named(value)}`,
+      lines: value ? [`Path: ${named(value)}`] : [],
     }
   }
 
@@ -124,7 +130,7 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
       title: `${title} "${pattern}"`,
       lines: [
         ...(pattern ? [`Pattern: ${pattern}`] : []),
-        ...(view.folder ? [`Folder: ${formatPath(view.folder)}`] : []),
+        ...(view.folder ? [`Folder: ${named(view.folder)}`] : []),
       ],
     }
   }
@@ -136,7 +142,7 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
       title: "Shell command",
       lines: [
         ...(command ? [`$ ${command}`] : resources.map((item) => `- ${item}`)),
-        ...(view.folder ? [`Folder: ${formatPath(view.folder)}`] : []),
+        ...(view.folder ? [`Folder: ${named(view.folder)}`] : []),
       ],
     }
   }
@@ -179,8 +185,8 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
     const directory = wildcardDirectory(raw)
     return {
       icon: "←",
-      title: `Access external directory ${formatPath(directory)}`,
-      lines: resources.map((item) => `- ${item}`),
+      title: `Access external directory ${named(directory)}`,
+      lines: resources.map((item) => `- ${plainPath(item)}`),
     }
   }
 
@@ -198,7 +204,7 @@ function present(source: PermissionPresentationInput, formatPath: (value: string
     // What the request is about: the MCP resource or server an MCP resource tool reads, the skill a Skill call loads.
     lines: [
       `Tool: ${source.action}`,
-      ...resources.filter((item) => item !== "*").map((item) => `Resource: ${item}`),
+      ...resources.filter((item) => item !== "*").map((item) => `Resource: ${plainPath(item)}`),
       ...(view.arguments ? [`Arguments: ${view.arguments}`] : []),
     ],
   }
@@ -219,10 +225,9 @@ export function permissionAlwaysLines(input: { action: string; save?: ReadonlyAr
   if (save.length === 1 && save[0] === "*") {
     return [bodyText(`This will always allow ${input.action} for this project.`)]
   }
-  return [
-    "This will always allow the following patterns for this project.",
-    ...save.map((item) => bodyText(`- ${item}`)),
-  ]
+  // A folder is a name; a command keeps its lines.
+  const shown = canonicalToolName(input.action) === "external_directory" ? plainPath : bodyText
+  return ["This will always allow the following patterns for this project.", ...save.map((item) => `- ${shown(item)}`)]
 }
 
 export function permissionOptionLabel(option: "once" | "always" | "reject" | "confirm" | "cancel") {

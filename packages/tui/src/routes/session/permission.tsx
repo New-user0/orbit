@@ -1,8 +1,8 @@
 import { createStore } from "solid-js/store"
 import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch, useContext } from "solid-js"
 import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { TextareaRenderable } from "@opentui/core"
-import { plain } from "@orbit/util/plain"
+import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
+import { plain, plainPath } from "@orbit/util/plain"
 import { useTheme, useThemes } from "../../context/theme"
 import type { PermissionReply, PermissionRequest } from "@orbit/client"
 import { SplitBorder } from "../../ui/border"
@@ -16,23 +16,36 @@ import { filetype } from "../../util/filetype"
 import { canonicalToolName } from "../../util/tool-display"
 import { permissionAlwaysLines, permissionLinks, permissionOptionLabel, permissionPresentation } from "../../util/permission"
 import { getScrollAcceleration } from "../../util/scroll"
+import { Locale } from "../../util/locale"
+import { stringWidth } from "../../util/string-width"
 import { useConfig } from "../../config"
 import { Keymap } from "../../context/keymap"
 import { useInteractivity } from "../../context/interactivity"
 import { usePathFormatter } from "../../context/path-format"
 import { SimulationSemantics } from "../../simulation/semantics"
+import { Hanging, hangingLead } from "../../component/hanging"
 import { PatchDiff } from "../../component/patch-diff"
 import { useToast } from "../../ui/toast"
 
 type PermissionStage = "permission" | "reject"
+/**
+ * The room a question has in its dialog: `rows` for the header, the gap under it and the body, above the options and
+ * the hints, and `width` for a line of either.
+ */
+type Space = { rows: () => number; width: () => number; expanded: () => boolean }
+// The rows that a scrolling body keeps, whatever the header above it holds.
+const BODY_ROWS = 2
+const DIALOG_ROWS = 15
 
 function EditBody(props: {
   file?: string
   diff?: string
   diffs?: { file: string; diff: string }[]
   patch?: string
-  /** The warning of each link, when there are several: they lead what scrolls. */
+  /** The warning of each link that the fixed line does not say whole: they lead what scrolls. */
   warnings: string[]
+  /** The names that a cut title no longer shows whole. */
+  names: string[]
 }) {
   const theme = useTheme()
   const themes = useThemes()
@@ -43,6 +56,8 @@ function EditBody(props: {
   // A patch that edits several files gets one diff per file, each under its own path.
   const diffs = createMemo(() => props.diffs ?? (props.diff ? [{ file: props.file ?? "", diff: props.diff }] : []))
   const several = () => diffs().length > 1
+  // A name that is above its file's diff is not listed again: what is left is a move's source, or the only file's.
+  const unnamed = () => props.names.filter((name) => !several() || !diffs().some((item) => item.file === name))
 
   const view = createMemo(() => {
     const diffView = config.diffs?.view
@@ -51,95 +66,100 @@ function EditBody(props: {
     return dimensions().width > 120 ? "split" : "unified"
   })
 
-  const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
+  let scroll: ScrollBoxRenderable | undefined
+  // A step of the wheel keeps a row of what the body showed, which can be two: no row, and no name across two, is skipped.
+  const scrollAcceleration = createMemo(() => {
+    const base = getScrollAcceleration(config)
+    return {
+      tick: (now?: number) => Math.min(base.tick(now), Math.max(1, (scroll?.viewport.height ?? 1) - 1)),
+      reset: () => base.reset(),
+    }
+  })
 
   return (
-    <box flexDirection="column" gap={1}>
-      <Show when={diffs().length > 0 || props.warnings.length > 0}>
-        <scrollbox
-          height="100%"
-          scrollAcceleration={scrollAcceleration()}
-          verticalScrollbarOptions={{
-            trackOptions: {
-              backgroundColor: theme.background.base,
-              foregroundColor: theme.scrollbar.base,
-            },
-          }}
-        >
-          <box flexDirection="column" gap={1}>
-            <Show when={props.warnings.length > 0}>
-              <box paddingLeft={1} flexDirection="column" flexShrink={0}>
-                <For each={props.warnings}>
-                  {(warning) => <text fg={theme.text.feedback.warning.base}>{warning}</text>}
-                </For>
+    <box flexDirection="column">
+      {/* One box for all that scrolls, so the two rows it can have are not split between two. */}
+      <scrollbox
+        height="100%"
+        ref={(item: ScrollBoxRenderable) => (scroll = item)}
+        scrollAcceleration={scrollAcceleration()}
+        verticalScrollbarOptions={{
+          trackOptions: {
+            backgroundColor: theme.background.base,
+            foregroundColor: theme.scrollbar.base,
+          },
+        }}
+      >
+        <box flexDirection="column" gap={1}>
+          <Show when={props.warnings.length > 0}>
+            <box paddingLeft={1} flexDirection="column" flexShrink={0}>
+              <For each={props.warnings}>
+                {(warning) => <Hanging text={warning} fg={theme.text.feedback.warning.base} />}
+              </For>
+            </box>
+          </Show>
+          <Show when={unnamed().length > 0}>
+            <box paddingLeft={1} flexDirection="column" flexShrink={0}>
+              <For each={unnamed()}>{(name) => <Hanging text={`Path: ${name}`} fg={theme.text.muted} />}</For>
+            </box>
+          </Show>
+          <For each={diffs()}>
+            {(item) => (
+              <box flexDirection="column">
+                <Show when={several()}>
+                  <box paddingLeft={1}>
+                    <Hanging text={`Path: ${item.file}`} fg={theme.text.muted} />
+                  </box>
+                </Show>
+                <PatchDiff
+                  diff={item.diff}
+                  hunkFg={theme.diff.text.hunkHeader}
+                  view={view()}
+                  filetype={filetype(item.file)}
+                  syntaxStyle={syntax()}
+                  showLineNumbers={true}
+                  width="100%"
+                  wrapMode="word"
+                  fg={theme.text.base}
+                  addedBg={theme.diff.background.added}
+                  removedBg={theme.diff.background.removed}
+                  contextBg={theme.diff.background.context}
+                  addedSignColor={theme.diff.highlight.added}
+                  removedSignColor={theme.diff.highlight.removed}
+                  lineNumberFg={theme.diff.lineNumber.text}
+                  lineNumberBg={theme.diff.background.context}
+                  addedLineNumberBg={theme.diff.lineNumber.background.added}
+                  removedLineNumberBg={theme.diff.lineNumber.background.removed}
+                />
               </box>
-            </Show>
-            <For each={diffs()}>
-              {(item) => (
-                <box flexDirection="column">
-                  <Show when={several()}>
-                    <box paddingLeft={1}>
-                      <text fg={theme.text.muted}>{`Path: ${item.file}`}</text>
-                    </box>
-                  </Show>
-                  <PatchDiff
-                    diff={item.diff}
-                    hunkFg={theme.diff.text.hunkHeader}
-                    view={view()}
-                    filetype={filetype(item.file)}
+            )}
+          </For>
+          <Show when={diffs().length === 0}>
+            <Show
+              when={props.patch}
+              fallback={
+                <box paddingLeft={1} flexShrink={0}>
+                  <text fg={theme.text.muted}>No diff provided</text>
+                </box>
+              }
+            >
+              {(patch) => (
+                // Right of where a warning starts, since this text's rows are the request's.
+                <box paddingLeft={2} flexShrink={0}>
+                  <code
+                    filetype="diff"
+                    drawUnstyledText={false}
+                    streaming={true}
                     syntaxStyle={syntax()}
-                    showLineNumbers={true}
-                    width="100%"
-                    wrapMode="word"
-                    fg={theme.text.base}
-                    addedBg={theme.diff.background.added}
-                    removedBg={theme.diff.background.removed}
-                    contextBg={theme.diff.background.context}
-                    addedSignColor={theme.diff.highlight.added}
-                    removedSignColor={theme.diff.highlight.removed}
-                    lineNumberFg={theme.diff.lineNumber.text}
-                    lineNumberBg={theme.diff.background.context}
-                    addedLineNumberBg={theme.diff.lineNumber.background.added}
-                    removedLineNumberBg={theme.diff.lineNumber.background.removed}
+                    content={patch()}
+                    fg={theme.text.muted}
                   />
                 </box>
               )}
-            </For>
-          </box>
-        </scrollbox>
-      </Show>
-      <Show when={diffs().length === 0}>
-        <Show
-          when={props.patch}
-          fallback={
-            <box paddingLeft={1}>
-              <text fg={theme.text.muted}>No diff provided</text>
-            </box>
-          }
-        >
-          {(patch) => (
-            <scrollbox
-              height="100%"
-              scrollAcceleration={scrollAcceleration()}
-              verticalScrollbarOptions={{
-                trackOptions: {
-                  backgroundColor: theme.background.base,
-                  foregroundColor: theme.scrollbar.base,
-                },
-              }}
-            >
-              <code
-                filetype="diff"
-                drawUnstyledText={false}
-                streaming={true}
-                syntaxStyle={syntax()}
-                content={patch()}
-                fg={theme.text.muted}
-              />
-            </scrollbox>
-          )}
-        </Show>
-      </Show>
+            </Show>
+          </Show>
+        </box>
+      </scrollbox>
     </box>
   )
 }
@@ -167,8 +187,6 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
 
   const theme = useTheme()
   const links = createMemo(() => permissionLinks(props.request, pathFormatter.format))
-  // Said whole for one link and counted for several, since it is above all that the request can make tall.
-  const notice = () => (links().lines.length === 1 ? links().lines[0] : links().summary)
   const review = useEditorReview(props.request, () => session()?.location)
 
   function reply(value: PermissionReply, message?: string) {
@@ -200,7 +218,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
         <RejectPrompt
           action={props.request.action}
           instance={props.request.id}
-          warning={notice()}
+          links={links()}
           onConfirm={(message) => {
             reply("reject", message || undefined)
           }}
@@ -224,21 +242,43 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           )
           // The views are written against the names the tools had before the rename, whichever one the request carries.
           const view = () => canonicalToolName(props.request.action)
-          const presentationBody = () =>
+          const title = view() !== "shell" && current.title ? current.title : "Permission required"
+          // How the header is fitted: the fixed line and the title above, and under them what a person approves, which
+          // is the grant while Always allow is focused and otherwise the body that scrolls (class 8). One link is said
+          // whole while that takes half the header at most, and summed up past that. An edit's title is cut, with a
+          // mark, to the rows that are left; Always allow cuts any title, to three rows at most outside fullscreen.
+          const layout = (granting: boolean, space: Space) => {
+            // A pattern follows a blank row, so each line of a grant takes two.
+            const kept = granting
+              ? Math.min(permissionAlwaysLines(props.request).length * 2, space.rows() - 3)
+              : BODY_ROWS
+            const rows = Math.max(2, space.rows() - 1 - kept)
+            const notice = fitLinks(links(), Math.floor(rows / 2), space.width())
+            if (!granting && view() !== "edit") return { notice, title: { text: title, rows: undefined, cut: false } }
+            const left = Math.max(1, rows - notice.rows)
+            const limit = granting && !space.expanded() ? Math.min(3, left) : left
+            const counted = [changes().additions, changes().deletions]
+              .filter((count) => count > 0)
+              .reduce((total, count) => total + stringWidth(`+${count}`) + 1, 0)
+            return { notice, title: fitText(title, limit, space.width() - 2 - counted) }
+          }
+
+          const presentationBody = (fitted: () => ReturnType<typeof layout>) =>
             view() === "edit" ? (
               <EditBody
                 file={current.file}
                 diff={current.diff}
                 diffs={current.diffs}
                 patch={current.patch}
-                warnings={links().lines.length > 1 ? links().lines : []}
+                warnings={links().lines.length > 1 || !fitted().notice.whole ? links().lines : []}
+                names={fitted().title.cut ? (current.names ?? []) : []}
               />
             ) : view() === "external_directory" ? (
               <Show when={current.lines.length > 0}>
                 <box paddingLeft={1} gap={1}>
                   <text fg={theme.text.muted}>Patterns</text>
                   <box>
-                    <For each={current.lines}>{(line) => <text fg={theme.text.base}>{line}</text>}</For>
+                    <For each={current.lines}>{(line) => <Hanging text={line} fg={theme.text.base} />}</For>
                   </box>
                 </box>
               </Show>
@@ -246,15 +286,14 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               <box paddingLeft={1}>
                 <For each={current.lines}>
                   {(line) => (
-                    <text
+                    <Hanging
+                      text={line}
                       fg={
                         view() === "shell" || view() === "subagent" || view() === "task"
                           ? theme.text.base
                           : theme.text.muted
                       }
-                    >
-                      {line}
-                    </text>
+                    />
                   )}
                 </For>
               </box>
@@ -272,21 +311,27 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               { additions: 0, deletions: 0 },
             )
           // The link warning is above the title, which names as many files as the request has, and outside the body,
-          // which the focused option replaces. While Always allow is focused the title is cut to three rows, so that
-          // however many files it names it does not push what the grant is out of the dialog (class 8).
-          const header = (granting: boolean) => (
+          // which the focused option replaces.
+          const header = (fitted: () => ReturnType<typeof layout>) => (
             <box flexDirection="column">
-              <LinkNotice warning={notice()} />
-              <box flexDirection="row" gap={1} flexShrink={0} maxHeight={granting ? 3 : undefined}>
-                <text fg={theme.text.feedback.warning.base}>{"▲"}</text>
-                <text fg={theme.text.base} flexShrink={1}>
-                  {view() !== "shell" && current.title ? current.title : "Permission required"}
+              <LinkNotice warning={fitted().notice.text} />
+              <box flexDirection="row" gap={1} flexShrink={0} maxHeight={fitted().title.rows}>
+                <text fg={theme.text.feedback.warning.base} flexShrink={0}>
+                  {"▲"}
+                </text>
+                <text
+                  fg={theme.text.base}
+                  flexShrink={1}
+                  // A bounded title is measured in characters, so it is wrapped by them.
+                  wrapMode={fitted().title.rows === undefined ? "word" : "char"}
+                >
+                  {fitted().title.text}
                 </text>
                 <Show when={changes().additions > 0}>
-                  <text fg={theme.diff.text.added}>{`+${changes().additions}`}</text>
+                  <text fg={theme.diff.text.added} flexShrink={0}>{`+${changes().additions}`}</text>
                 </Show>
                 <Show when={changes().deletions > 0}>
-                  <text fg={theme.diff.text.removed}>{`−${changes().deletions}`}</text>
+                  <text fg={theme.diff.text.removed} flexShrink={0}>{`−${changes().deletions}`}</text>
                 </Show>
               </box>
             </box>
@@ -297,16 +342,25 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title="Permission required"
               semanticLabel={permissionSemanticLabel(props.request.action, current.title)}
               instance={props.request.id}
-              header={(option) => header(option === "always")}
-              body={(option) => (
-                <Show when={option === "always"} fallback={presentationBody()}>
-                  <box paddingLeft={1} gap={1}>
-                    <For each={permissionAlwaysLines(props.request)}>
-                      {(line, index) => <text fg={index() === 0 ? theme.text.muted : theme.text.base}>{line}</text>}
-                    </For>
-                  </box>
-                </Show>
-              )}
+              header={(option, space) => header(() => layout(option === "always", space))}
+              body={(option, space) => {
+                const fitted = () => layout(option === "always", space)
+                return (
+                  <Show when={option === "always"} fallback={presentationBody(fitted)}>
+                    {/* The grant leads, and the whole of a warning that is only summed up above scrolls under it. */}
+                    <box paddingLeft={1} gap={1} flexShrink={links().lines.length > 0 ? 0 : 1}>
+                      <For each={permissionAlwaysLines(props.request)}>
+                        {(line, index) => (
+                          <Hanging text={line} fg={index() === 0 ? theme.text.muted : theme.text.base} />
+                        )}
+                      </For>
+                    </box>
+                    <Show when={links().lines.length === 1 && !fitted().notice.whole}>
+                      <LinkScroll warning={links().lines[0]!} />
+                    </Show>
+                  </Show>
+                )
+              }}
               options={
                 props.request.save?.length
                   ? {
@@ -439,20 +493,59 @@ function reviewable(request: PermissionRequest): Omit<EditorDiff, "id" | "roots"
   return { place: file.place, patch: file.patch, status }
 }
 
-// The one line about the request's links that never scrolls away.
+// The line about the request's links that never scrolls away. It wraps by the character, as `fitLinks` measures it.
 function LinkNotice(props: { warning?: string }) {
   const theme = useTheme()
   return (
     <Show when={props.warning}>
-      {(line) => <text fg={theme.text.feedback.warning.base}>{line()}</text>}
+      {(line) => <Hanging text={line()} fg={theme.text.feedback.warning.base} wrapMode="char" />}
     </Show>
   )
+}
+
+// A warning that is too long to stay fixed, whole where it scrolls.
+function LinkScroll(props: { warning: string }) {
+  const theme = useTheme()
+  return (
+    <box flexDirection="column" flexShrink={1}>
+      <scrollbox height="100%">
+        <box paddingLeft={1} flexShrink={0}>
+          <Hanging text={props.warning} fg={theme.text.feedback.warning.base} />
+        </box>
+      </scrollbox>
+    </box>
+  )
+}
+
+// The fixed line of a request's links in `rows` rows at most: one link's whole warning where it fits, and otherwise the
+// summary, in its short form where the sentence is wider than the line.
+function fitLinks(links: ReturnType<typeof permissionLinks>, rows: number, width: number) {
+  if (!links.summary) return { text: undefined, rows: 0, whole: true }
+  const line = links.lines.length === 1 ? links.lines[0] : undefined
+  const taken = line === undefined ? Infinity : wrappedRows(line, width)
+  if (taken <= rows) return { text: line, rows: taken, whole: true }
+  return { text: stringWidth(links.summary) <= width ? links.summary : links.short, rows: 1, whole: false }
+}
+
+// `text` in `rows` rows of `width` at most, with a mark where it is cut.
+function fitText(text: string, rows: number, width: number) {
+  const room = rows * Math.max(1, width - 1)
+  if (stringWidth(text) <= room) return { text, rows, cut: false }
+  return { text: Locale.truncateWidth(text, room), rows, cut: true }
+}
+
+// How many rows `Hanging` takes to draw `line` wrapped by the character. A cell is left over on each row, for a
+// character of two cells that does not fit in the last one.
+function wrappedRows(line: string, width: number) {
+  const lead = hangingLead(line)
+  return Math.max(1, Math.ceil(stringWidth(line.slice(lead.length)) / Math.max(1, width - lead.length - 1)))
 }
 
 /**
  * The short prompt while the request's diff is open in the editor: where it opened, the link warning, and the question
  * about the file by its name, with the usual options. The diff itself is in the editor, so none is drawn here. Every name
- * is written out, since the editor and the repository chose them (class 9).
+ * is written out, since the editor and the repository chose them (class 9). Neither a warning nor a name takes the rows
+ * of what Always allow grants: a warning too long for its rows is summed up and scrolls below, and a name is cut.
  */
 export function EditorDiffPrompt(props: {
   request: PermissionRequest
@@ -465,10 +558,23 @@ export function EditorDiffPrompt(props: {
     const files = props.request.metadata?.files
     const file = Array.isArray(files) && isRecord(files[0]) ? files[0] : undefined
     const place = typeof file?.place === "string" ? file.place : (props.request.resources[0] ?? "")
-    return plain(place.split(/[\\/]/).at(-1) ?? place)
+    return plainPath(place.split(/[\\/]/).at(-1) ?? place)
   }
   // It is only drawn for a request of one file, which has one linked end at most.
-  const warning = () => permissionLinks(props.request, pathFormatter.format).lines[0]
+  const links = createMemo(() => permissionLinks(props.request, pathFormatter.format))
+  const saves = process.env.TERM_PROGRAM === "vscode"
+  const layout = (granting: boolean, space: Space) => {
+    const granted = granting
+      ? permissionAlwaysLines(props.request).reduce((total, line) => total + wrappedRows(line, space.width()), 0)
+      : 0
+    // Under the one row of the header and the gap.
+    const free = space.rows() - 2 - granted - (saves ? 1 : 0)
+    const notice = fitLinks(links(), Math.min(3, Math.max(1, free - 1)), space.width())
+    // A summed-up warning leaves rows to read the whole of it in.
+    const left = Math.max(1, free - notice.rows - (notice.whole || granting ? 0 : BODY_ROWS))
+    const question = `Make this change to ${name()}?`
+    return { notice, question: fitText(question, left, space.width() - hangingLead(question).length) }
+  }
   return (
     <SessionQuestion
       title="Permission required"
@@ -482,20 +588,28 @@ export function EditorDiffPrompt(props: {
       }
       // While Always allow is focused the prompt says what it grants, as the full dialog does, so the short prompt never
       // hides that the grant reaches past this one file.
-      body={(option) => (
-        <box paddingLeft={1} flexDirection="column" flexShrink={0}>
-          <LinkNotice warning={warning()} />
-          <Show when={process.env.TERM_PROGRAM === "vscode"}>
-            <text fg={theme.text.muted}>Save in the editor to answer</text>
-          </Show>
-          <text fg={theme.text.base}>{`Make this change to ${name()}?`}</text>
-          <Show when={option === "always"}>
-            <For each={permissionAlwaysLines(props.request)}>
-              {(line, index) => <text fg={index() === 0 ? theme.text.muted : theme.text.base}>{line}</text>}
-            </For>
-          </Show>
-        </box>
-      )}
+      body={(option, space) => {
+        const fitted = () => layout(option === "always", space)
+        return (
+          <box flexDirection="column" flexShrink={1}>
+            <box paddingLeft={1} flexDirection="column" flexShrink={0}>
+              <LinkNotice warning={fitted().notice.text} />
+              <Show when={saves}>
+                <text fg={theme.text.muted}>Save in the editor to answer</text>
+              </Show>
+              <Hanging text={fitted().question.text} fg={theme.text.base} wrapMode="char" />
+              <Show when={option === "always"}>
+                <For each={permissionAlwaysLines(props.request)}>
+                  {(line, index) => (
+                    <Hanging text={line} fg={index() === 0 ? theme.text.muted : theme.text.base} wrapMode="char" />
+                  )}
+                </For>
+              </Show>
+            </box>
+            <Show when={!fitted().notice.whole && links().lines[0]}>{(line) => <LinkScroll warning={line()} />}</Show>
+          </box>
+        )
+      }}
       options={
         props.request.save?.length
           ? {
@@ -518,7 +632,7 @@ export function permissionSemanticLabel(action: string, title?: string) {
 function RejectPrompt(props: {
   action: string
   instance: string
-  warning?: string
+  links: ReturnType<typeof permissionLinks>
   onConfirm: (message: string) => void
   onCancel: () => void
 }) {
@@ -528,6 +642,7 @@ function RejectPrompt(props: {
   const config = useConfig().data
   const dimensions = useTerminalDimensions()
   const narrow = createMemo(() => dimensions().width < 80)
+  const [width, setWidth] = createSignal(dimensions().width)
   Keymap.createLayer(() => ({
     context: "permission",
     mode: "base",
@@ -562,6 +677,9 @@ function RejectPrompt(props: {
         role: "dialog",
         label: `Reject permission: ${props.action}`,
       }))}
+      onSizeChange={function () {
+        setWidth(this.width)
+      }}
       backgroundColor={theme.background.raised.base}
       border={["left"]}
       borderColor={theme.text.feedback.error.base}
@@ -573,7 +691,8 @@ function RejectPrompt(props: {
             <text fg={theme.text.feedback.error.base}>{"△"}</text>
             <text fg={theme.text.base}>Reject permission</text>
           </box>
-          <LinkNotice warning={props.warning} />
+          {/* The field under it has no room to scroll: a warning of more than three rows is summed up. */}
+          <LinkNotice warning={fitLinks(props.links, 3, width() - 6).text} />
         </box>
         <box paddingLeft={1}>
           <text fg={theme.text.muted}>Tell Orbit what to do differently</text>
@@ -662,8 +781,8 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
   id?: string
   group?: string
   choicesLabel?: string
-  header?: JSX.Element | ((option: keyof T) => JSX.Element)
-  body: JSX.Element | ((option: keyof T) => JSX.Element)
+  header?: JSX.Element | ((option: keyof T, space: Space) => JSX.Element)
+  body: JSX.Element | ((option: keyof T, space: Space) => JSX.Element)
   options: T
   escapeKey?: keyof T
   fullscreen?: boolean
@@ -756,10 +875,26 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
 
   const hint = createMemo(() => (store.expanded ? "minimize" : "fullscreen"))
   useRenderer()
+  // The dialog can be narrower than the screen, beside a sidebar, so it measures itself.
+  const [width, setWidth] = createSignal(dimensions().width)
+  const space: Space = {
+    // What the border, the options and the hints, stacked on a narrow screen, leave of the dialog.
+    rows: createMemo(() => {
+      const height = store.expanded ? dimensions().height - 2 : Math.min(DIALOG_ROWS, dimensions().height)
+      const hints = narrow() ? (keys.length > 1 ? 1 : 0) + 2 + (props.fullscreen ? 1 : 0) : 1
+      return height - 2 - keys.length - hints
+    }),
+    // Less the border and the padding on both sides.
+    width: () => width() - 6,
+    expanded: () => store.expanded,
+  }
 
   const content = () => (
     <box
       id={id()}
+      onSizeChange={function () {
+        setWidth(this.width)
+      }}
       ref={SimulationSemantics.bind(() => ({
         instance: props.instance,
         role: "dialog",
@@ -774,14 +909,15 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
         ? { top: dimensions().height * -1 + 1, bottom: 1, left: 2, right: 2, position: "absolute" }
         : {
             top: 0,
-            maxHeight: 15,
+            maxHeight: DIALOG_ROWS,
             bottom: 0,
             left: 0,
             right: 0,
             position: "relative",
           })}
     >
-      <box gap={1} paddingLeft={1} paddingRight={2} flexGrow={1}>
+      {/* What does not fit is clipped here, so nothing is painted over the options, the hints or the border. */}
+      <box gap={1} paddingLeft={1} paddingRight={2} flexGrow={1} overflow="hidden">
         <Show
           when={props.header}
           fallback={
@@ -792,10 +928,10 @@ export function SessionQuestion<const T extends Record<string, string>>(props: {
           }
         >
           <box paddingLeft={1} flexShrink={0}>
-            {typeof props.header === "function" ? props.header(store.selected) : props.header}
+            {typeof props.header === "function" ? props.header(store.selected, space) : props.header}
           </box>
         </Show>
-        {typeof props.body === "function" ? props.body(store.selected) : props.body}
+        {typeof props.body === "function" ? props.body(store.selected, space) : props.body}
       </box>
       <box flexShrink={0} paddingLeft={2} paddingRight={2}>
         <box
