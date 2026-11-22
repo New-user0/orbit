@@ -29,7 +29,7 @@ export function DialogMessage(props: {
         {
           title: "Rewind",
           value: "session.rewind",
-          description: "code and/or conversation to before this prompt",
+          description: "roll back to just before this prompt",
           onSelect: () => {
             if (message()?.type !== "user") return
             void props.onRewind(props.messageID)

@@ -140,7 +140,7 @@ const PROMPT = COMPACTION_PROMPT.trim()
 const REMINDER = COMPACTION_REMINDER.trim()
 const FALLBACK_SYSTEM = "You write summaries of conversations so that the work in them can continue."
 const LEFT_OUT = "[Earlier messages were left out so that this summary request fits.]"
-const TOO_LONG = "The conversation is too long to compact. Go back a few messages and try again."
+const TOO_LONG = "This conversation no longer fits in a compaction request. Rewind a few messages, then compact again."
 const NO_SUMMARY: Failure = { error: { type: "compaction.failed", message: "Compaction produced no summary" } }
 /** How often a rejected summary request is shortened and sent again. */
 const MAX_DROPS = 3

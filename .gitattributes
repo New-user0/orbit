@@ -10,3 +10,6 @@ packages/client/src/effect/generated/** text eol=lf
 packages/client/src/effect/api/** text eol=lf
 # bash and the Linux container run these as written, so a Windows checkout must keep their LF line endings.
 tools/linux-test/** text eol=lf
+# The prompt-text fixtures are compared byte for byte with the prompts, which use LF.
+packages/core/test/fixture/prompt-text/*.txt text eol=lf
+packages/server/test/fixture/prompt-text/*.txt text eol=lf

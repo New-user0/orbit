@@ -4318,7 +4318,7 @@
             }
           }
         },
-        "description": "Estimate what the session's next request would carry, by category: the system prompt, tools, MCP tools, custom agents, instruction files, skills and messages, with the reserve and free space of the model's window. The total is the newest response's measured prompt when there is one. Only a main session is answered (a child gets MainSessionOnlyError), and only in a trusted folder. It is read only: nothing is recorded and no model is asked.",
+        "description": "Estimate what the session's next request would carry, by category: the base prompt, tools outside MCP, MCP tool schemas, agent definitions, instructions, skill listings and the conversation, with the model window's reserve (for auto-compaction or as compaction headroom) and the room left. The total is the newest response's measured prompt when there is one. Only a main session is answered (a child gets MainSessionOnlyError), and only in a trusted folder. It is read only: nothing is recorded and no model is asked.",
         "summary": "Get context usage"
       }
     },
@@ -21174,7 +21174,7 @@
       },
       "Session.Assist.LabelSkip": {
         "type": "string",
-        "enum": ["subagent", "not_found", "unsettled", "aborted", "empty", "unavailable"],
+        "enum": ["subagent", "not_found", "unsettled", "interrupted", "no_text", "unavailable"],
         "description": "Why there is no label: the session is a subagent's, the calls are not in the message, a call has not finished, the calls were interrupted, the model answered nothing, or the model could not be asked."
       },
       "Session.Assist.Suggestion": {
@@ -21209,28 +21209,28 @@
         "type": "string",
         "enum": [
           "subagent",
-          "early_conversation",
-          "last_response_error",
-          "cache_cold",
-          "pending_permission",
-          "elicitation_active",
-          "plan_mode",
+          "too_early",
+          "reply_failed",
+          "cache_expired",
+          "awaiting_approval",
+          "awaiting_form",
+          "planning",
           "busy",
-          "aborted",
+          "cancelled",
           "unavailable",
-          "empty",
-          "done",
-          "meta_text",
-          "meta_wrapped",
-          "error_message",
-          "prefixed_label",
-          "too_few_words",
-          "too_many_words",
-          "too_long",
-          "multiple_sentences",
-          "has_formatting",
-          "evaluative",
-          "assistant_voice"
+          "no_text",
+          "just_done",
+          "self_reference",
+          "bracketed",
+          "error_text",
+          "labelled",
+          "one_word",
+          "over_twelve_words",
+          "too_many_characters",
+          "several_sentences",
+          "markup",
+          "verdict",
+          "assistant_phrasing"
         ],
         "description": "Why there is no suggestion: a state of the session that rules one out, a request cancelled by a newer one or by a prompt, a model that could not be asked, or a filter that dropped the text the model wrote."
       },

@@ -1,5 +1,6 @@
 import type { ModelInfo } from "@orbit/client"
 import type { SessionCost } from "@orbit/schema/session-cost"
+import { Locale } from "./locale"
 
 type Tokens = SessionCost.Row["tokens"]
 
@@ -11,8 +12,22 @@ export const money = (value: number) => `$${value > 0.5 ? value.toFixed(2) : val
 export const price = (value: number | undefined, partial = false) =>
   value === undefined ? "unknown" : `${money(value)}${partial ? " + unpriced" : ""}`
 
-/** What /cost shows under the usage heading when no model has answered yet: a line of zeros, as the reference prints. */
-export const NO_USAGE = "0 input, 0 output, 0 cache read, 0 cache write"
+/** One model's tokens on one line, as `/cost` shows them in the dialog and in `orb run`. */
+export const usageLine = (tokens: Tokens) =>
+  [
+    `in ${Locale.number(tokens.input)}`,
+    `out ${Locale.number(tokens.output)}`,
+    `from cache ${Locale.number(tokens.cache.read)}`,
+    `to cache ${Locale.number(tokens.cache.write)}`,
+    ...(tokens.reasoning > 0 ? [`reasoning ${Locale.number(tokens.reasoning)}`] : []),
+  ].join(" · ")
+
+/** What /cost shows under the tokens heading when no model has answered yet: a line of zeros, as the reference prints. */
+export const NO_USAGE = usageLine({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })
+
+/** Lines the edit tools added and removed, as `/cost` shows them. */
+export const lineChanges = (lines: { readonly added: number; readonly removed: number }) =>
+  `+${lines.added} / -${lines.removed} lines`
 
 /** A model the catalog has no price for is `undefined`, never zero: the server records $0 for it, which is not a free model. */
 export type ModelCost = {

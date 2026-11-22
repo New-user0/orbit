@@ -6,7 +6,8 @@ import { json } from "../fixture/tui-client"
 import { renderLocal, session } from "../fixture/local"
 
 // clients-ux-23: `/context` draws the server's analysis of the session's context window as the reference draws its own:
-// a square grid beside a legend, the lists of MCP tools, custom agents, instruction files and skills, and the suggestions.
+// a square grid beside a legend, the lists of MCP tool schemas, agent definitions, instructions and skill listings, and
+// the ways to free room.
 // The real dialog, the real client and a fetch handler that answers the route; what is asserted is the drawn frame.
 
 type Info = SessionContextUsage.Info
@@ -93,7 +94,7 @@ async function open(input: {
 }
 
 const answering = (info: Info) => () => json({ data: info })
-const drawn = (frame: string) => frame.includes("Estimated usage by category")
+const drawn = (frame: string) => frame.includes("Estimated breakdown")
 
 /** The grid's rows, each as its squares without the spaces between them. */
 function grid(frame: string) {
@@ -148,8 +149,8 @@ test("a window of 1M or more draws 20 by 10, and 5 by 10 below 80 columns", asyn
 })
 
 // TD3: squares in category order; every counted category gets one at least; a last square filled below 0.7 is the lighter
-// glyph; free space fills the middle and the reserve takes the end.
-test("each counted category gets at least one square in order, a partial last square uses the lighter glyph below 0.7, free space fills the middle and the reserve sits at the end", async () => {
+// glyph; the room left fills the middle and the reserve takes the end.
+test("each counted category gets at least one square in order, a partial last square uses the lighter glyph below 0.7, the room left fills the middle and the reserve sits at the end", async () => {
   const result = await open({ answer: answering(fixture()), done: drawn })
   await using _ = result.setup
 
@@ -178,30 +179,32 @@ test("deferred rows are left out of the legend and take no square", async () => 
   })
   await using _ = result.setup
 
-  for (const hidden of ["(deferred)", "N/A", "5.0K", "4.0K"]) expect(result.frame).not.toContain(hidden)
-  expect(result.frame).toContain("Messages: 4.8K tokens (4.8%)")
+  for (const hidden of ["(on demand)", "N/A", "5.0K", "4.0K"]) expect(result.frame).not.toContain(hidden)
+  expect(result.frame).toContain("Conversation: 4.8K tokens (4.8%)")
   expect(grid(result.frame).join("")).toBe(
     `${FULL}${FULL}${PARTIAL}` + PARTIAL + FULL.repeat(5) + FREE.repeat(81) + BUFFER.repeat(10),
   )
 })
 
-// TD5: the legend, and the compact buffer listed as a category when automatic compaction is off.
-test("the legend shows the model, total of window and percent, each category to one decimal, free space and the autocompact buffer, and the compact buffer as a category when auto compaction is off", async () => {
+// TD5: the legend, and the compaction headroom listed as a category when automatic compaction is off.
+test("the legend shows the model, total of window and percent, each category to one decimal, room left and the auto-compaction reserve, and the compaction headroom as a category when auto compaction is off", async () => {
   const auto = await open({ answer: answering(fixture()), done: drawn })
   await using _ = auto.setup
   const lines = auto.frame.split("\n")
   const at = (text: string) => lines.findIndex((line) => line.includes(text))
   const legend = [
     "provider/model · 17.7K/100.0K tokens (18%)",
-    "Estimated usage by category",
-    "System prompt: 2.6K tokens (2.6%)",
-    "System tools: 300 tokens (0.3%)",
-    "Messages: 4.8K tokens (4.8%)",
-    "Free space: 82.3K tokens (82.3%)",
-    "Autocompact buffer: 10.0K tokens (10.0%)",
+    "Estimated breakdown",
+    "Base prompt: 2.6K tokens (2.6%)",
+    "Tools outside MCP: 300 tokens (0.3%)",
+    "Conversation: 4.8K tokens (4.8%)",
+    "Room left: 82.3K tokens (82.3%)",
+    "Auto-compaction reserve: 10.0K tokens (10.0%)",
   ].map(at)
   expect(legend.every((index) => index >= 0)).toBe(true)
   expect(legend).toEqual(legend.toSorted((a, b) => a - b))
+  // The subtitle ends its row: a word more could claim what the figures are not.
+  expect(lines[at("Estimated breakdown")]).toMatch(/ Estimated breakdown *$/)
 
   const manual = await open({
     answer: answering(
@@ -219,17 +222,45 @@ test("the legend shows the model, total of window and percent, each category to 
   })
   await using __ = manual.setup
   const manualLines = manual.frame.split("\n")
-  const compact = manualLines.findIndex((line) => line.includes("Compact buffer: 3.0K tokens (3.0%)"))
-  const free = manualLines.findIndex((line) => line.includes("Free space: 89.6K tokens (89.6%)"))
+  const compact = manualLines.findIndex((line) => line.includes("Compaction headroom: 3.0K tokens (3.0%)"))
+  const free = manualLines.findIndex((line) => line.includes("Room left: 89.6K tokens (89.6%)"))
   expect(compact).toBeGreaterThanOrEqual(0)
   expect(free).toBeGreaterThan(compact)
-  expect(manual.frame).not.toContain("Autocompact buffer")
-  // Drawn like a category: full squares at the end, after free space.
+  expect(manual.frame).not.toContain("Auto-compaction reserve")
+  // Drawn like a category: full squares at the end, after the room left.
   expect(grid(manual.frame).join("")).toBe(`${FULL}${FULL}${PARTIAL}` + FULL.repeat(5) + FREE.repeat(89) + FULL.repeat(3))
 })
 
+// TD5b: every category the legend can draw has Orbit's own label; the headings of the lists below share some of those
+// words, so each label is looked for with its figure.
+test("the legend labels the MCP, agent, instruction and skill categories", async () => {
+  const result = await open({
+    answer: answering(
+      fixture({
+        categories: [
+          { kind: "mcp", tokens: 2_000 },
+          { kind: "agents", tokens: 600 },
+          { kind: "instructions", tokens: 3_400 },
+          { kind: "skills", tokens: 700 },
+          { kind: "free", tokens: 93_300 },
+        ],
+      }),
+    ),
+    done: drawn,
+  })
+  await using _ = result.setup
+
+  for (const line of [
+    "MCP tool schemas: 2.0K tokens (2.0%)",
+    "Agent definitions: 600 tokens (0.6%)",
+    "Instructions: 3.4K tokens (3.4%)",
+    "Skill listings: 700 tokens (0.7%)",
+  ])
+    expect(result.frame).toContain(line)
+})
+
 // TD6, D5 and D6: the sections the reference shows, and not the ones it keeps for its report.
-test("MCP tools (loaded and available), custom agents by scope, instruction files and skills are listed, and system tools, prompt sections and the message breakdown are not", async () => {
+test("MCP tool schemas (loaded now and on demand), agent definitions by scope, instructions and skill listings are listed, and tools outside MCP, prompt parts and the conversation by kind are not", async () => {
   const result = await open({
     answer: answering(
       fixture({
@@ -262,25 +293,27 @@ test("MCP tools (loaded and available), custom agents by scope, instruction file
   const lines = result.frame.split("\n")
   const at = (text: string) => lines.findIndex((line) => line.includes(text))
   const order = [
-    "MCP tools · /mcps",
-    "Loaded",
+    "MCP tool schemas · /mcps",
+    "Loaded now",
     "docs_search",
-    "Available",
+    "Loaded on demand",
     "docs_fetch",
-    "Custom agents · /agents",
+    "Agent definitions · /agents",
     "Project",
     "reviewer",
     "User",
     "helper",
-    "Instruction files · /memory",
+    "Instructions · /memory",
     "ORBIT.md",
-    "Skills · /skills",
+    "Skill listings · /skills",
     "release",
   ].map(at)
   expect(order.every((index) => index >= 0)).toBe(true)
   expect(order).toEqual(order.toSorted((a, b) => a - b))
   // Some tools are deferred, so the heading says that some are loaded on demand.
-  expect(lines[at("MCP tools · /mcps")]).toContain("MCP tools · /mcps (some are loaded on demand)")
+  expect(lines[at("MCP tool schemas · /mcps")]).toContain("MCP tool schemas · /mcps (some load on demand)")
+  const groups = ["Loaded now", "Loaded on demand"]
+  for (const group of groups) expect(lines[at(group)]?.trim()).toBe(group)
   expect(lines[at("docs_search")]).toContain("2.0K")
   expect(lines[at("ORBIT.md")]).toContain("1.2K")
   for (const hidden of ["SysToolZed", "SectionQuux", "ToolBreakX", "AttachKindY"]) expect(result.frame).not.toContain(hidden)
@@ -292,9 +325,7 @@ test("MCP tools (loaded and available), custom agents by scope, instruction file
   })
   await using __ = loaded.setup
   expect(loaded.frame).toContain("docs_search (docs): 2.0K tokens")
-  expect(loaded.frame).not.toContain("Loaded")
-  expect(loaded.frame).not.toContain("Available")
-  expect(loaded.frame).not.toContain("on demand")
+  for (const hidden of [...groups, "Loaded", "on demand"]) expect(loaded.frame).not.toContain(hidden)
 })
 
 // TD7: the suggestions, under everything else, warnings first, each with its saving.
@@ -319,18 +350,23 @@ test("suggestions are drawn under the view, warnings first, with their savings",
         },
       }),
     ),
-    done: (frame) => frame.includes("Suggestions"),
+    done: (frame) => frame.includes("Ways to free room"),
   })
   await using _ = result.setup
   const lines = result.frame.split("\n")
   const at = (text: string) => lines.findIndex((line) => line.includes(text))
-  const heading = at("Suggestions")
+  const heading = at("Ways to free room")
   const bash = lines.findIndex((line) => line.includes("Bash") && line.includes("8.0K"))
   const read = lines.findIndex((line) => line.includes("Read") && line.includes("9.0K"))
   expect(heading).toBeGreaterThan(at("release"))
   expect(bash).toBeGreaterThan(heading)
   expect(read).toBeGreaterThan(bash)
+  expect(lines[heading]?.trim()).toBe("Ways to free room")
   expect(lines[bash]).toContain("!")
+  // The saving is said to be freed. The line wraps at the dialog's width, so the frame's blanks are folded.
+  const folded = result.frame.replace(/\s+/g, " ")
+  expect(folded).toContain("· frees about 8.0K tokens Commands that print a lot")
+  expect(folded).toContain("· frees about 9.0K tokens A long file")
 })
 
 // TD7b: the instruction files suggestion names each file as the view's own list does, by its path in the session's folder.
@@ -345,13 +381,66 @@ test("the instruction files suggestion names each file by its path in the sessio
         ],
       }),
     ),
-    done: (frame) => frame.includes("Suggestions"),
+    done: (frame) => frame.includes("Ways to free room"),
   })
   await using _ = result.setup
-  const detail = result.frame.split("\n").find((line) => line.includes("The largest are"))
+  // The advice wraps at the dialog's width, so the frame's blanks are folded.
+  const folded = result.frame.replace(/\s+/g, " ")
 
-  expect(detail).toContain("The largest are ORBIT.md (4.0K)")
-  expect(detail).not.toContain(directory)
+  expect(folded).toContain("the biggest here are ORBIT.md (4.0K)")
+  expect(folded.slice(folded.indexOf("Ways to free room"))).not.toContain(directory)
+})
+
+test.each([100, 70])("one large instruction file is named in the singular at %i columns", async (width) => {
+  const files = [{ path: `${session(ROOT).location.directory}/AGENTS.md`, type: "file", tokens: 20_000 }]
+  const result = await open({
+    width,
+    answer: answering(fixture({ window: 200_000, files })),
+    done: (frame) => frame.includes("Ways to free room"),
+  })
+  await using _ = result.setup
+
+  expect(result.frame.replace(/\s+/g, "")).toContain("thebiggesthereisAGENTS.md(20.0K).")
+})
+
+// TD7c: three of twelve files of one size are a quarter of them, so the advice names the biggest without calling them
+// most of it; near capacity, the advice says what /compact does.
+test.each([100, 70])("near capacity with many files of one size the advice is true and readable at %i columns", async (width) => {
+  const directory = session(ROOT).location.directory
+  const files = Array.from({ length: 12 }, (_, index) => ({
+    path: `${directory}/rules/r${index}.md`,
+    type: "file",
+    tokens: 1_000,
+  }))
+  const result = await open({
+    width,
+    answer: answering(fixture({ window: 200_000, percentage: 85, total: 170_000, files })),
+    done: (frame) => frame.includes("Ways to free room"),
+  })
+  await using _ = result.setup
+  const folded = result.frame.replace(/\s+/g, " ")
+  const advice = folded.slice(folded.indexOf("Ways to free room"))
+
+  expect(advice).toContain(
+    "/compact summarizes the conversation at a moment you pick; left alone, Orbit will do so by itself shortly.",
+  )
+  // A figure can be broken at the line's end, so the list is compared without blanks.
+  expect(advice.replaceAll("\\", "/").replaceAll(" ", "")).toContain(
+    "/memory opens instruction files for trimming; the biggest here are rules/r0.md (1.0K), rules/r1.md (1.0K), rules/r2.md (1.0K).".replaceAll(
+      " ",
+      "",
+    ),
+  )
+  expect(advice).not.toMatch(/most of/i)
+})
+
+// The dialog carries the title of the report that `orb run "/context"` prints, at both widths and before any answer.
+test.each([100, 70])("the dialog's first line is its title, Context window, at %i columns", async (width) => {
+  const result = await open({ width, answer: answering(fixture()), done: drawn })
+  await using _ = result.setup
+
+  expect(result.frame.split("\n").find((line) => line.trim() !== "")?.trim()).toBe("Context window")
+  expect(result.frame).not.toContain("Context usage")
 })
 
 // TD8, D1 and D10: the figure is the payload's, not one worked out from the messages the store holds.
@@ -404,7 +493,7 @@ test("every string from the payload is escaped in the frame", async () => {
         },
       }),
     ),
-    done: (frame) => frame.includes("Suggestions") && frame.includes("skill"),
+    done: (frame) => frame.includes("Ways to free room") && frame.includes("skill"),
   })
   await using _ = result.setup
 
@@ -414,8 +503,9 @@ test("every string from the payload is escaped in the frame", async () => {
 })
 
 // TD10, D9: with no window there is nothing to be a share of.
-test("an unknown window shows rows and the total without a grid, percentages, reserve, free space or suggestions", async () => {
+test.each([100, 70])("an unknown window shows rows and the total without a grid, a claimed share, percentages, reserve, room left or suggestions at %i columns", async (width) => {
   const result = await open({
+    width,
     answer: answering(
       fixture({
         window: undefined,
@@ -443,11 +533,14 @@ test("an unknown window shows rows and the total without a grid, percentages, re
   await using _ = result.setup
 
   expect(result.frame).toContain("provider/model · 7.7K tokens")
-  expect(result.frame).toContain("System prompt: 2.6K tokens")
-  expect(result.frame).toContain("Messages: 4.8K tokens")
+  expect(result.frame).toContain("Base prompt: 2.6K tokens")
+  expect(result.frame).toContain("Conversation: 4.8K tokens")
   expect(grid(result.frame)).toEqual([])
   expect(result.frame).not.toContain("%")
-  for (const missing of ["Free space", "buffer", "Suggestions"]) expect(result.frame).not.toContain(missing)
+  // With no window there is nothing to be a share of, and the subtitle says so for neither.
+  expect(result.frame).toContain("Estimated breakdown")
+  expect(result.frame).not.toMatch(/\bshares?\b|of the window/i)
+  for (const missing of ["Room left", "reserve", "headroom", "Ways to free room"]) expect(result.frame).not.toContain(missing)
 })
 
 // TD11, classes 7 and 13: each failure is one line, and the server's own message is escaped.
@@ -489,7 +582,9 @@ test("a refusal, a missing session, an old server, a body that does not decode a
     expect({ name: row.name, shown: result.frame.includes(row.line) }).toEqual({ name: row.name, shown: true })
     expect(/\p{C}/u.test(result.frame.replaceAll("\n", ""))).toBe(false)
     expect(grid(result.frame)).toEqual([])
-    expect(result.frame).not.toContain("Estimated usage")
+    // Every line the dialog draws, so that nothing else, whatever it is called, can stand beside the error.
+    const drawnLines = result.frame.split("\n").flatMap((line) => line.trim() || [])
+    expect(drawnLines, row.name).toEqual(["Context window", expect.stringContaining(row.line)])
   }
 })
 
@@ -517,8 +612,8 @@ test("an entry that does not decode is left out with one log line, and the rest 
   })
   await using _ = result.setup
 
-  expect(result.frame).toContain("System prompt: 2.6K tokens (2.6%)")
-  expect(result.frame).toContain("Messages: 4.8K tokens (4.8%)")
+  expect(result.frame).toContain("Base prompt: 2.6K tokens (2.6%)")
+  expect(result.frame).toContain("Conversation: 4.8K tokens (4.8%)")
   expect(result.frame).toContain("release: 700 tokens")
   expect(result.frame).not.toContain("7.0K")
   expect(result.frame).not.toContain("could not be read")

@@ -1,3 +1,4 @@
+import { InputRenderable } from "@opentui/core"
 import { expect, test } from "bun:test"
 import type { OrbitEvent } from "@orbit/client"
 import { createAppFixture } from "./fixture/app"
@@ -160,6 +161,19 @@ test.each([40, 120])("nothing is drawn at %s columns before a report arrives", a
 
   expect(frame).not.toContain("Context almost full")
   expect(frame).not.toContain("before auto-compaction")
+})
+
+test("the command palette lists /context under the dialog's title", async () => {
+  await using state = await tmpdir()
+  await using setup = await render(state.path, 120)
+  await setup.waitForFrame(measured)
+  setup.mockInput.pressKey("p", { ctrl: true })
+  // The palette draws its field before it focuses it, and keys typed in between go nowhere.
+  await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof InputRenderable)
+  await setup.mockInput.typeText("context")
+
+  const palette = await setup.waitForFrame((frame) => frame.includes("Context window"))
+  expect(palette).toMatch(/ Context window +Session *$/m)
 })
 
 // TF1, D10: the figure is what the response's prompt held, input plus cache read and cache write, as the reference's

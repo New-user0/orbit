@@ -46,6 +46,7 @@ import { Context, DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { stubSnapshot } from "./lib/tool"
+import COMPACTION_TEXT from "./fixture/prompt-text/compaction.txt"
 
 let requests: LLMRequest[] = []
 const model = LanguageModel.make({
@@ -182,16 +183,91 @@ lean.effect("a minimal instance's summary request carries neither the hint nor t
 test("compaction prompt asks for the files, the work in progress and the next step", () => {
   const prompt = SessionCompaction.buildPrompt()
 
-  expect(prompt).toContain("3. Files and code")
-  expect(prompt).toContain("8. Work in progress")
-  expect(prompt).toContain("9. Next step")
+  expect(prompt).toContain("3. Code touched")
+  expect(prompt).toContain("8. Where things stand")
+  expect(prompt).toContain("9. What comes next")
+  // The sample's placeholder for section 8 asks for the work in progress, with files and code only where it has any.
+  expect(prompt).toMatch(
+    /8\. Where things stand:\s+\[What you were in the middle of and how far it had got, with any paths and code it involves\]/,
+  )
+  // Section 8 is about the work in progress, whether or not it touches a file, read from both sides' last messages;
+  // sections 4 and 5, and the analysis notes, keep a correction the person made and the questions still open.
+  expect(prompt).toContain(
+    "tell them exactly what you were in the middle of when the handoff was asked for and how far it had got. Take that from the closing messages, the person's as well as yours.",
+  )
+  expect(prompt).toContain(
+    "just as well an investigation, a test run, a design discussion or a question the person has yet to answer. Where files or code are part of it, give each path and quote the lines that count.",
+  )
+  // Section 9 continues that work, and never takes up another request unasked.
+  expect(prompt).toContain(
+    "9. What comes next: at most a single step, which must rest directly on two things, the person's most recent explicit request and the state that section 8 reports.",
+  )
+  expect(prompt).toContain(
+    "Never bring back a side request, or an older one already finished, until the person has agreed to it.",
+  )
+  expect(prompt).toContain(
+    "4. Errors and corrections: each failure you met and the fix that ended it. Add all that the person said about either, whether they confirmed it, qualified it or objected. Their redirections need the most care: a correction that drops out of the handoff gets made a second time.",
+  )
+  expect(prompt).toContain(
+    "5. Reasoning so far: which problems and questions are settled and which you were still chasing, so that a successor neither works the first kind out again nor forgets the second.",
+  )
+  expect(prompt).toContain(
+    "   - everything the person said about your work. Where they redirected you matters most: without it, the next stage repeats what they rejected",
+  )
+  expect(prompt).toMatch(/5\. Reasoning so far:\s+\[What is settled, and what you were still finding out\]/)
 })
 
 test("compaction prompt prohibits tool calls at both ends", () => {
   const prompt = SessionCompaction.buildPrompt()
 
-  expect(prompt.startsWith("IMPORTANT: Reply with text only. No tool calls.")).toBe(true)
-  expect(prompt).toEndWith("Any tool call is turned down and the handoff is lost.")
+  expect(prompt.startsWith("This reply must be plain text, and it must not call any tool.")).toBe(true)
+  expect(prompt).toEndWith(
+    "Once more: write plain text, the <analysis> block and then the <handoff> block, with no tool call. A tool call is refused, and then no handoff is saved.",
+  )
+})
+
+// The whole request, closing reminder included, so that dropping, softening or reversing any one of its rules fails here.
+test("compaction prompt is pinned word for word", () => {
+  expect(SessionCompaction.buildPrompt()).toBe(COMPACTION_TEXT)
+})
+
+test("compaction prompt has a project's own directions followed beside its sections, without precedence over them", () => {
+  const prompt = SessionCompaction.buildPrompt()
+
+  expect(prompt).toContain(
+    "When the context holds such directions, write the handoff so that it honours them alongside the sections listed earlier.",
+  )
+  expect(prompt).not.toMatch(/precedence|override|outrank/i)
+})
+
+// Each scope of the prompt's rules: one row per clause that says how far a rule reaches, and the narrower wording that
+// may not come back in its place.
+test.each([
+  ["section 2 covers what was only discussed", "each concept or technology of weight that the conversation touched on", /the work relies on/],
+  ["section 2 is not limited to what was used", "including any that was only discussed.", /the work relies on/],
+  ["section 4 takes all feedback", "whether they confirmed it, qualified it or objected.", /Where the person pushed back/],
+  ["section 4 stresses redirections", "Their redirections need the most care", /Where the person pushed back/],
+  ["the analysis takes all feedback", "everything the person said about your work.", /- what the person said about your work/],
+  ["the analysis takes every concept", "each concept that played a part", /the ideas they rest on/],
+  ["directions may be the person's own", "in an instruction file, whether the person's own or a project's", /Some projects describe|Where a project has left/],
+  ["directions may be in a message", "in a message from the person, or elsewhere.", /Some projects describe|Where a project has left/],
+  ["a finished task needs a clear ask", "the step may only be one the person has clearly asked for", /has asked for nothing further/],
+  ["a finished task's step need not continue it", "rest directly on two things", /must continue the work of section 8/],
+  ["with no ask there is no step", "without such a request this section stays empty.", /has asked for nothing further/],
+  ["the handoff is thorough", "a thorough account of it, your <handoff>", /context, and your <handoff> takes its place/],
+  ["any technical detail is kept", "and any other technical detail they will need", /design choices and code patterns into it/],
+  ["all the work done is weighted", "and the work you have done up to now.", /what you did about it/],
+  ["a solved problem is settled", "which problems and questions are settled", /which questions are settled/],
+] as const)("compaction prompt scope: %s", (_, kept, narrowed) => {
+  const prompt = SessionCompaction.buildPrompt()
+  expect(prompt).toContain(kept)
+  expect(prompt).not.toMatch(narrowed)
+})
+
+test("compaction prompt asks for names, choices and patterns copied exactly, and says why", () => {
+  expect(SessionCompaction.buildPrompt()).toContain(
+    "Copy names, design choices, code patterns and any other technical detail they will need into it exactly as they appeared: once the conversation is gone, the handoff is the only place they survive.",
+  )
 })
 
 it.effect("auto compaction estimates current content against the threshold below the effective window", () =>
@@ -585,7 +661,7 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     yield* hooks.register("session", "compaction", (event) =>
       Effect.sync(() => {
         hooked = event.messages.length
-        expect(JSON.stringify(event.messages)).not.toContain("IMPORTANT: Reply with text only")
+        expect(JSON.stringify(event.messages)).not.toContain("This reply must be plain text")
       }),
     )
     const messages = [
@@ -631,7 +707,7 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     expect(JSON.stringify(requests[0]?.messages)).toContain("agent named below")
     expect(JSON.stringify(requests[0]?.messages)).toContain("open-file.ts")
     expect(requests[0]?.messages).toHaveLength(hooked + 1)
-    expect(JSON.stringify(requests[0]?.messages.at(-1))).toContain("IMPORTANT: Reply with text only")
+    expect(JSON.stringify(requests[0]?.messages.at(-1))).toContain("This reply must be plain text")
     expect(JSON.stringify(requests[0]?.messages)).not.toContain("display-only-output")
     // The compaction message carries its own request usage so clients can show what compacting cost.
     expect(yield* store.context(sessionID)).toMatchObject([
@@ -995,18 +1071,18 @@ it.effect("a summary request for an unknown window is sent whole, with nothing s
 // retry. The section headings, the error texts and the placeholder are the spec's (ref-specs/context-memory-2.md).
 
 const SECTIONS = [
-  "Requests and intent",
-  "Technical context",
-  "Files and code",
-  "Problems and fixes",
-  "Problems worked through",
-  "User messages",
-  "Open tasks",
-  "Work in progress",
-  "Next step",
+  "Goal",
+  "Technical ground",
+  "Code touched",
+  "Errors and corrections",
+  "Reasoning so far",
+  "The person's messages",
+  "Still to do",
+  "Where things stand",
+  "What comes next",
 ]
 const NO_SUMMARY = "Compaction produced no summary"
-const TOO_LONG = "The conversation is too long to compact. Go back a few messages and try again."
+const TOO_LONG = "This conversation no longer fits in a compaction request. Rewind a few messages, then compact again."
 
 const usage = {
   inputTokens: 15,

@@ -33,6 +33,7 @@ import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { readInitial, readUpdate } from "./lib/instructions"
 import { insertSession } from "./lib/session-row"
+import PRIVATE_GUIDE from "./fixture/prompt-text/memory-guide.txt"
 
 const decodeInfo = Schema.decodeUnknownSync(Info)
 const first = SessionSchema.ID.make("ses_memory_first")
@@ -42,12 +43,12 @@ const INDEX = "core/memory-index"
 
 // The headings of the guide, in the reference's section order, in Orbit's words.
 const HEADINGS = [
-  "## Kinds of memory",
-  "## What not to save",
-  "## How to save a memory",
-  "## When to use memory",
-  "## Before acting on a memory",
-  "## Memory, plans and tasks",
+  "## What a memory can be about",
+  "## Leave these out",
+  "## Writing a memory down",
+  "## Reading memory",
+  "## Check before you trust it",
+  "## What memory is not for",
 ]
 
 const configured = (scope: Scope, memory: Record<string, unknown>) =>
@@ -367,8 +368,103 @@ describe("the memory guide source", () => {
       expect(at).toEqual([...at].sort((a, b) => a - b))
       // The model is told the folder exists, so it never spends a step creating it.
       expect(yield* exists(l.memory)).toBe(true)
+      expect(out.text).toContain("The folder already exists")
+      // A request settles a memory both ways; a request to leave memory alone keeps it out; the present state outranks it.
+      expect(out.text).toContain("A request about memory is never left for later.")
+      expect(out.text).toContain("must draw on none of it and must not bring it up")
+      expect(out.text).toContain("act on the present state, then bring the note up to date or remove it")
+      // The housekeeping and format rules the guide gives in its own words.
+      expect(out.text).toContain("Never have two notes on one point.")
+      expect(out.text).toContain("stays out, whoever proposes it")
+      // A left-out item stays out when the person asks for it; they are asked only for the unexpected part, saved in its place.
+      expect(out.text).toContain(
+        "An item on this list is never saved itself, however much of it the person wants kept. Only what was unexpected or far from obvious in it, usually a lesson rather than a record, may take its place. The person knows which part that is, so ask them for it, and save nothing else of the item.",
+      )
+      expect(out.text).toContain("Its dates must be absolute ones")
+      expect(out.text).toContain('Two labelled lines come under it: "Reason:"')
+      expect(out.text).toContain("Having to tell you twice is exactly what this memory exists to prevent.")
+      expect(out.text).toContain("- Use it: treat it as a standing rule for the kind of work it names.")
+      expect(out.text).toContain('and "Applies when:", naming the situations it covers.')
+      expect(out.text).toContain("- Format: the same three parts as feedback, with the fact or decision on the top line.")
+      expect(out.text).toContain("a deadline or an owner recorded here can call for another approach.")
+      // One note per point: an existing note is changed rather than joined by another, files carry their topic, and
+      // the front matter follows the content.
+      expect(out.text).toContain(
+        "Before you write, look for a memory on the same point and change it instead of adding another;",
+      )
+      expect(out.text).toContain(
+        "Let the topic, never the date, decide how memories are split into files, what each file is called and how the index is ordered.",
+      )
+      // A note that was wrong from the start goes as an outdated one does, and the index is kept short.
+      expect(out.text).toContain(
+        "a note that was mistaken from the start, or that has since stopped being true, must be corrected or deleted as soon as you notice.",
+      )
+      expect(out.text).toContain("so it has to stay short. Prune and merge its entries as it grows")
+      expect(out.text).toContain("When the name, description or type in a file's front matter no longer fits its content, correct that field.")
       // The removed tool is not named.
       expect(out.text).not.toMatch(/\bMemory tool\b|Memory read/)
+      // A request to check, recall or remember something makes reading memory a must.
+      expect(out.text).toContain(
+        "You must read memory before you answer any request to check, recall or remember, in whatever words it comes:",
+      )
+    }),
+  )
+
+  // Each scope of the guide's rules: the clause that says how far a rule reaches, and the narrower or wider wording
+  // that may not come back in its place.
+  it.live("keeps the scope of each rule", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const out = yield* Effect.gen(function* () {
+        yield* sessions(l)
+        return yield* readInitial(yield* load(first, { index: false }))
+      }).pipe(provide(l))
+      const rows = [
+        ["a repair of any age", "The way any bug was repaired, the one you fixed a minute ago included.", /an old bug/],
+        ["what the person says now", "whether in what the person says", /in the project today outranks/],
+        ["what an outside resource shows now", "or in a resource outside it.", /in the project today outranks/],
+        ["a request is saved at once", "as soon as they say so", /settles a memory either way/],
+        ["a request stays inside the left-out list", 'within the limits under "Leave these out"', /settles a memory either way/],
+        ["a request to forget waits no longer", "never left for later", /settles a memory either way/],
+        ["what is to be forgotten is found", "When they ask you to forget something, find it and remove it.", /delete the one that holds it/],
+        ["only that content is forgotten", "Remove only that content: edit it out of each memory file that holds it", /delete the one that holds it/],
+        ["the front matter forgets it too", "that holds it, front matter included", /delete the one that holds it/],
+        ["a file goes only when it is empty", "delete a file only when nothing but front matter would be left", /delete the one that holds it/],
+        ["the index entry is forgotten too", "Take it out of `MEMORY.md` as well: delete its entry", /delete the one that holds it/],
+        ["an entry keeps what stays", "reword the entry when it also covers what stays", /delete the one that holds it/],
+        ["no claim of who made the folder, or when", "The folder already exists", /Orbit created|before this conversation began/],
+        ["the folder may be listed", "on creating it or on proving that it exists", /probing or listing/],
+        ["the work you share", "the circumstances of the work you share", /circumstances of the project/],
+        ["the next conversation carries on", "carry on where the last one stopped", /does not start from nothing/],
+        ["a choice that was not obvious", "without having been the obvious choice", /could not have known/],
+        ["a confirmation is not said twice", "Having to tell you twice", /repeat a correction/],
+        ["who is doing what", "who has taken on what and why", /who is responsible for/],
+        ["reasons shape suggestions", "Let those reasons shape what you propose", /can change which approach/],
+        ["the step in hand stays out", "The step you are on, those done and those left", /Steps done and steps left/],
+        ["outdated for any reason", "or that has since stopped being true", /later work has overtaken/],
+        ["memory that seems relevant is read", "may touch on something a memory covers", /hand touches something/],
+        ["front matter is kept true", "no longer fits its content, correct that field", /When a file's content changes/],
+        ["the repository's state", "For the state or the shape of the repository", /how the repository is put together/],
+      ] as const
+      for (const [name, kept, changed] of rows)
+        expect({ name, kept: out.text.includes(kept), changed: changed.test(out.text) }).toEqual({
+          name,
+          kept: true,
+          changed: false,
+        })
+    }),
+  )
+
+  // The private guide whole, so that dropping, softening or reversing any one of its rules fails here.
+  it.live("gives the private guide word for word", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const out = yield* Effect.gen(function* () {
+        yield* sessions(l)
+        return yield* readInitial(yield* load(first, { index: false }))
+      }).pipe(provide(l))
+      const text = out.text.replaceAll(l.memory, "<memory folder>")
+      expect(text).toBe(PRIVATE_GUIDE)
     }),
   )
 

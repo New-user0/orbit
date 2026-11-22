@@ -217,7 +217,7 @@ export function linesWith(frame: string, text: string) {
 }
 
 /** The picker's list heading: shown while step 1 is up. */
-export const listHeading = "Rewind the code, the conversation or both to just before…"
+export const listHeading = "Roll back to just before which prompt?"
 
 /** No character of Unicode category C on any line of a frame, apart from the line breaks (class 9). */
 export function controlFree(frame: string) {

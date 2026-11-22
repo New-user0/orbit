@@ -179,3 +179,59 @@ test("instruction files are named by the path the view shows, escaped", () => {
     "/repo/file-0.md",
   )
 })
+
+test("each piece of advice is Orbit's own wording", () => {
+  const detail = (input: Parameters<typeof info>[0]) => contextSuggestions(info(input)).map((item) => item.detail)
+  const advice = [
+    ...detail({ window: 100_000, percentage: 80, auto: true }),
+    ...detail({ window: 100_000, percentage: 80, auto: false }),
+    ...detail({ window: 100_000, percentage: 50, auto: false }),
+    ...["Bash", "Read", "Grep", "WebFetch", "Search"].flatMap((name) =>
+      detail({ window: 100_000, tools: [tool(name, 5_000, 15_000)] }),
+    ),
+    ...detail({ window: 200_000, tools: [tool("Read", 0, 10_000)] }),
+    ...detail({ window: 100_000, files: [1_000, 2_000, 1_500, 500] }),
+  ]
+  expect(advice).toEqual([
+    "/compact summarizes the conversation at a moment you pick; left alone, Orbit will do so by itself shortly.",
+    "Turning automatic compaction back on, or running /compact yourself, keeps the window from filling up, since with the setting off nothing summarizes the conversation for you.",
+    "A full window will not be summarized for you, so run /compact before it fills.",
+    "Commands that print a lot fill the conversation. Cut their output down in the command itself, for example to the first or last lines or to the lines that match.",
+    "A long file seldom has to be read whole: give Read an offset and a limit to fetch just the lines in question.",
+    "Narrow what each search covers: a more exact pattern, a single folder or one file type.",
+    "Whole web pages cost many tokens. Name the part of the page you are after in the request.",
+    "Call Search with tighter inputs, or have each call return less.",
+    "A long file seldom has to be read whole: give Read an offset and a limit to fetch just the lines in question.",
+    "/memory opens instruction files for trimming; the biggest here are /repo/file-1.md (2.0K), /repo/file-2.md (1.5K), /repo/file-0.md (1.0K).",
+  ])
+  // The phrasings that the earlier rewrites still shared with the reference's sentences stay out.
+  for (const text of advice)
+    expect(text).not.toMatch(
+      /Pipe|head, tail or grep|summary is close|run long|line ranges|Biggest:|will start soon|lets you choose when|Shorten them|is off, so a full window/,
+    )
+})
+
+test.each([
+  [[20_000], "the biggest here is /repo/file-0.md (20.0K)."],
+  [[20_000, 10_000], "the biggest here are /repo/file-0.md (20.0K), /repo/file-1.md (10.0K)."],
+] as const)("the biggest instruction files read right for %j", (files, ending) => {
+  const [found] = contextSuggestions(info({ window: 200_000, files: [...files] }))
+  expect(found?.detail).toEndWith(ending)
+})
+
+test("each suggestion's title is Orbit's own wording", () => {
+  const title = (input: Parameters<typeof info>[0]) => contextSuggestions(info(input)).map((item) => item.title)
+  expect([
+    ...title({ window: 100_000, percentage: 80, auto: true }),
+    ...title({ window: 100_000, percentage: 50, auto: false }),
+    ...title({ window: 100_000, tools: [tool("Bash", 5_000, 15_000)] }),
+    ...title({ window: 200_000, tools: [tool("Read", 0, 10_000)] }),
+    ...title({ window: 100_000, files: [1_000, 2_000, 1_500, 500] }),
+  ]).toEqual([
+    "80% of the window is in use",
+    "Auto-compaction is switched off",
+    "Bash uses 20.0K tokens across its calls and results (20%)",
+    "What Read returned holds 10.0K tokens (5%)",
+    "Instructions hold 5.0K tokens (5%)",
+  ])
+})

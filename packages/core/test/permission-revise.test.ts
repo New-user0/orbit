@@ -250,8 +250,15 @@ describe("an approval answered with the person's revised content", () => {
           Exit.isSuccess(settled.exit) ? (settled.exit.value as { metadata?: unknown }).metadata : undefined,
         )
         expect(ran && applyPatch("alpha\nbeta\n", ran.patch)).toBe("alpha\nREVISED\n")
-        // The reference tells the model that the person modified its proposal before accepting it.
-        expect(text(settled.exit)).toMatch(/modif/i)
+        // The model is told that the person changed its proposal on the way to approving it, as the reference tells it.
+        expect(text(settled.exit)).toBe(
+          JSON.stringify([
+            {
+              type: "text",
+              text: `Edited ${ran?.file} with a version the person adjusted while approving it, which differs from your proposal`,
+            },
+          ]),
+        )
       }),
     ),
   )
@@ -270,8 +277,8 @@ describe("an approval answered with the person's revised content", () => {
         )
         expect(Exit.isSuccess(settled.exit)).toBe(true)
         expect(yield* Effect.promise(() => fs.readFile(file, "utf8"))).toBe("alpha\nBETA\n")
-        expect(text(settled.exit)).toContain("Edited a.txt (1 replacement)")
-        expect(text(settled.exit)).not.toMatch(/modif/i)
+        // The usual result and nothing after it, however a note of the person's change would be worded.
+        expect(text(settled.exit)).toBe(JSON.stringify([{ type: "text", text: "Edited a.txt (1 replacement)" }]))
       }),
     ),
   )
