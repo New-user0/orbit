@@ -84,13 +84,15 @@ export const Plugin = {
                 const next = Notebook.apply(notebook, edit)
                 const after = Notebook.serialize(next, original.text)
                 const preview = fileDiff(FileAccess.shownName(target), original.text, after)
+                const link = access.link(target)
                 yield* permission.assert({
                   action: "Edit",
                   resources: [target.resource],
                   save: ["*"],
                   ...FileAccess.leadsOf([target]),
-                  // `paths` and each file's `place` are where the edit lands as resolved here, absolute, for a client to show.
-                  metadata: { paths: [target.place], files: [{ ...preview, place: target.place }] },
+                  // `paths` and each file's `place` are where the edit lands as resolved here, absolute, for a client to show,
+                  // and `link` where a link on the way really leads, for a client to warn about.
+                  metadata: { paths: [target.place], files: [{ ...preview, place: target.place, ...(link && { link }) }] },
                   sessionID: context.sessionID,
                   agent: context.agent,
                   source: { type: "tool" as const, messageID: context.messageID, id: context.id },

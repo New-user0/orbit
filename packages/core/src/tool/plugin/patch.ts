@@ -317,14 +317,19 @@ export const Plugin = {
                     // Every place the patch touches as resolved here, absolute: a move's source and its destination too.
                     paths: [...new Set(targets.map((target) => target.place))],
                     diff: patchFiles.map((file) => `${file.patch}\n`).join(""),
+                    // `link` is where a link on the way to an entry's `place` really leads, and `fromLink` on the way to
+                    // its `from`, both of the targets that are written, for a client to warn about (class 3).
                     files: prepared.flatMap((change) => {
                       const [file, ...replaced] = [patchFile(change), ...replacedFile(change)]
-                      return change.type === "update" && change.moveTarget
-                        ? [
-                            { ...file!, place: change.moveTarget.place, from: change.target.place },
-                            ...replaced.map((item) => ({ ...item, place: change.moveTarget!.place })),
-                          ]
-                        : [{ ...file!, place: change.target.place }]
+                      const link = access.link(change.target)
+                      if (change.type !== "update" || !change.moveTarget)
+                        return [{ ...file!, place: change.target.place, ...(link && { link }) }]
+                      const moved = access.link(change.moveTarget)
+                      const to = { place: change.moveTarget.place, ...(moved && { link: moved }) }
+                      return [
+                        { ...file!, ...to, from: change.target.place, ...(link && { fromLink: link }) },
+                        ...replaced.map((item) => ({ ...item, ...to })),
+                      ]
                     }),
                   },
                   sessionID: context.sessionID,
