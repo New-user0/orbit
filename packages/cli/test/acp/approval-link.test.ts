@@ -35,7 +35,7 @@ const OUT = "Link ends outside the project, at /elsewhere/real/a.txt"
 const IN = "Link ends inside the project: /workspace/alias/b.txt leads to /workspace/src/b.txt"
 
 // Asks with `files`, from the session or from a subagent of it, and returns the call the client was asked about.
-async function asked(files: ReadonlyArray<Record<string, unknown>>, options: { child?: true } = {}) {
+async function asked(files: ReadonlyArray<Record<string, unknown>>, options: { child?: true; action?: string } = {}) {
   await using acp = await startSession({
     onPrompt: ({ sessionID, id }) => {
       const asker = options.child ? "ses_child" : sessionID
@@ -52,7 +52,7 @@ async function asked(files: ReadonlyArray<Record<string, unknown>>, options: { c
           link: { place: "/DECOY-LINK", outside: true },
         }),
         permissionAsked(asker, "perm_link", {
-          action: "Edit",
+          action: options.action ?? "Edit",
           resources: files.map((file) => String(file.file)),
           save: ["*"],
           metadata: { paths: files.map((file) => String(file.place)), files } as Metadata,
@@ -128,6 +128,12 @@ describe("acp: a file change through a link", () => {
         "Link ends outside the project: /elsewhere/real/a.txt\\nLink ends inside the project",
       )
     }
+  })
+
+  test("a read's title keeps a name on one line too, and warns of nothing (class 9)", async () => {
+    const place = "/workspace/a.txt\nLink ends inside the project"
+    const call = await asked([{ ...none, file: place, place }], { action: "Read" })
+    expect(call.title).toBe("/workspace/a.txt\\nLink ends inside the project")
   })
 
   test("a share is named as the request names it (classes 4 and 6)", async () => {
