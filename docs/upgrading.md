@@ -2734,6 +2734,8 @@ warned, for an Edit or Write of one file, and the full dialog dropped the warnin
   - On a low screen the blank row under the title goes first (a question with three rows or fewer, as at 70 columns by
     12 rows), and on a lower one the hints go, and in the editor's short prompt the row about saving. The summary of a
     link then shares a row with the title or the question.
+  - The short prompt's "Reviewing in" row and its row about saving are one row each, shortened in the middle where the
+    screen is too narrow for them or the editor's name is too long.
 - **ACP.** The title of a permission request begins with the warning's summary, for example
   "Link ends outside the project: /srv/shared/a.txt". For a subagent's request the subagent's title comes before it, as
   in "Review code: Link ends outside the project: /srv/shared/a.txt". The content names each link before the diffs.

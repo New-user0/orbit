@@ -637,7 +637,10 @@ export function EditorDiffPrompt(props: {
       header={
         <box flexDirection="row" gap={1} flexShrink={0}>
           <text fg={theme.text.feedback.warning.base}>{"▲"}</text>
-          <text fg={theme.text.base} flexShrink={1}>{`Reviewing in ${plain(props.editor)}`}</text>
+          {/* The layout counts one row for it, and one for saving: each is cut in the middle rather than wrapped. */}
+          <text fg={theme.text.base} flexShrink={1} height={1} wrapMode="none" truncate>
+            {`Reviewing in ${plain(props.editor)}`}
+          </text>
         </box>
       }
       // While Always allow is focused the prompt says what it grants, as the full dialog does, so the short prompt never
@@ -649,7 +652,7 @@ export function EditorDiffPrompt(props: {
             <box paddingLeft={1} flexDirection="column" flexShrink={0}>
               <LinkNotice warning={fitted().notice.text} />
               <Show when={fitted().saves}>
-                <text fg={theme.text.muted} flexShrink={0}>
+                <text fg={theme.text.muted} flexShrink={0} height={1} wrapMode="none" truncate>
                   Save in the editor to answer
                 </text>
               </Show>

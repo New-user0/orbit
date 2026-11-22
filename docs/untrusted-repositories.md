@@ -2513,7 +2513,10 @@ runs" is a permission.
     columns). The reject stage has only the sum. On a low screen the header gives way before the grant does: the blank
     row under it, the hints, the compact prompt's row about saving, and then the summary shares the title's row. So the
     first row of an edit's grant, and the word outside or inside of its link, are in sight from 7 rows of screen in the
-    dialog and from 8 in the compact prompt (the "on a screen ... rows high" rows);
+    dialog and from 8 in the compact prompt (the "on a screen ... rows high" rows). The compact prompt's header, which
+    names the editor, and its row about saving are a row each and are cut in the middle, so neither takes the warning's
+    or the grant's rows on a narrow screen or under a long editor name (the "row about saving" row: 30, 60 and 80
+    columns);
   - Mini's fixed line is the sum, or its short form, which keeps the word outside or inside, where the sentence does not
     fit (24 columns in the tests). The grant and the title come before the lines of the links, so both are on the first
     screen, and the links' lines follow by scrolling (the "Mini keeps the grant" and "24 columns" rows);
