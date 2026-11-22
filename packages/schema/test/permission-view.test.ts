@@ -87,3 +87,75 @@ test("the names of a tool and its old name are one action", () => {
   expect(PermissionView.action("apply_patch")).toBe("patch")
   expect(PermissionView.action("NotebookEdit")).toBe("notebook_edit")
 })
+
+// m5-link-warning: the links of a request, and the words every client warns with.
+const out = { place: "/real/outside/a.txt", outside: true }
+const inner = { place: "/p/src/b.txt", outside: false }
+const linksOf = (files: unknown, action = "Edit") =>
+  PermissionView.of({ action, resources: ["x"], metadata: { files } }).links
+
+test("the links of a request are one per linked end, the ones that end outside first", () => {
+  const files = [
+    { file: "alias/b.txt", place: "/p/alias/b.txt", patch: "x", link: inner },
+    { file: "a.txt", place: out.place, patch: "x", link: out },
+    { file: "c.txt", place: "/p/c.txt", patch: "x" },
+    // A move: the destination is plain and the source is linked.
+    { file: "d.txt", place: "/p/d.txt", from: "/p/way/e.txt", patch: "x", fromLink: { place: "/real/e.txt", outside: true } },
+    // What a move replaces repeats its destination's link, which is one link.
+    { file: "a.txt", place: out.place, patch: "y", link: out },
+  ]
+  expect(linksOf(files)).toEqual([
+    { file: out.place, ...out },
+    { file: "/p/way/e.txt", place: "/real/e.txt", outside: true },
+    { file: "/p/alias/b.txt", ...inner },
+  ])
+  // One end said to be outside and inside takes the stricter answer (class 3).
+  expect(
+    linksOf([
+      { file: "f", place: "/p/f", patch: "x", link: { place: "/r/f", outside: false } },
+      { file: "f", place: "/p/f", patch: "x", link: { place: "/r/f", outside: true } },
+    ]),
+  ).toEqual([{ file: "/p/f", place: "/r/f", outside: true }])
+})
+
+test("a link is named from an entry with no patch or no place, so the warning never goes with them", () => {
+  expect(linksOf([{ file: "a.txt", link: out }])).toEqual([{ file: "a.txt", ...out }])
+  expect(linksOf([{ link: out }])).toEqual([{ file: out.place, ...out }])
+})
+
+test("no link, an older server and a malformed link: each costs only that warning (class 7)", () => {
+  expect(PermissionView.of({ action: "Edit", resources: ["a.txt"] }).links).toEqual([])
+  expect(linksOf("not a list")).toEqual([])
+  const bad = [null, 7, "linked", [], {}, { place: 7, outside: true }, { place: "", outside: true }, { place: "/r" }, { place: "/r", outside: "true" }]
+  for (const value of bad) {
+    const view = PermissionView.of({
+      action: "Edit",
+      resources: ["x"],
+      metadata: {
+        files: [
+          null,
+          { file: "bad", place: "/p/bad", from: "/p/was", patch: "x", link: value, fromLink: value },
+          { file: "a.txt", place: out.place, patch: "x", link: out },
+        ],
+      },
+    })
+    expect([value, view.links]).toEqual([value, [{ file: out.place, ...out }]])
+    expect(view.files.map((file) => file.file)).toEqual(["bad", "a.txt"])
+  }
+})
+
+test("the words of the warning: where a link ends comes first, so a cut line still says it", () => {
+  const ends = { file: out.place, ...out }
+  const alias = { file: "/p/alias/b.txt", ...inner }
+  const show = (value: string) => `<${value}>`
+  expect(linksOf([])).toEqual([])
+  expect(PermissionView.linkWarning(ends, show)).toBe(`Link ends outside the project, at <${out.place}>`)
+  expect(PermissionView.linkWarning(alias, show)).toBe(
+    "Link ends inside the project: </p/alias/b.txt> leads to </p/src/b.txt>",
+  )
+  expect(PermissionView.linkSummary([])).toBeUndefined()
+  expect(PermissionView.linkSummary([ends])).toBe("Link ends outside the project")
+  expect(PermissionView.linkSummary([alias])).toBe("Link ends inside the project")
+  expect(PermissionView.linkSummary([ends, alias, { ...ends, file: "/p/other" }])).toBe("3 linked paths, 2 outside the project")
+  expect(PermissionView.linkSummary([alias, { ...alias, file: "/p/other" }])).toBe("2 linked paths, all inside the project")
+})

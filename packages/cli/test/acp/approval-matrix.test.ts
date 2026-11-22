@@ -67,6 +67,12 @@ const misleading = (row: Row) => {
   const lexical = lexicalOf(raw)
   return (row.truth.places ?? []).some((place) => slashed(path.resolve(place)) === lexical) ? undefined : raw
 }
+// Where the request says its links end (m5-link-warning).
+type End = { place: string; outside: boolean }
+const linksOf = (row: Row) =>
+  ((row.request.metadata?.files ?? []) as { link?: End; fromLink?: End }[]).flatMap((file) =>
+    [file.link, file.fromLink].filter((link): link is End => link !== undefined),
+  )
 const same = (items: ReadonlyArray<{ path: string }> | null | undefined) =>
   (items ?? []).map((item) => path.resolve(item.path))
 
@@ -120,6 +126,20 @@ describe("acp approvals show what the request carries", () => {
         )
         expect(text.join("\n")).toContain(row.truth.arguments)
       }
+      // Every link of the request is said in the content, and the title says that there is one; with none, neither does.
+      const links = linksOf(row)
+      const said = (call.content ?? []).flatMap((item) =>
+        item.type === "content" && item.content.type === "text" ? [item.content.text] : [],
+      )
+      for (const link of links)
+        expect(
+          said.some(
+            (line) =>
+              line.startsWith(`Link ends ${link.outside ? "outside" : "inside"} the project`) && line.endsWith(link.place),
+          ),
+        ).toBe(true)
+      if (links.length > 0) expect(String(call.title)).toMatch(/^(Link ends|\d+ linked paths)/)
+      if (links.length === 0) expect(drawn).not.toMatch(/Link ends|linked paths/)
       // A diff is the request's, at the place the request names.
       for (const item of call.content ?? [])
         if (item.type === "diff") expect(places.map((place) => path.resolve(place))).toContain(path.resolve(item.path))

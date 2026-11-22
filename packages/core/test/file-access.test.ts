@@ -529,4 +529,23 @@ describe("FileAccess.link", () => {
       expect(access.link(yield* access.resolve({ path: "docs", kind: "directory" }))).toBeUndefined()
     }).pipe(provide([])),
   )
+
+  // m5-link-warning, classes 4 and 6: the value is worked out from what `resolve` found, in memory. A host that does not
+  // exist takes seconds to fail when it is looked up, so a quick answer is one that contacted nothing.
+  it.live("names a share a link leads to without contacting it", () =>
+    Effect.gen(function* () {
+      const access = yield* FileAccess.Service
+      const location = yield* Location.Service
+      const absolute = AbsolutePath.make(path.join(location.directory, "net", "a.txt"))
+      const share = AbsolutePath.make(
+        process.platform === "win32" ? "\\\\orbit-test.invalid\\share\\a.txt" : "//orbit-test.invalid/share/a.txt",
+      )
+      const before = performance.now()
+      expect(access.link({ absolute, place: absolute, leads: share, resource: "net/a.txt" })).toEqual({
+        place: share,
+        outside: true,
+      })
+      expect(performance.now() - before).toBeLessThan(100)
+    }).pipe(provide([])),
+  )
 })

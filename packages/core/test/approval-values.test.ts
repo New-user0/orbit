@@ -78,6 +78,9 @@ const added: Record<string, unknown> = {
   workdir: `${decoy}/workdir`,
   paths: [`${decoy}/paths.txt`],
   files: [{ file: `${decoy}/files.txt`, patch: `--- ${decoy}\n+++ ${decoy}\n@@ -1 +1 @@\n-a\n+b\n` }],
+  // A link the model says its path is reached through: only the server's own value is ever shown (m5-link-warning).
+  link: { place: `${decoy}/link.txt`, outside: false },
+  fromLink: { place: `${decoy}/from-link.txt`, outside: true },
   url: `https://${decoy.toLowerCase()}.example/`,
   method: "POST",
 }
@@ -104,10 +107,12 @@ type Row = {
 const recorded: Row[] = []
 
 // Each spelling of the path to a file: the folder it really is in, and how the input writes the path up to the file's
-// name. A link row reaches the outside folder through a junction (a symlink off Windows) named `linked`.
+// name. A link row reaches the outside folder through a junction (a symlink off Windows) named `linked`, and a link
+// inside row the project's own `src` through one named `alias`, whose place is the project's spelling of it.
 const spellings: {
   name: string
   link?: true
+  alias?: true
   folder: (world: World) => string
   spelled: (world: World) => string
   only?: NodeJS.Platform
@@ -126,6 +131,7 @@ const spellings: {
     spelled: (w) => `~/${path.relative(Global.Path.home, w.outside).replaceAll("\\", "/")}/file`,
   },
   { name: "link", link: true, folder: (w) => w.outside, spelled: () => "linked/file" },
+  { name: "link inside", alias: true, folder: (w) => path.join(w.project, "alias"), spelled: () => "alias/file" },
   {
     name: "git bash drive path",
     only: "win32",
@@ -155,6 +161,10 @@ describe("approval values: the request carries what the tool acts on", () => {
                 const real = path.join(folder, `file${extension}`)
                 const named = (name: string) => path.join(folder, name)
                 yield* Effect.promise(async () => {
+                  if (spelling.alias) {
+                    await fs.mkdir(path.join(project.path, "src"))
+                    await fs.symlink(path.join(project.path, "src"), path.join(project.path, "alias"), "junction")
+                  }
                   await fs.mkdir(folder, { recursive: true })
                   if (spelling.link) await fs.symlink(outside.path, path.join(project.path, "linked"), "junction")
                   if (tool !== "Write") await fs.writeFile(real, tool === "NotebookEdit" ? notebook : "alpha\n")
@@ -247,6 +257,16 @@ describe("approval values: the request carries what the tool acts on", () => {
                   for (const file of files) expect(same([file.place!])).toEqual(same([places.at(-1)!]))
                   if (moves) expect(same([files[0]!.from!])).toEqual(same([places[0]!]))
                 }
+                // Where a link leads, on every entry of a file change and on both ends of a move, and on nothing else
+                // (m5-link-warning, class 8).
+                const leads = spelling.link ? outside.path : spelling.alias ? path.join(project.path, "src") : undefined
+                const linked = (file: string) =>
+                  leads === undefined ? undefined : { place: path.join(leads, path.basename(file)), outside: spelling.link === true }
+                const ends = files as { place?: string; from?: string; link?: unknown; fromLink?: unknown }[]
+                expect(ends.map((file) => file.link)).toEqual(ends.map((file) => linked(file.place!)))
+                expect(ends.map((file) => file.fromLink)).toEqual(
+                  ends.map((file) => (file.from === undefined ? undefined : linked(file.from))),
+                )
 
                 recorded.push(
                   normalize(
@@ -367,8 +387,9 @@ function normalize(row: Row, world: World): Row {
     [path.basename(world.outside), "{outsideName}"] as const,
   ]
   const text = replacements.reduce((current, [from, to]) => current.replaceAll(from, to), JSON.stringify(row))
-  // The slashes after a token are forward slashes in the fixture, so that it reads the same on every platform.
+  // The slashes after a token are forward slashes in the fixture, so that it reads the same on every platform. A patch's
+  // "no newline" mark keeps its backslash, without which the diff cannot be drawn.
   return JSON.parse(text, (_key, value) =>
-    typeof value === "string" && /\{(?:project|outside)\}/.test(value) ? value.replaceAll("\\", "/") : value,
+    typeof value === "string" && /\{(?:project|outside)\}/.test(value) ? value.replace(/\\(?! No newline at end of file)/g, "/") : value,
   )
 }

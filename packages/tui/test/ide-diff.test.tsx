@@ -407,7 +407,7 @@ test("while Always allow is focused the prompt says what it grants", async () =>
     for (const line of row.lines) expect(frame).toContain(line)
     expect(frame).toContain("Reviewing in Test Editor")
     expect(frame).toContain("Make this change to a.ts?")
-    expect(frame.replace(/\s+/g, "")).toContain("outsidethesession'sfolder,throughalink")
+    expect(frame.replace(/\s+/g, "")).toContain("Linkendsoutsidetheproject")
     // Another option focused again hides it.
     setup.app.mockInput.pressArrow("down")
     await setup.until((value) => compact(value) && !value.includes("This will always allow"), "the grant hidden")
@@ -800,7 +800,7 @@ test("a refused reply shows the server's reason and brings back the dialog", asy
   expect(setup.replies[1]).toEqual({ decision: "once" })
 })
 
-test("the link warning comes from the request: through a link, and outside the session's folder", async () => {
+test("the link warning comes from the request: a link, and whether it ends outside the project", async () => {
   // `outside` may be a string, for a link without its shape.
   const linked = (link: { place: string; outside: boolean | string } | undefined, tool?: "terminal") => ({
     tool,
@@ -810,25 +810,25 @@ test("the link warning comes from the request: through a link, and outside the s
     {
       name: "outside, compact",
       options: linked({ place: "/elsewhere/secrets/a.ts", outside: true }),
-      shows: "outside the session's folder, through a link",
+      shows: "Link ends outside the project",
       place: "/elsewhere/secrets/a.ts",
     },
     {
       name: "outside, full",
       options: linked({ place: "/elsewhere/secrets/a.ts", outside: true }, "terminal"),
-      shows: "outside the session's folder, through a link",
+      shows: "Link ends outside the project",
       place: "/elsewhere/secrets/a.ts",
     },
     {
       name: "inside, compact",
       options: linked({ place: `${sessionFolder}/real/a.ts`, outside: false }),
-      shows: "The link leads to",
+      shows: "Link ends inside the project",
       place: "real/a.ts",
     },
     {
       name: "inside, full",
       options: linked({ place: `${sessionFolder}/real/a.ts`, outside: false }, "terminal"),
-      shows: "The link leads to",
+      shows: "Link ends inside the project",
       place: "real/a.ts",
     },
     // The tool's input names a link too, and the request does not: nothing is said.
@@ -842,9 +842,11 @@ test("the link warning comes from the request: through a link, and outside the s
     },
     // A place that is not a string has no shape either.
     { name: "place not a string, compact", options: linked({ place: 7 as never, outside: true }) },
-    // The link is the one file's: a request of two files names none, even when its first file carries one.
+    // A request of two files names the link of the one that has it (FU-M5-005, m5-link-warning).
     {
       name: "two files, full",
+      shows: "Link ends outside the project",
+      place: "secrets/a.ts",
       options: {
         request: {
           metadata: {
@@ -866,7 +868,7 @@ test("the link warning comes from the request: through a link, and outside the s
     )
     const flat = frame.replace(/\s+/g, " ")
     if (row.shows) expect([row.name, flat.includes(row.shows), flat.includes(row.place!)]).toEqual([row.name, true, true])
-    else expect([row.name, flat.includes("through a link") || flat.includes("The link leads to")]).toEqual([row.name, false])
+    else expect([row.name, /Link ends|linked paths/.test(flat)]).toEqual([row.name, false])
     expect(flat).not.toContain("DECOY")
   }
 })
@@ -891,7 +893,8 @@ test("names in the compact prompt are written out", async () => {
   const frame = await setup.until(compact, "the compact prompt")
   for (const raw of ["\u001b", "\u0007", "‮", "​"]) expect(frame).not.toContain(raw)
   expect(frame).not.toContain("pwned\n")
-  const flat = frame.replace(/\s+/g, "")
+  // A warning long enough to wrap crosses the prompt's border.
+  const flat = frame.replace(/[\s│]+/g, "")
   // Each name is drawn, with its hidden characters written out where they were.
   expect(flat).toContain("Ed\\x1b[31mitor\\u{202e}")
   expect(flat).toContain("e\\x1b]0;pwned\\x07\\u{202e}gnp.ts\\u{200b}\\nx.ts")

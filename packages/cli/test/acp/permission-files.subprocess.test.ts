@@ -290,6 +290,8 @@ const linkCheck =
       expect(folder).toHaveLength(0)
       expect(run.permissions).toHaveLength(1)
       expect(shownAt(run.permissions[0]?.toolCall.locations)).toEqual([row.place(run.root)])
+      // A file change says that a link leads it there (m5-link-warning); a command or a read asks as it did.
+      if (row.tool === "Write") expect(String(run.permissions[0]?.toolCall.title)).toStartWith("Link ends outside the project")
       expect(await row.acted(run.root, run.bodies)).toBe(true)
       return
     }

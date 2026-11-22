@@ -1,5 +1,6 @@
-// clients-ux-15 part 3: an Edit or Write whose file is reached through a link says so on its request, as the reference
-// warns before such a change. The request names where the link really leads, and whether that is outside the session's
+// clients-ux-15 part 3 and m5-link-warning: a file change whose file is reached through a link says so on its request,
+// as the reference warns before such a change: an Edit, a Write, a NotebookEdit and every file of a Patch, both ends of
+// a move included (`fromLink` is the source's). The request names where the link really leads, and whether that is outside the session's
 // folders, decided by real path on the server, so every client shows the server's value and never works it out from the
 // tool's input (class 8). `outside` compares real paths, never strings (class 4): a sibling folder whose name begins with
 // the session folder's name is outside. Everything runs through the real Permission service and the real file tools.
@@ -30,10 +31,14 @@ import { SessionTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
 import { Tool } from "@orbit/core/tool"
 import { EditTool } from "@orbit/core/tool/plugin/edit"
+import { NotebookEditTool } from "@orbit/core/tool/plugin/notebook-edit"
+import { PatchTool } from "@orbit/core/tool/plugin/patch"
 import { WriteTool } from "@orbit/core/tool/plugin/write"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { LayerNode } from "@orbit/util/effect/layer-node"
+import { Global } from "@orbit/util/global"
 import { location } from "./fixture/location"
+import { canLinkFile } from "./fixture/symlink"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
@@ -45,7 +50,14 @@ const it = testEffect(Layer.empty)
 
 const plugins = makeLocationNode({
   name: "test/edit-link-plugins",
-  layer: Layer.effectDiscard(Effect.all([registerToolPlugin(EditTool.Plugin), registerToolPlugin(WriteTool.Plugin)])),
+  layer: Layer.effectDiscard(
+    Effect.all([
+      registerToolPlugin(EditTool.Plugin),
+      registerToolPlugin(WriteTool.Plugin),
+      registerToolPlugin(PatchTool.Plugin),
+      registerToolPlugin(NotebookEditTool.Plugin),
+    ]),
+  ),
   deps: [
     FileLedger.node,
     Tool.node,
@@ -58,10 +70,16 @@ const plugins = makeLocationNode({
   ],
 })
 
-// Runs one call in the project at `directory`, whose agent asks about everything, and allows each question once.
-const run = (directory: string, name: string, input: Record<string, unknown>) =>
+// Runs one call in the project at `directory`, whose agent asks about everything unless `effect` says otherwise, and
+// answers each question with `reply`: once unless told otherwise.
+const run = (
+  directory: string,
+  name: string,
+  input: Record<string, unknown>,
+  options: { effect?: "ask" | "allow"; reply?: "once" | "always" } = {},
+) =>
   Effect.gen(function* () {
-    yield* seed(directory)
+    yield* seed(directory, options.effect ?? "ask")
     const tools = yield* Tool.Service
     const permission = yield* Permission.Service
     const fiber = yield* (yield* tools.snapshot())
@@ -78,11 +96,14 @@ const run = (directory: string, name: string, input: Record<string, unknown>) =>
           return yield* drive()
         }
         asked.push(request)
-        yield* permission.reply({ requestID: request.id, reply: "once" }).pipe(Effect.exit)
+        yield* permission.reply({ requestID: request.id, reply: options.reply ?? "once" }).pipe(Effect.exit)
         return yield* drive()
       })
     const exit = yield* drive()
-    return { exit, request: asked.find((request) => request.action === "Edit") }
+    const grants = (yield* (yield* PermissionSaved.Service).list({ projectID: Project.ID.global })).map(
+      (item) => [item.action, item.resource] as const,
+    )
+    return { exit, request: asked.find((request) => request.action === "Edit"), grants }
   }).pipe(
     Effect.scoped,
     Effect.provide(
@@ -113,7 +134,7 @@ const run = (directory: string, name: string, input: Record<string, unknown>) =>
     ),
   )
 
-const seed = (directory: string) =>
+const seed = (directory: string, effect: "ask" | "allow") =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
@@ -139,7 +160,7 @@ const seed = (directory: string) =>
     const agents = yield* Agent.Service
     yield* agents.transform((editor) =>
       editor.update(identity.agent, (agent) => {
-        agent.permissions = [{ action: "*", resource: "*", effect: "ask" }]
+        agent.permissions = [{ action: "*", resource: "*", effect }]
       }),
     )
   })
@@ -308,4 +329,369 @@ describe("an Edit or Write in a project folder that is itself reached through a 
           (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
         ),
       )
+})
+
+// m5-link-warning: every kind of file change, by every spelling a tool takes, against every kind of link.
+const notebook = JSON.stringify({
+  cells: [{ cell_type: "code", execution_count: null, id: "calc", metadata: {}, outputs: [], source: ["print(1)"] }],
+  metadata: {},
+  nbformat: 4,
+  nbformat_minor: 5,
+})
+const text = "alpha\nbeta\n"
+const patched = (...hunks: string[]) => ({ patchText: ["*** Begin Patch", ...hunks, "*** End Patch"].join("\n") })
+const update = (file: string, to?: string) =>
+  [`*** Update File: ${file}`, ...(to === undefined ? [] : [`*** Move to: ${to}`]), "@@", "-beta", "+BETA"].join("\n")
+
+// `at` is the file the model names, already spelled; `plain` is a file of the project with no link on its way.
+const changes: Array<{
+  name: string
+  tool: "Edit" | "Write" | "NotebookEdit" | "Patch"
+  file: string
+  existing?: string
+  input: (at: string, plain: string) => Record<string, unknown>
+  // Which end of the change `at` is.
+  end: "link" | "fromLink"
+}> = [
+  {
+    name: "Edit",
+    tool: "Edit",
+    file: "b.txt",
+    existing: text,
+    input: (at) => ({ file_path: at, old_string: "beta", new_string: "BETA" }),
+    end: "link",
+  },
+  { name: "Write (new file)", tool: "Write", file: "new.txt", input: (at) => ({ file_path: at, content: "new\n" }), end: "link" },
+  {
+    name: "NotebookEdit",
+    tool: "NotebookEdit",
+    file: "b.ipynb",
+    existing: notebook,
+    input: (at) => ({ notebook_path: at, mode: "replace", cellId: "calc", source: "print(2)" }),
+    end: "link",
+  },
+  {
+    name: "Patch add",
+    tool: "Patch",
+    file: "new.txt",
+    input: (at) => patched(`*** Add File: ${at}\n+new`),
+    end: "link",
+  },
+  { name: "Patch update", tool: "Patch", file: "b.txt", existing: text, input: (at) => patched(update(at)), end: "link" },
+  {
+    name: "Patch delete",
+    tool: "Patch",
+    file: "b.txt",
+    existing: text,
+    input: (at) => patched(`*** Delete File: ${at}`),
+    end: "link",
+  },
+  {
+    name: "Patch move from",
+    tool: "Patch",
+    file: "b.txt",
+    existing: text,
+    input: (at, plain) => patched(update(at, plain)),
+    end: "fromLink",
+  },
+  {
+    name: "Patch move to",
+    tool: "Patch",
+    file: "new.txt",
+    input: (at, plain) => patched(update(plain, at)),
+    end: "link",
+  },
+]
+
+type World = { root: string; project: string }
+const forward = (value: string) => value.replaceAll("\\", "/")
+const bashDrive = (value: string) => `/${value[0]!.toLowerCase()}${forward(value.slice(2))}`
+// How the model spells the folder of the file, where that really is, and whether that is outside; none: no link.
+const spelledWays: Array<{
+  name: string
+  only?: NodeJS.Platform
+  spell: (world: World) => string
+  real: (world: World) => string
+  outside?: boolean
+}> = [
+  { name: "relative, inside", spell: () => "alias", real: (w) => path.join(w.project, "sub"), outside: false },
+  { name: "relative, out", spell: () => "out", real: (w) => path.join(w.root, "outside"), outside: true },
+  {
+    name: "relative, sibling with the project's prefix",
+    spell: () => "sibling",
+    real: (w) => path.join(w.root, "proj-other"),
+    outside: true,
+  },
+  { name: "absolute", spell: (w) => path.join(w.project, "out"), real: (w) => path.join(w.root, "outside"), outside: true },
+  { name: "dot-dot", spell: () => "plain/../alias", real: (w) => path.join(w.project, "sub"), outside: false },
+  {
+    name: "tilde",
+    spell: (w) => `~/${forward(path.relative(Global.Path.home, path.join(w.project, "out")))}`,
+    real: (w) => path.join(w.root, "outside"),
+    outside: true,
+  },
+  {
+    name: "absolute, outside through a link outside",
+    spell: (w) => path.join(w.root, "elsewhere", "alias"),
+    real: (w) => path.join(w.root, "farther"),
+    outside: true,
+  },
+  { name: "backslashes", only: "win32", spell: () => ".\\out", real: (w) => path.join(w.root, "outside"), outside: true },
+  { name: "other case", only: "win32", spell: () => "ALIAS", real: (w) => path.join(w.project, "sub"), outside: false },
+  {
+    name: "git bash drive",
+    only: "win32",
+    spell: (w) => bashDrive(path.join(w.project, "out")),
+    real: (w) => path.join(w.root, "outside"),
+    outside: true,
+  },
+  // The controls: no link on the way names none.
+  { name: "plain", spell: () => "sub", real: (w) => path.join(w.project, "sub") },
+  { name: "plain outside", spell: (w) => path.join(w.root, "elsewhere"), real: (w) => path.join(w.root, "elsewhere") },
+]
+
+const makeWorld = async (root: string): Promise<World> => {
+  const project = path.join(root, "proj")
+  for (const folder of ["proj/plain", "proj/sub", "outside", "proj-other", "elsewhere", "farther"])
+    await fs.mkdir(path.join(root, folder), { recursive: true })
+  await fs.symlink(path.join(project, "sub"), path.join(project, "alias"), "junction")
+  await fs.symlink(path.join(root, "outside"), path.join(project, "out"), "junction")
+  await fs.symlink(path.join(root, "proj-other"), path.join(project, "sibling"), "junction")
+  await fs.symlink(path.join(root, "farther"), path.join(root, "elsewhere", "alias"), "junction")
+  return { root, project }
+}
+
+type Ends = { readonly file: string; readonly place?: string; readonly from?: string; readonly link?: Link; readonly fromLink?: Link }
+const entries = (request: Permission.Request | undefined) =>
+  (request?.metadata as { files?: ReadonlyArray<Ends> } | undefined)?.files ?? []
+
+describe("every kind of file change names the link it is reached through, by every spelling", () => {
+  for (const change of changes)
+    for (const way of spelledWays.filter((item) => item.only === undefined || item.only === process.platform))
+      it.live(`${change.name}: ${way.name}`, () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (root) =>
+            Effect.gen(function* () {
+              const world = yield* Effect.promise(() => makeWorld(root.path))
+              const real = path.join(way.real(world), change.file)
+              const plain = path.join(world.project, "plain", "c.txt")
+              yield* Effect.promise(async () => {
+                if (change.existing !== undefined) await fs.writeFile(real, change.existing)
+                if (change.name === "Patch move to") await fs.writeFile(plain, text)
+              })
+              const settled = yield* run(
+                world.project,
+                change.tool,
+                change.input(`${way.spell(world)}/${change.file}`, "plain/c.txt"),
+              )
+              expect(Exit.isSuccess(settled.exit)).toBe(true)
+              const entry = entries(settled.request)[0]
+              expect(entry).toBeDefined()
+              const expected = way.outside === undefined ? undefined : { place: real, outside: way.outside }
+              expect(entry?.[change.end]).toEqual(expected)
+              // The other end of a move, which no link is on, names none.
+              expect(entry?.[change.end === "link" ? "fromLink" : "link"]).toBeUndefined()
+              // Only the request says more: what "always" would save is what it was.
+              expect(settled.request?.save).toEqual(["*"])
+            }),
+          (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+        ),
+      )
+})
+
+describe("a request of several files names the link of each", () => {
+  it.live("a Patch of four files: out, inside, none, and a move between two links", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (root) =>
+        Effect.gen(function* () {
+          const world = yield* Effect.promise(() => makeWorld(root.path))
+          yield* Effect.promise(async () => {
+            for (const file of ["outside/a.txt", "proj/sub/b.txt", "proj/plain/c.txt", "proj-other/d.txt"])
+              await fs.writeFile(path.join(root.path, file), text)
+          })
+          const settled = yield* run(
+            world.project,
+            "Patch",
+            patched(update("out/a.txt"), "*** Delete File: alias/b.txt", update("plain/c.txt"), update("sibling/d.txt", "alias/d.txt")),
+          )
+          expect(Exit.isSuccess(settled.exit)).toBe(true)
+          expect(entries(settled.request).map((entry) => ({ link: entry.link, fromLink: entry.fromLink }))).toEqual([
+            { link: { place: path.join(root.path, "outside", "a.txt"), outside: true }, fromLink: undefined },
+            { link: { place: path.join(world.project, "sub", "b.txt"), outside: false }, fromLink: undefined },
+            { link: undefined, fromLink: undefined },
+            {
+              link: { place: path.join(world.project, "sub", "d.txt"), outside: false },
+              fromLink: { place: path.join(root.path, "proj-other", "d.txt"), outside: true },
+            },
+          ])
+        }),
+      (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("a move onto a file through a link names it on the entry of what it replaces too", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (root) =>
+        Effect.gen(function* () {
+          const world = yield* Effect.promise(() => makeWorld(root.path))
+          const real = path.join(root.path, "outside", "onto.txt")
+          yield* Effect.promise(async () => {
+            await fs.writeFile(path.join(world.project, "plain", "c.txt"), text)
+            await fs.writeFile(real, "replaced\n")
+          })
+          const settled = yield* run(world.project, "Patch", patched(update("plain/c.txt", "out/onto.txt")))
+          expect(Exit.isSuccess(settled.exit)).toBe(true)
+          const named = { place: real, outside: true }
+          expect(entries(settled.request).map((entry) => entry.link)).toEqual([named, named])
+          expect(entries(settled.request).map((entry) => entry.fromLink)).toEqual([undefined, undefined])
+        }),
+      (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+    ),
+  )
+})
+
+describe("a Patch or NotebookEdit at the edges of what a link is", () => {
+  // The link is the file itself, which needs a link to a file: a junction cannot stand for one.
+  const linkedFile = canLinkFile ? it.live : it.live.skip
+  linkedFile("a file that is itself the link: update, delete and notebook", () =>
+    Effect.gen(function* () {
+      for (const name of ["update", "delete", "notebook"] as const)
+        yield* Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (root) =>
+            Effect.gen(function* () {
+              const project = path.join(root.path, "proj")
+              const file = name === "notebook" ? "real.ipynb" : "real.txt"
+              const spelled = name === "notebook" ? "shown.ipynb" : "shown.txt"
+              const real = path.join(root.path, file)
+              yield* Effect.promise(async () => {
+                await fs.mkdir(project)
+                await fs.writeFile(real, name === "notebook" ? notebook : text)
+                await fs.symlink(real, path.join(project, spelled), "file")
+              })
+              const settled = yield* run(
+                project,
+                name === "notebook" ? "NotebookEdit" : "Patch",
+                name === "notebook"
+                  ? { notebook_path: spelled, mode: "replace", cellId: "calc", source: "print(2)" }
+                  : patched(name === "update" ? update(spelled) : `*** Delete File: ${spelled}`),
+              )
+              expect([name, entries(settled.request)[0]?.link]).toEqual([name, { place: real, outside: true }])
+            }),
+          (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+        )
+    }),
+  )
+
+  // A new file under a link that leads nowhere yet: the reference says nothing here, and Orbit says where it would land
+  // (class 4). Whether the write then works is the file system's matter.
+  for (const tool of ["Write", "Patch"] as const)
+    it.live(`${tool} of a new file under a dangling link`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (root) =>
+          Effect.gen(function* () {
+            const project = path.join(root.path, "proj")
+            const gone = path.join(root.path, "removed")
+            yield* Effect.promise(async () => {
+              await fs.mkdir(project)
+              await fs.mkdir(gone)
+              await fs.symlink(gone, path.join(project, "dangling"), "junction")
+              await fs.rmdir(gone)
+            })
+            const settled = yield* run(
+              project,
+              tool,
+              tool === "Write"
+                ? { file_path: "dangling/new.txt", content: "new\n" }
+                : patched("*** Add File: dangling/new.txt\n+new"),
+            )
+            expect(entries(settled.request)[0]?.link).toEqual({ place: path.join(gone, "new.txt"), outside: true })
+          }),
+        (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+      ),
+    )
+
+  // A project folder that is itself reached through a link, as macOS's `/var` is, is no link of the repository's.
+  for (const tool of ["Patch", "NotebookEdit"] as const)
+    for (const named of [false, true])
+      it.live(`${tool} in a project folder reached through a link: ${named ? "its own link inside" : "plain"}`, () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (root) =>
+            Effect.gen(function* () {
+              const real = path.join(root.path, "real-proj")
+              const project = path.join(root.path, "proj")
+              const file = tool === "Patch" ? "b.txt" : "b.ipynb"
+              yield* Effect.promise(async () => {
+                await fs.mkdir(path.join(real, "sub"), { recursive: true })
+                await fs.symlink(real, project, "junction")
+                await fs.symlink(path.join(real, "sub"), path.join(real, "alias"), "junction")
+                await fs.writeFile(path.join(real, "sub", file), tool === "Patch" ? text : notebook)
+              })
+              const at = `${named ? "alias" : "sub"}/${file}`
+              const settled = yield* run(
+                project,
+                tool,
+                tool === "Patch"
+                  ? patched(update(at))
+                  : { notebook_path: at, mode: "replace", cellId: "calc", source: "print(2)" },
+              )
+              expect(Exit.isSuccess(settled.exit)).toBe(true)
+              expect(entries(settled.request)[0]?.link).toEqual(
+                named ? { place: path.join(real, "sub", file), outside: false } : undefined,
+              )
+            }),
+          (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+        ),
+      )
+})
+
+describe("the warning changes no decision and no grant", () => {
+  for (const change of changes) {
+    it.live(`${change.name}: "always" saves what it saved`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (root) =>
+          Effect.gen(function* () {
+            const world = yield* Effect.promise(() => makeWorld(root.path))
+            const real = path.join(world.project, "sub", change.file)
+            yield* Effect.promise(async () => {
+              if (change.existing !== undefined) await fs.writeFile(real, change.existing)
+              if (change.name === "Patch move to") await fs.writeFile(path.join(world.project, "plain", "c.txt"), text)
+            })
+            const input = change.input(`alias/${change.file}`, "plain/c.txt")
+            const settled = yield* run(world.project, change.tool, input, { reply: "always" })
+            expect(Exit.isSuccess(settled.exit)).toBe(true)
+            expect(entries(settled.request)[0]?.[change.end]).toEqual({ place: real, outside: false })
+            expect(settled.grants).toEqual([["Edit", "*"]])
+          }),
+        (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+      ),
+    )
+    // The control: where a rule allows the change, a link on the way asks nothing.
+    it.live(`${change.name}: an allow still asks nothing`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (root) =>
+          Effect.gen(function* () {
+            const world = yield* Effect.promise(() => makeWorld(root.path))
+            yield* Effect.promise(async () => {
+              if (change.existing !== undefined)
+                await fs.writeFile(path.join(world.project, "sub", change.file), change.existing)
+              if (change.name === "Patch move to") await fs.writeFile(path.join(world.project, "plain", "c.txt"), text)
+            })
+            const input = change.input(`alias/${change.file}`, "plain/c.txt")
+            const settled = yield* run(world.project, change.tool, input, { effect: "allow" })
+            expect(Exit.isSuccess(settled.exit)).toBe(true)
+            expect(settled.request).toBeUndefined()
+            expect(settled.grants).toEqual([])
+          }),
+        (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+      ),
+    )
+  }
 })
