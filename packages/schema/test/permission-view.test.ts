@@ -91,8 +91,15 @@ test("the names of a tool and its old name are one action", () => {
 // m5-link-warning: the links of a request, and the words every client warns with.
 const out = { place: "/real/outside/a.txt", outside: true }
 const inner = { place: "/p/src/b.txt", outside: false }
-const linksOf = (files: unknown, action = "Edit") =>
-  PermissionView.of({ action, resources: ["x"], metadata: { files } }).links
+// What the view adds, typed here so that each test fails on its own assertion while the view does not have it.
+type Ended = { readonly file: string; readonly place: string; readonly outside: boolean }
+const linked: typeof PermissionView & {
+  linkWarning?: (link: Ended, show: (value: string) => string) => string
+  linkSummary?: (links: ReadonlyArray<Ended>) => string | undefined
+} = PermissionView
+const viewOf = (request: PermissionView.Request): PermissionView.View & { readonly links?: ReadonlyArray<Ended> } =>
+  PermissionView.of(request)
+const linksOf = (files: unknown, action = "Edit") => viewOf({ action, resources: ["x"], metadata: { files } }).links
 
 test("the links of a request are one per linked end, the ones that end outside first", () => {
   const files = [
@@ -124,11 +131,11 @@ test("a link is named from an entry with no patch or no place, so the warning ne
 })
 
 test("no link, an older server and a malformed link: each costs only that warning (class 7)", () => {
-  expect(PermissionView.of({ action: "Edit", resources: ["a.txt"] }).links).toEqual([])
+  expect(viewOf({ action: "Edit", resources: ["a.txt"] }).links).toEqual([])
   expect(linksOf("not a list")).toEqual([])
   const bad = [null, 7, "linked", [], {}, { place: 7, outside: true }, { place: "", outside: true }, { place: "/r" }, { place: "/r", outside: "true" }]
   for (const value of bad) {
-    const view = PermissionView.of({
+    const view = viewOf({
       action: "Edit",
       resources: ["x"],
       metadata: {
@@ -149,13 +156,14 @@ test("the words of the warning: where a link ends comes first, so a cut line sti
   const alias = { file: "/p/alias/b.txt", ...inner }
   const show = (value: string) => `<${value}>`
   expect(linksOf([])).toEqual([])
-  expect(PermissionView.linkWarning(ends, show)).toBe(`Link ends outside the project, at <${out.place}>`)
-  expect(PermissionView.linkWarning(alias, show)).toBe(
+  expect(linked.linkWarning?.(ends, show)).toBe(`Link ends outside the project, at <${out.place}>`)
+  expect(linked.linkWarning?.(alias, show)).toBe(
     "Link ends inside the project: </p/alias/b.txt> leads to </p/src/b.txt>",
   )
-  expect(PermissionView.linkSummary([])).toBeUndefined()
-  expect(PermissionView.linkSummary([ends])).toBe("Link ends outside the project")
-  expect(PermissionView.linkSummary([alias])).toBe("Link ends inside the project")
-  expect(PermissionView.linkSummary([ends, alias, { ...ends, file: "/p/other" }])).toBe("3 linked paths, 2 outside the project")
-  expect(PermissionView.linkSummary([alias, { ...alias, file: "/p/other" }])).toBe("2 linked paths, all inside the project")
+  expect(linked.linkSummary).toBeFunction()
+  expect(linked.linkSummary?.([])).toBeUndefined()
+  expect(linked.linkSummary?.([ends])).toBe("Link ends outside the project")
+  expect(linked.linkSummary?.([alias])).toBe("Link ends inside the project")
+  expect(linked.linkSummary?.([ends, alias, { ...ends, file: "/p/other" }])).toBe("3 linked paths, 2 outside the project")
+  expect(linked.linkSummary?.([alias, { ...alias, file: "/p/other" }])).toBe("2 linked paths, all inside the project")
 })

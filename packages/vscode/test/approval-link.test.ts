@@ -2,7 +2,7 @@
 // (class 8), with each place written out (class 9). A malformed link costs only that warning (class 7).
 import { expect, test } from "bun:test"
 import { permissionItem } from "../src/controller"
-import { approvalCard } from "../src/webview/approval"
+import { approvalCard, type Card } from "../src/webview/approval"
 
 const patch = "--- a\n+++ b\n@@ -1,1 +1,1 @@\n-old\n+new\n"
 const out = { file: "linked/a.txt", place: "/out/a.txt", patch, link: { place: "/out/a.txt", outside: true } }
@@ -12,7 +12,8 @@ const none = { file: "c.txt", place: "/p/c.txt", patch }
 const OUT = "Link ends outside the project, at /out/a.txt"
 const IN = "Link ends inside the project: /p/alias/b.txt leads to /p/src/b.txt"
 
-const card = (files: unknown) =>
+// The warnings are typed here, so that each test fails on its own assertion while the card does not have them.
+const card = (files: unknown): Card & { readonly warnings?: ReadonlyArray<string> } =>
   approvalCard(
     permissionItem({ id: "per_link", sessionID: "ses_link", action: "Edit", resources: ["a"], metadata: { files } }),
   )

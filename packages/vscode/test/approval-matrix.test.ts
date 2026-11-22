@@ -8,7 +8,7 @@ import os from "node:os"
 import path from "node:path"
 import { afterAll, expect, test } from "bun:test"
 import { permissionItem } from "../src/controller"
-import { approvalCard } from "../src/webview/approval"
+import { approvalCard, type Card } from "../src/webview/approval"
 import { excerpt } from "../src/webview/present"
 
 type Row = {
@@ -70,7 +70,9 @@ for (const row of rows)
 type End = { place: string; outside: boolean }
 for (const row of rows)
   test(`the VS Code card for ${row.id} warns of the request's links and no other`, () => {
-    const card = approvalCard(permissionItem({ id: "per_matrix", sessionID: "ses_matrix", ...row.request }))
+    const card: Card & { readonly warnings?: ReadonlyArray<string> } = approvalCard(
+      permissionItem({ id: "per_matrix", sessionID: "ses_matrix", ...row.request }),
+    )
     const links = ((row.request.metadata?.files ?? []) as { link?: End; fromLink?: End }[]).flatMap((file) =>
       [file.link, file.fromLink].filter((link): link is End => link !== undefined),
     )
