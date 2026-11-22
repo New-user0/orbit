@@ -2714,6 +2714,9 @@ warned, for an Edit or Write of one file, and the full dialog dropped the warnin
   ones that end outside first. These words replace the terminal UI's earlier ones.
 - **Terminal UI and Mini.** The warning stays while Always allow is chosen and while you type why you reject, and a
   request of several files warns too.
+- **Long lists of files.** While Always allow is focused, the terminal UI's dialog now cuts a title that names many files
+  to three rows, so that what the grant allows stays in the dialog. Before, such a title could push it out. Focus another
+  option to read the names.
 - **ACP.** The title of a permission request begins with the warning, for example
   "Link ends outside the project: /srv/shared/a.txt", and the content names each link before the diffs.
 - **VS Code.** The chat's card lists the warnings above the diff, and the title of the chat's diff tab says

@@ -2502,7 +2502,9 @@ runs" is a permission.
   that end outside first:
   - the terminal UI's full dialog (the permission, always and reject stages, and fullscreen) and the compact prompt of an
     editor review, and Mini's three stages in colour and mono (`packages/tui/test/approval-link.test.tsx`,
-    `approval-prompt.test.tsx`, `ide-diff.test.tsx`);
+    `approval-prompt.test.tsx`, `ide-diff.test.tsx`). While Always allow is focused the full dialog cuts its title to
+    three rows, so that a long list of files does not push what the grant is out of sight (the "is cut only while" and "leaves
+    what Always allow grants" rows of `approval-link.test.tsx`);
   - ACP's permission title and content (`packages/cli/test/acp/approval-link.test.ts`);
   - the VS Code chat's card, and the title of its review or preview tab, which can answer while the card is hidden
     (`packages/vscode/test/approval-link.test.ts`, `webview-trust.test.ts`, `diff-review.test.ts`). A tab of the terminal
