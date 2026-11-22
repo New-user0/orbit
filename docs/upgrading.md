@@ -2714,16 +2714,26 @@ warned, for an Edit or Write of one file, and the full dialog dropped the warnin
   ones that end outside first. These words replace the terminal UI's earlier ones.
 - **A link that is deleted or moved.** When Patch deletes or moves a path that is itself a link, the request, the diff's
   header and the call's progress name the link, which is what is removed, where they named the file it leads to. `link` or
-  `fromLink` says where it leads, and that file is not removed.
+  `fromLink` says where it leads, and that file is not removed. So do the call's result (`D shown.txt`, `applied` and
+  `files`) and its error where it fails, which in an untrusted folder named the file outside.
 - **Terminal UI and Mini.** The warning stays while Always allow is chosen and while you type why you reject, and a
-  request of several files warns too. Where a warning is too long to stay whole, a summary stays and the warning scrolls
-  (the reject stage has the summary only). On a narrow screen the summary is short, for example "Link ends outside" or
-  "2 links, 1 outside".
-- **Long titles.** The terminal UI's dialog cuts the title of an edit with "…" so that the diff and the warnings keep
-  rows to scroll in, and lists the names it cut there. While Always allow is focused it cuts any title, to three rows at
-  most outside fullscreen, so that what the grant allows stays in the dialog. Fullscreen cuts only what does not fit.
-  The wheel moves less than three rows a step in a body that is that short. Mini puts the grant, and the edit's title,
-  above the lines of the links.
+  request of several files warns too. Where a warning is too long to stay whole, a summary stays and the warning is in
+  what scrolls, under the grant while Always allow is focused (the reject stage has the summary only). On a narrow
+  screen the summary is short, for example "Link ends outside" or "2 links, 1 outside". Mini puts the grant, and the
+  edit's title, above the lines of the links.
+- **Every question of the terminal UI's dialog, with a link or without one.**
+  - What does not fit under the title scrolls with the wheel, with a bar in the dialog's right padding, where a long
+    command, list of patterns or grant was clipped or drawn over the options. Fullscreen (ctrl+f) has more rows. The
+    wheel moves less than three rows a step in a body that is that short.
+  - A wrapped line is indented under its first word, so a long command, folder or resource can take a row more than it
+    did, and its end can need a scroll where it fitted before. A grant wraps by the character.
+  - A title is one line, with a line break written out as `\n`, wraps by the character, and is cut with "…" to leave
+    the body rows to scroll in, or the grant its rows while Always allow is focused. What was cut is whole in what
+    scrolls: an edit's names, or any other title under its icon. Fullscreen cuts only what does not fit.
+  - The blank rows between the lines of a grant stay while they fit and go before a pattern would.
+  - On a low screen the blank row under the title goes first (a question with three rows or fewer, as at 70 columns by
+    12 rows), and on a lower one the hints go, and in the editor's short prompt the row about saving. The summary of a
+    link then shares a row with the title or the question.
 - **ACP.** The title of a permission request begins with the warning's summary, for example
   "Link ends outside the project: /srv/shared/a.txt". For a subagent's request the subagent's title comes before it, as
   in "Review code: Link ends outside the project: /srv/shared/a.txt". The content names each link before the diffs.

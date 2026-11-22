@@ -2498,15 +2498,22 @@ runs" is a permission.
   the tool's input and never by resolving a path, so a share is named and not contacted for it (classes 4, 6 and 8). A
   request without a link, or from an older server, is drawn without a warning; a malformed link costs only itself, and
   where two entries disagree about one end, outside wins (classes 3 and 7; `packages/schema/test/permission-view.test.ts`).
-  A fixed line says that there is a link, above what scrolls, and the repository, which chooses how long a path is and
-  how many are linked, takes neither the grant nor the body's rows with it. Each linked end is named, the ones that end
-  outside first (`packages/tui/test/approval-link.test.tsx` for both bullets below, at the sizes it draws):
+  A fixed line says that there is a link, above what scrolls. The repository chooses how long a path is and how many are
+  linked, so that line is bounded. Each linked end is named, the ones that end outside first
+  (`packages/tui/test/approval-link.test.tsx` for both bullets below, at the sizes it draws):
   - the terminal UI's full dialog and the compact prompt of an editor review fit the fixed line and the title to the
-    dialog. One link is said whole while that fits and summed up past that, with the whole warning where it scrolls (the
-    reject stage has only the sum). An edit's title is cut with a mark to leave the body two rows, with the names it cut
-    in the body, and while Always allow is focused any title is cut, to three rows at most outside fullscreen. A step of
-    the wheel skips no row of that body, and what still does not fit is clipped inside the border (the "what Always allow
-    grants", "can be read", "cut title", "fullscreen dialog" and "clipped inside it" rows);
+    dialog, and all under them is one body that scrolls, in every question of those two, linked or not (class 8). No row
+    of a question or a grant is squeezed, painted over or narrowed by the scroll bar, which is in the dialog's padding
+    and shows where more follows, and the last row can be reached with the wheel (the "every row of", "the end of a
+    long" rows: four actions, 1 to 12 lines, wrapped or not, linked or not, both focused stages, 70 to 120 columns).
+    One link is said whole while that fits and summed up past that. A title is cut with a mark to leave the body its
+    rows: two of an edit, one of another question and, while Always allow is focused, those of the grant. What is summed
+    up or cut is whole in the body, under the grant while Always allow is focused (the "every name and target", "one
+    long name", "a link's target" and "long title" rows: 2 to 20 files, names and targets to 1000 characters, 60 to 120
+    columns). The reject stage has only the sum. On a low screen the header gives way before the grant does: the blank
+    row under it, the hints, the compact prompt's row about saving, and then the summary shares the title's row. So the
+    first row of an edit's grant, and the word outside or inside of its link, are in sight from 7 rows of screen in the
+    dialog and from 8 in the compact prompt (the "on a screen ... rows high" rows);
   - Mini's fixed line is the sum, or its short form, which keeps the word outside or inside, where the sentence does not
     fit (24 columns in the tests). The grant and the title come before the lines of the links, so both are on the first
     screen, and the links' lines follow by scrolling (the "Mini keeps the grant" and "24 columns" rows);
@@ -2526,16 +2533,20 @@ runs" is a permission.
   spaces, U+2028 and U+2029, fillers and blank Braille (`packages/util/test/plain-path.test.ts`). It is the sink for the
   paths of a warning, and for the names in the titles, `Path:`, `Folder:`, pattern and resource lines of an edit, a read,
   a list and an `external_directory` question, in the terminal UI, Mini and the VS Code card, for ACP's titles of those
-  and for the chat tab's title. A name that wraps is indented under its line's first word in the terminal UI and Mini,
+  and for the chat tab's title. A title in the terminal UI's dialog is one line (`plain`), so a line break in a pattern
+  or a query takes no row of the body (the "line break in a title" row). A name that wraps is indented under its line's
+  first word in the terminal UI and Mini,
   and in the card's title and warnings, and raw diff text is indented, so printable padding draws no row where a warning
   starts either (the "blank spelling", "length of padding" and "joined diff" rows of the TUI file, the "blank" rows of
   the others). ACP quotes a name that opens with a warning's words. The server writes a line break in a name out in a
   diff's header (`fileDiff`; `edit-link.test.ts`, "the header of an approval's diff is one line").
 - A delete, and the source of a move, remove the last part of the path. Where that is itself a link, the request, its
   diff's header and the call's progress name the link, where it really is, as what is changed, and `link` or `fromLink`
-  says where it leads; that file stays. A write goes through such a link, and its request names the file written to as
-  before (`FileAccess.removedLink`; classes 3 and 8; `edit-link.test.ts`, "a file that is itself a link: what is shown
-  is what runs", which checks the request and the disk for each tool, trusted and not).
+  says where it leads; that file stays. The call's result and what it says when it fails, the names a code rewind reads
+  included, name that link too. A write goes through such a link, and its request names the file written to as before
+  (`FileAccess.removedLink`; classes 3 and 8; `edit-link.test.ts`, "a file that is itself a link: what is shown is what
+  runs", which checks the request, the disk and the result for each tool, trusted and not, and "a failure names what
+  was to be removed").
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob

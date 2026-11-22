@@ -1336,6 +1336,11 @@ test("the hints and the blank row under the header give way only on a screen too
   const low = await rows(12, 70)
   expect(low.join("")).toContain("enterconfirm")
   expect(low[1]).toBe(GRANT)
+  // Lower still, the hints go, and with two rows the summary shares the title's.
+  const lowest = dialog((await drawFull(ask([out("a.txt")]), "always", { width: 70, height: 7 }))[0]!)
+  expect(lowest.join("")).not.toContain("enterconfirm")
+  expect(lowest[0]!.startsWith("▲LinkendsoutsideEdit")).toBe(true)
+  expect(lowest[1]!.startsWith(GRANT)).toBe(true)
 })
 
 test("the blank row between two lines of a grant is drawn while it pushes none of them out", async () => {
