@@ -12,6 +12,7 @@ import type { JsonValue } from "@orbit/client/promise"
 import { parseColor, SyntaxStyle, type CapturedFrame, type RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { onMount, Show } from "solid-js"
+import { Hanging } from "../src/component/hanging"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
 import { DataProvider, useData } from "../src/context/data"
@@ -1368,4 +1369,30 @@ test("a line break in a title takes none of the body's rows (class 9)", async ()
   const shots = await drawFull(asked("Grep", [pattern], { path: "/srv/in-this-folder" }), "permission", { width: 80, height: 24 }, { read: true })
   expect(above(shots[0]!)[0]).toContain("\\n".repeat(2).replaceAll("\\", "/"))
   expect(readAll(shots)).toContain("srv/in-this-folder")
+})
+
+test("a line of an approval keeps its rows where the box is too low for all of them (class 8)", async () => {
+  // A line with a lead, and one without, which is plain text.
+  for (const lead of ["- ", ""]) {
+    const app = await testRender(
+      () => (
+        <box height={3} width={30} overflow="hidden">
+          <Hanging text={`${lead}first`} fg="#ffffff" />
+          <Hanging text={`${lead}second ${words("s", 8)}`} fg="#ffffff" />
+          <Hanging text={`${lead}third ${words("t", 8)}`} fg="#ffffff" />
+        </box>
+      ),
+      { width: 30, height: 4 },
+    )
+    try {
+      await app.renderOnce()
+      await app.renderOnce()
+      const rows = trimEmpty(app.captureCharFrame().split("\n").map(squash))
+      expect([lead, rows[0]]).toEqual([lead, `${lead.trim()}first`])
+      const under = squash(`${lead}second ${words("s", 8)}${lead}third ${words("t", 8)}`)
+      expect([lead, rows.length, under.startsWith(rows.slice(1).join(""))]).toEqual([lead, 3, true])
+    } finally {
+      app.renderer.destroy()
+    }
+  }
 })
