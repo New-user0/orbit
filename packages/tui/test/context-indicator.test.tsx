@@ -1,3 +1,4 @@
+import { InputRenderable } from "@opentui/core"
 import { expect, test } from "bun:test"
 import type { OrbitEvent } from "@orbit/client"
 import { createAppFixture } from "./fixture/app"
@@ -167,7 +168,8 @@ test("the command palette lists /context under the dialog's title", async () => 
   await using setup = await render(state.path, 120)
   await setup.waitForFrame(measured)
   setup.mockInput.pressKey("p", { ctrl: true })
-  await setup.waitForFrame((frame) => frame.includes("Search"))
+  // The palette draws its field before it focuses it, and keys typed in between go nowhere.
+  await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof InputRenderable)
   await setup.mockInput.typeText("context")
 
   await setup.waitForFrame((frame) => frame.includes("Context window"))
