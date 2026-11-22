@@ -229,6 +229,12 @@ describe("the agent memory block", () => {
         expect(project).toContain("committed")
         expect(project).toContain("Everyone who clones the repository receives them")
         expect(project).not.toContain("not committed")
+        // Each scope line whole, so that neither how far the memory reaches nor what to write there can be dropped.
+        expect(tails.map((tail) => tail.trimEnd().split("\n").at(-1))).toEqual([
+          "Scope of these notes: user. You carry them into every project you work in, so write down only what holds in general, wherever you are.",
+          "Scope of these notes: project. Everyone who clones the repository receives them, since they are committed with it; write down what holds for this project.",
+          "Scope of these notes: local. They belong to this project on this machine and are not committed to version control; write down what holds for this project here.",
+        ])
         expect(local).toContain("not committed")
         expect(local).toContain("this machine")
         expect(new Set(tails).size).toBe(3)

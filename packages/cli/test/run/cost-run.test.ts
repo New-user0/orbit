@@ -103,6 +103,19 @@ test("costText prints every part of a full summary, and drops the parts a bare o
   expect(text.split("\n").find((line) => line.includes("provider/free"))).toContain("+ unpriced")
   expect(text.split("\n").find((line) => line.includes("provider/big"))).not.toContain("unpriced")
 
+  // The whole block, so that each label keeps its own figure and the rows sit under their heading.
+  expect(text.split("\n")).toEqual([
+    "Spent:           $0.75 + unpriced",
+    "Subagents:       $0.2500 (included above)",
+    "Model time:      4.0s",
+    "Elapsed:         1m 5s",
+    "Lines changed:   +1 / -2 lines",
+    "Other:           $0.0100 (undone responses, older usage)",
+    "Per model:",
+    "  provider/big\\x1b[31m ($0.5000): in 1.2K · out 300 · from cache 500 · to cache 60 · reasoning 40",
+    "  provider/free ($0.0000 + unpriced): in 3 · out 0 · from cache 0 · to cache 0",
+  ])
+
   // The provider ID comes from a record or a config, so it is escaped like the model ID (class 9).
   const hostile = costText({ ...full, rows: [{ ...row, providerID: "evil\u001b]0;x\u0007\u009b2K‮name" }] } as never)
   expect(hostile).toContain("evil")

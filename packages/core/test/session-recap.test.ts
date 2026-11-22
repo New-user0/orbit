@@ -342,10 +342,12 @@ it.effect(
       expect(instruction.length).toBeLessThan(600)
       // It is three short sentences at most, closes with the next step, puts the purpose of the work before it, and
       // leaves finished work out.
-      expect(instruction).toContain("Reply with a recap of no more than three short sentences")
-      expect(instruction).toContain("Its final sentence names what should happen next.")
-      expect(instruction).toContain("Before that, say in everyday words what the whole effort is meant to achieve")
-      expect(instruction).toContain("Work that is already done or committed needs no mention.")
+      expect(instruction).toBe(
+        "Reply with a recap of no more than three short sentences, for a reader who has lost track of this conversation. " +
+          "Its final sentence names what should happen next. Before that, say in everyday words what the whole effort is " +
+          "meant to achieve, such as the feature under construction or the fault under investigation, with implementation " +
+          "details left out. Work that is already done or committed needs no mention.",
+      )
 
       // One durable fact, projected as a recap message after the last user message.
       expect(yield* recordedRecaps(db)).toHaveLength(1)

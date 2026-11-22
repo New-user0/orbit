@@ -217,6 +217,24 @@ test("code changes show only when counted", async () => {
   expect(older.frame).not.toContain("Lines changed")
 })
 
+// Each label keeps its own figure, and the per-model heading stands over the rows and over the line of zeros alike.
+test("the timing rows and the per-model heading are drawn with and without rows", async () => {
+  const none = "in 0 · out 0 · from cache 0 · to cache 0"
+  const used = "in 1.0K · out 500 · from cache 200 · to cache 100"
+  for (const [rows, expected] of [
+    [[], `Per model Tokens: ${none}`],
+    [[row("big", { cost: 0.5 })], `Per model big · provider $0.5000 ${used}`],
+  ] as const) {
+    const { setup, frame } = await open({
+      answer: () => json({ data: info({ cost: 0.5, own: 0.5, api: 4_000, wall: 65_000, rows }) }),
+      models: [priced("big")],
+    })
+    await using _ = setup
+    expect(flat(frame)).toContain("Model time 4.0s Elapsed 1m 5s")
+    expect(flat(frame)).toContain(expected)
+  }
+})
+
 // PT4, classes 7 and 13: each failure is one line, and none crashes the dialog.
 // Two providers of one model keep two rows, so the provider is drawn beside the name; a session with no response yet
 // draws a line of zeros, as the reference does.

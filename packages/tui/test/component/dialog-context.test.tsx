@@ -228,6 +228,34 @@ test("the legend shows the model, total of window and percent, each category to 
   expect(grid(manual.frame).join("")).toBe(`${FULL}${FULL}${PARTIAL}` + FULL.repeat(5) + FREE.repeat(89) + FULL.repeat(3))
 })
 
+// TD5b: every category the legend can draw has Orbit's own label; the headings of the lists below share some of those
+// words, so each label is looked for with its figure.
+test("the legend labels the MCP, agent, instruction and skill categories", async () => {
+  const result = await open({
+    answer: answering(
+      fixture({
+        categories: [
+          { kind: "mcp", tokens: 2_000 },
+          { kind: "agents", tokens: 600 },
+          { kind: "instructions", tokens: 3_400 },
+          { kind: "skills", tokens: 700 },
+          { kind: "free", tokens: 93_300 },
+        ],
+      }),
+    ),
+    done: drawn,
+  })
+  await using _ = result.setup
+
+  for (const line of [
+    "MCP tool schemas: 2.0K tokens (2.0%)",
+    "Agent definitions: 600 tokens (0.6%)",
+    "Instructions: 3.4K tokens (3.4%)",
+    "Skill listings: 700 tokens (0.7%)",
+  ])
+    expect(result.frame).toContain(line)
+})
+
 // TD6, D5 and D6: the sections the reference shows, and not the ones it keeps for its report.
 test("MCP tools (loaded and available), custom agents by scope, instruction files and skills are listed, and system tools, prompt sections and the message breakdown are not", async () => {
   const result = await open({
@@ -331,6 +359,10 @@ test("suggestions are drawn under the view, warnings first, with their savings",
   expect(bash).toBeGreaterThan(heading)
   expect(read).toBeGreaterThan(bash)
   expect(lines[bash]).toContain("!")
+  // The saving is said to be freed. The line wraps at the dialog's width, so the frame's blanks are folded.
+  const folded = result.frame.replace(/\s+/g, " ")
+  expect(folded).toContain("· frees about 8.0K tokens")
+  expect(folded).toContain("· frees about 9.0K tokens")
 })
 
 // TD7b: the instruction files suggestion names each file as the view's own list does, by its path in the session's folder.

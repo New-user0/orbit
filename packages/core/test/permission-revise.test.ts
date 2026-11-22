@@ -251,7 +251,14 @@ describe("an approval answered with the person's revised content", () => {
         )
         expect(ran && applyPatch("alpha\nbeta\n", ran.patch)).toBe("alpha\nREVISED\n")
         // The model is told that the person changed its proposal on the way to approving it, as the reference tells it.
-        expect(text(settled.exit)).toMatch(/with a version the person adjusted while approving it, which differs from your proposal/)
+        expect(text(settled.exit)).toBe(
+          JSON.stringify([
+            {
+              type: "text",
+              text: `Edited ${ran?.file} with a version the person adjusted while approving it, which differs from your proposal`,
+            },
+          ]),
+        )
       }),
     ),
   )

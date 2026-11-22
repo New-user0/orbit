@@ -119,6 +119,20 @@ test("the report has the reference's sections in order, every one for everyone",
   expect(categories[3]).toBe("| MCP tool schemas (on demand) | 1,500 | 0.8% |")
   expect(categories[8]).toBe("| Conversation | 27,400 | 13.7% |")
 
+  // Each table's header, so that no column can be renamed or change places with its neighbour.
+  expect(tables(auto).map((table) => table[0])).toEqual([
+    "| Part | Tokens | Share |",
+    "| Tool | Server | Tokens |",
+    "| Tool | Tokens |",
+    "| Part | Tokens |",
+    "| Agent | Scope | Tokens |",
+    "| Source | File | Tokens |",
+    "| Skill | Tokens |",
+    "| Kind | Tokens |",
+    "| Tool | In calls | In results |",
+    "| Attachment | Tokens |",
+  ])
+
   // With automatic compaction off the reserve is a category like the others, before free space.
   const manual = tables(contextMarkdown(fixture({ auto: false, window: 200_000 })))[0]!.slice(2)
   expect(manual.map((row) => row.split("|")[1]!.trim()).slice(-2)).toEqual(["Compaction headroom", "Room left"])

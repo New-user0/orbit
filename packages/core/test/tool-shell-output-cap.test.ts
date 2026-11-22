@@ -620,7 +620,7 @@ describe("ShellTool output cap", () => {
         expect(off.shell.description).not.toMatch(/background/i)
         // The foreground-only timeout sentence names the default and the maximum in their own places.
         expect(off.shell.description).toContain(
-          "Without one, a command gets 120000 ms (2 minutes); no timeout may be longer than 600000 ms (10 minutes).",
+          "The timeout is optional and given in milliseconds. Without one, a command gets 120000 ms (2 minutes); no timeout may be longer than 600000 ms (10 minutes).",
         )
         expect(off.agent.properties).not.toContain("background")
         expect(off.agent.description).not.toMatch(/background/i)
