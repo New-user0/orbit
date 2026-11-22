@@ -721,6 +721,8 @@ describe("a file that is itself a link: what is shown is what runs", () => {
     { name: "inside", spelled: "shown", link: ["proj", "shown"], real: ["proj", "sub", "real"], outside: false },
     { name: "in a linked folder out", spelled: "out/shown", link: ["outside", "shown"], real: ["farther", "real"], outside: true },
     { name: "in a linked folder inside", spelled: "alias/shown", link: ["proj", "sub", "shown"], real: ["outside", "real"], outside: true },
+    // Here the folder's real place holds its spelled one, so it is told from no link only by not being the same path.
+    { name: "in a folder linked to one above it", spelled: "up/shown", link: ["shown"], real: ["farther", "real"], outside: true },
   ]
   for (const trusted of [true, false])
     for (const act of acts)
@@ -738,6 +740,7 @@ describe("a file that is itself a link: what is shown is what runs", () => {
                 yield* Effect.promise(async () => {
                   await fs.writeFile(real, before)
                   await fs.symlink(real, link, "file")
+                  await fs.symlink(world.root, path.join(world.project, "up"), "junction")
                   await fs.writeFile(path.join(world.project, "plain", "c.txt"), text)
                 })
                 const at = `${shape.spelled}${suffix}`
