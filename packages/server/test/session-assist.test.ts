@@ -343,10 +343,41 @@ it.live(
           .find((line) => line.startsWith("Output: "))
           ?.slice("Output: ".length)
         expect({ length: output?.length, dots: output?.endsWith("...") }).toEqual({ length: 300, dots: true })
-        expect(text).toContain(`Before running them, the assistant wrote: ${"I".repeat(150)}INTENT-MARK${"J".repeat(39)}`)
+        expect(text).toContain(`The assistant's own words in the message that made these calls: ${"I".repeat(150)}INTENT-MARK${"J".repeat(39)}`)
         expect(text).not.toContain("J".repeat(40))
+        expect(text).toContain("The batch, one call after another:")
         // No history: the person's message is not sent.
         expect(JSON.stringify(asked[0].body.messages)).not.toContain("read the notes")
+      })
+    }),
+  60_000,
+)
+
+// The intent is the message's last text, which can follow its calls, so the header may not say that it came before them.
+it.live(
+  "a label's header claims no position for text that follows the calls",
+  () =>
+    Effect.gen(function* () {
+      const { folders, llm, notes } = yield* layout
+      const server = yield* startServer(folders.config)
+      yield* Effect.promise(async () => {
+        const batch = await withBatch(server, llm, notes, folders.repo)
+        const exported = (await request(server, "GET", `/api/experimental/session/${batch.id}/export`)).body?.data
+        const copy = JSON.parse(
+          JSON.stringify(exported).replace(/"((?:ses|msg|prt)_[A-Za-z0-9]+)"/g, '"$1after"'),
+        ) as { info: { id: string }; messages: Array<{ id: string; content?: Array<{ type: string; text?: string }> }> }
+        const messageID = `${batch.messageID}after`
+        copy.messages.find((message) => message.id === messageID)?.content?.push({ type: "text", text: "TRAILING-TEXT" })
+        const imported = await request(server, "POST", "/api/experimental/session/import", {
+          body: { ...copy, location: { directory: folders.repo } },
+        })
+        expect(imported.status).toBe(200)
+        const before = llm.requests.length
+
+        await label(server, copy.info.id, { messageID, toolCallIDs: [batch.toolCallID] })
+
+        const header = textOf(llm.requests.slice(before)[0].body.messages[1].content).split("\n")[0]
+        expect(header).toBe("The assistant's own words in the message that made these calls: TRAILING-TEXT")
       })
     }),
   60_000,
@@ -479,6 +510,17 @@ it.live(
         expect(JSON.stringify(last?.content)).not.toContain("SECOND-USER-LINE")
         // The instruction whole, so that dropping, softening or reversing any one of its rules fails here.
         expect(textOf(last?.content)).toBe(SUGGESTION_PROMPT)
+        // The banned items are judgements, and none of them covers the approval that the examples ask for.
+        const [examples, banned] = textOf(last?.content).split("A draft must have none of these:")
+        expect(examples).toContain('their short approval, as in "yep, keep at it"')
+        expect(banned).toContain("- praise, thanks or any other judgement of the work")
+        expect(banned).not.toMatch(/approv|affirm|agree|yep|plans that are yours alone/i)
+        // The other scopes: an idea is banned as a topic is, any failure leaves the draft empty, any new code counts as
+        // something to try, and the action is to be as specific as its object.
+        expect(banned).toContain("topics and ideas the person has not brought up")
+        expect(examples).toContain("something has just gone wrong: leave it empty")
+        expect(examples).toContain("Fresh code has yet to be exercised")
+        expect(examples).toContain("Make both the action and its object specific")
         // Nothing the request did reached the session's history.
         expect(await assistants(server, id)).toHaveLength(2)
       })

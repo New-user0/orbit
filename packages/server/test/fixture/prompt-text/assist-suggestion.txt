@@ -6,19 +6,19 @@ Keep a draft only if the person would send it unchanged.
 
 For instance:
 - They wanted a refactor and a changelog entry, and the refactor is in: "now the changelog"
-- A script was just written: "run it on the sample data"
+- Fresh code has yet to be exercised: "run it on the sample data"
 - You laid out options: the one they seem to lean towards
 - Your reply ended by asking whether to proceed: their short approval, as in "yep, keep at it"
 - Everything is finished and the follow-up is plain: "open a PR"
-- The last step errored, or you misread them: leave it empty
+- You misread them, or something has just gone wrong: leave it empty
 
-Name the object in the draft: "rerun the date parser tests" helps the person, and a vague "check it" does not.
+Make both the action and its object specific: "rerun the date parser tests" helps the person, and a vague "check it" does not.
 
 A draft must have none of these:
-- approval or thanks ("nice", "perfect")
+- praise, thanks or any other judgement of the work ("nice", "perfect")
 - anything phrased as a question
 - wording only the assistant would use ("I will", "Let me")
-- topics the person has not brought up, and plans that are yours alone
+- topics and ideas the person has not brought up, and steps that only you favour
 - a second sentence
 
 Answer with the draft alone, two to twelve words in the person's own register, with no quotes and no comment. The answer must be empty whenever what they wrote points to no particular next move.

@@ -88,7 +88,7 @@ export function contextSuggestions(
     found.push({
       severity: "info",
       title: `Instructions hold ${Locale.number(files)} tokens (${share(files)}%)`,
-      detail: `/memory opens instruction files for trimming; the biggest here are ${largest.join(", ")}.`,
+      detail: `/memory opens instruction files for trimming; the biggest here ${largest.length === 1 ? "is" : "are"} ${largest.join(", ")}.`,
       savings: Math.floor(files * SAVINGS.files),
     })
   }

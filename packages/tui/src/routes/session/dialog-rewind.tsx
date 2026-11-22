@@ -384,7 +384,7 @@ export function DialogRewind(props: {
         ? names[0]
         : names.length === 2
           ? `${names[0]} and ${names[1]}`
-          : `${names[0]} and ${names.length - 1} other files`
+          : `${names.length} files, ${names[0]} among them`
     return `Files go back: +${code.insertions} -${code.deletions} in ${label}.`
   }
 
@@ -445,14 +445,14 @@ export function DialogRewind(props: {
               </Show>
               <Show when={state.code}>
                 <text fg={theme.text.feedback.warning.base}>
-                  ⚠ Restores what Orbit's edit tools changed; changes from shell commands or outside Orbit stay.
+                  ⚠ Restores only what Orbit's edit tools changed; changes from shell commands or outside Orbit stay.
                 </text>
               </Show>
             </box>
           )}
         </Match>
         <Match when={prompts().length === 0}>
-          <text fg={theme.text.muted}>Nothing to rewind yet.</text>
+          <text fg={theme.text.muted}>This conversation has no prompt to return to.</text>
         </Match>
         <Match when={props.preselected}>
           <text fg={theme.text.muted}>Checking files…</text>

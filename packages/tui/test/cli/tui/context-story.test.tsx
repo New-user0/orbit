@@ -75,7 +75,7 @@ test("the story is listed under the dialog's title", () => {
 test.each([64, 120])("the story draws the real view for each fixture and resets, at %i columns", async (width) => {
   const app = await render(width)
   try {
-    const first = await app.waitForFrame((frame) => frame.includes("Estimated share of the window") && fixture(frame) === "typical")
+    const first = await app.waitForFrame((frame) => frame.includes("Estimated breakdown") && fixture(frame) === "typical")
     for (const control of ["ctrl+g", "ctrl+x"]) expect(first).toContain(control)
     expect(first).toContain("ORBIT.md")
 

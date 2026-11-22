@@ -370,7 +370,7 @@ describe("the memory guide source", () => {
       expect(yield* exists(l.memory)).toBe(true)
       expect(out.text).toContain("Orbit created it before this conversation began")
       // A request settles a memory both ways; a request to leave memory alone keeps it out; the present state outranks it.
-      expect(out.text).toContain("you must carry it out right then: write down what they want kept, and for what they want gone")
+      expect(out.text).toContain("A request about memory is never left for later.")
       expect(out.text).toContain("must draw on none of it and must not bring it up")
       expect(out.text).toContain("act on the present state, then bring the note up to date or remove it")
       // The housekeeping and format rules the guide gives in its own words.
@@ -382,11 +382,11 @@ describe("the memory guide source", () => {
       )
       expect(out.text).toContain("Its dates must be absolute ones")
       expect(out.text).toContain('Two labelled lines come under it: "Reason:"')
-      expect(out.text).toContain("Having to repeat a correction is exactly what this memory exists to prevent.")
+      expect(out.text).toContain("Having to tell you twice is exactly what this memory exists to prevent.")
       expect(out.text).toContain("- Use it: treat it as a standing rule for the kind of work it names.")
       expect(out.text).toContain('and "Applies when:", naming the situations it covers.')
       expect(out.text).toContain("- Format: the same three parts as feedback, with the fact or decision on the top line.")
-      expect(out.text).toContain("A deadline or an owner recorded here can change which approach you propose.")
+      expect(out.text).toContain("a deadline or an owner recorded here can call for another approach.")
       // One note per point: an existing note is changed rather than joined by another, files carry their topic, and
       // the front matter follows the content.
       expect(out.text).toContain(
@@ -397,16 +397,54 @@ describe("the memory guide source", () => {
       )
       // A note that was wrong from the start goes as an outdated one does, and the index is kept short.
       expect(out.text).toContain(
-        "a note that was mistaken from the start, or that later work has overtaken, must be corrected or deleted as soon as you notice.",
+        "a note that was mistaken from the start, or that has since stopped being true, must be corrected or deleted as soon as you notice.",
       )
       expect(out.text).toContain("so it has to stay short. Prune and merge its entries as it grows")
-      expect(out.text).toContain("When a file's content changes, make its front matter describe the new content.")
+      expect(out.text).toContain("When the name, description or type in a file's front matter no longer fits its content, correct that field.")
       // The removed tool is not named.
       expect(out.text).not.toMatch(/\bMemory tool\b|Memory read/)
       // A request to check, recall or remember something makes reading memory a must.
       expect(out.text).toContain(
         "You must read memory before you answer any request to check, recall or remember, in whatever words it comes:",
       )
+    }),
+  )
+
+  // Each scope of the guide's rules: the clause that says how far a rule reaches, and the narrower or wider wording
+  // that may not come back in its place.
+  it.live("keeps the scope of each rule", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const out = yield* Effect.gen(function* () {
+        yield* sessions(l)
+        return yield* readInitial(yield* load(first, { index: false }))
+      }).pipe(provide(l))
+      const rows = [
+        ["a repair of any age", "The way any bug was repaired, the one you fixed a minute ago included.", /an old bug/],
+        ["what the person says now", "whether in what the person says", /in the project today outranks/],
+        ["what an outside resource shows now", "or in a resource outside it.", /in the project today outranks/],
+        ["a request is saved at once", "as soon as they say so", /settles a memory either way/],
+        ["a request stays inside the left-out list", 'within the limits under "Leave these out"', /settles a memory either way/],
+        ["a request to forget waits no longer", "never left for later", /settles a memory either way/],
+        ["the folder may be listed", "on creating it or on proving that it exists", /probing or listing/],
+        ["the work you share", "the circumstances of the work you share", /circumstances of the project/],
+        ["the next conversation carries on", "carry on where the last one stopped", /does not start from nothing/],
+        ["a choice that was not obvious", "without having been the obvious choice", /could not have known/],
+        ["a confirmation is not said twice", "Having to tell you twice", /repeat a correction/],
+        ["who is doing what", "who has taken on what and why", /who is responsible for/],
+        ["reasons shape suggestions", "Let those reasons shape what you propose", /can change which approach/],
+        ["the step in hand stays out", "The step you are on, those done and those left", /Steps done and steps left/],
+        ["outdated for any reason", "or that has since stopped being true", /later work has overtaken/],
+        ["memory that seems relevant is read", "may touch on something a memory covers", /hand touches something/],
+        ["front matter is kept true", "no longer fits its content, correct that field", /When a file's content changes/],
+        ["the repository's state", "For the state or the shape of the repository", /how the repository is put together/],
+      ] as const
+      for (const [name, kept, changed] of rows)
+        expect({ name, kept: out.text.includes(kept), changed: changed.test(out.text) }).toEqual({
+          name,
+          kept: true,
+          changed: false,
+        })
     }),
   )
 

@@ -19,7 +19,7 @@ const RECENT_MESSAGES = 30
 // One terse paragraph, sent as the last user message with no system prompt. Session notes go before it once they exist.
 const INSTRUCTION =
   "Reply with a recap of no more than three short sentences, for a reader who has lost track of this conversation. " +
-  "Its final sentence names what should happen next. Before that, say in everyday words what the whole effort is " +
+  "End it on what should happen next, and use its opening to say in everyday words what the whole effort is " +
   "meant to achieve, such as the feature under construction or the fault under investigation, with implementation " +
   "details left out. Never report finished work, progress or commits in it."
 

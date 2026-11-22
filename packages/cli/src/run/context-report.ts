@@ -10,10 +10,10 @@ import { errorMessage } from "../util/error"
 
 const LABELS: Record<SessionContextUsage.CategoryKind, string> = {
   system: "Base prompt",
-  tools: "Built-in tools",
+  tools: "Tools outside MCP",
   mcp: "MCP tool schemas",
   "mcp-deferred": "MCP tool schemas (on demand)",
-  "tools-deferred": "Built-in tools (on demand)",
+  "tools-deferred": "Tools outside MCP (on demand)",
   agents: "Agent definitions",
   instructions: "Instructions",
   skills: "Skill listings",
@@ -52,10 +52,10 @@ export function contextMarkdown(info: SessionContextUsage.Info) {
     ),
     ...section(
       "MCP tool schemas",
-      ["Tool", "Server", "Tokens"],
+      ["Tool", "From server", "Tokens"],
       info.mcp.map((tool) => [cell(tool.name), cell(tool.server), tool.deferred ? deferred(tool.tokens) : tokens(tool.tokens)]),
     ),
-    ...section("Built-in tools", ["Tool", "Tokens"], [
+    ...section("Tools outside MCP", ["Tool", "Tokens"], [
       ...info.systemTools.map((tool) => [cell(tool.name), tokens(tool.tokens)]),
       ...info.deferredTools.map((tool) => [cell(tool.name), deferred(tool.tokens)]),
     ]),
@@ -66,7 +66,7 @@ export function contextMarkdown(info: SessionContextUsage.Info) {
     ),
     ...section(
       "Agent definitions",
-      ["Agent", "Scope", "Tokens"],
+      ["Agent", "Defined in", "Tokens"],
       info.agents.map((agent) => [cell(agent.id), cell(agent.scope), tokens(agent.tokens)]),
     ),
     ...section(
@@ -78,7 +78,7 @@ export function contextMarkdown(info: SessionContextUsage.Info) {
     ...section("Conversation by kind", ["Kind", "Tokens"], [
       ["Calls to tools", tokens(info.messages.toolCalls)],
       ["What tools returned", tokens(info.messages.toolResults)],
-      ["Attached files", tokens(info.messages.attachments)],
+      ["Added context", tokens(info.messages.attachments)],
       ["Replies", tokens(info.messages.assistant)],
       ["Prompts", tokens(info.messages.user)],
     ]),
@@ -88,8 +88,8 @@ export function contextMarkdown(info: SessionContextUsage.Info) {
       info.messages.tools.map((tool) => [cell(tool.name), tokens(tool.calls), tokens(tool.results)]),
     ),
     ...section(
-      "Heaviest attachments",
-      ["Attachment", "Tokens"],
+      "Heaviest added context",
+      ["What was added", "Tokens"],
       info.messages.attachmentKinds.map((item) => [cell(item.name), tokens(item.tokens)]),
     ),
   ].join("\n")

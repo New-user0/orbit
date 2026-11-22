@@ -26,7 +26,7 @@ export interface LabelInput {
 export interface Interface {
   /**
    * A short label for a finished batch of the session's tool calls, written by the side model from each call's name,
-   * input and output and from the text the assistant wrote before the calls. Nothing is stored or sent to the session.
+   * input and output and from the last text of the message that made the calls. Nothing is stored or sent to the session.
    */
   readonly label: (input: LabelInput) => Effect.Effect<SessionAssist.Label, NotFoundError>
   /**
@@ -213,8 +213,8 @@ type Settled = {
 
 const labelPrompt = (calls: ReadonlyArray<Settled>, intent: string | undefined) =>
   [
-    ...(intent?.trim() ? [`Before running them, the assistant wrote: ${intent}`, ""] : []),
-    "The tools that finished:",
+    ...(intent?.trim() ? [`The assistant's own words in the message that made these calls: ${intent}`, ""] : []),
+    "The batch, one call after another:",
     "",
     calls
       .map((call) =>
@@ -226,10 +226,10 @@ const labelPrompt = (calls: ReadonlyArray<Settled>, intent: string | undefined) 
   ].join("\n")
 
 const LABEL_SYSTEM = [
-  "Write a label for the tool calls below. Whoever reads it did not watch the calls run and sees only the label in their place, so it has to say at a glance what got done. It has room for roughly 30 characters, and anything past that is cut off.",
-  "Someone skimming a column of these labels has to tell one batch from the next, so the detail that singles this one out, often a file, a symbol or a package, matters more than grammar: drop articles and joining words, and shorten a path to its file name, before you lose it. Each label must read as something already done, opening on its verb.",
+  "Write a single label for all of the tool calls below. Whoever reads it did not watch the calls run and sees only the label in their place, so it has to say at a glance what got done. It has room for roughly 30 characters, and anything past that is cut off.",
+  "Someone skimming a column of these labels has to tell one batch from the next, so the detail that singles this one out, often a file, a symbol or a package, matters more than grammar: drop articles and joining words, and shorten a long path to its file name, before you lose it. Each label must read as something already done, opening on its verb.",
   [
-    "Examples:",
+    "For example:",
     "- Listed the migrations folder",
     "- Patched retry delay in queue.ts",
     "- Renamed userId to accountId",
@@ -245,19 +245,19 @@ const SUGGESTION_PROMPT = [
   [
     "For instance:",
     '- They wanted a refactor and a changelog entry, and the refactor is in: "now the changelog"',
-    '- A script was just written: "run it on the sample data"',
+    '- Fresh code has yet to be exercised: "run it on the sample data"',
     "- You laid out options: the one they seem to lean towards",
     '- Your reply ended by asking whether to proceed: their short approval, as in "yep, keep at it"',
     '- Everything is finished and the follow-up is plain: "open a PR"',
-    "- The last step errored, or you misread them: leave it empty",
+    "- You misread them, or something has just gone wrong: leave it empty",
   ].join("\n"),
-  'Name the object in the draft: "rerun the date parser tests" helps the person, and a vague "check it" does not.',
+  'Make both the action and its object specific: "rerun the date parser tests" helps the person, and a vague "check it" does not.',
   [
     "A draft must have none of these:",
-    '- approval or thanks ("nice", "perfect")',
+    '- praise, thanks or any other judgement of the work ("nice", "perfect")',
     "- anything phrased as a question",
     '- wording only the assistant would use ("I will", "Let me")',
-    "- topics the person has not brought up, and plans that are yours alone",
+    "- topics and ideas the person has not brought up, and steps that only you favour",
     "- a second sentence",
   ].join("\n"),
   "Answer with the draft alone, two to twelve words in the person's own register, with no quotes and no comment. The answer must be empty whenever what they wrote points to no particular next move.",

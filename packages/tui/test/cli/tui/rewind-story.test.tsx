@@ -88,7 +88,7 @@ test.each([64, 120])("the story draws the real picker for each fixture and reset
         expect(controlFree(frame)).toBe(true)
         expect(frame).toContain("\\x1b")
       }
-      if (label === "nothing to rewind") expect(frame).toContain("Nothing to rewind yet.")
+      if (label === "nothing to rewind") expect(frame).toContain("This conversation has no prompt to return to.")
     }
     expect(seen).toContain("hostile names")
     expect(seen).toContain("nothing to rewind")

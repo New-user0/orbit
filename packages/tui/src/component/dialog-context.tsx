@@ -31,10 +31,10 @@ const NARROW = 80
 
 const LABELS: Record<SessionContextUsage.CategoryKind, string> = {
   system: "Base prompt",
-  tools: "Built-in tools",
+  tools: "Tools outside MCP",
   mcp: "MCP tool schemas",
   "mcp-deferred": "MCP tool schemas (on demand)",
-  "tools-deferred": "Built-in tools (on demand)",
+  "tools-deferred": "Tools outside MCP (on demand)",
   agents: "Agent definitions",
   instructions: "Instructions",
   skills: "Skill listings",
@@ -215,7 +215,7 @@ export function ContextView(props: { readonly info: SessionContextUsage.Info; re
         <box flexShrink={1}>
           <text fg={theme.text.muted}>{summary()}</text>
           <text fg={theme.text.muted} attributes={TextAttributes.ITALIC}>
-            Estimated share of the window
+            Estimated breakdown
           </text>
           <For each={legend()}>
             {(item) => (

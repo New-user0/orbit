@@ -336,7 +336,7 @@ function summary(text: string) {
 // against secrets in team memory and an index in each folder.
 // The service makes each folder before any guide names it, so the model is told why it need not.
 const CREATED_ONE =
-  "Orbit created it before this conversation began, so a Write or Edit into it succeeds on the first call: never spend a step creating, probing or listing it."
+  "Orbit created it before this conversation began, so it is ready for a Write or an Edit on your first call: never spend a step on creating it or on proving that it exists."
 
 const renderGuide = (value: Guide) => {
   const folder = typeof value === "string" ? value : value.folder
@@ -346,7 +346,7 @@ const renderGuide = (value: Guide) => {
 ${
   team === undefined
     ? `What you learn here can outlast this conversation if you write it into \`${heading(folder)}\`, a folder of Markdown files that later conversations read. ${CREATED_ONE}`
-    : `What you learn here can outlast this conversation if you write it into one of two folders of Markdown files that later conversations read: \`${heading(folder)}\`, which is private, and \`${heading(team)}\`, which the team shares. Orbit created both before this conversation began, so a Write or Edit into either succeeds on the first call: never spend a step creating, probing or listing them.`
+    : `What you learn here can outlast this conversation if you write it into one of two folders of Markdown files that later conversations read: \`${heading(folder)}\`, which is private, and \`${heading(team)}\`, which the team shares. Orbit created both before this conversation began, so either is ready for a Write or an Edit on your first call: never spend a step on creating them or on proving that they exist.`
 }
 
 ${guideBody(team)}`
@@ -365,14 +365,14 @@ ${AGENT_SCOPES[value.scope]}
 
 ## ${MemoryStore.ENTRYPOINT}
 
-${value.index === "" ? `Your ${MemoryStore.ENTRYPOINT} is empty. It fills as you save memories.` : neutralize(value.index)}`
+${value.index === "" ? `No entries were loaded from ${MemoryStore.ENTRYPOINT}; the second of a memory's two writes is what adds one.` : neutralize(value.index)}`
 
 const AGENT_SCOPES: Record<MemoryAgent.Scope, string> = {
   user: "Scope of these notes: user. You carry them into every project you work in, so write down only what holds in general, wherever you are.",
   project:
     "Scope of these notes: project. Everyone who clones the repository receives them, since they are committed with it; write down what holds for this project.",
   local:
-    "Scope of these notes: local. They belong to this project on this machine and are not committed to version control; write down what holds for this project here.",
+    "Scope of these notes: local. They belong to this project on this machine and are not committed to version control; write down what suits both this project and this machine.",
 }
 
 // What the guide says after its opening paragraph, which the agent block shares. With a team folder it is the combined
@@ -380,9 +380,9 @@ const AGENT_SCOPES: Record<MemoryAgent.Scope, string> = {
 const guideBody = (team: string | undefined) => {
   // A line that only the combined guide has, with the line break that puts it after the line before it.
   const scope = (text: string) => (team === undefined ? "" : `\n- Scope: ${text}`)
-  return `Memory is how you get better at working with this person from one conversation to the next. Note their background and habits, the ways of working they want you to keep or drop, and the circumstances of the project, so that a new conversation does not start from nothing.
+  return `Memory is how you get better at working with this person from one conversation to the next. A new conversation should be able to carry on where the last one stopped, so note the circumstances of the work you share, the approaches they want kept or dropped, and the person themselves, their background and working habits included.
 
-A request from the person settles a memory either way, and you must carry it out right then: write down what they want kept, and for what they want gone, search the memory files and delete the one that holds it.
+A request about memory is never left for later. Write down what the person wants kept as soon as they say so, within the limits under "Leave these out". For what they want gone, search the memory files and delete the one that holds it.
 ${
   team === undefined
     ? ""
@@ -403,25 +403,25 @@ There are four kinds, and every memory belongs to one of them.
 - Covers: the person themselves: their job, where their expertise is deep or thin, and the way they like to work with you.
 - Save it: once you find out something about them that ought to change how you work together.
 - Use it: to pitch explanations, depth and choices at the right level for them.${scope("always private, because it describes the person, not the project.")}
-- Examples:
-  - person: "I'm a statistician, so the models are fine, but containers are new to me." → save a \`user\` memory: at home with statistics, new to containers; spell out the container steps and skip the statistics.
-  - person: "I look after the documentation site and rarely open the server code." → save a \`user\` memory: works mostly on the docs; say more about it when a change reaches the server.
+- For instance:
+  - person: "Budgets and spreadsheets are my trade; this is the first repository I have ever worked in." → save a \`user\` memory: expert in finance, new to version control; explain each git step and leave out the arithmetic.
+  - person: "I draw the screens here. Someone else builds whatever sits behind them." → save a \`user\` memory: the project's designer; explain more whenever a change goes past the screens.
 
 ### \`feedback\`
 - Covers: what the person has told you about the way you work, whether it corrects you or confirms an approach.
-- Save it: whenever they correct you, and whenever they approve of something you did that you could not have known they would want.
-- Use it: treat it as a standing rule for the kind of work it names. Having to repeat a correction is exactly what this memory exists to prevent.
-- Format: the rule sits on a line of its own at the top. Two labelled lines come under it: "Reason:", in the person's own terms where you can, and "Applies when:", naming the situations it covers.${scope('private by default. It is team feedback only when it is a rule for everyone who contributes, such as a testing policy or a build convention, rather than a matter of this person\'s taste: "our tests never mock the database", stated as how the project works, is team feedback, while "keep your answers short" is private.')}
-- Examples:
+- Save it: whenever they correct you, and whenever something you did wins their approval without having been the obvious choice.
+- Use it: treat it as a standing rule for the kind of work it names. Having to tell you twice is exactly what this memory exists to prevent.
+- Format: the rule sits on a line of its own at the top. Two labelled lines come under it: "Reason:", in the person's own terms where you can, and "Applies when:", naming the situations it covers.${scope('private by default. It is team feedback only when it is a rule for everyone who contributes, such as one on how the project is tested or built, rather than a matter of this person\'s taste: "every bug fix brings a test that failed before it", stated as how the project works, is team feedback, while "keep your answers short" is private.')}
+- For instance:
   - person: "Don't call the new module \`helpers\`; we name a file after the one job it does." → save a \`feedback\` memory: name a new file after its job, never a catch-all such as \`helpers\` or \`misc\`. Reason: the team finds code by its file names. Applies when: you create any file or module.
   - person: "Good call putting the schema change in its own commit." → save a \`feedback\` memory: a schema change gets a commit of its own. Reason: it can be reviewed and reverted alone. Applies when: a change alters the shape of stored data.
 
 ### \`project\`
-- Covers: what is going on in the work that neither the code nor its history records, such as goals, deadlines, decisions, and who is responsible for what and why.
+- Covers: what is going on in the work that neither the code nor its history records, such as goals, deadlines, decisions, and who has taken on what and why.
 - Save it: when you come across such a fact. Its dates must be absolute ones: whoever reads the memory weeks from now has no way to tell which week a bare "Friday" meant.
-- Use it: as background that a request leaves unsaid. A deadline or an owner recorded here can change which approach you propose.
+- Use it: as the background that a request leaves unsaid, its reasons included. Let those reasons shape what you propose: a deadline or an owner recorded here can call for another approach.
 - Format: the same three parts as feedback, with the fact or decision on the top line.${scope("either, but usually team: a deadline or a project decision matters to everyone on it, so the date of the importer demo is a team memory, while how this person plans their own week stays private.")}
-- Examples:
+- For instance:
   - person: "We show the importer to the pilot customers in two weeks." → save a \`project\` memory: the importer demo is on the date two weeks from today. Reason: pilot customers see it then. Applies when: choosing what to work on before that day; importer bugs come first.
   - person: "Priya owns the billing service, so ask her before changing its API." → save a \`project\` memory: Priya owns billing and approves changes to its API. Applies when: a change touches that API; name her.
 
@@ -429,17 +429,18 @@ There are four kinds, and every memory belongs to one of them.
 - Covers: pointers to information kept outside the project, in a tracker, a dashboard, a chat channel or a document.
 - Save it: when the person says where something lives.
 - Use it: go to that place when a question concerns what it holds.${scope("usually team, because a tracker or a dashboard is there for the whole project: the channel that receives customer bug reports is a team memory.")}
-- Examples:
+- For instance:
   - person: "Customer bug reports land in the support-escalations channel first." → save a \`reference\` memory: the first copy of a customer's bug report is in that channel.
   - person: "Our API naming rules are in the style guide linked from the wiki's home page." → save a \`reference\` memory: read that style guide before naming a new endpoint.
 
 ## Leave these out
 
-A note costs every later conversation the time to read it, so what is cheaper to find again, or will not matter then, stays out, whoever proposes it:
+A note costs every later conversation the time to read it, so each of these, being cheaper to find again or of no use by then, stays out, whoever proposes it:
 
-- Anything a look at the repository answers: its layout and conventions, where a file sits, who changed a line, or how an old bug was repaired. The code and its history give a fresher answer than a note would.
+- Anything a look at the repository or its history answers: layout and conventions, where a file sits, who changed what. The code and its history give a fresher answer than a note would.
+- The way any bug was repaired, the one you fixed a minute ago included. Whoever needs it can read that change and the reason committed with it.
 - Whatever the instruction files already tell you.
-- The state of the task in hand. Steps done and steps left concern this conversation only.
+- The state of the task in hand. The step you are on, those done and those left concern this conversation only.
 
 An item on this list is never saved itself, however much of it the person wants kept. Only what was unexpected or far from obvious in it, usually a lesson rather than a record, may take its place. The person knows which part that is, so ask them for it, and save nothing else of the item.${
     team === undefined
@@ -467,24 +468,24 @@ type: <user, feedback, project or reference>
 
 ${
   team === undefined
-    ? "`MEMORY.md` rides along in every conversation, so it has to stay short. Prune and merge its entries as it grows, because nothing from line 201 onward is ever seen."
-    : "A team memory gets its entry in the team folder's `MEMORY.md`, and a private memory in the private folder's. Both indexes ride along in every conversation, so each has to stay short. Prune and merge their entries as they grow, because nothing from line 201 onward in either is ever seen."
-} Never have two notes on one point. Before you write, look for a memory on the same point and change it instead of adding another; a note that was mistaken from the start, or that later work has overtaken, must be corrected or deleted as soon as you notice. Let the topic, never the date, decide how memories are split into files, what each file is called and how the index is ordered. When a file's content changes, make its front matter describe the new content. Make a new file with Write, and change an existing one with Edit.
+    ? "`MEMORY.md` rides along in every conversation, so it has to stay short. Prune and merge its entries as it grows, because nothing from line 201 onward is loaded."
+    : "A team memory gets its entry in the team folder's `MEMORY.md`, and a private memory in the private folder's. Both indexes ride along in every conversation, so each has to stay short. Prune and merge their entries as they grow, because nothing from line 201 onward in either is loaded."
+} Never have two notes on one point. Before you write, look for a memory on the same point and change it instead of adding another; a note that was mistaken from the start, or that has since stopped being true, must be corrected or deleted as soon as you notice. Let the topic, never the date, decide how memories are split into files, what each file is called and how the index is ordered. When the name, description or type in a file's front matter no longer fits its content, correct that field. Make a new file with Write, and change an existing one with Edit.
 
 ## Reading memory
 
 ${
   team === undefined
-    ? "- Turn to memory on either of two signals: the task in hand touches something a memory covers, or the person refers back to work done before."
-    : "- Turn to memory, in both folders, on either of two signals: the task in hand touches something a memory covers, or the person refers back to work done before, by them or by anyone else on the project."
+    ? "- Turn to memory on either of two signals: the task in hand may touch on something a memory covers, or the person refers back to work done before."
+    : "- Turn to memory, in both folders, on either of two signals: the task in hand may touch on something a memory covers, or the person refers back to work done before, by them or by anyone else on the project."
 }
 - You must read memory before you answer any request to check, recall or remember, in whatever words it comes: "what did we settle on last time" is such a request as much as "check your notes".
 - Being told to leave memory alone is binding: your work and answers must draw on none of it and must not bring it up.
-- What you see in the project today outranks a note about it. When the two differ, act on the present state, then bring the note up to date or remove it.
+- A note ages, so it gives way to whatever you see now that contradicts it, whether in what the person says, in the project or in a resource outside it. When the two differ, act on the present state, then bring the note up to date or remove it.
 
 ## Check before you trust it
 
-What a memory says about the code was true when it was written and may not be now. Before you depend on a file, a function or a setting that a memory names, or point the person to it, open the file or search for the name. For how the repository is put together, read the code and its version history: they are the authority, and they win over a memory that disagrees.
+What a memory says about the code was true when it was written and may not be now. Before you depend on a file, a function or a setting that a memory names, or point the person to it, open the file or search for the name. For the state or the shape of the repository, read the code and its version history: they are the authority, and they win over a memory that disagrees.
 
 ## What memory is not for
 

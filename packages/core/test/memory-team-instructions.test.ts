@@ -349,13 +349,13 @@ describe("the guide with team memory on", () => {
         expect(howToSave).toContain("in the folder that its scope selects")
         expect(off.text).not.toContain("in the folder that its scope selects")
         // Each folder's index is cut at the same line, and reading memory covers both folders.
-        expect(howToSave).toContain("nothing from line 201 onward in either is ever seen")
+        expect(howToSave).toContain("nothing from line 201 onward in either is loaded")
         expect(on.text).toContain("Turn to memory, in both folders, on either of two signals")
         expect(on.text).toContain("refers back to work done before, by them or by anyone else on the project.")
         expect(howToSave).toContain(
           "A team memory gets its entry in the team folder's `MEMORY.md`, and a private memory in the private folder's. Both indexes ride along in every conversation",
         )
-        expect(off.text).toContain("nothing from line 201 onward is ever seen")
+        expect(off.text).toContain("nothing from line 201 onward is loaded")
         expect(howToSave).toContain("so each has to stay short. Prune and merge their entries as they grow")
         // Off, the guide is today's.
         expect(headings(off.text)).toEqual(HEADINGS)

@@ -94,7 +94,7 @@ async function open(input: {
 }
 
 const answering = (info: Info) => () => json({ data: info })
-const drawn = (frame: string) => frame.includes("Estimated share of the window")
+const drawn = (frame: string) => frame.includes("Estimated breakdown")
 
 /** The grid's rows, each as its squares without the spaces between them. */
 function grid(frame: string) {
@@ -194,9 +194,9 @@ test("the legend shows the model, total of window and percent, each category to 
   const at = (text: string) => lines.findIndex((line) => line.includes(text))
   const legend = [
     "provider/model · 17.7K/100.0K tokens (18%)",
-    "Estimated share of the window",
+    "Estimated breakdown",
     "Base prompt: 2.6K tokens (2.6%)",
-    "Built-in tools: 300 tokens (0.3%)",
+    "Tools outside MCP: 300 tokens (0.3%)",
     "Conversation: 4.8K tokens (4.8%)",
     "Room left: 82.3K tokens (82.3%)",
     "Auto-compaction reserve: 10.0K tokens (10.0%)",
@@ -258,7 +258,7 @@ test("the legend labels the MCP, agent, instruction and skill categories", async
 })
 
 // TD6, D5 and D6: the sections the reference shows, and not the ones it keeps for its report.
-test("MCP tool schemas (loaded now and on demand), agent definitions by scope, instructions and skill listings are listed, and built-in tools, prompt parts and the conversation by kind are not", async () => {
+test("MCP tool schemas (loaded now and on demand), agent definitions by scope, instructions and skill listings are listed, and tools outside MCP, prompt parts and the conversation by kind are not", async () => {
   const result = await open({
     answer: answering(
       fixture({
@@ -388,6 +388,18 @@ test("the instruction files suggestion names each file by its path in the sessio
   expect(folded.slice(folded.indexOf("Ways to free room"))).not.toContain(directory)
 })
 
+test.each([100, 70])("one large instruction file is named in the singular at %i columns", async (width) => {
+  const files = [{ path: `${session(ROOT).location.directory}/AGENTS.md`, type: "file", tokens: 20_000 }]
+  const result = await open({
+    width,
+    answer: answering(fixture({ window: 200_000, files })),
+    done: (frame) => frame.includes("Ways to free room"),
+  })
+  await using _ = result.setup
+
+  expect(result.frame.replace(/\s+/g, "")).toContain("thebiggesthereisAGENTS.md(20.0K).")
+})
+
 // TD7c: three of twelve files of one size are a quarter of them, so the advice names the biggest without calling them
 // most of it; near capacity, the advice says what /compact does.
 test.each([100, 70])("near capacity with many files of one size the advice is true and readable at %i columns", async (width) => {
@@ -488,8 +500,9 @@ test("every string from the payload is escaped in the frame", async () => {
 })
 
 // TD10, D9: with no window there is nothing to be a share of.
-test("an unknown window shows rows and the total without a grid, percentages, reserve, room left or suggestions", async () => {
+test.each([100, 70])("an unknown window shows rows and the total without a grid, a claimed share, percentages, reserve, room left or suggestions at %i columns", async (width) => {
   const result = await open({
+    width,
     answer: answering(
       fixture({
         window: undefined,
@@ -521,6 +534,9 @@ test("an unknown window shows rows and the total without a grid, percentages, re
   expect(result.frame).toContain("Conversation: 4.8K tokens")
   expect(grid(result.frame)).toEqual([])
   expect(result.frame).not.toContain("%")
+  // With no window there is nothing to be a share of, and the subtitle says so for neither.
+  expect(result.frame).toContain("Estimated breakdown")
+  expect(result.frame).not.toMatch(/\bshares?\b|of the window/i)
   for (const missing of ["Room left", "reserve", "headroom", "Ways to free room"]) expect(result.frame).not.toContain(missing)
 })
 

@@ -233,7 +233,7 @@ describe("the agent memory block", () => {
         expect(tails.map((tail) => tail.trimEnd().split("\n").at(-1))).toEqual([
           "Scope of these notes: user. You carry them into every project you work in, so write down only what holds in general, wherever you are.",
           "Scope of these notes: project. Everyone who clones the repository receives them, since they are committed with it; write down what holds for this project.",
-          "Scope of these notes: local. They belong to this project on this machine and are not committed to version control; write down what holds for this project here.",
+          "Scope of these notes: local. They belong to this project on this machine and are not committed to version control; write down what suits both this project and this machine.",
         ])
         expect(local).toContain("not committed")
         expect(local).toContain("this machine")
@@ -252,8 +252,8 @@ describe("the agent memory block", () => {
   )
 
   // Class 7: an index that is not there, is empty or cannot be read (a folder named MEMORY.md) reads as empty: the block
-  // still loads, with a line that says the index fills as memories are saved. A filled index is the control.
-  it.live("says the agent's MEMORY.md is empty until a memory is saved", () =>
+  // still loads, with a line that says no entries were loaded and what adds one. A filled index is the control.
+  it.live("says that no entries were loaded from the agent's MEMORY.md until a memory is saved", () =>
     Effect.gen(function* () {
       const rows = [
         { name: "missing", make: (_folder: string) => Effect.void },
@@ -272,7 +272,9 @@ describe("the agent memory block", () => {
           return {
             name: row.name,
             block: Object.keys(view.values).includes(AGENT),
-            empty: view.text.includes("MEMORY.md is empty"),
+            empty: view.text.endsWith(
+              "## MEMORY.md\n\nNo entries were loaded from MEMORY.md; the second of a memory's two writes is what adds one.",
+            ),
             filled: view.text.includes("FILLED-LINE"),
           }
         }),
@@ -508,7 +510,7 @@ describe("the agent memory block in a folder it must not read", () => {
         const linked = yield* initial(l, { id: "linked", memory: "project" })
         const plain = yield* initial(l, { id: "plain", memory: "project" })
         expect(linked.text).not.toContain("SECRET-KEY-MARKER")
-        expect(linked.text).toContain("MEMORY.md is empty")
+        expect(linked.text).toContain("No entries were loaded from MEMORY.md")
         expect(plain.text).toContain("PLAIN-AGENT-LINE")
       }),
     )

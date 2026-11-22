@@ -143,7 +143,7 @@ test.each([
   await setup.renderOnce()
   const frame = setup.captureCharFrame()
   expect(frame).not.toContain(listHeading)
-  expect(frame).not.toContain("Nothing to rewind yet.")
+  expect(frame).not.toContain("This conversation has no prompt to return to.")
 })
 
 // A select dialog focuses its search field a moment after it is drawn, so each filter is typed after that moment.
@@ -1404,7 +1404,7 @@ test.each(matrix)("$entry on $row", async (cell) => {
     return
   }
   if (cell.expect === "nothing") {
-    await setup.waitForFrame((frame) => frame.includes("Nothing to rewind yet."))
+    await setup.waitForFrame((frame) => frame.includes("This conversation has no prompt to return to."))
     expect(setup.actions()).toEqual([])
     return
   }
@@ -1429,7 +1429,7 @@ test.each(matrix)("$entry on $row", async (cell) => {
   await setup.renderOnce()
   const frame = setup.captureCharFrame()
   expect(frame).not.toContain(listHeading)
-  expect(frame).not.toContain("Nothing to rewind yet.")
+  expect(frame).not.toContain("This conversation has no prompt to return to.")
   expect(frame).not.toContain("Checking files")
   expect(frame).not.toContain("Do nothing")
   expect(setup.dryRunsSent()).toEqual([])

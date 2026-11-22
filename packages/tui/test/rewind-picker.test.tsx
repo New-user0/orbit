@@ -111,7 +111,7 @@ test("step 2 offers the code options only when a dry run would change files, and
   expect(both).toContain("Files go back: +3 -5 in a.ts and b.ts.")
   expect(both).toContain("The conversation goes back to this point.")
   expect(both).toContain(
-    "Restores what Orbit's edit tools changed; changes from shell commands or outside Orbit stay.",
+    "Restores only what Orbit's edit tools changed; changes from shell commands or outside Orbit stay.",
   )
 
   setup.mockInput.pressEscape()
@@ -523,7 +523,7 @@ test("a session with no prompts says there is nothing to rewind", async () => {
   await setup.waitForFrame((frame) => frame.includes("Rewind fixture"))
   await setup.mockInput.typeText("/rewind")
   setup.mockInput.pressEnter()
-  const frame = await setup.waitForFrame((frame) => frame.includes("Nothing to rewind yet."))
+  const frame = await setup.waitForFrame((frame) => frame.includes("This conversation has no prompt to return to."))
   expect(frame).not.toContain(listHeading)
   expect(setup.actions()).toEqual([])
 })
@@ -590,6 +590,28 @@ test("a refused rewind's message is drawn with its control characters written ou
   const frame = await setup.waitForFrame((frame) => frame.includes("Could not rewind the code and conversation:"))
   expect(frame).toContain("boom \\x1b]0;pwned\\x07 \\x1b[2K")
   expect(controlFree(frame)).toBe(true)
+})
+
+test("step 2 names more than two files by their count and the first of them", async () => {
+  await using state = await tmpdir()
+  await using setup = await rewindApp({
+    state: state.path,
+    answer: (request) =>
+      request.path.endsWith("/revert/files") && request.body?.dryRun
+        ? json({
+            data: {
+              canRewind: true,
+              filesChanged: ["/w/src/a.ts", "/w/src/b.ts", "/w/src/c.ts"],
+              insertions: 6,
+              deletions: 4,
+            },
+          })
+        : undefined,
+  })
+  await openPicker(setup)
+  await selectPrompt(setup, 2)
+  const frame = await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  expect(frame).toContain("Files go back: +6 -4 in 3 files, a.ts among them.")
 })
 
 // Classes 7 and 13: code options need a dry run that says it can rewind and lists the files as a list. One that cannot
@@ -1092,7 +1114,7 @@ test.each(["the list", "the list while it checks files", "the empty picker", "th
       await setup.waitForFrame((frame) => frame.includes("Rewind fixture"))
       await setup.mockInput.typeText("/rewind")
       setup.mockInput.pressEnter()
-      await setup.waitForFrame((frame) => frame.includes("Nothing to rewind yet."))
+      await setup.waitForFrame((frame) => frame.includes("This conversation has no prompt to return to."))
     }
     if (place !== "the empty picker") await openPicker(setup)
     if (place === "the list while it checks files") {
@@ -1117,7 +1139,7 @@ test.each(["the list", "the list while it checks files", "the empty picker", "th
     await setup.waitForFrame(
       (frame) =>
         !frame.includes(listHeading) &&
-        !frame.includes("Nothing to rewind yet.") &&
+        !frame.includes("This conversation has no prompt to return to.") &&
         !frame.includes("Could not rewind") &&
         !frame.includes("Checking files…"),
     )
@@ -1134,11 +1156,11 @@ test("Enter in a picker with nothing to rewind keeps it open", async () => {
   await setup.waitForFrame((frame) => frame.includes("Rewind fixture"))
   await setup.mockInput.typeText("/rewind")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => frame.includes("Nothing to rewind yet."))
+  await setup.waitForFrame((frame) => frame.includes("This conversation has no prompt to return to."))
   setup.mockInput.pressEnter()
-  expect(await settled(setup)).toContain("Nothing to rewind yet.")
+  expect(await settled(setup)).toContain("This conversation has no prompt to return to.")
   setup.mockInput.pressEscape()
-  await setup.waitForFrame((frame) => !frame.includes("Nothing to rewind yet."))
+  await setup.waitForFrame((frame) => !frame.includes("This conversation has no prompt to return to."))
 })
 
 // The index of the first line at or below the list heading that holds `text`.
@@ -1713,7 +1735,7 @@ test("the first prompt to arrive turns nothing to rewind into the list", async (
   await setup.waitForFrame((frame) => frame.includes("Rewind fixture"))
   await setup.mockInput.typeText("/rewind")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => frame.includes("Nothing to rewind yet."))
+  await setup.waitForFrame((frame) => frame.includes("This conversation has no prompt to return to."))
   arrive(setup, "msg_0001", "Add the first thing")
 
   const frame = await setup.waitForFrame((frame) => listHas(frame, "Add the first thing") === 1, { maxPasses: 200 })

@@ -87,14 +87,14 @@ test("the report has the reference's sections in order, every one for everyone",
     "**In use:** 50,000 of 200,000 (25%)",
     "### Breakdown",
     "### MCP tool schemas",
-    "### Built-in tools",
+    "### Tools outside MCP",
     "### Base prompt parts",
     "### Agent definitions",
     "### Instructions",
     "### Skill listings",
     "### Conversation by kind",
     "### Heaviest tools",
-    "### Heaviest attachments",
+    "### Heaviest added context",
   ].map((line) => at(auto, line))
   expect(order.every((index) => index >= 0)).toBe(true)
   expect(order).toEqual(order.toSorted((a, b) => a - b))
@@ -105,10 +105,10 @@ test("the report has the reference's sections in order, every one for everyone",
   const categories = tables(auto)[0]!.slice(2)
   expect(categories.map((row) => row.split("|")[1]!.trim())).toEqual([
     "Base prompt",
-    "Built-in tools",
+    "Tools outside MCP",
     "MCP tool schemas",
     "MCP tool schemas (on demand)",
-    "Built-in tools (on demand)",
+    "Tools outside MCP (on demand)",
     "Agent definitions",
     "Instructions",
     "Skill listings",
@@ -122,15 +122,15 @@ test("the report has the reference's sections in order, every one for everyone",
   // Each table's header, so that no column can be renamed or change places with its neighbour.
   expect(tables(auto).map((table) => table[0])).toEqual([
     "| Part | Tokens | Share |",
-    "| Tool | Server | Tokens |",
+    "| Tool | From server | Tokens |",
     "| Tool | Tokens |",
     "| Part | Tokens |",
-    "| Agent | Scope | Tokens |",
+    "| Agent | Defined in | Tokens |",
     "| Source | File | Tokens |",
     "| Skill | Tokens |",
     "| Kind | Tokens |",
     "| Tool | In calls | In results |",
-    "| Attachment | Tokens |",
+    "| What was added | Tokens |",
   ])
 
   // With automatic compaction off the reserve is a category like the others, before free space.
@@ -148,7 +148,7 @@ test("the report has the reference's sections in order, every one for everyone",
   expect(auto).toContain("| release | 700 |")
   expect(auto).toContain("| Calls to tools | 3,000 |")
   expect(auto).toContain("| What tools returned | 15,000 |")
-  expect(auto).toContain("| Attached files | 2,000 |")
+  expect(auto).toContain("| Added context | 2,000 |")
   expect(auto).toContain("| Replies | 4,000 |")
   expect(auto).toContain("| Prompts | 3,300 |")
   expect(auto).toContain("| Bash | 2,000 | 10,000 |")

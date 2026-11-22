@@ -211,6 +211,14 @@ test("each piece of advice is Orbit's own wording", () => {
     )
 })
 
+test.each([
+  [[20_000], "the biggest here is /repo/file-0.md (20.0K)."],
+  [[20_000, 10_000], "the biggest here are /repo/file-0.md (20.0K), /repo/file-1.md (10.0K)."],
+] as const)("the biggest instruction files read right for %j", (files, ending) => {
+  const [found] = contextSuggestions(info({ window: 200_000, files: [...files] }))
+  expect(found?.detail).toEndWith(ending)
+})
+
 test("each suggestion's title is Orbit's own wording", () => {
   const title = (input: Parameters<typeof info>[0]) => contextSuggestions(info(input)).map((item) => item.title)
   expect([

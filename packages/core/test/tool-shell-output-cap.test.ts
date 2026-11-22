@@ -344,13 +344,13 @@ describe("ShellTool output cap", () => {
         Effect.gen(function* () {
           const result = yield* settled(registry, call({ command: blankHeadCommand("") }))
           expect(result.persisted).toMatchObject({ session: sessionID, parts: 1, size: blankHeadBytes })
-          expect(text(result.outcome)).not.toContain("ran and produced nothing")
+          expect(text(result.outcome)).not.toContain("ran and gave nothing back")
           const saved = yield* Effect.promise(() => fs.readFile(result.saved ?? "", "utf8"))
           expect(saved).toEndWith("\ntail-marker")
           expect(saved.length).toBe(blankHeadBytes)
           const shown = lowered(result.outcome, result.root)
           expect(shown).toStartWith("<saved-output>")
-          expect(shown).toContain(`so all of it went to a file: ${result.saved}`)
+          expect(shown).toContain(`For more than its beginning, see the saved file: ${result.saved}`)
           expect(shown).toEndWith("</saved-output>")
         }),
       ),
@@ -508,6 +508,10 @@ describe("ShellTool output cap", () => {
           const result = yield* settled(registry, call({ command: overflowCommand(bytes) }))
           expect(result.persisted?.size).toBe(overflowBytes(bytes))
           expect((yield* Effect.promise(() => fs.stat(result.saved ?? ""))).size).toBe(64 * 1024 * 1024)
+          // The size shown is the one before the cut, so the wrapper may not say that all of it was saved.
+          const shown = lowered(result.outcome, result.root).split("\n")[1]
+          expect(shown).toContain("For more than its beginning, see the saved file:")
+          expect(shown).not.toMatch(/\ball of it\b|\bfull output\b/i)
         }),
       ),
     { timeout: 180_000 },

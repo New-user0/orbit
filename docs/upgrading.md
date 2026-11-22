@@ -1911,8 +1911,8 @@ The list moves with the dialog keys every picker uses (up and down, ctrl+p and c
 so keys you set for `dialog.select.prev`, `next`, `home`, `end` and `submit` apply to it too, and also with j and k.
 Ctrl, shift or alt with up, or shift+k, selects the oldest prompt; the same with down, or shift+j, selects `(current)`.
 The list stops at its first and last rows, and page up and page down do nothing in it. Every row is three lines tall,
-so the list does not move when the file lines arrive. `n` closes the list, the `Nothing to rewind yet.` picker and the
-error line, as Esc does; Enter does nothing when there is nothing to rewind.
+so the list does not move when the file lines arrive. `n` closes the list, the `This conversation has no prompt to
+return to.` picker and the error line, as Esc does; Enter does nothing when there is nothing to rewind.
 
 The list follows the conversation while it is open, with one `(current)` row, always last. The highlight keeps its
 place in the list: a prompt or `!` command that arrives while `(current)` is highlighted is highlighted itself, and one
@@ -2037,7 +2037,7 @@ until the file watch caught up, or for good with watching off.
 
 The terminal UI's `/context` used to estimate the conversation from the messages it had loaded, at four characters a
 token, and draw one bar per row. It now asks the server, which counts what the session's next request would carry by
-category: the base prompt, built-in tools, MCP tool schemas, agent definitions, instructions, skill listings and the
+category: the base prompt, tools outside MCP, MCP tool schemas, agent definitions, instructions, skill listings and the
 conversation, with the reserve kept below the window (the auto-compaction reserve, or 3,000 tokens of compaction
 headroom with automatic compaction off) and the room left. Tools loaded on demand are counted in no total: the dialog
 leaves them out of its legend and its grid, and its MCP tool schemas heading says when some load on demand, while the
@@ -2052,7 +2052,7 @@ that cannot be read and no answer in time each show one line; one entry of the a
 category from a newer server, is left out with a log line and the rest is shown.
 
 `orb run "/context"` and `orb -p "/context"` used to send the text to the model as a prompt. They now print the same
-counts as a Markdown report, with every table (the built-in tools, the base prompt parts and the conversation by kind
+counts as a Markdown report, with every table (the tools outside MCP, the base prompt parts and the conversation by kind
 too), and send nothing to the model. `--format result` and `orb -p --output-format json` print one result line whose
 `result` is the report; `orb run --format json` prints one `{"type":"context_usage","sessionID","usage"}` line. `--file`
 with `/context` is refused. The run's own session is reported (`--session`, `--continue`, `--resume`, or a new one), a
@@ -2675,7 +2675,7 @@ want it: `content` on `POST /api/session/:sessionID/permission/:requestID/reply`
 `permission.reply`). The reply names no file: the server diffs your text against the file as the question read it,
 records that diff as `files` on `permission.replied` with the question's place, and the tool writes your text where it
 resolved before asking, after the usual check that the file has not changed since. The file's byte order mark is kept.
-When your text differs from the proposal, an Edit tells the model that you modified its proposal before approving it;
+When your text differs from the proposal, an Edit tells the model that you adjusted it while approving it;
 the proposal itself, sent back unchanged, gets the usual result. Text equal to the file as it was read is taken as a
 reject. Before, a `content` field was dropped and the proposal was written. A PostToolUse hook still gets the model's
 proposal as `tool_input` after a revised reply, so a hook that needs what was written reads an Edit's
@@ -4015,8 +4015,8 @@ config to save results at another size.
 
 Before, a tool that returned no content was stored as the text `undefined` (or `null` for an MCP tool whose server sent
 no content), an empty result could stop the step, and a shell command that printed nothing returned `(no output)`. Now
-every successful result that is empty, blank or only whitespace is stored and sent as `(<tool> finished and returned no
-output)`, with the name the model called. A silent shell command's own result text is blank, so the same line applies;
+every successful result that is empty, blank or only whitespace is stored and sent as `(<tool> ran and gave nothing
+back)`, with the name the model called. A silent shell command's own result text is blank, so the same line applies;
 its exit and timeout notices still follow as before, and a background command's stored output is its notice alone.
 Failed calls are not changed.
 
@@ -5097,7 +5097,8 @@ window less the summary's room instead of the whole window; lower it if compacti
   it is, where it used to fail (`session-compaction.test.ts`, "analysis never stored").
 - **The next request.** A summary checkpoint reaches the model as one user message that says the conversation
   grew past the context window and its earlier part now lives in the summary, followed by the summary. An automatic compaction adds a line telling the
-  model to carry on without asking the user anything; a manual one does not
+  model to carry on with the interrupted task, through as many messages as it takes, without asking the person
+  anything; a manual one does not
   (`session-runner-message.test.ts`).
 - **A reply with no text gets one more request.** The first request shares the main request's system prompt, tools and
   settings; any text it returns is used, and a tool call in it is never run. When it returns no text, or fails, one
@@ -5306,12 +5307,16 @@ the model reads it after the summary. Before, the model saw only the summary.
 
 ## The wording added in this release was written again, and some labels and reason names changed
 
-The texts this release added were rewritten in Orbit's own sentences. The prompts keep the rules of the wording they
-replace: among them, the handoff still describes the work in progress, the memory guide still bans secrets from team
-memory whoever asks and still wants a short index, and a project's compaction instructions are followed without outranking
-the prompt's own sections (`session-compaction.test.ts`, `memory-instructions.test.ts`,
-`memory-team-instructions.test.ts`). The screens show the same figures under new wording and names, and the usage line of
-`/cost` has a new format.
+The texts this release added were rewritten in Orbit's own sentences. These rules of the wording they replace are
+among those the tests named here pin: the handoff describes the work in progress, keeps all feedback and every important
+concept that came up, and follows compaction instructions from your own or the project's instruction files or from your
+messages, beside its own sections (`session-compaction.test.ts`); the line after an automatic compaction bans questions
+for the whole continuation (`session-runner-message.test.ts`); the memory guide leaves out how any bug was fixed, gives
+what is seen now precedence over a note, saves on request at once within its left-out list, wants a short index and bans
+secrets from team memory whoever asks (`memory-instructions.test.ts`, `memory-team-instructions.test.ts`). One rule is
+narrower on purpose: when you ask to keep something from the left-out list, the guide has the model ask you only for
+what was unexpected in it, where it used to accept what was surprising or worth keeping. The screens show the same
+figures under new wording and names, and the usage line of `/cost` has a new format.
 
 - **Model-facing text.** The compaction prompt and its closing line (the nine handoff sections are now Goal, Technical
   ground, Code touched, Errors and corrections, Reasoning so far, The person's messages, Still to do, Where things stand
@@ -5320,8 +5325,10 @@ the prompt's own sections (`session-compaction.test.ts`, `memory-instructions.te
   for skills and running subagents after a compaction, the batch-label and next-message prompts, the memory guide (its
   headings, and the `Reason:` and `Applies when:` lines it asks for in a feedback or project memory), the note on an old
   memory file, the refusal of a secret in team memory, the note on an edit the person revised, the shell tool's timeout
-  sentence, the notice when a background command's output passes its size limit, the saved-output wrapper and the line
-  for a tool that returned nothing (`(<tool> ran and produced nothing)`). The compaction failure for a conversation too
+  sentence, the notice when a background command's output passes its size limit, the saved-output wrapper, the line
+  for a tool that returned nothing (`(<tool> ran and gave nothing back)`), and the line of an agent's memory block
+  with no index entries. The wrapper no longer says that all of a result was saved, because a shell output over 64 MB
+  is cut first, and calls its head the opening of up to 2,000 characters. The compaction failure for a conversation too
   long to summarize now reads "This conversation no longer fits in a compaction request. Rewind a few messages, then
   compact again." (`session-compaction.test.ts`, "prompt-too-long").
 - **Suggestion and label reasons (API).** `POST …/assist/suggestion` answers with new reason names. The filters: `empty`
@@ -5333,12 +5340,14 @@ the prompt's own sections (`session-compaction.test.ts`, `memory-instructions.te
   `elicitation_active` `awaiting_form`, `plan_mode` `planning` and `aborted` `cancelled` (`subagent`, `busy` and
   `unavailable` stay). `POST …/assist/label` answers `no_text` where it answered `empty`, and `interrupted` where it
   answered `aborted` (`packages/server/test/session-assist.test.ts`).
-- **`/context`.** The categories are Base prompt, Built-in tools, MCP tool schemas, Agent definitions, Instructions, Skill
-  listings, Conversation, Auto-compaction reserve, Compaction headroom and Room left, and a tool loaded on demand is
+- **`/context`.** The categories are Base prompt, Tools outside MCP, MCP tool schemas, Agent definitions, Instructions,
+  Skill listings, Conversation, Auto-compaction reserve, Compaction headroom and Room left, and a tool loaded on demand is
   marked `(on demand)`. The report opens with `## Context window` and `**In use:**`, and its tables are Breakdown, MCP
-  tool schemas, Built-in tools, Base prompt parts, Agent definitions, Instructions, Skill listings, Conversation by kind,
-  Heaviest tools and Heaviest attachments. The dialog and its entry in the command palette are titled Context window,
-  as the report is, and the dialog's suggestions are headed "Ways to free room"
+  tool schemas, Tools outside MCP, Base prompt parts, Agent definitions, Instructions, Skill listings, Conversation by kind,
+  Heaviest tools and Heaviest added context, with the columns From server, Defined in and What was added.
+  The dialog and its entry in the command palette are titled Context window,
+  as the report is, the legend is headed "Estimated breakdown", with or without a known window, and the dialog's
+  suggestions are headed "Ways to free room"
   (`packages/cli/test/run/context-report.test.ts`, `packages/tui/test/component/dialog-context.test.tsx`).
 - **`/cost`.** The rows are Spent, Subagents, Model time, Elapsed and Lines changed (`+12 / -3 lines`), then Per model,
   and each model's tokens read `in 1.2K · out 300 · from cache 500 · to cache 60`, in the dialog and in
@@ -5346,8 +5355,10 @@ the prompt's own sections (`session-compaction.test.ts`, `memory-instructions.te
 - **`/memory`.** The first row reads Memory across sessions, and still turns the whole of memory on or off, reading as
   well as saving. The others read Project instructions, Personal instructions, Browse saved memories, Browse
   team memories and Browse memories of agent `<name>`, and a file's line reads `File:` or `In the repository:`.
-- **Rewind.** The picker asks "Roll back to just before which prompt?", the confirm step's last option is `Do nothing`,
-  and its warning reads "Restores what Orbit's edit tools changed; changes from shell commands or outside Orbit stay."
+- **Rewind.** The picker asks "Roll back to just before which prompt?", or with no prompt says "This conversation has no
+  prompt to return to." The confirm step's last option is `Do nothing`, it names more than two files as "3 files, a.ts
+  among them", and its warning reads "Restores only what Orbit's edit tools changed; changes from shell commands or
+  outside Orbit stay."
   The message dialog describes Rewind as "roll back to just before this prompt", and the `session.rewind` key as "Roll
   back to an earlier prompt".
 
