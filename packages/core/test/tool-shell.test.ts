@@ -4900,4 +4900,63 @@ describe("ShellGuard: a deny for the spelling of a path a link leads out of", ()
         ),
       { timeout: 120_000 },
     )
+
+  // From a session folder below the worktree the project spells the file `../cfg/s`. The shell keeps that spelling, and
+  // so do the file tools since fix loop 11 (edit-link.test.ts, "a rule for the ../ spelling"), so one rule decides both.
+  for (const trusted of [true, false])
+    guardIt(trusted).live(
+      `decides cat ../cfg/s from a session folder below the worktree (${trusted ? "trusted" : "untrusted"})`,
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) =>
+            Effect.gen(function* () {
+              const active = path.join(tmp.path, "active")
+              const below = path.join(active, "plain")
+              const outside = path.join(tmp.path, "outside")
+              yield* Effect.promise(async () => {
+                await fs.mkdir(below, { recursive: true })
+                await fs.mkdir(outside)
+                await fs.writeFile(path.join(outside, "s"), "secret")
+                await fs.symlink(outside, path.join(active, "cfg"), isWindows ? "junction" : "dir")
+              })
+              Bun.spawnSync(["git", "init", "-q", active])
+              const spellings = [undefined, "../cfg/s", "../cfg/*"]
+              const decided = yield* withSession(below, () =>
+                Effect.gen(function* () {
+                  const access = yield* FileAccess.Service
+                  const cwd = yield* access.resolve({ path: below, kind: "directory" })
+                  return yield* Effect.forEach(spellings, (spelling) =>
+                    Effect.gen(function* () {
+                      yield* permissions([
+                        { action: "Bash", resource: "*", effect: "allow" },
+                        { action: "external_directory", resource: "*", effect: "allow" },
+                        ...(spelling === undefined ? [] : [{ action: "Read", resource: spelling, effect: "deny" as const }]),
+                      ])
+                      const exit = yield* ShellGuard.prepare({
+                        command: "cat ../cfg/s",
+                        shell: "sh",
+                        cwd,
+                        env: {},
+                        portable: false,
+                        base: { sessionID, agent: toolIdentity.agent },
+                      }).pipe(Effect.flatMap(ShellGuard.denyPass), Effect.exit)
+                      const blocked =
+                        Exit.isFailure(exit) &&
+                        exit.cause.reasons.some(
+                          (reason) => Cause.isFailReason(reason) && reason.error instanceof Permission.BlockedError,
+                        )
+                      return { spelling, blocked, settled: blocked || Exit.isSuccess(exit) }
+                    }),
+                  )
+                }),
+              )
+              expect(decided).toEqual(
+                spellings.map((spelling) => ({ spelling, blocked: spelling !== undefined, settled: true })),
+              )
+            }),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+        ),
+      { timeout: 120_000 },
+    )
 })

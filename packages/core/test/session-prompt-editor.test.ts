@@ -38,7 +38,8 @@ import { it } from "./lib/effect"
 
 const sessionID = Session.ID.make("ses_prompt_editor")
 
-const provide = (project: string, trusted = true) =>
+// `project` is the session folder; `worktree` is the project's, when the session folder is below it.
+const provide = (project: string, trusted = true, worktree = project) =>
   Effect.provide(
     Layer.mergeAll(
       AppNodeBuilder.build(
@@ -59,7 +60,12 @@ const provide = (project: string, trusted = true) =>
         [
           ...(trusted ? [] : untrustedProjectNodes),
           Location.node.replace(
-            Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(project) }))),
+            Layer.succeed(
+              Location.Service,
+              Location.Service.of(
+                location({ directory: AbsolutePath.make(project) }, { projectDirectory: AbsolutePath.make(worktree) }),
+              ),
+            ),
           ),
         ],
       ),
@@ -68,12 +74,12 @@ const provide = (project: string, trusted = true) =>
     ),
   )
 
-const prepare = (project: string, rules: Permission.Ruleset) =>
+const prepare = (project: string, rules: Permission.Ruleset, worktree = project) =>
   Effect.gen(function* () {
     const database = yield* Database.Service
     yield* database.db
       .insert(ProjectTable)
-      .values({ id: Project.ID.global, worktree: AbsolutePath.make(project), sandboxes: [] })
+      .values({ id: Project.ID.global, worktree: AbsolutePath.make(worktree), sandboxes: [] })
       .onConflictDoNothing()
       .run()
       .pipe(Effect.orDie)
@@ -289,6 +295,44 @@ describe("editor context at admission", () => {
       )
     }
   }
+
+  // Fix loop 11 (classes 3 and 4): from a session folder below the worktree the project spells the file `../cfg/s`. A
+  // trusted folder checks that spelling; an untrusted one checks the place the link leads to, with the spelling as a
+  // lead that is now tried relative to the session folder although it climbs out of it.
+  for (const trusted of [true, false])
+    it.live(`a Read deny for the ../ spelling of a link out drops the field (${trusted ? "trusted" : "untrusted"})`, () =>
+      Effect.gen(function* () {
+        const root = (yield* tmpdirScoped()).path
+        const project = path.join(root, "project")
+        const below = path.join(project, "plain")
+        const outside = path.join(root, "outside")
+        fs.mkdirSync(below, { recursive: true })
+        fs.mkdirSync(outside)
+        fs.writeFileSync(path.join(outside, "s"), "SECRET-MARKER")
+        fs.symlinkSync(outside, path.join(project, "cfg"), "junction")
+        const file = path.join(project, "cfg", "s")
+        const editor = { path: file, selection: { start: 1, end: 1, text: "SECRET-MARKER" } }
+        const rulesets: ReadonlyArray<readonly [string, Permission.Ruleset]> = [
+          ["no deny", [allow]],
+          ["dot-dot deny", [allow, { action: "Read", resource: "../cfg/s", effect: "deny" }]],
+          ["dot-dot pattern deny", [allow, { action: "Read", resource: "../cfg/*", effect: "deny" }]],
+          ["absolute deny", [allow, { action: "Read", resource: file.replaceAll("\\", "/"), effect: "deny" }]],
+        ]
+        const kept = yield* Effect.forEach(rulesets, ([name, rules]) =>
+          Effect.gen(function* () {
+            yield* prepare(below, rules, project)
+            const payload = yield* admit({ text: "hi", editor })
+            return [name, payload.editor !== undefined] as const
+          }).pipe(provide(below, trusted, project)),
+        )
+        expect(kept).toEqual([
+          ["no deny", true],
+          ["dot-dot deny", false],
+          ["dot-dot pattern deny", false],
+          ["absolute deny", false],
+        ])
+      }),
+    )
 
   it.live("a ~ spelling is resolved before the rule decides", () =>
     Effect.gen(function* () {

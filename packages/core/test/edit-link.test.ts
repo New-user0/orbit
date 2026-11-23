@@ -7,8 +7,10 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Effect, Exit, Layer, Schema, Stream } from "effect"
 import { Agent } from "@orbit/core/agent"
+import { Config } from "@orbit/core/config"
+import { ConfigPolicyPlugin } from "@orbit/core/config/plugin/policy"
 import { Database } from "@orbit/core/database/database"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Environment } from "@orbit/core/environment/index"
@@ -38,6 +40,8 @@ import { WriteTool } from "@orbit/core/tool/plugin/write"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
+import { Document, Info } from "@orbit/schema/config"
+import type { ConfigPolicy } from "@orbit/schema/config/policy"
 import { transformEnvironmentFiles } from "./fixture/environment"
 import { location } from "./fixture/location"
 import { untrustedProjectNodes } from "./fixture/project-trust"
@@ -46,6 +50,7 @@ import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { registerToolPlugin } from "./lib/tool"
+import { host } from "./plugin/host"
 
 const sessionID = Session.ID.make("ses_link")
 const identity = { agent: Agent.ID.make("test"), messageID: SessionMessage.ID.make("msg_link") }
@@ -91,10 +96,15 @@ const run = (
     rules?: Permission.Ruleset
     // Orbit's data folder, which holds the project's memory folder.
     data?: string
+    // The project's worktree, when the session folder `directory` is below it.
+    worktree?: string
+    // Policy statements the real configuration policy plugin applies, from a person's document or their organization.
+    policy?: { from: "user" | "organization"; statements: ConfigPolicy.Info[] }
   } = {},
 ) =>
   Effect.gen(function* () {
-    yield* seed(directory, options.effect ?? "ask", options.rules)
+    yield* seed(directory, options.effect ?? "ask", options.rules, options.worktree)
+    if (options.policy) yield* installPolicy(options.policy.from, options.policy.statements)
     const tools = yield* Tool.Service
     const permission = yield* Permission.Service
     const access = yield* FileAccess.Service
@@ -149,7 +159,15 @@ const run = (
         [
           FileLedger.node.replace(FileLedger.permissiveLayer),
           Location.node.replace(
-            Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
+            Layer.succeed(
+              Location.Service,
+              Location.Service.of(
+                location(
+                  { directory: AbsolutePath.make(directory) },
+                  { projectDirectory: AbsolutePath.make(options.worktree ?? directory) },
+                ),
+              ),
+            ),
           ),
           Formatter.node.replace(Layer.mock(Formatter.Service, { file: () => Effect.succeed(false) })),
           Image.node.replace(imagePassthrough),
@@ -170,12 +188,32 @@ const refusing = (refuse: { act: "remove" | "write"; name: string }) =>
     return { write: (target, bytes) => (named(target) ? Effect.fail(refused(target)) : files.write(target, bytes)) }
   })
 
-const seed = (directory: string, effect: "ask" | "allow", rules: Permission.Ruleset = []) =>
+// Runs the real configuration policy plugin on the stack's own hooks, so a statement reaches Permission as in a server:
+// as an `experimental.policies` entry of the person's document, or as a statement of their organization.
+const installPolicy = Effect.fn(function* (from: "user" | "organization", statements: ConfigPolicy.Info[]) {
+  const hooks = yield* PluginHooks.Service
+  const managed = yield* ManagedPolicy.Service
+  if (from === "organization") yield* managed.set("connection", { statements })
+  const unused = () => Effect.die("unused")
+  const context = host({
+    event: { subscribe: () => Stream.empty },
+    provider: { list: unused, get: unused, transform: () => Effect.succeed({ dispose: Effect.void }), reload: () => Effect.void },
+    permission: { list: unused, get: unused, reply: unused, hook: (name, callback) => hooks.register("permission", name, callback) },
+  })
+  const document = new Document({
+    type: "document",
+    scope: "user",
+    info: Schema.decodeUnknownSync(Info)({ experimental: { policies: from === "user" ? statements : [] } }),
+  })
+  yield* ConfigPolicyPlugin.Plugin.effect(context).pipe(Effect.provide(Config.testLayer([document])))
+})
+
+const seed = (directory: string, effect: "ask" | "allow", rules: Permission.Ruleset = [], worktree = directory) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
       .insert(ProjectTable)
-      .values({ id: Project.ID.global, worktree: AbsolutePath.make(directory), sandboxes: [] })
+      .values({ id: Project.ID.global, worktree: AbsolutePath.make(worktree), sandboxes: [] })
       .onConflictDoNothing()
       .run()
       .pipe(Effect.orDie)
@@ -1201,6 +1239,241 @@ describe("a rule for the spelling of a path a link leads out of decides the call
                 (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
               ),
           )
+})
+
+/// Fix loop 11, GAP B (classes 3 and 8): a policy written for a path as the project spells it refuses every call that
+// writes, removes or reads through a link there, in an untrusted folder as in a trusted one, whether a person's document
+// or their organization states it. Until the folder is trusted, the resource of such a call is the place the link leads
+// to, so the policy plugin, which was shown the resource and its aliases only, let the call through. It is now shown the
+// request's leads in every spelling a rule is tried in, and refuses on them in a pass of its own. The trusted rows are
+// the control.
+describe("a policy for the spelling of a path a link leads out of refuses the call through it", () => {
+  const linkedFile = canLinkFile ? it.live : it.live.skip
+  const fileTools = [
+    { name: "Edit", file: "shown.txt", existing: text, input: (at: string) => changes[0]!.input(at, "") },
+    { name: "Write", file: "shown.txt", existing: text, input: (at: string) => ({ file_path: at, content: "new\n" }) },
+    { name: "NotebookEdit", file: "shown.ipynb", existing: notebook, input: (at: string) => changes[2]!.input(at, "") },
+    { name: "Patch update", file: "shown.txt", existing: text, input: (at: string) => patched(update(at)) },
+    { name: "Patch move to", file: "shown.txt", existing: text, input: (at: string) => patched(update("plain/b.txt", at)) },
+    // These two remove the link itself, so what a refusal keeps is the link.
+    { name: "Patch delete", file: "shown.txt", existing: text, input: (at: string) => patched(`*** Delete File: ${at}`) },
+    {
+      name: "Patch move from",
+      file: "shown.txt",
+      existing: text,
+      input: (at: string) => patched(update(at, "plain/moved.txt")),
+    },
+    { name: "Read", file: "shown.txt", existing: text, input: (at: string) => ({ file_path: at }) },
+  ]
+  const folderTools = [
+    ...changes,
+    { name: "Read", tool: "Read", file: "b.txt", existing: text, input: (at: string) => ({ file_path: at }) },
+  ]
+  const rows = [
+    ...fileTools.map((item) => ({
+      ...item,
+      shape: "a file link",
+      tool: item.name.split(" ")[0]!,
+      at: item.file,
+      named: item.file,
+    })),
+    ...folderTools.map((item) => ({ ...item, shape: "a folder link", at: `out/${item.file}`, named: "out/*" })),
+  ]
+  for (const trusted of [true, false])
+    for (const row of rows)
+      for (const from of ["user", "organization"] as const)
+        for (const spelling of ["relative", "absolute"] as const)
+          (row.shape === "a file link" ? linkedFile : it.live)(
+            `${from} policy for its ${spelling} spelling: ${row.name} through ${row.shape}, in ${trusted ? "a trusted" : "an untrusted"} folder`,
+            () =>
+              Effect.acquireUseRelease(
+                Effect.promise(() => tmpdir()),
+                (root) =>
+                  Effect.gen(function* () {
+                    const world = yield* Effect.promise(() => makeWorld(root.path))
+                    const real = path.join(
+                      world.root,
+                      "outside",
+                      row.shape === "a file link" ? `real${path.extname(row.file)}` : row.file,
+                    )
+                    yield* Effect.promise(async () => {
+                      await fs.writeFile(path.join(world.project, "plain", "b.txt"), text)
+                      if (row.existing !== undefined) await fs.writeFile(real, row.existing)
+                      if (row.shape === "a file link") await fs.symlink(real, path.join(world.project, row.at), "file")
+                    })
+                    const action = row.tool === "Read" ? "Read" : "Edit"
+                    const named = spelling === "relative" ? row.named : forward(path.join(world.project, row.named))
+                    const settled = yield* run(world.project, row.tool, row.input(row.at, "plain/b.txt"), {
+                      effect: "allow",
+                      trusted,
+                      rules: [{ action: "external_directory", resource: "*", effect: "allow" }],
+                      policy: { from, statements: [{ action: "permission", resource: `${action}:${named}`, effect: "deny" }] },
+                    })
+                    expect(Exit.isSuccess(settled.exit)).toBe(false)
+                    expect(settled.asked.filter((request) => request.action === action)).toEqual([])
+                    // The place the link leads to is as it was, and so is the link.
+                    expect(yield* Effect.promise(() => fs.readFile(real, "utf8").catch(() => undefined))).toBe(
+                      row.existing,
+                    )
+                    expect(
+                      yield* Effect.promise(() =>
+                        fs.lstat(path.join(world.project, row.shape === "a file link" ? row.at : "out")).then(
+                          (info) => info.isSymbolicLink(),
+                          () => false,
+                        ),
+                      ),
+                    ).toBe(true)
+                  }),
+                (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+              ),
+          )
+
+  // The leads never widen: a policy that allows only the spelling of a lead does not lift a deny of the resource, in a
+  // trusted folder (where the resource is the spelling and the lead the real place) as in an untrusted one (the other
+  // way round). Merged into the aliases, the later allow would decide both.
+  for (const trusted of [true, false])
+    for (const from of ["user", "organization"] as const)
+      it.live(
+        `a later allow of a lead's spelling keeps a ${from} deny of the real place (${trusted ? "trusted" : "untrusted"})`,
+        () =>
+          Effect.acquireUseRelease(
+            Effect.promise(() => tmpdir()),
+            (root) =>
+              Effect.gen(function* () {
+                const world = yield* Effect.promise(() => makeWorld(root.path))
+                const real = path.join(world.root, "outside", "b.txt")
+                yield* Effect.promise(() => fs.writeFile(real, text))
+                const settled = yield* run(world.project, "Edit", changes[0]!.input("out/b.txt", ""), {
+                  effect: "allow",
+                  trusted,
+                  rules: [{ action: "external_directory", resource: "*", effect: "allow" }],
+                  policy: {
+                    from,
+                    statements: [
+                      {
+                        action: "permission",
+                        resource: `Edit:${forward(path.join(world.root, "outside"))}/*`,
+                        effect: "deny",
+                      },
+                      { action: "permission", resource: "Edit:out/*", effect: "allow" },
+                    ],
+                  },
+                })
+                expect(Exit.isSuccess(settled.exit)).toBe(false)
+                expect(yield* Effect.promise(() => fs.readFile(real, "utf8"))).toBe(text)
+              }),
+            (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+          ),
+      )
+
+  // The control: with no policy for the path, the same call runs.
+  for (const trusted of [true, false])
+    it.live(`with no policy for the path, an Edit through a folder link runs (${trusted ? "trusted" : "untrusted"})`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (root) =>
+          Effect.gen(function* () {
+            const world = yield* Effect.promise(() => makeWorld(root.path))
+            const real = path.join(world.root, "outside", "b.txt")
+            yield* Effect.promise(() => fs.writeFile(real, text))
+            const settled = yield* run(world.project, "Edit", changes[0]!.input("out/b.txt", ""), {
+              effect: "allow",
+              trusted,
+              rules: [{ action: "external_directory", resource: "*", effect: "allow" }],
+              policy: { from: "user", statements: [{ action: "permission", resource: "Edit:plain/*", effect: "deny" }] },
+            })
+            expect(Exit.isSuccess(settled.exit)).toBe(true)
+            expect(yield* Effect.promise(() => fs.readFile(real, "utf8"))).toBe("alpha\nBETA\n")
+          }),
+        (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+      ),
+    )
+})
+
+// Fix loop 11, GAP A (classes 3, 4 and 8): with the session folder below the worktree, the project spells a file under a
+// link out `../out/b.txt`. A trusted folder asks with that spelling, so a rule written for it decides; an untrusted one
+// asks for the place the link leads to with that spelling as a lead, which was tried relative to the session folder only
+// when it did not climb out of it. It is now kept while it stays in the project's folders. The absolute spelling and the
+// trusted folder are the controls.
+describe("a rule for the ../ spelling of a path a link leads out of decides the call through it", () => {
+  const rows = [
+    ...changes,
+    { name: "Read", tool: "Read", file: "b.txt", existing: text, input: (at: string) => ({ file_path: at }) },
+  ]
+  for (const trusted of [true, false])
+    for (const row of rows)
+      for (const effect of ["deny", "ask"] as const)
+        for (const spelling of ["dot-dot", "absolute"] as const)
+          it.live(
+            `${effect} for its ${spelling} spelling: ${row.name}, in ${trusted ? "a trusted" : "an untrusted"} folder`,
+            () =>
+              Effect.acquireUseRelease(
+                Effect.promise(() => tmpdir()),
+                (root) =>
+                  Effect.gen(function* () {
+                    const world = yield* Effect.promise(() => makeWorld(root.path))
+                    const real = path.join(world.root, "outside", row.file)
+                    yield* Effect.promise(async () => {
+                      await fs.writeFile(path.join(world.project, "plain", "b.txt"), text)
+                      if (row.existing !== undefined) await fs.writeFile(real, row.existing)
+                    })
+                    const action = row.tool === "Read" ? "Read" : "Edit"
+                    const settled = yield* run(
+                      path.join(world.project, "plain"),
+                      row.tool,
+                      row.input(`../out/${row.file}`, "b.txt"),
+                      {
+                        effect: "allow",
+                        trusted,
+                        worktree: world.project,
+                        rules: [
+                          { action: "external_directory", resource: "*", effect: "allow" },
+                          {
+                            action,
+                            resource: spelling === "dot-dot" ? "../out/*" : `${forward(path.join(world.project, "out"))}/*`,
+                            effect,
+                          },
+                        ],
+                      },
+                    )
+                    const asked = settled.asked.filter((request) => request.action === action)
+                    expect([Exit.isSuccess(settled.exit), asked.length]).toEqual(
+                      effect === "deny" ? [false, 0] : [true, 1],
+                    )
+                    if (effect === "deny")
+                      expect(yield* Effect.promise(() => fs.readFile(real, "utf8").catch(() => undefined))).toBe(
+                        row.existing,
+                      )
+                  }),
+                (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+              ),
+          )
+
+  // A climbing relative of a place outside the project is still no subject: no project spells that file so, and a rule
+  // for `../outside/*` must not decide a call that a link of the worktree leads there.
+  for (const trusted of [true, false])
+    it.live(`a rule for a ../ spelling outside the project does not decide (${trusted ? "trusted" : "untrusted"})`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (root) =>
+          Effect.gen(function* () {
+            const world = yield* Effect.promise(() => makeWorld(root.path))
+            const real = path.join(world.root, "outside", "b.txt")
+            yield* Effect.promise(() => fs.writeFile(real, text))
+            const settled = yield* run(world.project, "Edit", changes[0]!.input("out/b.txt", ""), {
+              effect: "allow",
+              trusted,
+              rules: [
+                { action: "external_directory", resource: "*", effect: "allow" },
+                { action: "Edit", resource: "../outside/*", effect: "deny" },
+              ],
+            })
+            expect(Exit.isSuccess(settled.exit)).toBe(true)
+            expect(yield* Effect.promise(() => fs.readFile(real, "utf8"))).toBe("alpha\nBETA\n")
+          }),
+        (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+      ),
+    )
 })
 
 // The name of a link that is removed: as it is spelled in the project, or where it is when an untrusted one leads out.
