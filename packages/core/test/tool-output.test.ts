@@ -137,7 +137,9 @@ describe("ToolOutput", () => {
           const linked = yield* settleCall("call_link", link)
           expect(linked).toEqual({ content: [{ type: "text", text: "the" }] })
           expect((yield* Effect.promise(() => fs.stat(target))).size).toBe(ToolOutput.ADOPTED_BYTES + 1)
-          expect(yield* Effect.promise(() => fs.readdir(path.join(output.root, "ses_tool_output")).catch(() => []))).toEqual([])
+          expect(
+            yield* Effect.promise(() => fs.readdir(path.join(output.root, "ses_tool_output")).catch(() => [])),
+          ).toEqual([])
 
           const saved = yield* settleCall("call_real", real)
           expect(saved.metadata?.persisted).toMatchObject({ parts: 1, size: ToolOutput.ADOPTED_BYTES + 1 })

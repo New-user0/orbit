@@ -99,6 +99,50 @@ test("a slash command's prompt is given back as `/name args`, and `/name ` with 
   expect(projectedPromptInput({ text: "Add the parser" } as Projected).text).toBe("Add the parser")
 })
 
+// m5-quality, item 9c: a skill activated for the session (a `skill` message, from `POST /api/session/:id/skill`) is a
+// row too, as the reference lists a person's skill invocation by its name: drawn `/name`, never its instructions. It has
+// no checkpoint of its own, so step 2 offers only the conversation, and that puts `/name ` back in the input.
+test("a skill message is a row drawn by its name, whose conversation rewind puts the skill back in the input", async () => {
+  await using state = await tmpdir()
+  const messages = [
+    ...conversation.slice(0, 4),
+    {
+      id: "msg_0004s",
+      type: "skill",
+      skill: "skl_deploy",
+      name: "deploy",
+      text: "SKILL-INSTRUCTIONS for deploying",
+      time: { created: now - 30 * 60_000 },
+    },
+    ...conversation.slice(4),
+  ]
+  await using setup = await rewindApp({ state: state.path, messages })
+  await setup.waitForFrame((frame) => frame.includes("Renamed it."))
+  await setup.mockInput.typeText("/rewind")
+  setup.mockInput.pressEnter()
+  const list = await setup.waitForFrame((frame) => frame.includes(listHeading) && frame.includes("(current)"))
+  expect(linesWith(list, "/deploy")).toBeGreaterThan(0)
+  expect(list).not.toContain("SKILL-INSTRUCTIONS")
+
+  // Up from "(current)": the newest prompt, then the skill.
+  setup.mockInput.pressArrow("up")
+  setup.mockInput.pressArrow("up")
+  setup.mockInput.pressEnter()
+  const confirm = await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  expect(confirm).toContain("/deploy")
+  expect(confirm).not.toContain("Code only")
+  setup.mockInput.pressEnter()
+  await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
+  expect(setup.actions().filter((action) => action !== "interrupt" && action !== "wait")).toEqual([
+    `stage ${JSON.stringify({ messageID: "msg_0004s", files: false })}`,
+  ])
+  const frame = await setup.waitForFrame(
+    (frame) => !frame.includes("Do nothing") && !frame.includes(listHeading) && linesWith(frame, "/deploy") > 0,
+    { maxPasses: 200 },
+  )
+  expect(frame).not.toContain("SKILL-INSTRUCTIONS")
+})
+
 // m5-quality, item 9b (class 15): a list row is one line, so a prompt of several lines is drawn on its row with its
 // breaks as spaces.
 test("a prompt of several lines is one line on its row", async () => {

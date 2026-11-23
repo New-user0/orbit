@@ -263,4 +263,23 @@ describe.skipIf(process.platform === "win32")("a PostToolUse hook after an appro
       }),
     ),
   )
+
+  // Saving the proposal unchanged is no change of the person's (Orbit's rule for what the model is told), so the hook
+  // reads the model's input, which is what was written.
+  it.live("a revision equal to the proposal tells the hook the model's input", () =>
+    withProject((directory, payload) =>
+      Effect.gen(function* () {
+        yield* prepare(directory, { "a.txt": "alpha\nbeta\n" })
+        const edit = yield* run(
+          directory,
+          payload,
+          "Edit",
+          { file_path: "a.txt", old_string: "beta", new_string: "BETA" },
+          "alpha\nBETA\n",
+        )
+        expect(edit.tool_input).toMatchObject({ old_string: "beta", new_string: "BETA" })
+        expect(edit.tool_input.replace_all).toBeUndefined()
+      }),
+    ),
+  )
 })
