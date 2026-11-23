@@ -10,7 +10,9 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { Bus } from "@orbit/core/bus"
 import { EventTable } from "@orbit/core/event/sql"
-import { Location } from "@orbit/schema/location"
+import { FileAccess } from "@orbit/core/file-access"
+import { Location } from "@orbit/core/location"
+import { Permission } from "@orbit/core/permission"
 import { SessionEvent } from "@orbit/core/session/event"
 import { Model } from "@orbit/core/model"
 import { Provider } from "@orbit/core/provider"
@@ -34,6 +36,7 @@ import { Skill } from "@orbit/core/skill"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { trustedProject } from "./fixture/project-trust"
+import { permissionLayer } from "./lib/permission"
 
 const executionCalls: Session.ID[] = []
 const interruptCalls: Session.ID[] = []
@@ -69,11 +72,17 @@ const locations = makeGlobalNode({
     Effect.gen(function* () {
       const bus = yield* Bus.Service
       return yield* LayerMap.make(
-        (_ref: Location.Ref) =>
+        (ref: Location.Ref) =>
           // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
           Layer.mergeAll(
-            LayerNode.compile(LayerNode.group([PluginHooks.node, Skill.node]), {
-              replacements: [Bus.node.replace(Layer.succeed(Bus.Service, bus))],
+            // A mentioned file is resolved with the read tool's resolver and checked against the read rules at
+            // admission; no rule denies one here (session-prompt-editor.test.ts holds the rules' rows).
+            LayerNode.compile(LayerNode.group([PluginHooks.node, Skill.node, FileAccess.node, Permission.node]), {
+              replacements: [
+                Bus.node.replace(Layer.succeed(Bus.Service, bus)),
+                Location.node.replace(Location.boundNode(ref)),
+                Permission.node.replace(permissionLayer()),
+              ],
             }),
             Layer.mock(Image.Service, {
               normalize: (_resource, content) =>
