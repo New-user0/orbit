@@ -87,10 +87,12 @@ const run = (
     updates?: Tool.Metadata[]
     // The file system refuses to remove, or to write, a file of this name.
     refuse?: { act: "remove" | "write"; name: string }
+    // The agent's rules after its first one, which is for everything.
+    rules?: Permission.Ruleset
   } = {},
 ) =>
   Effect.gen(function* () {
-    yield* seed(directory, options.effect ?? "ask")
+    yield* seed(directory, options.effect ?? "ask", options.rules)
     const tools = yield* Tool.Service
     const permission = yield* Permission.Service
     const fiber = yield* (yield* tools.snapshot())
@@ -119,7 +121,7 @@ const run = (
     const grants = (yield* (yield* PermissionSaved.Service).list({ projectID: Project.ID.global })).map(
       (item) => [item.action, item.resource] as const,
     )
-    return { exit, request: asked.find((request) => request.action === "Edit"), grants }
+    return { exit, request: asked.find((request) => request.action === "Edit"), asked, grants }
   }).pipe(
     Effect.scoped,
     Effect.provide(
@@ -161,7 +163,7 @@ const refusing = (refuse: { act: "remove" | "write"; name: string }) =>
     return { write: (target, bytes) => (named(target) ? Effect.fail(refused(target)) : files.write(target, bytes)) }
   })
 
-const seed = (directory: string, effect: "ask" | "allow") =>
+const seed = (directory: string, effect: "ask" | "allow", rules: Permission.Ruleset = []) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
@@ -187,7 +189,7 @@ const seed = (directory: string, effect: "ask" | "allow") =>
     const agents = yield* Agent.Service
     yield* agents.transform((editor) =>
       editor.update(identity.agent, (agent) => {
-        agent.permissions = [{ action: "*", resource: "*", effect }]
+        agent.permissions = [{ action: "*", resource: "*", effect }, ...rules]
       }),
     )
   })
@@ -895,6 +897,126 @@ describe("a file that is itself a link: a failure names what was to be removed",
             (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
           ),
         )
+})
+
+// Fix loop 6 (classes 3 and 4): a delete, or a move's source, that is a link in a folder reached through a link of the
+// project removes that link where it really is: `out/config.txt` removes `<root>/outside/config.txt`, while the request
+// named only the spelling and the file the link leads to (`<root>/farther`). The person's rules for the folder the link
+// is in decide the removal, as they do when the model names that folder itself (the control).
+describe("the rules for the folder of a link that is removed decide its removal", () => {
+  const linkedFile = canLinkFile ? it.live : it.live.skip
+  const ways = [
+    { name: "through the project's link", spelled: () => "out/config.txt" },
+    { name: "the folder named itself", spelled: (root: string) => path.join(root, "outside", "config.txt") },
+  ]
+  const outside = (root: string) => `${forward(path.join(root, "outside"))}/*`
+  const cases = [
+    {
+      name: "a deny for the folder refuses it",
+      options: (root: string) => ({ rules: [{ action: "Edit", resource: outside(root), effect: "deny" as const }] }),
+      removed: false,
+      check: () => {},
+    },
+    {
+      name: "an ask for the folder asks, where everything else is allowed",
+      options: (root: string) => ({
+        effect: "allow" as const,
+        rules: [{ action: "Edit", resource: outside(root), effect: "ask" as const }],
+      }),
+      removed: true,
+      check: (settled: { request?: Permission.Request }) => expect(settled.request?.action).toBe("Edit"),
+    },
+    {
+      name: "the folder is asked about",
+      options: () => ({}),
+      removed: true,
+      check: (settled: { asked: Permission.Request[] }, root: string) =>
+        expect(
+          settled.asked.filter((item) => item.action === "external_directory").flatMap((item) => item.resources),
+        ).toContain(outside(root)),
+    },
+  ]
+  for (const trusted of [true, false])
+    for (const act of ["delete", "move from"] as const)
+      for (const way of ways)
+        for (const item of cases)
+          linkedFile(`${item.name}: ${act}, ${way.name}, in ${trusted ? "a trusted" : "an untrusted"} folder`, () =>
+            Effect.acquireUseRelease(
+              Effect.promise(() => tmpdir()),
+              (root) =>
+                Effect.gen(function* () {
+                  const world = yield* Effect.promise(() => makeWorld(root.path))
+                  const link = path.join(world.root, "outside", "config.txt")
+                  const real = path.join(world.root, "farther", "config.txt")
+                  yield* Effect.promise(async () => {
+                    await fs.writeFile(real, text)
+                    await fs.symlink(real, link, "file")
+                  })
+                  const at = way.spelled(world.root)
+                  const settled = yield* run(
+                    world.project,
+                    "Patch",
+                    patched(act === "delete" ? `*** Delete File: ${at}` : update(at, "plain/moved.txt")),
+                    { ...item.options(world.root), trusted },
+                  )
+                  expect(Exit.isSuccess(settled.exit)).toBe(item.removed)
+                  const [linkThere, content] = yield* Effect.promise(async () => [
+                    await fs.lstat(link).then(
+                      (info) => info.isSymbolicLink(),
+                      () => false,
+                    ),
+                    await fs.readFile(real, "utf8"),
+                  ])
+                  expect(linkThere).toBe(!item.removed)
+                  expect(content).toBe(text)
+                  item.check(settled, world.root)
+                }),
+              (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+            ),
+          )
+
+  // Whether the folder of the link that is removed gets a question of its own. A link of a project that is not trusted
+  // yet leads to a folder of Orbit's own: that folder's allow does not answer for it, as it does not for a file the link
+  // leads to. In a trusted project, or through a link outside the project, which is not the repository's, the allow
+  // does. A link that stays in the project needs no folder question. `own` is the folder made Orbit's own.
+  const folderRows = [
+    { name: "an own folder through the project's link", trusted: true, spelled: "out/config.txt", link: ["outside"], real: ["farther"], own: true, asked: false },
+    { name: "an own folder through the project's link", trusted: false, spelled: "out/config.txt", link: ["outside"], real: ["farther"], own: true, asked: true },
+    { name: "an own folder through a link outside the project", trusted: false, spelled: path.join("elsewhere", "alias", "config.txt"), absolute: true, link: ["farther"], real: ["outside"], own: true, asked: false },
+    { name: "a folder in the project through its link inside", trusted: true, spelled: "alias/config.txt", link: ["proj", "sub"], real: ["farther"], own: false, asked: false },
+    { name: "a folder in the project through its link inside", trusted: false, spelled: "alias/config.txt", link: ["proj", "sub"], real: ["farther"], own: false, asked: false },
+  ]
+  for (const row of folderRows)
+    linkedFile(`${row.name}, in ${row.trusted ? "a trusted" : "an untrusted"} folder`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (root) =>
+          Effect.gen(function* () {
+            const world = yield* Effect.promise(() => makeWorld(root.path))
+            const folder = path.join(world.root, ...row.link)
+            const link = path.join(folder, "config.txt")
+            const real = path.join(world.root, ...row.real, "config.txt")
+            yield* Effect.promise(async () => {
+              await fs.writeFile(real, text)
+              await fs.symlink(real, link, "file")
+            })
+            const unused = path.join(world.root, "unused")
+            const at = row.absolute ? path.join(world.root, row.spelled) : row.spelled
+            const settled = yield* run(world.project, "Patch", patched(`*** Delete File: ${at}`), {
+              trusted: row.trusted,
+              rules: row.own ? Agent.folders({ data: unused, tmp: unused, config: folder }) : [],
+            })
+            expect(Exit.isSuccess(settled.exit)).toBe(true)
+            expect(
+              settled.asked
+                .filter((item) => item.action === "external_directory")
+                .flatMap((item) => item.resources)
+                .includes(`${forward(folder)}/*`),
+            ).toBe(row.asked)
+          }),
+        (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+      ),
+    )
 })
 
 // The name of a link that is removed: as it is spelled in the project, or where it is when an untrusted one leads out.

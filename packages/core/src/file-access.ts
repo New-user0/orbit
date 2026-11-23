@@ -148,11 +148,15 @@ export interface Interface {
    */
   readonly link: (target: Target) => { readonly place: AbsolutePath; readonly outside: boolean } | undefined
   /**
-   * What removing `target` removes when its last part is itself a link: that link, where it really is, and not the file
-   * it leads to, which stays (class 3). Undefined for any other target. It reads the link and follows only the folders
-   * above it, so it is asked after the target's external directory is.
+   * What removing `target` removes when its last part is itself a link: that link, where it really is (`place`), and not
+   * the file it leads to, which stays (class 3). Undefined for any other target. It reads the link and follows only the
+   * folders above it, so it is asked after the target's external directory is. Where a link of a folder above leads the
+   * link outside the project, `outside` is the target for that folder's own question, which nothing asked yet: the one
+   * asked for `target` is about the folder of the file the link leads to.
    */
-  readonly removedLink: (target: Target) => Effect.Effect<AbsolutePath | undefined>
+  readonly removedLink: (
+    target: Target,
+  ) => Effect.Effect<{ readonly place: AbsolutePath; readonly outside?: Target } | undefined, FSUtil.Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileAccess") {}
@@ -581,7 +585,14 @@ const layer = Layer.effect(
       if (itself === undefined) return undefined
       const folder = path.dirname(target.absolute)
       const lead = yield* trust.leads(folder)
-      return unlinked(folder, lead) ? target.absolute : AbsolutePath.make(path.join(lead, path.basename(target.absolute)))
+      if (unlinked(folder, lead)) return { place: target.absolute }
+      const place = AbsolutePath.make(path.join(lead, path.basename(target.absolute)))
+      if (real.some((item) => FSUtil.contains(item, place))) return { place }
+      // The folder the link is in is asked about as a link of the project leading out is: in a folder that is not trusted
+      // yet, Orbit's allows for its own folders do not decide it (class 3).
+      const escaped =
+        folders.some((item) => FSUtil.contains(item, folder)) && (yield* trust.escapes(folder)) !== undefined
+      return { place, outside: yield* external(place, "file", place, escaped) }
     })
 
     return Service.of({

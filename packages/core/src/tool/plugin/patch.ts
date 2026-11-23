@@ -219,14 +219,21 @@ export const Plugin = {
                   yield* Effect.gen(function* () {
                     const target = yield* resolveTarget(hunk.path)
                     // A delete, and a move's source, remove the path's last part, which can be a link to the file that was read.
-                    const removes =
+                    const removed =
                       hunk.type === "delete" || (hunk.type === "update" && hunk.movePath)
                         ? yield* access.removedLink(target)
                         : undefined
+                    const removes = removed?.place
                     if (removes) {
                       places[places.length - 1] = removes
                       yield* context.progress({ places: [...new Set(places)] })
                     }
+                    // A link of a folder above puts the link that is removed in another folder than the one asked about.
+                    if (removed?.outside?.externalDirectory)
+                      yield* access.authorizeExternal([removed.outside], context, {
+                        filepath: removed.place,
+                        parentDir: removed.outside.externalDirectory.directory,
+                      })
                     const id = yield* identify(target, hunk.path)
                     if (hunk.type === "add") {
                       yield* ledger.assertRead(context.sessionID, target.absolute, hunk.path)
@@ -321,11 +328,29 @@ export const Plugin = {
                   change.target,
                   ...(change.type === "update" && change.moveTarget ? [change.moveTarget] : []),
                 ])
+                // The link that a delete or a move removes is where it really is, which a link of a folder above can make
+                // a place that neither the resource nor its lead names. It joins the leads, so the person's deny or ask
+                // for that folder decides the removal (class 3).
+                const led = FileAccess.leadsOf(targets).leads ?? {}
+                const removing = prepared.flatMap((change) =>
+                  change.type !== "add" && change.removes !== undefined && change.removes !== change.target.absolute
+                    ? [[change.target, change.removes] as const]
+                    : [],
+                )
+                const leads = {
+                  ...led,
+                  ...Object.fromEntries(
+                    removing.map(([target, removes]) => [
+                      target.resource,
+                      [...(led[target.resource] ?? []), removes],
+                    ]),
+                  ),
+                }
                 yield* permission.assert({
                   action: "Edit",
                   resources: [...new Set(targets.map((target) => target.resource))],
                   save: ["*"],
-                  ...FileAccess.leadsOf(targets),
+                  ...(Object.keys(leads).length === 0 ? {} : { leads }),
                   metadata: {
                     filepath: targets.map((target) => target.resource).join(", "),
                     // Every place the patch touches as resolved here, absolute: a move's source and its destination too.
