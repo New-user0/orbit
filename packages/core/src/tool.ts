@@ -248,6 +248,8 @@ const layer = Layer.effect(
       }
       const afterEvent: PluginHooks.Domains["tool"]["execute.after"] = {
         ...base,
+        // What ran, when it is not the call's own input: a person's revision of an Edit or Write.
+        ...(execution.value.input === undefined ? {} : { input: ToolNames.view(name, execution.value.input) }),
         status: "completed",
         result: {
           ...(execution.value.output === undefined ? {} : { output: execution.value.output }),
