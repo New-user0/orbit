@@ -2508,7 +2508,8 @@ runs" is a permission.
     end of a long" rows);
   - those rows are the ones the session has, under the banner and beside the docks, and not the screen's. A dialog has
     15 at most. Where it has fewer, the docks above it and the route's two blank rows give way to it, then the top of
-    its border and then the bottom. So the three options, the focused one's mark, a link's line and a body that scrolls
+    its border and then the bottom. A dock gives way in whole rows and no two of its rows are drawn over each other
+    (the "give way in whole rows" rows: 80x24, 100x24 and 80x25 with a plan of 2 or 5 steps and with a queued prompt). So the three options, the focused one's mark, a link's line and a body that scrolls
     stay on screen while Allow once or Always allow is focused, and the field, its hints and the line in the reject
     stage (the "the session route at" rows: 80 columns by 6 to 24 rows, 30x12 and 40x8, with a plan and a queued prompt
     at 80x24, the mouse off; the resize, docks and "come back" rows of that file);

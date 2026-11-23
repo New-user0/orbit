@@ -2735,7 +2735,8 @@ warned, for an Edit or Write of one file, and the full dialog dropped the warnin
     would leave the body no row, or the grant too few while Always allow is focused. What was cut is whole in what
     scrolls: an edit's names, or any other title under its icon.
   - The dialog is fitted to the rows the session has. While a question is asked, the plan and the other docks above it
-    show only in the rows it leaves them, which on an 80x24 screen can be none for an edit, and the session's blank row
+    show only in the rows it leaves them, losing whole rows from the bottom up (on an 80x24 screen an edit leaves the
+    plan its header row and none of its steps; the dialog keeps its 15 rows first), and the session's blank row
     at the bottom and the one of "Jump to latest" go where the dialog has fewer than 15 rows. On the lowest screens the
     top of the border goes, and then its bottom, so that every option stays on screen. The reject stage drops its blank
     rows there, and a long reason scrolls in its field.
