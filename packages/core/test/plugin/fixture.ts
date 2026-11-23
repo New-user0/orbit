@@ -29,6 +29,7 @@ import { PersistentPty } from "@orbit/core/persistent-pty"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Permission } from "@orbit/core/permission"
+import { PermissionPolicy } from "@orbit/core/permission/policy"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { FileAccess } from "@orbit/core/file-access"
 import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
@@ -106,6 +107,7 @@ export const pluginTestNodes = LayerNode.group([
   LocationServiceMap.node,
   FileAccess.node,
   Permission.node,
+  PermissionPolicy.node,
   PowerShellParse.node,
   ProjectTrust.node,
   PluginHooks.node,

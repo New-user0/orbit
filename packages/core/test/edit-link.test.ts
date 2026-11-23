@@ -7,10 +7,8 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Cause, Effect, Exit, Layer, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import { Agent } from "@orbit/core/agent"
-import { Config } from "@orbit/core/config"
-import { ConfigPolicyPlugin } from "@orbit/core/config/plugin/policy"
 import { Database } from "@orbit/core/database/database"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { Environment } from "@orbit/core/environment/index"
@@ -22,6 +20,7 @@ import { Image } from "@orbit/core/image"
 import { Location } from "@orbit/core/location"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { Permission } from "@orbit/core/permission"
+import { PermissionPolicy } from "@orbit/core/permission/policy"
 import { PermissionSaved } from "@orbit/core/permission/saved"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { Project } from "@orbit/core/project"
@@ -40,7 +39,6 @@ import { WriteTool } from "@orbit/core/tool/plugin/write"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
-import { Document, Info } from "@orbit/schema/config"
 import type { ConfigPolicy } from "@orbit/schema/config/policy"
 import { transformEnvironmentFiles } from "./fixture/environment"
 import { location } from "./fixture/location"
@@ -50,7 +48,7 @@ import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { registerToolPlugin } from "./lib/tool"
-import { host } from "./plugin/host"
+import { installPolicy } from "./fixture/policy"
 
 const sessionID = Session.ID.make("ses_link")
 const identity = { agent: Agent.ID.make("test"), messageID: SessionMessage.ID.make("msg_link") }
@@ -75,6 +73,7 @@ const plugins = makeLocationNode({
     Formatter.node,
     Location.node,
     Permission.node,
+    PermissionPolicy.node,
   ],
 })
 
@@ -159,6 +158,7 @@ const run = (
           PluginHooks.node,
           ManagedPolicy.node,
           Permission.node,
+          PermissionPolicy.node,
           Tool.node,
           FileAccess.node,
           FileMutation.node,
@@ -196,26 +196,6 @@ const refusing = (refuse: { act: "remove" | "write"; name: string }) =>
       return { remove: (target) => (named(target) ? Effect.fail(refused(target)) : files.remove(target)) }
     return { write: (target, bytes) => (named(target) ? Effect.fail(refused(target)) : files.write(target, bytes)) }
   })
-
-// Runs the real configuration policy plugin on the stack's own hooks, so a statement reaches Permission as in a server:
-// as an `experimental.policies` entry of the person's document, or as a statement of their organization.
-const installPolicy = Effect.fn(function* (from: "user" | "organization", statements: ConfigPolicy.Info[]) {
-  const hooks = yield* PluginHooks.Service
-  const managed = yield* ManagedPolicy.Service
-  if (from === "organization") yield* managed.set("connection", { statements })
-  const unused = () => Effect.die("unused")
-  const context = host({
-    event: { subscribe: () => Stream.empty },
-    provider: { list: unused, get: unused, transform: () => Effect.succeed({ dispose: Effect.void }), reload: () => Effect.void },
-    permission: { list: unused, get: unused, reply: unused, hook: (name, callback) => hooks.register("permission", name, callback) },
-  })
-  const document = new Document({
-    type: "document",
-    scope: "user",
-    info: Schema.decodeUnknownSync(Info)({ experimental: { policies: from === "user" ? statements : [] } }),
-  })
-  yield* ConfigPolicyPlugin.Plugin.effect(context).pipe(Effect.provide(Config.testLayer([document])))
-})
 
 const seed = (directory: string, effect: "ask" | "allow", rules: Permission.Ruleset = [], worktree = directory) =>
   Effect.gen(function* () {

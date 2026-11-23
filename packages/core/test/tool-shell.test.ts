@@ -57,6 +57,7 @@ import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { which } from "@orbit/util/which"
 import type { ConfigManaged } from "@orbit/schema/config/managed"
 import { offlineModels } from "./fixture/models"
+import { installPolicy } from "./fixture/policy"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
 import { Expected } from "./lib/session-message"
@@ -4954,6 +4955,102 @@ describe("ShellGuard: a deny for the spelling of a path a link leads out of", ()
               expect(decided).toEqual(
                 spellings.map((spelling) => ({ spelling, blocked: spelling !== undefined, settled: true })),
               )
+            }),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+        ),
+      { timeout: 120_000 },
+    )
+})
+
+// m5-quality, item 12 (classes 3 and 8): the shell's deny-only Read and Edit probes consult the configuration policies
+// too, as the tools' own requests do, though a probe runs no plugin hook: the policy plugin's own decision is installed
+// for it. Here an organization statement for the path as the project spells it, a plain file and one through a folder
+// link out, stops `cat` and a redirect in a trusted and an untrusted folder; a statement for another file is the
+// control. The gate runs without starting the command, so the rows run on every platform.
+describe("ShellGuard: a policy for the path a command names", () => {
+  const guardIt = (trusted: boolean) =>
+    testEffect(
+      AppNodeBuilder.build(LayerNode.group([nodes, PermissionSaved.node, PowerShellParse.node]), [
+        SessionExecution.node.replace(executionNode),
+        Global.node.replace(tempGlobalLayer),
+        PluginSupervisor.node.replace(shellPluginSupervisor),
+        ...(trusted ? [] : [WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false }))]),
+        offlineModels,
+      ]),
+    )
+  const rows = [
+    { command: "cat plain/s", action: "Read", named: "plain/s" },
+    { command: "echo x > plain/s", action: "Edit", named: "plain/s" },
+    { command: "cat cfg/s", action: "Read", named: "cfg/s" },
+    { command: "echo x > cfg/s", action: "Edit", named: "cfg/s" },
+  ]
+  for (const trusted of [true, false])
+    guardIt(trusted).live(
+      `refuses cat and a redirect of a plain file and through a link (${trusted ? "trusted" : "untrusted"})`,
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) =>
+            Effect.gen(function* () {
+              const active = path.join(tmp.path, "active")
+              const outside = path.join(tmp.path, "outside")
+              yield* Effect.promise(async () => {
+                await fs.mkdir(path.join(active, "plain"), { recursive: true })
+                await fs.mkdir(outside)
+                await fs.writeFile(path.join(outside, "s"), "secret")
+                await fs.writeFile(path.join(active, "plain", "s"), "secret")
+                await fs.symlink(outside, path.join(active, "cfg"), isWindows ? "junction" : "dir")
+              })
+              const decided = yield* withSession(active, () =>
+                Effect.gen(function* () {
+                  const access = yield* FileAccess.Service
+                  const managed = yield* ManagedPolicy.Service
+                  const cwd = yield* access.resolve({ path: active, kind: "directory" })
+                  // The real policy plugin, which reads the organization's statements as each row sets them.
+                  yield* installPolicy("organization", [])
+                  yield* permissions([
+                    { action: "Bash", resource: "*", effect: "allow" },
+                    { action: "external_directory", resource: "*", effect: "allow" },
+                    { action: "Read", resource: "*", effect: "allow" },
+                    { action: "Edit", resource: "*", effect: "allow" },
+                  ])
+                  return yield* Effect.forEach(rows, (row) =>
+                    Effect.forEach([`${row.action}:other.txt`, `${row.action}:${row.named}`], (resource) =>
+                      Effect.gen(function* () {
+                        yield* managed.set("connection", {
+                          statements: [{ action: "permission", resource, effect: "deny" }],
+                        })
+                        const exit = yield* ShellGuard.prepare({
+                          command: row.command,
+                          shell: "sh",
+                          cwd,
+                          env: {},
+                          portable: false,
+                          base: { sessionID, agent: toolIdentity.agent },
+                        }).pipe(Effect.flatMap(ShellGuard.denyPass), Effect.exit)
+                        const blocked =
+                          Exit.isFailure(exit) &&
+                          exit.cause.reasons.some(
+                            (reason) => Cause.isFailReason(reason) && reason.error instanceof Permission.BlockedError,
+                          )
+                        return { command: row.command, resource, blocked, settled: blocked || Exit.isSuccess(exit) }
+                      }),
+                    ),
+                  ).pipe(
+                    Effect.map((items) => items.flat()),
+                    Effect.ensuring(managed.set("connection", { statements: [] })),
+                  )
+                }),
+              )
+              expect(decided).toEqual(
+                rows.flatMap((row) => [
+                  { command: row.command, resource: `${row.action}:other.txt`, blocked: false, settled: true },
+                  { command: row.command, resource: `${row.action}:${row.named}`, blocked: true, settled: true },
+                ]),
+              )
+              // Nothing ran: the files are as they were.
+              expect(yield* Effect.promise(() => fs.readFile(path.join(outside, "s"), "utf8"))).toBe("secret")
+              expect(yield* Effect.promise(() => fs.readFile(path.join(active, "plain", "s"), "utf8"))).toBe("secret")
             }),
           (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
         ),

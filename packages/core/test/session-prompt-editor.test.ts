@@ -13,6 +13,7 @@ import { Instance } from "@orbit/core/instance/service"
 import { Location } from "@orbit/core/location"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { Permission } from "@orbit/core/permission"
+import { PermissionPolicy } from "@orbit/core/permission/policy"
 import { PermissionSaved } from "@orbit/core/permission/saved"
 import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
@@ -27,6 +28,7 @@ import { SessionTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location } from "./fixture/location"
+import { installPolicy } from "./fixture/policy"
 import { untrustedProjectNodes } from "./fixture/project-trust"
 import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -52,6 +54,8 @@ const provide = (project: string, trusted = true, worktree = project) =>
           PluginHooks.node,
           ManagedPolicy.node,
           Permission.node,
+
+          PermissionPolicy.node,
           Global.node,
           FileAccess.node,
           ProjectTrust.node,
@@ -295,6 +299,45 @@ describe("editor context at admission", () => {
       )
     }
   }
+
+  // m5-quality, item 12 (classes 3 and 8): a configuration policy refuses the editor field as it refuses the Read tool,
+  // though the check runs no plugin hook: the policy plugin's own decision is installed for it. A plain file, a folder
+  // link out and a file link out, by the path as the project spells it, from the person's document and from their
+  // organization, in a trusted and an untrusted folder. A policy for another file is the control.
+  for (const trusted of [true, false])
+    for (const link of ["plain", "folder", "file"] as const)
+      for (const from of ["user", "organization"] as const)
+        (link === "file" && !canLinkFile ? it.live.skip : it.live)(
+          `a ${from} policy Read deny drops the field: ${link === "plain" ? "a plain file" : `a ${link} link out`} (${trusted ? "trusted" : "untrusted"})`,
+          () =>
+            Effect.gen(function* () {
+              const root = (yield* tmpdirScoped()).path
+              const project = path.join(root, "project")
+              const outside = path.join(root, "outside")
+              fs.mkdirSync(path.join(project, "plain"), { recursive: true })
+              fs.mkdirSync(outside)
+              fs.writeFileSync(path.join(outside, "s"), "SECRET-MARKER")
+              fs.writeFileSync(path.join(project, "plain", "s"), "SECRET-MARKER")
+              if (link === "folder") fs.symlinkSync(outside, path.join(project, "cfg"), "junction")
+              if (link === "file") fs.symlinkSync(path.join(outside, "s"), path.join(project, "key.txt"), "file")
+              const spelled = { plain: "plain/s", folder: "cfg/s", file: "key.txt" }[link]
+              const editor = { path: path.join(project, spelled), selection: { start: 1, end: 1, text: "SECRET-MARKER" } }
+              const kept = yield* Effect.forEach(["other.txt", spelled], (named) =>
+                Effect.scoped(
+                  Effect.gen(function* () {
+                    yield* prepare(project, [allow])
+                    yield* installPolicy(from, [{ action: "permission", resource: `Read:${named}`, effect: "deny" }])
+                    const payload = yield* admit({ text: "hi", editor })
+                    return [named, payload.editor !== undefined] as const
+                  }).pipe(provide(project, trusted)),
+                ),
+              )
+              expect(kept).toEqual([
+                ["other.txt", true],
+                [spelled, false],
+              ])
+            }),
+        )
 
   // Fix loop 11 (classes 3 and 4): from a session folder below the worktree the project spells the file `../cfg/s`. A
   // trusted folder checks that spelling; an untrusted one checks the place the link leads to, with the spelling as a
