@@ -2559,7 +2559,13 @@ runs" is a permission.
     default title of a request whose caller is not its tool, an MCP call's `Arguments:` (the label outside the span), a
     shell call's command and any other call's name in the updates' titles, and a subagent's title in front of its calls,
     which keeps its 40-character cut (classes 6, 8 and 9; `packages/cli/test/acp/approval-markdown.test.ts`, one row per
-    sink, each with values Markdown would change, a line break, and plain values as the control);
+    sink, each with values Markdown would change, a line break, and plain values as the control). What a tool gave back
+    goes in the call's content by `literalBlock` in the same file: a Read's file text, any other tool's text output and
+    an error's text are sent as they are when they are one line Markdown draws letter for letter, and otherwise in a
+    fenced code block whose fence is longer than any run of backticks in them, so they keep their lines and none of them
+    becomes a link, an image or a tag (classes 6 and 9; the same file, "what a tool gave back reads as it is": a Read, a
+    shell call's output and an MCP call's error, each with the hostile values, a line break and a file of several lines
+    with fences of its own, and one plain line as the control);
   - the VS Code chat's card, and the title of its review or preview tab, which can answer while the card is hidden
     (`packages/vscode/test/approval-link.test.ts`, `webview-trust.test.ts`, `diff-review.test.ts`). A tab of the terminal
     UI's bridge has no warning in its title: the compact prompt beside it has it.
@@ -2602,9 +2608,9 @@ runs" is a permission.
   it for each escaped target, so Edit, Write, NotebookEdit, every file of a Patch and the door of Read carry it. Before, a deny written for the path in the project let a write land where the link leads (classes
   3 and 8; `edit-link.test.ts`, "a rule for the spelling of a path a link leads out of decides the call through it": a
   deny and an ask, by each spelling, for a file that is a link out and a file below a folder link out, trusted as the
-  control and untrusted). Two checks that send a file's text to the model without the read tool build their Read request
-  the same way: the one that lets the editor's file and selection into a prompt, and the one the file-change reminder
-  makes before it shows a change. A Read deny for the path in the project drops the editor field in an untrusted folder
+  control and untrusted). Three checks that send a file's text to the model without the read tool build their Read
+  request the same way: the one that lets the editor's file and selection into a prompt, the one for a mentioned file
+  (below), and the one the file-change reminder makes before it shows a change. A Read deny for the path in the project drops the editor field in an untrusted folder
   too (`session-prompt-editor.test.ts`, "a Read deny for the spelling of a folder link out drops the field" and its file
   link row: the relative and the absolute path, trusted as the control and untrusted, and no deny keeps the field). The
   reminder skips such a file in an untrusted folder before any rule is asked, because its name leads out of the project,
@@ -2636,8 +2642,18 @@ runs" is a permission.
   `Read:` policies by the relative and the absolute path, from a person's document and as an organization statement,
   for every file tool and Read through a file link and a folder link out, trusted as the control and untrusted, a later
   allow of a lead's spelling that keeps the deny, and no policy as the control that runs).
-- The checks that run no plugin hook (`Permission.denied` and `Permission.allowed`: the editor field at admission, the
-  file-change reminder's re-read and its seeding from history, and the shell guard's Read and Edit probes) take the
+- A mentioned file or folder (`@path`, which a client sends as a `file:` attachment) reaches the model whole at
+  admission, without the read tool, so the same Read request is built for it before anything of it is opened
+  (`SessionPrompt.unreadable`, which the editor field shares). A Read deny rule or a policy that refuses it leaves it
+  out of the prompt with one log line, and the prompt and its other mentions are admitted, as the reference drops a
+  mentioned file its read rules deny. Before, `@secret/x` sent a file that the Read tool, `cat` and the editor field
+  refused (classes 3 and 8; `session-prompt-editor.test.ts`, "mentioned files at admission": a Read deny by the relative
+  and the absolute path, and a user and an organization policy, for a plain file, a file through a folder link out and
+  a file link out, trusted and untrusted, with a mention of another file kept as the control in each, and a mentioned
+  folder).
+- The checks that run no plugin hook (`Permission.denied` and `Permission.allowed`: the editor field and a mentioned
+  file at admission, the file-change reminder's re-read and its seeding from history, and the shell guard's Read and
+  Edit probes) take the
   configuration policies' answer from `PermissionPolicy` (`packages/core/src/permission/policy.ts`), where the policy
   plugin installs the same decision its hook applies, shown the same resources, aliases and leads. It only refuses, and
   no other plugin code runs on those paths. Before, a policy that refused the Read tool let `cat`, a redirect or an

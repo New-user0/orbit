@@ -2217,7 +2217,8 @@ alone keeps working as before.
 
 A prompt you gave as a slash command, such as `/review src/a.ts`, was shown everywhere as the command's expansion, the
 prompt text the model reads. The terminal UI now shows it as you typed it, `/review src/a.ts`, on the rewind picker's row
-and in its quote, in the transcript, the queue dock, the timeline and the fork list, and every place that puts a prompt
+and in its quote, in the transcript and its Markdown copy (`/copy`, and `/export` as Markdown), the queue dock, the
+timeline and the fork list, and every place that puts a prompt
 back in the input (a rewind, an interrupt before the reply, undoing a queued prompt, a fork, Mini) gives back
 `/review src/a.ts`, or `/review ` for a command run with no arguments, so sending it runs the command again. The model
 still reads the expansion. A skill activated for the session through the API is a row of the rewind picker too, drawn
@@ -2226,7 +2227,8 @@ command for a skill, so sending that text sends it as a prompt.
 
 The server records the command on the prompt it admits: the user message and the inbox item have an optional
 `command: { name, arguments }`. A prompt sent through `session.prompt` cannot set it, and the prompt a subagent command
-gives its child has none. A sanitized export redacts the arguments as it redacts the text.
+gives its child has none. A sanitized export redacts the command's name and its arguments, as it redacts the text and a
+skill's name.
 
 **Affects:** terminal UI and Mini users who run slash commands, and SDK or HTTP clients that read user messages or inbox
 items.
@@ -2242,10 +2244,15 @@ a subagent's title in front of its calls. Each of these is now written so Markdo
 were: on one line, unchanged where Markdown draws it letter for letter, and otherwise in a code span. A URL is always in
 a code span, since Markdown would make it a link. Nothing is cut but a subagent's title.
 
-**Affects:** ACP editors, and anything that matches an ACP call's title.
+What a tool gave back goes in a call's content the same way: the text of a file a Read opened, another tool's output and
+the text of an error are sent as they are when they are one line that Markdown leaves alone, and otherwise in a fenced
+code block whose fence no line of them can close, so they keep their lines.
+
+**Affects:** ACP editors, and anything that matches an ACP call's title or reads its content.
 
 **What to do:** Nothing, unless something matches such a title exactly: allow for the backticks of a code span, or match
-on the call's `rawInput`.
+on the call's `rawInput`. Something that reads a call's text content should allow for the fence around it, or read the
+call's `rawOutput`.
 
 ## Permissions
 
@@ -2839,6 +2846,17 @@ folder. A policy here only refuses; it never allows what the rules do not.
 **Affects:** people and organizations that refuse files with configuration policies.
 
 **What to do:** Nothing. A policy you relied on for the Read tool now covers these checks as well.
+
+### A mentioned file that a read rule refuses is left out of the prompt
+
+A file or folder you mention in a prompt (`@path`, sent as a file attachment) reached the model whole, even when a Read
+deny rule or a configuration policy refused it to the Read tool. Such a mention is now left out of the prompt with one
+log line, as the editor's selection already was, for a plain path and for one through a link, in a trusted and an
+untrusted folder. The prompt and its other mentions are sent as before.
+
+**Affects:** people who refuse files with Read deny rules or policies and mention files in prompts, from any client.
+
+**What to do:** Nothing. Allow the file, or paste what you need from it, if you meant the model to read it.
 
 ## Plugins and SDK
 
