@@ -1047,15 +1047,21 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   carve-out never covers this root (`current` leaves it out). `snapshot.json` is read at its real path inside the
   snapshot folder (`MemoryStore.locate`) and decoded with `Schema.decodeUnknownOption`; missing logs nothing, anything
   else that fails logs one line and takes no snapshot (class 7). Only a listing entry of type `file` is copied, its name
-  must pass `ConfigAgent.isName` (class 5, one line), it is read at its real path inside the snapshot folder and
+  must pass `ConfigAgent.isName` (class 5, one line), at most the first 200 such names in code-point order are copied
+  (`MemoryStore.MAX_SCAN_FILES`, the most of a memory folder the reference reads; the rest cost one line), it is read at
+  its real path inside the snapshot folder, at most 250,001 bytes, and left out with one line when it is over 250,000
+  bytes (the reference's bound on a team memory entry), so its size is decided from the bytes read at the place it is
+  read from (classes 4 and 7), and it is
   written into a new hidden folder beside the target (`makeTempDirectory`), and no target name that is a link (one
-  that leads nowhere included) is written through or moved over (class 4). The copy stays interruptible: an interrupt
+  that leads nowhere included) is written through or moved over (class 4). The hidden folder is made and its removal
+  attached in one step an interrupt waits for (`Effect.acquireUseRelease`), so an interrupt just after it is made leaves
+  none. The copy stays interruptible: an interrupt
   removes that folder, so nothing of the snapshot reaches the target, and only the move into place waits, one rename of
   the whole folder when the target is not there (a file at its name is left alone and costs the agent one line) or one
   per file and the marker when it is (class 7); the target is the one
   `{ folder, real }` of `MemoryAgent.folder` that the block, the make and the carve-out use (class 3). A failing file or
   agent costs only itself with one line (class 7); `updatedAt` reaches only the marker, as JSON, and no log message
-  (class 9). There is no size or count cap, as in the reference (a cap is a follow-up). Proof:
+  (class 9). Proof:
   `test/memory-agent-snapshot.test.ts` (the copy and marker, an escape in `updatedAt`, the Markdown decision with links,
   folders, `NOTES.MD` and a text file, the agents that qualify, memory off by config and switch, an untrusted project
   and the grant with the recorded file system, malformed, linked, folder and missing `snapshot.json`, a file in the
@@ -1063,8 +1069,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   in a loop, agent snapshot folders linked out or dangling, links, folders and names that are not plain in the source,
   links at target names and a user folder linked out, a share with the recorded file system, a file that cannot be
   written, a worktree's Location, once per agent list and again after a change, an interrupt after the first copied
-  file, an interrupt during a copy of 1,000 files that returns in under half the whole copy's time, and an interrupt
-  after the first file moved into a folder that is there), `test/memory-agent.test.ts` (the
+  file, an interrupt during a copy of 200 large files that returns in under half the whole copy's time, an interrupt
+  after the first file moved into a folder that is there, an interrupt just after the hidden folder is made, a file
+  over 250,000 bytes and one of exactly that size, 203 files cut to the first 200, and the cut by code point where the
+  listing orders otherwise), `test/memory-agent.test.ts` (the
   snapshot folder after trust and for plain ids only), `test/memory-agent-instructions.test.ts` (the snapshot's index
   in the first block from the one resolved folder, with the carve-out, through a linked Location),
   `test/memory-listing.test.ts` (`/memory` listing and make before any session) and
@@ -1226,7 +1234,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   made; the writer's `O_NOFOLLOW`, read back from `/proc` on Linux; a vanished file), `test/tool-shell-output-cap.test.ts`
   (the linked session folder, a message ID that cannot name a file, a hostile call ID, the 64 MB cut, a copy when the
   shell file is on another volume, a replay that keeps the first copy, a copy that cannot be made on Linux, the withheld
-  keys with trusted controls, a blank head alone and before a timeout note), `test/tool-output.test.ts` (an offer used once, the bound on unsettled offers),
+  keys with trusted controls, a blank head alone and before a timeout note), `test/tool-output.test.ts` (an offer used once, the bound on unsettled offers,
+  and "an offered file that is a link > is neither cut nor saved, and a real file of the same size is": a link at the
+  offered file to a file over 64 MB, where a file link can be made, so the 64 MB cut's own open is pinned),
   `test/tool-output-lowering.test.ts` (the `parts` that do not decode, a look-alike after the wrapper).
 
 **CLI and flow** (`packages/cli`, `packages/flow`):
@@ -2542,9 +2552,14 @@ runs" is a permission.
     warning, or in the name of a file or folder that titles the request, becomes a link, an image or a tag, which a
     client could contact a host for (classes 6 and 8; the "Markdown's literal text" rows). A subagent's title, which a
     model chose and which comes before the summary, is one line of 40 characters at most and is quoted where it has a
-    warning's words anywhere (classes 8 and 9; the "subagent's title reads as no warning" row). A description or command
-    that titles an `external_directory` question, other content of the call and the updates' titles are not rewritten
-    for Markdown (FU-M5-009);
+    warning's words anywhere (classes 8 and 9; the "subagent's title reads as no warning" row). Every other value a
+    model, a file, a subagent or an MCP server chose that ACP sends in a title or in text content goes through the same
+    rule (`literal` in `packages/cli/src/acp/markdown.ts`), whole and on one line: the description or command that titles
+    an `external_directory` question, a fetch's URL and its `METHOD url`, a search's pattern, a web search's query, the
+    default title of a request whose caller is not its tool, an MCP call's `Arguments:` (the label outside the span), a
+    shell call's command and any other call's name in the updates' titles, and a subagent's title in front of its calls,
+    which keeps its 40-character cut (classes 6, 8 and 9; `packages/cli/test/acp/approval-markdown.test.ts`, one row per
+    sink, each with values Markdown would change, a line break, and plain values as the control);
   - the VS Code chat's card, and the title of its review or preview tab, which can answer while the card is hidden
     (`packages/vscode/test/approval-link.test.ts`, `webview-trust.test.ts`, `diff-review.test.ts`). A tab of the terminal
     UI's bridge has no warning in its title: the compact prompt beside it has it.
@@ -2621,6 +2636,16 @@ runs" is a permission.
   `Read:` policies by the relative and the absolute path, from a person's document and as an organization statement,
   for every file tool and Read through a file link and a folder link out, trusted as the control and untrusted, a later
   allow of a lead's spelling that keeps the deny, and no policy as the control that runs).
+- The checks that run no plugin hook (`Permission.denied` and `Permission.allowed`: the editor field at admission, the
+  file-change reminder's re-read and its seeding from history, and the shell guard's Read and Edit probes) take the
+  configuration policies' answer from `PermissionPolicy` (`packages/core/src/permission/policy.ts`), where the policy
+  plugin installs the same decision its hook applies, shown the same resources, aliases and leads. It only refuses, and
+  no other plugin code runs on those paths. Before, a policy that refused the Read tool let `cat`, a redirect or an
+  editor selection of the same file through (classes 3 and 8; `session-prompt-editor.test.ts`, "a user/organization
+  policy Read deny drops the field", a plain file and a folder and a file link out, trusted and untrusted;
+  `durable-reminders.test.ts`, "a policy Read deny skips"; `tool-shell.test.ts`, "ShellGuard: a policy for the path a
+  command names"; each with a policy for another file as the control; and `permission-policy.test.ts` for the
+  install's lifetime).
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob
@@ -2758,13 +2783,16 @@ no command to paste") and the `holderRefusal` rows of `packages/cli/test/trust.t
   and reads token counts with `Number`.
 - The rewind picker (`packages/tui/src/routes/session/dialog-rewind.tsx`) draws four values a clone or the store can
   choose: a file name from a prompt's `scope=prompt` diff on its list row and one from the dry run's `filesChanged` in
-  its confirm step, each as `plain(basename)`; the stored prompt, or the stored command of a `!` shell row, through
+  its confirm step, each as `plain(basename)`; the stored prompt (a slash command's as `/name arguments` from its stored
+  `command`), the stored command of a `!` shell row, or the stored name of a skill row, through
   `bodyText` on its list row, which turns line breaks into spaces, and in the confirm step, which quotes up to its first
   four lines and 500 characters and keeps their line breaks; and the server's message in its error line, through
   `plain`. The storybook's `rewind` story draws the same component with a hostile fixture. Tests:
   `packages/tui/test/rewind-picker.test.tsx` ("a repository file name and a stored prompt are drawn with their control
-  characters written out", which also draws a hostile shell command, and "a refused rewind's message is drawn with its
-  control characters written out") and `packages/tui/test/cli/tui/rewind-story.test.tsx`, with ordinary names and an
+  characters written out", which also draws a hostile shell command, "a slash command's stored arguments and a skill's
+  name are drawn with their control characters written out", and "a refused rewind's message is drawn with its
+  control characters written out"), `packages/tui/test/rewind-command.test.tsx` ("a prompt of several lines is one line
+  on its row") and `packages/tui/test/cli/tui/rewind-story.test.tsx`, with ordinary names and an
   ordinary shell command as the control in "/rewind lists every prompt with its own file edits and a current row".
 - The runner writes session titles and commit subjects through `plain` (`packages/flow/src/runner.ts`). Text that is
   stored outlives the clone, so escape it at write time.

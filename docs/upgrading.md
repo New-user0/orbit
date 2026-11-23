@@ -2213,6 +2213,40 @@ Write permission requests (a file entry may now carry `link`).
 **What to do:** Nothing. Update the VS Code extension and the terminal UI together to get the editor review; either one
 alone keeps working as before.
 
+### A slash command's prompt is shown as the command you ran
+
+A prompt you gave as a slash command, such as `/review src/a.ts`, was shown everywhere as the command's expansion, the
+prompt text the model reads. The terminal UI now shows it as you typed it, `/review src/a.ts`, on the rewind picker's row
+and in its quote, in the transcript, the queue dock, the timeline and the fork list, and every place that puts a prompt
+back in the input (a rewind, an interrupt before the reply, undoing a queued prompt, a fork, Mini) gives back
+`/review src/a.ts`, or `/review ` for a command run with no arguments, so sending it runs the command again. The model
+still reads the expansion. A skill activated for the session through the API is a row of the rewind picker too, drawn
+`/<name>`; its rewind offers only the conversation and puts `/<name> ` back in the input. The terminal UI has no slash
+command for a skill, so sending that text sends it as a prompt.
+
+The server records the command on the prompt it admits: the user message and the inbox item have an optional
+`command: { name, arguments }`. A prompt sent through `session.prompt` cannot set it, and the prompt a subagent command
+gives its child has none. A sanitized export redacts the arguments as it redacts the text.
+
+**Affects:** terminal UI and Mini users who run slash commands, and SDK or HTTP clients that read user messages or inbox
+items.
+
+**What to do:** Nothing. A client that shows a user message may show `command` the same way.
+
+### Over ACP, text a model or a file chose reads as it is in titles and content
+
+An editor that renders an ACP call's content, and some that render its title, as Markdown could draw a link, an image or
+a heading out of what a model or a repository wrote: the description or command that titles a question about an outside
+folder, a fetch's URL, a search's pattern or query, an MCP call's arguments, a shell call's command, a call's name, and
+a subagent's title in front of its calls. Each of these is now written so Markdown shows it as it is, as paths already
+were: on one line, unchanged where Markdown draws it letter for letter, and otherwise in a code span. A URL is always in
+a code span, since Markdown would make it a link. Nothing is cut but a subagent's title.
+
+**Affects:** ACP editors, and anything that matches an ACP call's title.
+
+**What to do:** Nothing, unless something matches such a title exactly: allow for the backticks of a code span, or match
+on the call's `rawInput`.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -2794,6 +2828,18 @@ policies name files, and plugins with a `permission.evaluate` hook.
 **What to do:** Nothing, unless something matches an ACP permission title from its start or exactly: allow for the
 warning (and a subagent's title) before the name and for backticks around it, or match on the call's `locations`.
 
+### A configuration policy refuses a file to the editor field, the file-change reminder and the shell
+
+A `permission` statement in `experimental.policies`, or one of your organization's, refused the Read or Edit tool but not
+the checks that run no plugin hook: the editor's selection still reached the model with a prompt, a file the session had
+read was still reported when it changed, and `cat secret/x` or a redirect into it passed the shell's own check. Those
+checks now take the policies' answer too, for a plain path and for one through a link, in a trusted and an untrusted
+folder. A policy here only refuses; it never allows what the rules do not.
+
+**Affects:** people and organizations that refuse files with configuration policies.
+
+**What to do:** Nothing. A policy you relied on for the Read tool now covers these checks as well.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
@@ -2951,6 +2997,19 @@ warming hook does.
 **Affects:** plugins with a `session.context` hook that has side effects.
 
 **What to do:** Skip the side effect when `event.analysis` is `true`.
+
+### A post-tool hook is told what ran after a revised Edit or Write
+
+When you approved an Edit or Write with your own version of the file, a `PostToolUse` hook, and the `execute.after` event
+of a plugin, still got the model's proposal as the call's input. They now get what was written: a Write's `content` is
+your text, and an Edit is one edit of the whole file, its `old_string` the file as the request read it, its `new_string`
+your version and `replace_all` false. A version equal to the proposal leaves the model's input. A `PreToolUse` hook, the
+recorded call and what the model reads keep the model's input. A tool's result may now carry the `input` that ran for
+this.
+
+**Affects:** hooks and plugins that check or format what an Edit or Write wrote.
+
+**What to do:** Nothing, unless a hook relied on the model's `old_string` after a revision: it is the whole file now.
 
 ## Agent loop
 
@@ -4315,6 +4374,16 @@ the next session copies the snapshot whole; only the move into place, which is q
 **What to do:** Nothing. A folder that an earlier build left part-copied stays as it is; delete its files to have the
 next session copy the snapshot again. A hidden `.<agent id>.snapshot-` folder that a crash leaves in
 `<data>/memory/agents` can be deleted.
+
+### An agent memory snapshot copies at most 200 files of at most 250,000 bytes each
+
+A project's agent memory snapshot was copied whole, whatever the number and size of its files. A file over 250,000 bytes
+is now left out with one log line, and at most 200 files are copied: the first by name, in code-point order, with one log
+line for the rest. An interrupt just after the hidden folder of the copy is made no longer leaves that folder behind.
+
+**Affects:** projects that ship agent memory snapshots with more than 200 files or with files over 250,000 bytes.
+
+**What to do:** Keep a snapshot within the bounds, or split a large file.
 
 ## Files and web tools
 
