@@ -2582,7 +2582,8 @@ runs" is a permission.
   `edit-link.test.ts`, "a rule for the spelling of a link that is removed decides its removal": a deny and an ask, by
   each spelling, for a delete and a move's source of five shapes of link, trusted as the control and untrusted, and a
   link in a memory folder reached through a linked data folder, which is still removed without a question). The same
-  spelling is a subject of every request that a file is written or read through such a link: `FileAccess.leadsOf` adds
+  spelling is a subject of the deny and ask rules of every request that a file is written or read through such a link
+  (relative to the session folder too, also as `../` from a session folder below the worktree): `FileAccess.leadsOf` adds
   it for each escaped target, so Edit, Write, NotebookEdit, every file of a Patch and the door of Read carry it. Before, a deny written for the path in the project let a write land where the link leads (classes
   3 and 8; `edit-link.test.ts`, "a rule for the spelling of a path a link leads out of decides the call through it": a
   deny and an ask, by each spelling, for a file that is a link out and a file below a folder link out, trusted as the
@@ -2600,6 +2601,26 @@ runs" is a permission.
   the link leads to (classes 3 and 8; `tool-shell.test.ts`, "ShellGuard: a deny for the spelling of a path a link leads
   out of": a deny by the relative path, the absolute path and a pattern, for `cat`, a redirect, `rm`, `bash -c` and,
   where it is installed, PowerShell, trusted as the control and untrusted, and no deny as the control that passes).
+  From a session folder below the worktree the project spells such a file `../out/b.txt`. A trusted folder asks with
+  that spelling, and the rules now try a lead's relative that climbs out of the session folder too, while its place is
+  in one of the project's folders. Before, a deny or ask for `../out/*` decided the call in a trusted folder and not in
+  an untrusted one (classes 3, 4 and 8; `edit-link.test.ts`, "a rule for the ../ spelling of a path a link leads out of
+  decides the call through it": a deny and an ask for every file tool and Read, with the absolute path and the trusted
+  folder as the controls, and a `../` rule for a place outside the project, which still decides nothing; the editor
+  field in `session-prompt-editor.test.ts`, "a Read deny for the ../ spelling of a link out drops the field"; and the
+  shell, which kept that spelling already, in `tool-shell.test.ts`, "decides cat ../cfg/s from a session folder below
+  the worktree").
+- A configuration policy (`experimental.policies` of any scope) and an organization's statements decide through the
+  `permission.evaluate` hook, which is shown a request's `leads` beside its resources and aliases: each lead in every
+  spelling the rules try, from the same function, and a file tool's relative resource by where it is. The policy plugin
+  refuses on them in a pass of its own that never allows, so a policy that allows only the spelling of a lead does not
+  lift a deny of the resource. Before, a deny policy for the path as an untrusted project spells it (`Edit:out/*`) never
+  met a write, removal or read through a link that leads out, because the resource is the place the link leads to, and
+  a policy written with an absolute path never met a relative resource, in a trusted folder too (classes 3 and 8;
+  `edit-link.test.ts`, "a policy for the spelling of a path a link leads out of refuses the call through it": `Edit:` and
+  `Read:` policies by the relative and the absolute path, from a person's document and as an organization statement,
+  for every file tool and Read through a file link and a folder link out, trusted as the control and untrusted, a later
+  allow of a lead's spelling that keeps the deny, and no policy as the control that runs).
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob

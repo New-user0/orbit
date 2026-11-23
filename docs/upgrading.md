@@ -2730,7 +2730,14 @@ warned, for an Edit or Write of one file, and the full dialog dropped the warnin
   an Edit, Write, NotebookEdit, Patch or Read through that path. Before, such a rule did not apply, so the file the link
   leads to could be written or read without a question even where you had denied the path. A Read or Edit deny written
   that way also stops a shell command that reads, writes or removes the file through the link, as it does in a trusted
-  folder; before, such a command reached the file the link leads to.
+  folder; before, such a command reached the file the link leads to. Where the session folder is below the project's
+  folder, a rule written as `../out/*` for such a path now decides too; before, it did only in a trusted folder.
+- **Policies through a link.** A deny in `experimental.policies` or an organization's statement now refuses a file tool
+  or Read through a link where it names the path as the project spells it (`Edit:out/*`) or as the place the link leads
+  to, in a trusted folder and in one that is not trusted yet. A deny written with an absolute path now also refuses a
+  file named relative to the session folder. Before, a policy met only the request's resource, so such a call went
+  ahead. A policy that allows the spelling of a link never lifts a deny of where it leads. A plugin's
+  `permission.evaluate` hook is shown these spellings as `leads`, keyed by resource like `aliases`.
 - **Terminal UI and Mini.** The warning stays while Always allow is chosen and while you type why you reject, and a
   request of several files warns too. Where a warning is too long to stay whole, or a path in it holds a warning's own
   words, a summary stays and the warning is in what scrolls, under the grant while Always allow is focused (the reject
@@ -2778,7 +2785,8 @@ warned, for an Edit or Write of one file, and the full dialog dropped the warnin
 The warning changes no decision, rule or saved approval.
 
 **Affects:** people who approve file changes in a project with links; scripts and SDK callers that read Patch and
-NotebookEdit permission requests; ACP clients or scripts that match permission titles.
+NotebookEdit permission requests; ACP clients or scripts that match permission titles; people and organizations whose
+policies name files, and plugins with a `permission.evaluate` hook.
 
 **What to do:** Nothing, unless something matches an ACP permission title from its start or exactly: allow for the
 warning (and a subagent's title) before the name and for backticks around it, or match on the call's `locations`.
