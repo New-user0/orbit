@@ -1,5 +1,5 @@
 import type { MiniPermissionRequest, PermissionReply } from "./types"
-import { permissionAlwaysLines, permissionOptionLabel, permissionPresentation } from "../util/permission"
+import { permissionAlwaysLines, permissionLinks, permissionOptionLabel, permissionPresentation } from "../util/permission"
 import { toolPath } from "./tool"
 import { monoPrefix } from "./mono"
 
@@ -70,6 +70,11 @@ export function permissionInfo(request: MiniPermissionRequest, directory?: strin
     diffs: undefined,
     patch: undefined,
   }
+}
+
+// Not among the `lines` of `permissionInfo`, which the diffs lead in mono.
+export function permissionWarnings(request: MiniPermissionRequest, directory?: string) {
+  return permissionLinks(request, (value) => toolPath(value, { home: true, directory }))
 }
 
 export function permissionLabel(option: PermissionOption): string {

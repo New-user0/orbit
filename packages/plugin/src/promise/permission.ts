@@ -15,6 +15,14 @@ export interface PermissionEvaluation {
    * hook that only inspects `resources` never sees them and decides on the primary spelling alone.
    */
   readonly aliases?: Readonly<Record<string, ReadonlyArray<string>>>
+  /**
+   * The real places a resource leads to through a link, keyed by that resource, one list per place: its real path, its
+   * path as the project spells it (where a link of a project that is not trusted leads out, the resource is the real
+   * place) and each of those relative to the session folder. A hook may refuse on them, deciding the spellings of one
+   * place together. It must not allow on them, as it may on an alias: a policy that allows only a place's spelling never
+   * lifts a deny written for the resource.
+   */
+  readonly leads?: Readonly<Record<string, ReadonlyArray<ReadonlyArray<string>>>>
   readonly metadata?: Record<string, unknown>
   readonly source?: Permission.Source
   effect: Permission.Effect

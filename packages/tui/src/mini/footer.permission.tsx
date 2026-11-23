@@ -26,12 +26,14 @@ import {
   permissionReject,
   permissionRun,
   permissionShift,
+  permissionWarnings,
   type PermissionOption,
 } from "./permission.shared"
 import { stringWidth } from "../util/string-width"
 import { toolFiletype } from "./tool"
 import { transparent, type RunBlockTheme, type RunFooterTheme } from "./theme"
 import type { MiniPermissionRequest, PermissionReply } from "./types"
+import { Hanging } from "../component/hanging"
 import { PatchDiff } from "../component/patch-diff"
 
 function buttons(
@@ -154,6 +156,7 @@ export function RunPermissionBody(props: {
   const [state, setState] = createSignal(createPermissionBodyState(props.request))
   const stage = createMemo(() => state().stage)
   const info = createMemo(() => permissionInfo(props.request, props.directory?.(), props.mono))
+  const links = createMemo(() => permissionWarnings(props.request, props.directory?.()))
   // A patch that edits several files gets one diff per file, each under its own path.
   const diffs = createMemo(() => info().diffs ?? (info().diff ? [{ file: info().file ?? "", diff: info().diff! }] : []))
   let scroll: ScrollBoxRenderable | undefined
@@ -174,6 +177,20 @@ export function RunPermissionBody(props: {
       ? "pgup/pgdn scroll"
       : `${props.mono ? "left/right" : "⇆"} select  enter confirm  esc ${stage() === "always" ? "cancel" : "reject"}`
   const inlineControls = () => controlsWidth() + stringWidth(hint()) + 1 <= width() - (compact() ? 0 : 5)
+  // The sentence where it fits, and otherwise the short form, which keeps the word outside or inside.
+  const summary = () => {
+    const full = links().summary
+    if (full === undefined || stringWidth(full) <= width() - (compact() ? 0 : 5)) return full
+    return links().short
+  }
+  // Each linked end on a line of its own, under what is approved (class 8).
+  const warnings = () => (
+    <Show when={links().lines.length > 0}>
+      <box width="100%" flexDirection="column" flexShrink={0} paddingLeft={compact() ? 0 : 1}>
+        <For each={links().lines}>{(line) => <Hanging text={line} fg={props.theme.warning} />}</For>
+      </box>
+    </Show>
+  )
   const title = createMemo(() => {
     if (stage() === "always") {
       return "Always allow"
@@ -318,10 +335,20 @@ export function RunPermissionBody(props: {
         gap={compact() ? 0 : 1}
         flexShrink={0}
       >
-        <text height={1} fg={props.theme.text} wrapMode="none" truncate>
-          <span style={{ fg: props.theme.permission }}>{props.mono ? "! " : "△ "}</span>
-          {title()}
-        </text>
+        <box flexDirection="column">
+          <text height={1} fg={props.theme.text} wrapMode="none" truncate>
+            <span style={{ fg: props.theme.permission }}>{props.mono ? "! " : "△ "}</span>
+            {title()}
+          </text>
+          {/* One line in every stage, above what scrolls. */}
+          <Show when={summary()}>
+            {(line) => (
+              <text height={1} fg={props.theme.warning} wrapMode="none" truncate>
+                {line()}
+              </text>
+            )}
+          </Show>
+        </box>
         <Show when={!compact() && stage() === "reject"}>
           <text fg={props.theme.muted}>Tell Orbit what to do differently</text>
         </Show>
@@ -404,11 +431,14 @@ export function RunPermissionBody(props: {
               <Match when={stage() === "permission"}>
                 <box width="100%" flexDirection="column" flexShrink={0} gap={compact() ? 0 : 1}>
                   <box width="100%" paddingLeft={compact() ? 0 : 1} flexShrink={0}>
-                    <text width="100%" fg={props.theme.text} wrapMode="word" flexShrink={0}>
-                      <span style={{ fg: props.theme.muted }}>{info().icon} </span>
-                      {info().title}
-                    </text>
+                    <Hanging
+                      lead={`${info().icon} `}
+                      leadFg={props.theme.muted}
+                      text={info().title}
+                      fg={props.theme.text}
+                    />
                   </box>
+                  {warnings()}
                   <Show
                     when={diffs().length > 0}
                     fallback={
@@ -418,37 +448,40 @@ export function RunPermissionBody(props: {
                           <box width="100%" flexDirection="column" flexShrink={0} gap={compact() ? 0 : 1}>
                             <For each={info().lines}>
                               {(line) => (
-                                <text width="100%" fg={props.theme.text} wrapMode="word" flexShrink={0}>
-                                  {line}
-                                </text>
+                                // Text of several rows, a diff in mono, is right of where a warning starts.
+                                <box width="100%" flexShrink={0} paddingLeft={line.includes("\n") ? 2 : 0}>
+                                  <Hanging text={line} fg={props.theme.text} />
+                                </box>
                               )}
                             </For>
                           </box>
                         }
                       >
                         {(patch) => (
-                          <Show
-                            when={props.block.syntax}
-                            fallback={
-                              <text width="100%" fg={props.theme.muted} wrapMode="word" flexShrink={0}>
-                                {patch()}
-                              </text>
-                            }
-                          >
-                            {(syntax) => (
-                              <code
-                                width="100%"
-                                flexShrink={0}
-                                wrapMode="word"
-                                filetype="diff"
-                                drawUnstyledText={false}
-                                streaming={true}
-                                syntaxStyle={syntax()}
-                                content={patch()}
-                                fg={props.theme.muted}
-                              />
-                            )}
-                          </Show>
+                          <box width="100%" flexShrink={0} paddingLeft={2}>
+                            <Show
+                              when={props.block.syntax}
+                              fallback={
+                                <text width="100%" fg={props.theme.muted} wrapMode="word" flexShrink={0}>
+                                  {patch()}
+                                </text>
+                              }
+                            >
+                              {(syntax) => (
+                                <code
+                                  width="100%"
+                                  flexShrink={0}
+                                  wrapMode="word"
+                                  filetype="diff"
+                                  drawUnstyledText={false}
+                                  streaming={true}
+                                  syntaxStyle={syntax()}
+                                  content={patch()}
+                                  fg={props.theme.muted}
+                                />
+                              )}
+                            </Show>
+                          </box>
                         )}
                       </Show>
                     }
@@ -457,16 +490,16 @@ export function RunPermissionBody(props: {
                       {(item) => (
                         <box width="100%" flexDirection="column" flexShrink={0} gap={compact() ? 0 : 1}>
                           <Show when={diffs().length > 1}>
-                            <text width="100%" fg={props.theme.muted} wrapMode="word" flexShrink={0}>
-                              {`Path: ${item.file}`}
-                            </text>
+                            <Hanging text={`Path: ${item.file}`} fg={props.theme.muted} />
                           </Show>
                           <Show
                             when={width() >= 40}
                             fallback={
-                              <text width="100%" fg={props.theme.text} wrapMode="word" flexShrink={0}>
-                                {item.diff}
-                              </text>
+                              <box width="100%" flexShrink={0} paddingLeft={2}>
+                                <text width="100%" fg={props.theme.text} wrapMode="word" flexShrink={0}>
+                                  {item.diff}
+                                </text>
+                              </box>
                             }
                           >
                             <PatchDiff
@@ -506,11 +539,12 @@ export function RunPermissionBody(props: {
                 <box width="100%" flexDirection="column" flexShrink={0} gap={compact() ? 0 : 1}>
                   <For each={permissionAlwaysLines(props.request)}>
                     {(line) => (
-                      <text width="100%" fg={props.theme.text} wrapMode="word" flexShrink={0}>
-                        {line}
-                      </text>
+                      <box width="100%" flexShrink={0}>
+                        <Hanging text={line} fg={props.theme.text} />
+                      </box>
                     )}
                   </For>
+                  {warnings()}
                 </box>
               </Match>
             </Switch>

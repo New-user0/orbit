@@ -443,6 +443,67 @@ describe("a share or device spelling is refused before the disk is touched", () 
   })
 })
 
+// m5-link-warning: a review tab answers by a save or a close, and the panel with its card can be hidden, so the tab's
+// title says that the file is behind a link. One whose link ends outside never opens (the row of the folder outside).
+test("the chat's review tab of a file behind a link says so in its title, and one with none does not", async () => {
+  const through = path.join(project, "alias", "b.txt")
+  const real = path.join(project, "sub", "b.txt")
+  const rows = [
+    { name: "a link", file: { file: "alias/b.txt", place: through, patch, status: "modified", link: { place: real, outside: false } }, linked: true },
+    { name: "no link", file: { file: "a.txt", place: inside, patch, status: "modified" }, linked: false },
+    { name: "a malformed link", file: { file: "a.txt", place: inside, patch, status: "modified", link: { place: 7, outside: true } }, linked: false },
+  ]
+  for (const revisable of [true, false])
+    for (const row of rows) {
+      const tabs: Tab[] = []
+      const host: ConstructorParameters<typeof Review>[0] = {
+        reply: async () => "sent",
+        folders: async () => ({ folders: [project] }),
+        workspace: () => [project],
+        show: async (tab) => void tabs.push(tab),
+        changes: async () => {},
+        close: async () => {},
+        reveal: async () => {},
+        note: () => {},
+        warn: () => {},
+        unmark: () => {},
+      }
+      await new Review(host).open(item([row.file], { revisable }), true)
+      expect([row.name, revisable, tabs.length]).toEqual([row.name, revisable, 1])
+      const name = path.basename(row.file.place)
+      expect(tabs[0]!.title).toMatch(
+        new RegExp(row.linked ? `^Orbit: ${name} behind a link \\(\\w{6}\\)$` : `^Orbit: ${name} \\(\\w{6}\\)$`),
+      )
+    }
+})
+
+test("of several previewed files only the one behind a link has it in its title, and so has a move from one", async () => {
+  const through = path.join(project, "alias", "b.txt")
+  const link = { place: path.join(project, "sub", "b.txt"), outside: false }
+  const rows = [
+    { files: [{ file: "a.txt", place: inside, patch, status: "modified" }, { file: "alias/b.txt", place: through, patch, status: "modified", link }], linked: ["b.txt"] },
+    { files: [{ file: "c.txt", place: path.join(project, "c.txt"), from: through, patch, status: "modified", fromLink: link }], linked: ["c.txt"] },
+  ]
+  for (const row of rows) {
+    const tabs: Tab[] = []
+    const host: ConstructorParameters<typeof Review>[0] = {
+      reply: async () => "sent",
+      folders: async () => ({ folders: [project] }),
+      workspace: () => [project],
+      show: async (tab) => void tabs.push(tab),
+      changes: async () => {},
+      close: async () => {},
+      reveal: async () => {},
+      note: () => {},
+      warn: () => {},
+      unmark: () => {},
+    }
+    await new Review(host).open(item(row.files, { revisable: false }), true)
+    expect(tabs).toHaveLength(row.files.length)
+    expect(tabs.filter((tab) => tab.title.includes(" behind a link (")).map((tab) => tab.title.split(" ")[1])).toEqual(row.linked)
+  }
+})
+
 test("a session or window folder spelled as a share or a relative path is dropped before the disk is touched", async () => {
   const relative = "orbit-relative-folder"
   const share = `//${host}/share`
@@ -1919,4 +1980,8 @@ test("the changed-since-read notice names no file", async () => {
   expect(shown.warnings).toEqual([changedNotice])
   expect(changedNotice).not.toContain("moved-on")
   expect(shown.notes.map((note) => note.text)).toEqual([changedNotice])
+})
+
+test("a tab's title writes out the blanks of a name (class 9)", () => {
+  expect(tabTitle("/out/a\u2028b  c.txt", true)).toMatch(/^Orbit: a\\u\{2028\}b\\x20\\x20c\.txt behind a link \([a-z0-9]{6}\)$/)
 })

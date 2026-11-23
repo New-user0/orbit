@@ -12,7 +12,7 @@
 // against the folders the terminal UI names for its session, and its answers go back to that terminal UI, which replies
 // to its server; a tab the extension closes itself tells it the review was dismissed.
 import type { SessionRewindFiles } from "@orbit/client"
-import { plain } from "@orbit/flow/plain"
+import { plain, plainPath } from "@orbit/flow/plain"
 import { FSUtil } from "@orbit/util/fs-util"
 import { LinkShare } from "@orbit/util/link-share"
 import { parsePatch } from "diff"
@@ -327,7 +327,9 @@ export class Review {
       await this.host.reveal(shown.title)
       return mode
     }
-    await this.show({ request: item.id, name: change.place ?? change.file, mode, ...found })
+    // The tab can answer while the card that warns is out of sight, so its title says it too (class 8).
+    const linked = item.view.links.some((link) => link.file === change.place || link.file === change.from)
+    await this.show({ request: item.id, name: change.place ?? change.file, linked, mode, ...found })
     return mode
   }
 
@@ -399,13 +401,14 @@ export class Review {
   private async show(input: {
     readonly request: string
     readonly name: string
+    readonly linked?: boolean
     readonly mode: "review" | "preview"
     readonly place: string
     readonly before: string
     readonly after: string
     readonly owner?: DiffOwner
   }) {
-    const title = tabTitle(input.name)
+    const title = tabTitle(input.name, input.linked)
     const key = `${input.owner ? `/${input.owner.key}` : ""}/${input.request}/${title.slice(-7, -1)}`
     const name = sideName(input.place)
     const review = input.mode === "review"
@@ -615,9 +618,12 @@ function hunks(patch: string) {
   }
 }
 
-/** The title of a review or preview tab: Orbit's label, the file's base name written out, and six random characters. */
-export function tabTitle(file: string) {
-  return `Orbit: ${plain(file.split(/[\\/]/).at(-1) ?? file)} (${nonce()})`
+/**
+ * The title of a review or preview tab: Orbit's label, the file's base name written out, that it is behind a link when
+ * the chat knows it is, and six random characters.
+ */
+export function tabTitle(file: string, linked = false) {
+  return `Orbit: ${plainPath(file.split(/[\\/]/).at(-1) ?? file)}${linked ? " behind a link" : ""} (${nonce()})`
 }
 
 /**

@@ -143,6 +143,49 @@ test("a write outside the folder asks about the resolved folder, from the server
   )
 }, 240_000)
 
+// m5-link-warning: stream-json and the SDK's view of a request are the request itself, so the link is in it.
+test("a notebook edit through a link carries the link on the permission request", async () => {
+  await fs.mkdir(path.join(workspace, "notebooks"), { recursive: true })
+  await fs.symlink(path.join(workspace, "notebooks"), path.join(workspace, "nb-alias"), "junction")
+  await Bun.write(
+    path.join(workspace, "notebooks", "n.ipynb"),
+    JSON.stringify({
+      cells: [{ cell_type: "code", execution_count: null, id: "calc", metadata: {}, outputs: [], source: ["print(1)"] }],
+      metadata: {},
+      nbformat: 4,
+      nbformat_minor: 5,
+    }),
+  )
+  const spelled = "nb-alias/n.ipynb"
+  await scripted(
+    [
+      { tool: { name: "Read", input: { file_path: spelled } } },
+      {
+        tool: {
+          name: "NotebookEdit",
+          input: { notebook_path: spelled, mode: "replace", cellId: "calc", source: "print(2)", link: "MODEL-ADDED-KEY" },
+        },
+      },
+      "done",
+    ],
+    async (own, home) => {
+      const run = controller(home, own)
+      run.send({ type: "user", text: "edit the notebook" })
+      const ask = await run.until((line) => line.type === "permission_request")
+      run.send({ type: "permission_reply", requestID: ask.line.request.id, decision: "reject" })
+      await run.until((line) => line.type === "result", ask.next)
+      run.end()
+      await run.finish()
+
+      expect(ask.line.request.metadata.files[0].link).toEqual({
+        place: path.join(workspace, "notebooks", "n.ipynb"),
+        outside: false,
+      })
+      expect(JSON.stringify(ask.line)).not.toContain("MODEL-ADDED-KEY")
+    },
+  )
+}, 240_000)
+
 test("always saves the rule, so the same write asks nothing the second time", async () => {
   const name = "always.txt"
   await scripted([write(name), "first done", write(name), "second done"], async (own, home) => {

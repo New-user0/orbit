@@ -2485,16 +2485,142 @@ runs" is a permission.
   `content` field, and `PluginHost` refuses a reply that carries one with `Permission.RevisionError`, because the
   promise adapter decodes a plugin's reply against the route's payload, which has the field (classes 7, 12 and 13;
   `packages/sdk/test/permission-revise.test.ts`, whose `@ts-expect-error` also pins the type).
-- An Edit or Write reached through a link says so on its request: the file entry carries `link: { place, outside }`,
-  where `place` is where the link really leads (`FileAccess.realPlace`) and `outside` says whether that is outside the
-  Location's folder and the project's folder, both by real path (`FileAccess.link`, `FSUtil.contains` on real paths, so a
-  sibling folder whose name starts with the project's is outside; class 4). A file below a project folder that is itself
-  reached through a system link names no link. The terminal UI draws its warning from this value alone, in the full
-  dialog and in the compact prompt of an editor review, with the place through the path formatter and `plain`, and never
-  from the tool's input (classes 8 and 9). Proof: `packages/core/test/edit-link.test.ts` (link inside, link and junction
-  out, a sibling with the project's name as its prefix, no link; for Edit and Write), the link rows of
-  `approval-matrix.json` and the T row "the link warning comes from the request" (a decoy link in the tool's input draws
-  nothing). Patch, NotebookEdit, Mini, ACP and the VS Code card do not show it yet.
+- A file change reached through a link says so on its request. Edit, Write, NotebookEdit and Patch (add, update, delete,
+  and both ends of a move) put `link: { place, outside }` on the file entry of each linked `place`, and a move puts
+  `fromLink` of the same shape on the entry whose `from` is linked. `place` is where the link really leads
+  (`FileAccess.realPlace`) and `outside` says whether that is outside the Location's folder and the project's folder, both
+  by real path (`FileAccess.link`, `FSUtil.contains` on real paths, so a sibling folder whose name starts with the
+  project's is outside; class 4). It is worked out from the targets the tool writes, never from another resolution
+  (class 3), and changes no decision, saved rule or grant. A file below a project folder that is itself reached through a
+  system link names no link. Proof: `packages/core/test/edit-link.test.ts` (each tool by each spelling, the edges, several
+  files, what "always" saves) and the link rows of `packages/core/test/approval-values.test.ts`.
+- Every client that shows that approval warns from `PermissionView.links` and the one set of words beside it, never from
+  the tool's input and never by resolving a path, so a share is named and not contacted for it (classes 4, 6 and 8). A
+  request without a link, or from an older server, is drawn without a warning; a malformed link costs only itself, and
+  where two entries disagree about one end, outside wins (classes 3 and 7; `packages/schema/test/permission-view.test.ts`).
+  A fixed line says that there is a link, above what scrolls. The repository chooses how long a path is and how many are
+  linked, so that line is bounded. Each linked end is named, the ones that end outside first
+  (`packages/tui/test/approval-link.test.tsx` draws the components of the first six bullets below, and
+  `packages/tui/test/approval-route.test.tsx` the whole terminal UI, each at the sizes it names):
+  - the terminal UI's full dialog and the compact prompt of an editor review fit the fixed line and the title to the
+    rows they have, and all under them is one body that scrolls, in every question of those two, linked or not (class 8).
+    No row of a question or a grant is squeezed, painted over or narrowed by the scroll bar (the "every row of" and "the
+    end of a long" rows);
+  - those rows are the ones the session has, under the banner and beside the docks, and not the screen's. A dialog has
+    15 at most. Where it has fewer, the docks above it and the route's two blank rows give way to it, then the top of
+    its border and then the bottom. A dock gives way in whole rows and no two of its rows are drawn over each other
+    (the "give way in whole rows" rows: 80x24, 100x24 and 80x25 with a plan of 2 or 5 steps and with a queued prompt). So the three options, the focused one's mark, a link's line and a body that scrolls
+    stay on screen while Allow once or Always allow is focused, and the field, its hints and the line in the reject
+    stage (the "the session route at" rows: 80 columns by 6 to 24 rows, 30x12 and 40x8, with a plan and a queued prompt
+    at 80x24, the mouse off; the resize, docks and "come back" rows of that file);
+  - no value needs a mouse (classes 8 and 14). While the body holds more than is in sight, page up and down, home and end
+    scroll it, where otherwise they are the session's, and the bottom border names them while it is drawn. With those
+    keys alone the whole of a target, a name, a move's source, a command, a grant, a folder, the last of 12 files or of
+    14 patterns, a read and a search of 30 to 500 characters can be read, in the stage that shows it, in the dialog, in
+    fullscreen and, for an edit of one file, in the compact prompt (the "read with the keys alone" rows: 8 sizes from
+    30x12 to 100x30; "the keys page"; "the keys are the session's"; "fullscreen at" for 80x6 to 80x24);
+  - one link is said whole on the fixed line while that leaves a row to the title and one to the body, or all of the
+    grant while Always allow is focused, and is summed up past that. It is summed up too where a name in it has a
+    warning's words, so that no row of that line is the repository's sentence (class 9; "the fixed line never carries").
+    A title is whole while that leaves the same, and is otherwise cut with a mark to leave an edit two rows to scroll
+    in. What is summed up or cut is whole in the body, under the grant while Always allow is focused, and a name that
+    the whole warning says is not listed again over the diff (the "every name and target", "a title is whole" and
+    "listed again" rows). The reject stage has three rows of warning at most, or the sum;
+  - on a screen narrower than 60 columns or a dialog with fewer than 15 rows, the blank row under the header and the
+    hints give way to a warning, a title or a grant that fits without them. The blank row gives way to a whole warning
+    at any size. In the compact prompt the row about saving goes before the question is cut or the link summed up, and
+    the header goes where no row would be left to scroll in. What fitted on the first screen of m5-integration at 30 to
+    60 columns (a short name, its link's target, the grant and the diff) is on the first screen (the "fitted before",
+    "gives way before" and "rows high" rows). While Always allow is focused that counts only screens on which the grant
+    was drawn: on the others the grant comes first now and the rest follows by scrolling. Longer values can need the
+    keys where a first screen showed their end before;
+  - Mini's fixed line is the sum, or its short form, which keeps the word outside or inside, where the sentence does not
+    fit (24 columns in the tests). The grant and the title come before the lines of the links, so both are on the first
+    screen, and the links' lines follow by scrolling (the "Mini keeps the grant" and "24 columns" rows);
+  - ACP's permission title and content (`packages/cli/test/acp/approval-link.test.ts`). The protocol has a client render
+    content as Markdown, and some render titles so, so a path that Markdown would change is a code span: no path in a
+    warning, or in the name of a file or folder that titles the request, becomes a link, an image or a tag, which a
+    client could contact a host for (classes 6 and 8; the "Markdown's literal text" rows). A subagent's title, which a
+    model chose and which comes before the summary, is one line of 40 characters at most and is quoted where it has a
+    warning's words anywhere (classes 8 and 9; the "subagent's title reads as no warning" row). A description or command
+    that titles an `external_directory` question, other content of the call and the updates' titles are not rewritten
+    for Markdown (FU-M5-009);
+  - the VS Code chat's card, and the title of its review or preview tab, which can answer while the card is hidden
+    (`packages/vscode/test/approval-link.test.ts`, `webview-trust.test.ts`, `diff-review.test.ts`). A tab of the terminal
+    UI's bridge has no warning in its title: the compact prompt beside it has it.
+  stream-json and the SDK pass the request whole, link included (`packages/cli/test/run/stream.test.ts`,
+  `edit-link.test.ts`).
+- A name in those approvals cannot pass for a warning (class 9). `plainPath` (`packages/util/src/plain.ts`) writes out
+  what `plain` does and every blank but one space between two words: runs of spaces, a space at either end, other
+  spaces, U+2028 and U+2029, fillers and blank Braille (`packages/util/test/plain-path.test.ts`). It is the sink for the
+  paths of a warning, and for the names in the titles, `Path:`, `Folder:`, pattern and resource lines of an edit, a read,
+  a list and an `external_directory` question, in the terminal UI, Mini and the VS Code card, for ACP's titles of those
+  and for the chat tab's title. A title in the terminal UI's dialog is one line (`plain`), so a line break in a pattern
+  or a query takes no row of the body (the "line break in a title" row). A name that wraps is indented under its line's
+  first word in the terminal UI and Mini,
+  and in the card's title and warnings, and raw diff text is indented, so printable padding draws no row where a warning
+  starts either (the "blank spelling", "length of padding" and "joined diff" rows of the TUI file, the "blank" rows of
+  the others). ACP quotes a name that opens with a warning's words. The server writes a line break in a name out in a
+  diff's header (`fileDiff`; `edit-link.test.ts`, "the header of an approval's diff is one line").
+- A delete, and the source of a move, remove the last part of the path. Where that is itself a link, the request, its
+  diff's header and the call's progress name the link, where it really is, as what is changed, and `link` or `fromLink`
+  says where it leads; that file stays. The call's result and what it says when it fails, the names a code rewind reads
+  included, name that link too. A write goes through such a link, and its request names the file written to as before
+  (`FileAccess.removedLink`; classes 3 and 8; `edit-link.test.ts`, "a file that is itself a link: what is shown is what
+  runs", which checks the request, the disk and the result for each tool, trusted and not, and "a failure names what
+  was to be removed"). Where a link of a folder above puts that link in another folder (`out/config` with `out` leading
+  to `~/.ssh`, whose `config` is a link to a dotfile), the place it is removed from is a subject of the Edit request's
+  deny and ask rules (`leads`), and its folder gets a question of its own when it is outside the project, marked
+  `escaped` when an untrusted project's link leads there, so Orbit's allows for its own folders do not answer it. Before,
+  a deny for the link's own folder became a question about another one (classes 3 and 4; `edit-link.test.ts`, "the
+  rules for the folder of a link that is removed decide its removal": a deny, an ask and the folder question for a
+  delete and a move's source, trusted and not, with the folder named directly as the control, and the rows for Orbit's
+  own folders, a link that stays in the project and a folder with no link, which is asked about once). In an untrusted
+  project the request of a path that a link leads out names the place it leads to, so when such a path is removed, the
+  path as the project spells it joins the subjects of those rules too. Before, a deny or ask written for that path,
+  relative or absolute, did not apply there, and the link was removed without a question (classes 3 and 8;
+  `edit-link.test.ts`, "a rule for the spelling of a link that is removed decides its removal": a deny and an ask, by
+  each spelling, for a delete and a move's source of five shapes of link, trusted as the control and untrusted, and a
+  link in a memory folder reached through a linked data folder, which is still removed without a question). The same
+  spelling is a subject of the deny and ask rules of every request that a file is written or read through such a link
+  (relative to the session folder too, also as `../` from a session folder below the worktree): `FileAccess.leadsOf` adds
+  it for each escaped target, so Edit, Write, NotebookEdit, every file of a Patch and the door of Read carry it. Before, a deny written for the path in the project let a write land where the link leads (classes
+  3 and 8; `edit-link.test.ts`, "a rule for the spelling of a path a link leads out of decides the call through it": a
+  deny and an ask, by each spelling, for a file that is a link out and a file below a folder link out, trusted as the
+  control and untrusted). Two checks that send a file's text to the model without the read tool build their Read request
+  the same way: the one that lets the editor's file and selection into a prompt, and the one the file-change reminder
+  makes before it shows a change. A Read deny for the path in the project drops the editor field in an untrusted folder
+  too (`session-prompt-editor.test.ts`, "a Read deny for the spelling of a folder link out drops the field" and its file
+  link row: the relative and the absolute path, trusted as the control and untrusted, and no deny keeps the field). The
+  reminder skips such a file in an untrusted folder before any rule is asked, because its name leads out of the project,
+  and its request still carries the spelling (`durable-reminders.test.ts`, "a Read deny for the spelling of a link out
+  skips a file written through it": trusted, the deny skips the file and no deny reports it; revoked, nothing is
+  reported, and the deny is a deny of the request). The shell checks a command's files against the person's Read and Edit denies before it asks
+  (`ShellGuard.facts`, the probes), and the probes of such a path carry that spelling too, relative to the session
+  folder as a trusted folder names it. Before, a deny written for it let `cat`, a redirect or `rm` read or write the file
+  the link leads to (classes 3 and 8; `tool-shell.test.ts`, "ShellGuard: a deny for the spelling of a path a link leads
+  out of": a deny by the relative path, the absolute path and a pattern, for `cat`, a redirect, `rm`, `bash -c` and,
+  where it is installed, PowerShell, trusted as the control and untrusted, and no deny as the control that passes).
+  From a session folder below the worktree the project spells such a file `../out/b.txt`. A trusted folder asks with
+  that spelling, and the rules now try a lead's relative that climbs out of the session folder too, while its place is
+  in one of the project's folders. Before, a deny or ask for `../out/*` decided the call in a trusted folder and not in
+  an untrusted one (classes 3, 4 and 8; `edit-link.test.ts`, "a rule for the ../ spelling of a path a link leads out of
+  decides the call through it": a deny and an ask for every file tool and Read, with the absolute path and the trusted
+  folder as the controls, and a `../` rule for a place outside the project, which still decides nothing; the editor
+  field in `session-prompt-editor.test.ts`, "a Read deny for the ../ spelling of a link out drops the field"; and the
+  shell, which kept that spelling already, in `tool-shell.test.ts`, "decides cat ../cfg/s from a session folder below
+  the worktree").
+- A configuration policy (`experimental.policies` of any scope) and an organization's statements decide through the
+  `permission.evaluate` hook, which is shown a request's `leads` beside its resources and aliases: each lead in every
+  spelling the rules try, from the same function, and a file tool's relative resource by where it is. The policy plugin
+  refuses on them in a pass of its own that never allows, so a policy that allows only the spelling of a lead does not
+  lift a deny of the resource. Before, a deny policy for the path as an untrusted project spells it (`Edit:out/*`) never
+  met a write, removal or read through a link that leads out, because the resource is the place the link leads to, and
+  a policy written with an absolute path never met a relative resource, in a trusted folder too (classes 3 and 8;
+  `edit-link.test.ts`, "a policy for the spelling of a path a link leads out of refuses the call through it": `Edit:` and
+  `Read:` policies by the relative and the absolute path, from a person's document and as an organization statement,
+  for every file tool and Read through a file link and a folder link out, trusted as the control and untrusted, a later
+  allow of a lead's spelling that keeps the deny, and no policy as the control that runs).
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob
@@ -2538,8 +2664,10 @@ runs" is a permission.
   any decoy: `packages/tui/test/approval-matrix.test.tsx` (the terminal UI's presentation, and Mini's drawn as the real
   component), `packages/cli/test/acp/approval-matrix.test.ts` (ACP over the wire, approval and later updates),
   `packages/vscode/test/approval-matrix.test.ts` (the item and card VS Code draws) and, over a real `orb acp` process in
-  an untrusted folder with a trusted control, `permission-files.subprocess.test.ts`. A new tool, client or path form
-  adds its row to these.
+  an untrusted folder with a trusted control, `permission-files.subprocess.test.ts`. Their link rows also check each
+  client's warning, and the stages, sizes and malformed links that the matrix cannot hold are in
+  `packages/tui/test/approval-link.test.tsx`, `packages/cli/test/acp/approval-link.test.ts` and
+  `packages/vscode/test/approval-link.test.ts`. A new tool, client or path form adds its row to these.
 
 **Review questions:**
 

@@ -2203,8 +2203,9 @@ terminal UI from before this release; those keep the full dialog. To keep every 
 `"diffs": { "tool": "terminal" }` in `cli.json`, or choose Diff tool in `/config`, which lists it while an editor is
 linked.
 
-The approval of an Edit or Write whose file is reached through a link now says where the link leads, and says when
-that is outside the session's folder, in the full dialog and in the short prompt.
+The approval of an Edit or Write whose file is reached through a link now says where the link leads, and whether that
+is inside or outside the project, in the full dialog and in the short prompt (see "Every approval of a file change says
+where a link leads" under Permissions).
 
 **Affects:** terminal UI users running in a VS Code window with the Orbit extension, and scripts that read Edit and
 Write permission requests (a file entry may now carry `link`).
@@ -2701,6 +2702,97 @@ it was.
 **Affects:** clients, SDK callers and plugins that answer approvals; listeners of `permission.replied`; ACP clients; the terminal UI and Mini.
 
 **What to do:** Nothing. Send `content` only for a request marked `revisable`, with a `once` decision.
+
+### Every approval of a file change says where a link leads
+
+A file change whose path goes through a link now warns in every client that asks about it. Before, only the terminal UI
+warned, for an Edit or Write of one file, and the full dialog dropped the warning while Always allow was focused.
+
+- **Requests.** A Patch or NotebookEdit request carries `link` (`{ "place", "outside" }`) on each linked file entry, as
+  Edit and Write requests do, and a move also carries `fromLink` when the file it moves from is behind a link.
+- **Words.** The warning begins "Link ends outside the project" or "Link ends inside the project" and then names where
+  the link leads. Several are counted, for example "2 linked paths, 1 outside the project", and named one by one with the
+  ones that end outside first. These words replace the terminal UI's earlier ones.
+- **A link that is deleted or moved.** When Patch deletes or moves a path that is itself a link, the request, the diff's
+  header and the call's progress name the link, which is what is removed, where they named the file it leads to. `link` or
+  `fromLink` says where it leads, and that file is not removed. So do the call's result (`D shown.txt`, `applied` and
+  `files`) and its error where it fails, which in an untrusted folder named the file outside.
+- **A link removed from a folder that a link leads to.** Where such a link is in a folder that the path reaches through
+  another link, a deny or ask rule for the folder it is removed from now decides the delete or move, as it does when
+  that folder is named directly, and a folder outside the project is asked about (`external_directory`) before it is
+  removed from. Before, the link could be removed with only the file it leads to asked about.
+- **A link removed in a folder that is not trusted yet.** Where a link of the project leads out, a deny or ask rule
+  written for the path of the link as the project spells it, relative or absolute, now also decides a Patch that deletes
+  that link or moves it away. Before, only the rules for the place the link leads to applied there, so the link could be
+  removed without a question.
+- **A file written or read through a link in a folder that is not trusted yet.** The same now holds for every file
+  tool: where a link of the project leads out, a deny or ask rule written for the path as the project spells it decides
+  an Edit, Write, NotebookEdit, Patch or Read through that path. Before, such a rule did not apply, so the file the link
+  leads to could be written or read without a question even where you had denied the path. A Read or Edit deny written
+  that way also stops a shell command that reads, writes or removes the file through the link, as it does in a trusted
+  folder; before, such a command reached the file the link leads to. Where the session folder is below the project's
+  folder, a rule written as `../out/*` for such a path now decides too; before, it did only in a trusted folder.
+- **Policies through a link.** A deny in `experimental.policies` or an organization's statement now refuses a file tool
+  or Read through a link where it names the path as the project spells it (`Edit:out/*`) or as the place the link leads
+  to, in a trusted folder and in one that is not trusted yet. A policy written with an absolute path now also decides a
+  file named relative to the session folder, as a rule does: its deny refuses the file, and a later allow lifts a broad
+  deny of it, so a policy that denies everything and then allows a few paths (`Edit:*` deny, then `Edit:src/*` allow)
+  lets a file tool work on those paths, in a project reached through a link too. Before, a policy met only the
+  request's resource, so such a call went ahead. A policy that allows the spelling of a link never lifts a deny of where
+  it leads. A plugin's `permission.evaluate` hook is shown a file tool's resource by where it is among its `aliases`,
+  and the places a resource leads to as `leads`: keyed by resource like `aliases`, one list of spellings per place.
+- **Terminal UI and Mini.** The warning stays while Always allow is chosen and while you type why you reject, and a
+  request of several files warns too. Where a warning is too long to stay whole, or a path in it holds a warning's own
+  words, a summary stays and the warning is in what scrolls, under the grant while Always allow is focused (the reject
+  stage has the summary only). On a narrow screen the summary is short, for example "Link ends outside" or
+  "2 links, 1 outside". Mini puts the grant, and the edit's title, above the lines of the links.
+- **Every question of the terminal UI's dialog, with a link or without one.**
+  - What does not fit under the title scrolls, with a bar in the dialog's right padding, where a long command, list of
+    patterns or grant was clipped or drawn over the options. While there is more, page up and page down (or ctrl+alt+b
+    and ctrl+alt+f), home and end scroll the question, where they scrolled the conversation before, and the dialog's
+    bottom border says "pgup/pgdn scroll". The commands are `permission.prompt.page.up`, `permission.prompt.page.down`,
+    `permission.prompt.first` and `permission.prompt.last`, in the permission context of the keybindings file. The wheel
+    scrolls too, less than three rows a step in a body that is that short.
+  - A wrapped line is indented under its first word, so a long command, folder or resource can take a row more than it
+    did, and its end can need a scroll where it fitted before. A grant wraps by the character.
+  - A title is one line, with a line break written out as `\n`, wraps by the character, and is cut with "…" where it
+    would leave the body no row, or the grant too few while Always allow is focused. What was cut is whole in what
+    scrolls: an edit's names, or any other title under its icon.
+  - The dialog is fitted to the rows the session has. While a question is asked, the plan and the other docks above it
+    show only in the rows it leaves them, losing whole rows from the bottom up (on an 80x24 screen an edit leaves the
+    plan its header row and none of its steps; the dialog keeps its 15 rows first), and the session's blank row
+    at the bottom and the one of "Jump to latest" go where the dialog has fewer than 15 rows. On the lowest screens the
+    top of the border goes, and then its bottom, so that every option stays on screen. The reject stage drops its blank
+    rows there, and a long reason scrolls in its field.
+  - The blank rows between the lines of a grant stay while they fit and go before a pattern would.
+  - Under 60 columns, or where the dialog has fewer than 15 rows, the blank row under the title and the key hints give
+    way to a warning, title or grant that fits without them. That can hide the "ctrl+f fullscreen" hint; the key still
+    works. The blank row also goes for a link's warning that fits whole without it.
+  - In the editor's short prompt, which has no fullscreen, the row about saving shows only where the question, the
+    warning and the grant fit whole with it. The "Reviewing in" row goes on the lowest screens. Each of the two is one
+    row, shortened in the middle where the screen is too narrow for it or the editor's name is too long.
+- **ACP.** The title of a permission request begins with the warning's summary, for example
+  "Link ends outside the project: /srv/shared/a.txt". For a subagent's request the subagent's title comes before it, as
+  in "Review code: Link ends outside the project: /srv/shared/a.txt". That title is now one line, cut to 40 characters
+  with "...", and in backticks where Markdown would change it or it holds a warning's words, also on a request with no
+  link. The content names each link before the diffs.
+  Both are read as Markdown by some clients, so a path that Markdown would change, such as `C:\Users\me\.orbit` or
+  `__init__.py`, is now in backticks there, also in the title of an edit, a read or an outside folder with no link.
+- **VS Code.** The chat's card lists the warnings above the diff, and the title of the chat's diff tab says
+  "behind a link", for example "Orbit: a.txt behind a link (k3x9qa)".
+- **File names.** In the approval of an edit, read, list or outside folder, a name is one line: a line break or line
+  separator, a control or invisible character, a run of spaces, a space at either end and any other space are written
+  out (`\n`, `\x1b`, `\x20`, `\u{2028}`), and a wrapped name is indented. A diff's header writes out a line break in
+  a name too.
+
+The warning changes no decision, rule or saved approval.
+
+**Affects:** people who approve file changes in a project with links; scripts and SDK callers that read Patch and
+NotebookEdit permission requests; ACP clients or scripts that match permission titles; people and organizations whose
+policies name files, and plugins with a `permission.evaluate` hook.
+
+**What to do:** Nothing, unless something matches an ACP permission title from its start or exactly: allow for the
+warning (and a subagent's title) before the name and for backticks around it, or match on the call's `locations`.
 
 ## Plugins and SDK
 

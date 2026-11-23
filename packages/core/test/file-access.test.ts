@@ -529,4 +529,38 @@ describe("FileAccess.link", () => {
       expect(access.link(yield* access.resolve({ path: "docs", kind: "directory" }))).toBeUndefined()
     }).pipe(provide([])),
   )
+
+  // m5-link-warning, classes 4 and 6: the value is worked out from what `resolve` found, in memory. A host that does not
+  // exist takes seconds to fail when it is looked up, so a quick answer is one that contacted nothing.
+  it.live("names a share a link leads to without contacting it", () =>
+    Effect.gen(function* () {
+      const access = yield* FileAccess.Service
+      const location = yield* Location.Service
+      const absolute = AbsolutePath.make(path.join(location.directory, "net", "a.txt"))
+      const share = AbsolutePath.make(
+        process.platform === "win32" ? "\\\\orbit-test.invalid\\share\\a.txt" : "//orbit-test.invalid/share/a.txt",
+      )
+      const before = performance.now()
+      expect(access.link({ absolute, place: absolute, leads: share, resource: "net/a.txt" })).toEqual({
+        place: share,
+        outside: true,
+      })
+      expect(performance.now() - before).toBeLessThan(100)
+    }).pipe(provide([])),
+  )
+
+  // Only the same place is no link (class 4): one that holds the spelled place, or is held by it, is not that place.
+  it.live("names a link for a place above or below the spelled one, and none for the same place", () =>
+    Effect.gen(function* () {
+      const access = yield* FileAccess.Service
+      const location = yield* Location.Service
+      const root = yield* Effect.promise(() => fs.realpath(location.directory))
+      const absolute = AbsolutePath.make(path.join(location.directory, "a", "b"))
+      const linked = (...parts: string[]) =>
+        access.link({ absolute, place: absolute, leads: AbsolutePath.make(path.join(root, ...parts)), resource: "a/b" })
+      expect(linked("a", "b")).toBeUndefined()
+      for (const parts of [["a"], ["a", "b", "below"], ["other"]])
+        expect(linked(...parts)).toEqual({ place: AbsolutePath.make(path.join(root, ...parts)), outside: false })
+    }).pipe(provide([])),
+  )
 })

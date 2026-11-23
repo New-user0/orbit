@@ -271,7 +271,14 @@ const listing = {
     "terminal.select",
     "terminal.close",
   ],
-  permission: ["app.exit", "permission.prompt.fullscreen"],
+  permission: [
+    "app.exit",
+    "permission.prompt.fullscreen",
+    "permission.prompt.page.up",
+    "permission.prompt.page.down",
+    "permission.prompt.first",
+    "permission.prompt.last",
+  ],
   composer: [
     "composer.subagent.up",
     "composer.subagent.down",

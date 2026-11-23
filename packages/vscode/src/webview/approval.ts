@@ -1,5 +1,5 @@
-import type { PermissionView } from "@orbit/schema/permission-view"
-import { body } from "@orbit/flow/plain"
+import { PermissionView } from "@orbit/schema/permission-view"
+import { body, plainPath } from "@orbit/flow/plain"
 import type { FileChange } from "../protocol.js"
 import { excerpt } from "./present.js"
 
@@ -8,6 +8,8 @@ import { excerpt } from "./present.js"
 
 export interface Card {
   readonly title: string
+  /** Where the request's links lead: each on its own line, after their count when there are several. */
+  readonly warnings: ReadonlyArray<string>
   /** One line per value the card shows beside its title. */
   readonly lines: ReadonlyArray<string>
   /** The first changed lines of every file's diff, written out like the rest of the card. */
@@ -21,10 +23,13 @@ export function approvalCard(item: {
   readonly files: ReadonlyArray<FileChange>
 }): Card {
   const card = build(item)
+  const links = item.view.links
+  const warnings = links.map((link) => PermissionView.linkWarning(link, plainPath))
   // Every string here can come from a model or a file (a command, an MCP argument), so control characters, including the
   // ones that reorder text, are written out before the card is drawn (class 9).
   return {
     title: body(card.title),
+    warnings: links.length > 1 ? [PermissionView.linkSummary(links)!, ...warnings] : warnings,
     lines: card.lines.map(body),
     changes: item.files.flatMap((file) => excerpt(file.patch, 6)).map((line) => ({ ...line, text: body(line.text) })),
   }
@@ -44,15 +49,16 @@ function build(item: {
   readonly resources: ReadonlyArray<string>
   readonly view: PermissionView.View
   readonly files: ReadonlyArray<FileChange>
-}): Omit<Card, "changes"> {
+}): Omit<Card, "changes" | "warnings"> {
   const view = item.view
   const verb = verbOf(item.action)
   if (item.files.length > 0)
     return {
-      title: `${verb} ${item.files.map((file) => basename(file.place ?? file.file)).join(", ")}`,
+      // Each name is one line: a break in one starts no line that reads as a link warning (class 9).
+      title: `${verb} ${item.files.map((file) => plainPath(basename(file.place ?? file.file))).join(", ")}`,
       lines: [...new Set([...view.places, ...item.files.flatMap((file) => [file.from, file.place ?? file.file])])]
         .filter((place): place is string => place !== undefined)
-        .map((place) => `Path: ${place}`),
+        .map((place) => `Path: ${plainPath(place)}`),
     }
   if (view.url !== undefined)
     return {
@@ -61,14 +67,22 @@ function build(item: {
     }
   // The request's resources are what the rule matches: the command of a shell approval, the pattern of a search.
   const resources = item.resources.filter((resource) => resource !== "*")
+  // Those of a question about files or folders are names and are each one line (class 9). A command keeps its lines.
+  const named =
+    PermissionView.action(item.action) === "external_directory" || view.places.length > 0
+      ? plainPath
+      : (value: string) => value
   const lines = [
-    ...resources.filter((resource) => resource !== view.pattern && !view.places.includes(resource)).map((resource) => `Resource: ${resource}`),
-    ...view.places.map((place) => `Path: ${place}`),
+    ...resources
+      .filter((resource) => resource !== view.pattern && !view.places.includes(resource))
+      .map((resource) => `Resource: ${named(resource)}`),
+    ...view.places.map((place) => `Path: ${plainPath(place)}`),
     ...(view.pattern === undefined ? [] : [`Pattern: ${view.pattern}`]),
-    ...(view.folder === undefined ? [] : [`Folder: ${view.folder}`]),
+    ...(view.folder === undefined ? [] : [`Folder: ${plainPath(view.folder)}`]),
     ...(view.arguments === undefined ? [] : [`Arguments: ${view.arguments}`]),
   ]
-  const target = view.places[0] ?? view.pattern ?? (resources.length > 0 ? resources.join(", ") : "")
+  const target =
+    (view.places[0] === undefined ? view.pattern : plainPath(view.places[0])) ?? resources.map(named).join(", ")
   return {
     title: `${verb} ${target}`.trim(),
     lines: lines.length > 0 ? lines : item.resources,

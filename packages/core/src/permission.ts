@@ -478,33 +478,57 @@ const layer = Layer.effect(
       return led === "deny" || (led === "ask" && own !== "ask") ? led : own
     }
 
+    // Every spelling a rule can be written in for one lead, since rules are written as the project names its files: the real
+    // path, the same place under the project's folders as they are spelled (a session folder reached through a link has
+    // real-path leads), and each of those relative to the session folder. A relative that climbs out of the session folder
+    // (`../out/b.txt` from a session folder below the worktree) is kept while its place is in one of the project's folders
+    // as spelled, since a trusted folder names that file so and a rule may be written for it (class 3). The plugin hooks
+    // are shown the same spellings (`evaluateInput`), so a policy and a rule cannot disagree on what a lead is called.
+    const leadSpellings = (lead: string) => {
+      const places = [
+        lead,
+        ...real.flatMap((folder, index) =>
+          FSUtil.contains(folder, lead) ? [path.join(spelled[index]!, path.relative(folder, lead))] : [],
+        ),
+      ]
+      const relatives = places.flatMap((place) => {
+        const relative = path.relative(location.directory, place)
+        return relative === "" ||
+          path.isAbsolute(relative) ||
+          (relative.startsWith("..") && !spelled.some((folder) => FSUtil.contains(folder, place)))
+          ? []
+          : [relative.replaceAll("\\", "/")]
+      })
+      return [...places, ...relatives]
+    }
+
+    // What a plugin hook is shown of each resource, keyed by that resource, leaving out a resource with nothing to show.
+    // Its aliases: the request's own, and a file tool's resource relative to the session folder joined by where it is,
+    // as the rules try it (`resolved`), so a policy written with the absolute path decides it in a trusted folder as in
+    // an untrusted one, and a later allow of either spelling lifts a broad deny of it. Its leads: one list per place it
+    // leads to, of every spelling `stricter` tries for that place, so a policy written for the path as an untrusted
+    // project spells it refuses the place a link there leads to, as a rule does (class 3), and the spellings of one place
+    // are decided together, as a rule decides them.
+    const byResource = <A>(resources: ReadonlyArray<string>, of: (resource: string) => ReadonlyArray<A>) => {
+      const entries = resources.flatMap((resource) => {
+        const values = of(resource)
+        return values.length === 0 ? [] : [[resource, values] as const]
+      })
+      return entries.length === 0 ? undefined : Object.fromEntries(entries)
+    }
+
     // What the rules say about the real places a resource leads to, when it is a deny or an ask. An allow written for such a
     // place never lifts the resource, since the person wrote it for the place and not for the link's spelling.
-    // Rules are written as the project names its files, so one lead is tried in every spelling a rule can be written in: the
-    // real path, the same place under the project's folders as they are spelled (a session folder reached through a link has
-    // real-path leads), and each of those relative to the session folder. The spelling of the resource itself is not a
-    // subject: a rule that names only the link must not decide the place it leads to, so the Plan agent's allow for its
-    // folder is also written for the folder's real path (`PlanPlugin`). The last rule that matches any of them decides, as
-    // for aliases.
+    // One lead is tried in every spelling of `leadSpellings`. The spelling of the resource itself is not a subject: a rule
+    // that names only the link must not decide the place it leads to, so the Plan agent's allow for its folder is also
+    // written for the folder's real path (`PlanPlugin`). The last rule that matches any of them decides, as for aliases.
     function stricter(
       action: string,
       leads: ReadonlyArray<string> | undefined,
       rules: Permission.Ruleset,
     ) {
       const effects = (leads ?? []).flatMap((lead) => {
-        const places = [
-          lead,
-          ...real.flatMap((folder, index) =>
-            FSUtil.contains(folder, lead) ? [path.join(spelled[index]!, path.relative(folder, lead))] : [],
-          ),
-        ]
-        const relatives = places.flatMap((place) => {
-          const relative = path.relative(location.directory, place)
-          return relative === "" || relative.startsWith("..") || path.isAbsolute(relative)
-            ? []
-            : [relative.replaceAll("\\", "/")]
-        })
-        const subjects = [...places, ...relatives]
+        const subjects = leadSpellings(lead)
         const rule = rules.findLast(
           (rule) => actionMatches(action, rule.action) && subjects.some((subject) => Wildcard.match(subject, rule.resource)),
         )
@@ -553,7 +577,11 @@ const layer = Layer.effect(
             agent: input.agent,
             action: input.action,
             resources: input.resources,
-            aliases: input.aliases,
+            aliases: byResource(input.resources, (resource) => [
+              ...(input.aliases?.[resource] ?? []),
+              ...resolved(input.action, resource),
+            ]),
+            leads: byResource(input.resources, (resource) => (input.leads?.[resource] ?? []).map(leadSpellings)),
             metadata: input.metadata,
             source: input.source,
             effect,

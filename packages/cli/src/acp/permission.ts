@@ -2,6 +2,7 @@ import type { PermissionOption, ToolCallContent, ToolCallLocation } from "@agent
 import type { EventSubscribeOutput, OrbitClient, PermissionReplyInput } from "@orbit/client/promise"
 import { PermissionView } from "@orbit/schema/permission-view"
 import { ToolNames } from "@orbit/schema/tool-names"
+import { plainPath } from "@orbit/util/plain"
 import { Cause, Effect } from "effect"
 import { resolve } from "node:path"
 import type { ACPConnection } from "./connection"
@@ -59,7 +60,7 @@ const ask = Effect.fnUntraced(function* (input: Input) {
   const rawInput: ToolInput = caller
     ? declaredFields(caller.name, caller.input)
     : { ...request.metadata, resources: request.resources }
-  const previews = [...servedPreviews(view, input.cwd), ...argumentsContent(view)]
+  const previews = [...linksContent(view), ...servedPreviews(view, input.cwd), ...argumentsContent(view)]
   const toolCallID = input.event.data.source?.id ?? input.event.data.id
   const result = yield* input.connection.requestPermission({
     sessionId: input.clientSessionID,
@@ -70,8 +71,12 @@ const ask = Effect.fnUntraced(function* (input: Input) {
         state: {
           input: rawInput,
           title: prefixedTitle(
-            input.titlePrefix,
-            permissionTitle(toolName, view, caller?.input, previews, request, caller !== undefined, input.cwd),
+            subagentName(input.titlePrefix),
+            // An editor can fold a call's content, so the title too says that a link is on the way.
+            prefixedTitle(
+              PermissionView.linkSummary(view.links),
+              permissionTitle(toolName, view, caller?.input, previews, request, caller !== undefined, input.cwd),
+            ),
           ),
         },
         cwd: input.cwd,
@@ -98,9 +103,66 @@ function prefixedTitle(prefix: string | undefined, title: string | undefined) {
   return `${prefix}: ${title}`
 }
 
+// A subagent's title, which a model chose, in front of a warning: one line, short enough that the warning stays in a
+// title that an editor cuts, and quoted where a warning's words are anywhere in it, so that it leads as none of Orbit's
+// (classes 8 and 9).
+function subagentName(title: string | undefined) {
+  if (!title?.trim()) return undefined
+  const whole = plainPath(title.trim())
+  const characters = Array.from(whole)
+  const text =
+    characters.length > NAME_LENGTH
+      ? `${characters.slice(0, NAME_LENGTH - 3).join("").trimEnd()}...`
+      : whole
+  return WARNING_WORDS.test(whole) ? codeSpan(text) : markdownPath(text)
+}
+
 // Only the edit family has files to show a diff of; the check is by canonical name and alias.
 const isEditFamily = (name: string) =>
   PermissionView.action(name) === "edit" || ["patch", "notebook_edit"].includes(PermissionView.action(name))
+
+/** Where each link of the request leads, absolute as the locations are and written out on its line (class 9). */
+function linksContent(view: PermissionView.View): ToolCallContent[] {
+  return view.links.map((link) => ({
+    type: "content",
+    content: {
+      type: "text",
+      // A warning of two paths has a tilde of one that can pair with a tilde of the other, and strike out what is between.
+      text: PermissionView.linkWarning(link, (path) => markdownPath(path, link.file === link.place)),
+    },
+  }))
+}
+
+// A path that Markdown draws letter for letter: it has no mark that pairs with another or takes what follows it as
+// markup, a backslash only before a letter or a digit, an underscore only inside a word, at most the one tilde of a
+// short name such as `RUNNER~1` and that only where no other path shares the text, and it starts no block and holds
+// nothing that becomes a link by itself.
+const LITERAL =
+  /^(?:[\p{L}\p{M}\p{N} /.,:;=@+'"!?%$#(){}~-]|\](?![([:])|(?<=[\p{L}\p{N}])_(?=[\p{L}\p{N}])|\\(?=[\p{L}\p{N}]))+$/u
+const ACTIVE = /^(?:[-+=#]|\d+[.)])|:\/\/|www\.|@[^/\\]*\./i
+// A name that opens with the words of a warning would read as one, so it is quoted too.
+const WARNING = /^(?:link ends|\d+ linked paths)/i
+// A subagent's title stands before the warning itself, so its words are quoted wherever they are in it.
+const WARNING_WORDS = /link ends|linked paths/i
+const NAME_LENGTH = 40
+
+/**
+ * A path in text that a client renders as Markdown, as the protocol has it do with content and some do with titles: as
+ * it is where Markdown shows it so, and otherwise in a code span with a longer fence than any in it. So the text a
+ * person reads is the path, and no name a repository chose becomes a link, an image or a tag (classes 6, 8 and 9).
+ */
+function markdownPath(value: string, alone = true) {
+  const text = plainPath(value)
+  const tildes = text.split("~").length - 1
+  if (tildes <= (alone ? 1 : 0) && LITERAL.test(text) && !ACTIVE.test(text) && !WARNING.test(text)) return text
+  return codeSpan(text)
+}
+
+function codeSpan(text: string) {
+  const fence = "`".repeat(Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length)) + 1)
+  const pad = text.startsWith("`") || text.endsWith("`") ? " " : ""
+  return `${fence}${pad}${text}${pad}${fence}`
+}
 
 /**
  * The files of the request, drawn from their unified patches: the removed and context lines against the added ones. They
@@ -138,12 +200,12 @@ function permissionTitle(
   switch (PermissionView.action(request.action)) {
     case "external_directory": {
       const directory = request.resources.find(isPath)
-      return (
-        stringValue(metadata.description) ??
-        stringValue(metadata.command) ??
-        stringValue(metadata.parentDir) ??
-        (directory && `Access external directory ${wildcardDirectory(directory)}`)
-      )
+      const called = stringValue(metadata.description) ?? stringValue(metadata.command)
+      // One line, since this question is asked just before a change through a link out (class 9).
+      if (called !== undefined) return plainPath(called.trim())
+      const parent = stringValue(metadata.parentDir)
+      if (parent !== undefined) return markdownPath(parent)
+      return directory && `Access external directory ${markdownPath(wildcardDirectory(directory))}`
     }
     case "webfetch": {
       // The method is part of what is approved: a Code Mode POST must not read like the GET that was allowed.
@@ -161,12 +223,17 @@ function permissionTitle(
     case "patch":
     case "notebook_edit":
     case "list":
-    case "lsp":
+    case "lsp": {
       // The file the server named for its rules: relative to the project inside it, absolute outside it. Whatever the
       // calling tool's input spelled changes nothing. A trusted link that leads out keeps its link spelling as the
       // resource, so when that resource is not the place the tool acts on, the real place is the title.
-      if (files.length === 1 && (view.places.length === 0 || samePlace(files[0], view.places[0], cwd))) return files[0]
-      return view.places[0] ?? files[0] ?? view.files[0]?.file
+      const named =
+        files.length === 1 && (view.places.length === 0 || samePlace(files[0], view.places[0], cwd))
+          ? files[0]
+          : (view.places[0] ?? files[0] ?? view.files[0]?.file)
+      // One line, so a break in a file's name starts no line that reads as a link warning (class 9).
+      return named === undefined ? undefined : markdownPath(named)
+    }
     default:
       // A request whose caller is not its tool (an MCP call, a Workflow agent) names the action and what it reaches.
       return owned ? undefined : [toolName, ...request.resources.filter((resource) => resource !== "*")].join(" ")

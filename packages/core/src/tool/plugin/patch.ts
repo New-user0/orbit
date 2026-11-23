@@ -58,6 +58,8 @@ type Prepared =
     })
   | (Extract<Patch.Hunk, { readonly type: "delete" }> & {
       readonly target: FileAccess.Target
+      /** The link that is deleted, when the target's last part is one. */
+      readonly removes?: string
       readonly before: string
       readonly after: string
     })
@@ -67,6 +69,8 @@ type Prepared =
       readonly before: string
       readonly after: string
       readonly moveTarget?: FileAccess.Target
+      /** The link that a move removes, when its source's last part is one. */
+      readonly removes?: string
       /** The destination's text when a move replaces a file that already exists. */
       readonly replaced?: string
     })
@@ -214,6 +218,22 @@ export const Plugin = {
                 for (const hunk of hunks) {
                   yield* Effect.gen(function* () {
                     const target = yield* resolveTarget(hunk.path)
+                    // A delete, and a move's source, remove the path's last part, which can be a link to the file that was read.
+                    const removed =
+                      hunk.type === "delete" || (hunk.type === "update" && hunk.movePath)
+                        ? yield* access.removedLink(target)
+                        : undefined
+                    const removes = removed?.place
+                    if (removes) {
+                      places[places.length - 1] = removes
+                      yield* context.progress({ places: [...new Set(places)] })
+                    }
+                    // A link of a folder above puts the link that is removed in another folder than the one asked about.
+                    if (removed?.outside?.externalDirectory)
+                      yield* access.authorizeExternal([removed.outside], context, {
+                        filepath: removed.place,
+                        parentDir: removed.outside.externalDirectory.directory,
+                      })
                     const id = yield* identify(target, hunk.path)
                     if (hunk.type === "add") {
                       yield* ledger.assertRead(context.sessionID, target.absolute, hunk.path)
@@ -244,7 +264,7 @@ export const Plugin = {
                                 new ToolFailure({
                                   message:
                                     hunk.type === "delete"
-                                      ? `patch verification failed: Failed to delete ${target.resource}: ${errorMessage(error)}`
+                                      ? `patch verification failed: Failed to delete ${changedName({ target, removes })}: ${errorMessage(error)}`
                                       : `patch verification failed: Failed to read file to update ${target.absolute}: ${errorMessage(error)}`,
                                 }),
                             ),
@@ -255,7 +275,7 @@ export const Plugin = {
                       if (!states.has(id)) states.set(id, { absolute: target.absolute, display: hunk.path, snapshot })
                     }
                     if (hunk.type === "delete") {
-                      prepared.push({ ...hunk, target, before: snapshot!.text, after: "" })
+                      prepared.push({ ...hunk, target, removes, before: snapshot!.text, after: "" })
                       return
                     }
                     const original = previous ?? Bom.join(snapshot!.text, snapshot!.bom)
@@ -290,6 +310,7 @@ export const Plugin = {
                       before,
                       after: update.content,
                       moveTarget,
+                      removes,
                       replaced: replaced?.text,
                     })
                     if (!moveTarget) updates.set(id, Patch.joinBom(update.content, update.bom))
@@ -307,24 +328,56 @@ export const Plugin = {
                   change.target,
                   ...(change.type === "update" && change.moveTarget ? [change.moveTarget] : []),
                 ])
+                // The link that a delete or a move removes is where it really is, which a link of a folder above can make
+                // a place that neither the resource nor its lead names. It joins the leads, so the person's deny or ask
+                // for that folder decides the removal (class 3). The path as the project spells it is a lead already
+                // where a link of an untrusted project leads out (`FileAccess.leadsOf`).
+                const led = FileAccess.leadsOf(targets).leads ?? {}
+                const removing = prepared.flatMap((change) =>
+                  change.type !== "add" && change.removes !== undefined && change.removes !== change.target.absolute
+                    ? [[change.target, change.removes] as const]
+                    : [],
+                )
+                const leads = {
+                  ...led,
+                  ...Object.fromEntries(
+                    removing.map(([target, removes]) => [
+                      target.resource,
+                      [...(led[target.resource] ?? []), removes],
+                    ]),
+                  ),
+                }
                 yield* permission.assert({
                   action: "Edit",
                   resources: [...new Set(targets.map((target) => target.resource))],
                   save: ["*"],
-                  ...FileAccess.leadsOf(targets),
+                  ...(Object.keys(leads).length === 0 ? {} : { leads }),
                   metadata: {
                     filepath: targets.map((target) => target.resource).join(", "),
                     // Every place the patch touches as resolved here, absolute: a move's source and its destination too.
-                    paths: [...new Set(targets.map((target) => target.place))],
+                    paths: [
+                      ...new Set(
+                        prepared.flatMap((change) => [
+                          changed(change),
+                          ...(change.type === "update" && change.moveTarget ? [change.moveTarget.place] : []),
+                        ]),
+                      ),
+                    ],
                     diff: patchFiles.map((file) => `${file.patch}\n`).join(""),
+                    // `link` is where a link on the way to an entry's `place` really leads, and `fromLink` on the way to
+                    // its `from`, both of the targets that are written, for a client to warn about (class 3). Where what
+                    // is removed is itself a link, that link is the `place` or `from` (`changed`).
                     files: prepared.flatMap((change) => {
                       const [file, ...replaced] = [patchFile(change), ...replacedFile(change)]
-                      return change.type === "update" && change.moveTarget
-                        ? [
-                            { ...file!, place: change.moveTarget.place, from: change.target.place },
-                            ...replaced.map((item) => ({ ...item, place: change.moveTarget!.place })),
-                          ]
-                        : [{ ...file!, place: change.target.place }]
+                      const link = access.link(change.target)
+                      if (change.type !== "update" || !change.moveTarget)
+                        return [{ ...file!, place: changed(change), ...(link && { link }) }]
+                      const moved = access.link(change.moveTarget)
+                      const to = { place: change.moveTarget.place, ...(moved && { link: moved }) }
+                      return [
+                        { ...file!, ...to, from: changed(change), ...(link && { fromLink: link }) },
+                        ...replaced.map((item) => ({ ...item, ...to })),
+                      ]
                     }),
                   },
                   sessionID: context.sessionID,
@@ -345,20 +398,19 @@ export const Plugin = {
                   (change) =>
                     Effect.gen(function* () {
                       if (change.type === "delete") {
-                        touched.push({ file: change.target.resource })
+                        // What is removed is named as the request named it: the link, and not the file it leads to (class 3).
+                        const removed = changedName(change)
+                        touched.push({ file: removed })
                         yield* environment.files
                           .remove(change.target.absolute)
-                          .pipe(Effect.mapError((error) => fail(`Failed to delete ${change.target.resource}`, error)))
-                        applied.push({
-                          type: change.type,
-                          resource: change.target.resource,
-                          target: change.target.absolute,
-                        })
+                          .pipe(Effect.mapError((error) => fail(`Failed to delete ${removed}`, error)))
+                        applied.push({ type: change.type, resource: removed, target: change.target.absolute })
                         return
                       }
                       if (change.type === "update" && change.moveTarget) {
                         const moveTarget = change.moveTarget
-                        touched.push({ file: moveTarget.resource, from: change.target.resource })
+                        const removed = changedName(change)
+                        touched.push({ file: moveTarget.resource, from: removed })
                         yield* environment.files
                           .write(moveTarget.absolute, new TextEncoder().encode(change.content))
                           .pipe(Effect.mapError((error) => fail(`Failed to write ${moveTarget.resource}`, error)))
@@ -366,10 +418,7 @@ export const Plugin = {
                           .remove(change.target.absolute)
                           .pipe(
                             Effect.mapError((error) =>
-                              fail(
-                                `Wrote ${moveTarget.resource} but failed to remove ${change.target.resource}`,
-                                error,
-                              ),
+                              fail(`Wrote ${moveTarget.resource} but failed to remove ${removed}`, error),
                             ),
                           )
                         applied.push({
@@ -489,16 +538,29 @@ function errorMessage(error: unknown) {
 function patchFile(change: Prepared, after = change.after): typeof FileDiff.Info.Type & { readonly from?: string } {
   const moved = change.type === "update" ? change.moveTarget : undefined
   const diff = fileDiff(
-    change.target.place,
+    changed(change),
     change.before,
     after,
     change.type === "add" && !change.existed ? "added" : change.type === "delete" ? "deleted" : "modified",
   )
   return {
     ...diff,
-    file: moved?.resource ?? change.target.resource,
-    ...(moved ? { from: change.target.resource } : {}),
+    file: moved?.resource ?? changedName(change),
+    ...(moved ? { from: changedName(change) } : {}),
   }
+}
+
+type Changed = { readonly target: FileAccess.Target; readonly removes?: string }
+
+// The place a change acts on: the target's, or the link itself where that is what is removed (class 3).
+function changed(change: Changed) {
+  return change.removes ?? change.target.place
+}
+
+// The name that goes with `changed`: the resource, unless that names the file a removed link leads to.
+function changedName(change: Changed) {
+  if (change.target.resource !== change.target.place.replaceAll("\\", "/")) return change.target.resource
+  return changed(change).replaceAll("\\", "/")
 }
 
 /** A move onto an existing file replaces it, so the destination's current text is shown as removed beside the move. */
