@@ -7,6 +7,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Patch } from "@orbit/util/patch"
 import { Result } from "effect"
+import { literal } from "./markdown"
 
 export type ToolInput = Record<string, unknown>
 
@@ -274,9 +275,13 @@ function toolContent(content: ToolContent): ToolCallContent[] {
   })
 }
 
+// A shell call's command, which the model wrote, or the call's name: whole and on one line, written so a client that
+// renders the title as Markdown shows it as it is (class 9). `fallback`, an approval's title, is written so where
+// permission.ts builds it.
 function toolTitle(toolName: string, input: ToolInput, fallback: string | undefined) {
-  if (isShell(toolName)) return stringValue(input.command) ?? fallback ?? toolName
-  return fallback || toolName
+  const command = isShell(toolName) ? stringValue(input.command) : undefined
+  if (command !== undefined) return literal(command)
+  return fallback || literal(toolName)
 }
 
 function rawInput(toolName: string, input: ToolInput, cwd: string): ToolInput {

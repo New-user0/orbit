@@ -13,6 +13,7 @@ import { ToolNames } from "@orbit/schema/tool-names"
 import { TokenUsage } from "@orbit/schema/token-usage"
 import { partsToContentChunks, type ReplayPart } from "./content"
 import { ACPError } from "./error"
+import { subagentName } from "./markdown"
 import { completedToolUpdate, errorToolUpdate, pendingToolCall, runningToolUpdate, type ToolInput } from "./tool"
 
 export const ChildSessionUpdatesCapability = "orbit/child-session-updates"
@@ -679,7 +680,9 @@ function projectChildUpdate(update: SessionUpdate, child: ChildSession) {
   }
   if (projected.sessionUpdate === "tool_call" || projected.sessionUpdate === "tool_call_update") {
     projected.toolCallId = `${child.id}:${projected.toolCallId}`
-    if (projected.title && child.title) projected.title = `${child.title}: ${projected.title}`
+    // The subagent's title, which a model chose, is one short line that reads as it is (classes 8 and 9).
+    const name = subagentName(child.title)
+    if (projected.title && name) projected.title = `${name}: ${projected.title}`
   }
   return projected
 }

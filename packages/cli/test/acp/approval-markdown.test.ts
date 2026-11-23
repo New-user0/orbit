@@ -168,6 +168,19 @@ describe("acp: model and file text in an approval reads as it is", () => {
       expect(texts(call).map(read)).toEqual([shown(written)])
     }
   })
+
+  // Cell 6.h: a request whose caller is not its tool (here none) is titled with its action and what it reaches, which an
+  // MCP server or a model chose. The plain name is the control.
+  test("a request whose caller is not its tool, titled with its action and what it reaches", async () => {
+    for (const value of [...HOSTILE, BROKEN.value]) {
+      const call = await asked({ action: "slack_post_message", resources: [value] })
+      expect(read(String(call.title))).toEqual(
+        shown(`slack_post_message ${value === BROKEN.value ? BROKEN.shown : value}`),
+      )
+    }
+    const plain = await asked({ action: "slack_post_message", resources: ["*"] })
+    expect(plain.title).toBe("slack_post_message")
+  })
 })
 
 describe("acp: model text in a call's title reads as it is", () => {
@@ -192,6 +205,17 @@ describe("acp: model text in a call's title reads as it is", () => {
       "call_shell",
     )
     expect(plain.at(-1)).toBe("ls -la")
+  })
+
+  // Cell 6.h: any other call is titled with its name, which an MCP server chose. `read` is the control.
+  test("another call's title is its name, one line", async () => {
+    for (const value of [...HOSTILE, BROKEN.value]) {
+      const all = await titles((sessionID) => [toolStarted(sessionID, "call_tool", value)], "call_tool")
+      expect(all.length).toBeGreaterThan(0)
+      for (const title of all) expect(read(title)).toEqual(shown(value === BROKEN.value ? BROKEN.shown : value))
+    }
+    const plain = await titles((sessionID) => [toolStarted(sessionID, "call_tool", "read")], "call_tool")
+    expect(plain).toEqual(["read"])
   })
 
   test("a subagent's title in front of its calls", async () => {
