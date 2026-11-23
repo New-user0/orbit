@@ -2734,10 +2734,13 @@ warned, for an Edit or Write of one file, and the full dialog dropped the warnin
   folder, a rule written as `../out/*` for such a path now decides too; before, it did only in a trusted folder.
 - **Policies through a link.** A deny in `experimental.policies` or an organization's statement now refuses a file tool
   or Read through a link where it names the path as the project spells it (`Edit:out/*`) or as the place the link leads
-  to, in a trusted folder and in one that is not trusted yet. A deny written with an absolute path now also refuses a
-  file named relative to the session folder. Before, a policy met only the request's resource, so such a call went
-  ahead. A policy that allows the spelling of a link never lifts a deny of where it leads. A plugin's
-  `permission.evaluate` hook is shown these spellings as `leads`, keyed by resource like `aliases`.
+  to, in a trusted folder and in one that is not trusted yet. A policy written with an absolute path now also decides a
+  file named relative to the session folder, as a rule does: its deny refuses the file, and a later allow lifts a broad
+  deny of it, so a policy that denies everything and then allows a few paths (`Edit:*` deny, then `Edit:src/*` allow)
+  lets a file tool work on those paths, in a project reached through a link too. Before, a policy met only the
+  request's resource, so such a call went ahead. A policy that allows the spelling of a link never lifts a deny of where
+  it leads. A plugin's `permission.evaluate` hook is shown a file tool's resource by where it is among its `aliases`,
+  and the places a resource leads to as `leads`: keyed by resource like `aliases`, one list of spellings per place.
 - **Terminal UI and Mini.** The warning stays while Always allow is chosen and while you type why you reject, and a
   request of several files warns too. Where a warning is too long to stay whole, or a path in it holds a warning's own
   words, a summary stays and the warning is in what scrolls, under the grant while Always allow is focused (the reject
