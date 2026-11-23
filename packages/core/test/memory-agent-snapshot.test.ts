@@ -817,8 +817,8 @@ describe("agent memory snapshots", () => {
     Effect.gen(function* () {
       const l = yield* layout
       const folder = path.join(l.user, "reviewer")
-      // Enough files that the copy is still running when the first one shows up.
-      const many = notes(500, "")
+      // As many files as a copy takes (200), each large enough that the copy is still running when the first one shows up.
+      const many = notes(200, "x".repeat(65_536))
       yield* snapshotAt(path.join(l.snapshots, "reviewer"), many)
       const expected = [".snapshot-synced.json", ...Object.keys(many)].toSorted()
       const out = yield* Effect.gen(function* () {
@@ -849,7 +849,7 @@ describe("agent memory snapshots", () => {
     Effect.gen(function* () {
       const l = yield* layout
       const folder = path.join(l.user, "reviewer")
-      yield* snapshotAt(path.join(l.snapshots, "reviewer"), notes(1_000, "x".repeat(16_384)))
+      yield* snapshotAt(path.join(l.snapshots, "reviewer"), notes(200, "x".repeat(200_000)))
       const out = yield* Effect.gen(function* () {
         yield* define(reviewer)
         const fiber = yield* Effect.forkChild(sync)
@@ -863,7 +863,7 @@ describe("agent memory snapshots", () => {
         return { stopped, whole: Date.now() - starting, interrupted, next: (yield* listed(folder))?.length }
       }).pipe(provide(l))
       expect(out.interrupted).toEqual({ folder: undefined, user: [] })
-      expect(out.next).toBe(1_001)
+      expect(out.next).toBe(201)
       expect(out.stopped).toBeLessThan(out.whole / 2)
     }),
     60_000,
@@ -1046,6 +1046,32 @@ describe("agent memory snapshots", () => {
       expect(
         logs.filter((line) => line.includes("agent memory snapshot of reviewer") && !line.includes("files copied")),
       ).toHaveLength(1)
+    }),
+    60_000,
+  )
+
+  // FU-M5-004: "by name" is by code point, the same order on every machine, not the order a listing comes in. NTFS lists
+  // names without regard to case, so there `C.md` comes after every `b-…` name and would be the one cut; by code point an
+  // upper-case letter comes first, so it is kept and the last `b-…` name is cut.
+  it.live("cuts a snapshot by code point, whatever order the folder lists its names in", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const folder = path.join(l.user, "reviewer")
+      const many = {
+        "C.md": "CAPITAL\n",
+        ...Object.fromEntries(
+          Array.from({ length: 200 }, (_, index) => [`b-${String(index).padStart(3, "0")}.md`, `B-${index}\n`]),
+        ),
+      }
+      yield* snapshotAt(path.join(l.snapshots, "reviewer"), many)
+      yield* Effect.gen(function* () {
+        yield* define(reviewer)
+        yield* sync
+      }).pipe(provide(l))
+      const copied = (yield* listed(folder)) ?? []
+      expect(copied).toContain("C.md")
+      expect(copied).not.toContain("b-199.md")
+      expect(copied).toHaveLength(201)
     }),
     60_000,
   )
