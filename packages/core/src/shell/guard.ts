@@ -144,7 +144,15 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
       external: internal ? undefined : reached,
       unresolved: !internal && reached === undefined,
       why: "refused" as const,
-      targets: [lexical, actual].flatMap((target) => (target ? [target.resource] : [])),
+      // Until the folder is trusted, the resource of a path that a link of the project leads out is the place it leads
+      // to, so the path as the project spells it joins, as a trusted folder names it: a deny written for that spelling
+      // decides the command as it decides the file tools (class 3). The probes only deny, so this only adds refusals.
+      targets: [
+        ...[lexical, actual].flatMap((target) => (target ? [target.resource] : [])),
+        ...(lexical.externalDirectory?.escaped
+          ? [path.relative(location.directory, lexical.absolute).replaceAll("\\", "/") || "."]
+          : []),
+      ],
     }
   })
 
