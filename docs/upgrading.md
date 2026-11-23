@@ -2717,6 +2717,10 @@ warned, for an Edit or Write of one file, and the full dialog dropped the warnin
   header and the call's progress name the link, which is what is removed, where they named the file it leads to. `link` or
   `fromLink` says where it leads, and that file is not removed. So do the call's result (`D shown.txt`, `applied` and
   `files`) and its error where it fails, which in an untrusted folder named the file outside.
+- **A link removed from a folder that a link leads to.** Where such a link is in a folder that the path reaches through
+  another link, a deny or ask rule for the folder it is removed from now decides the delete or move, as it does when
+  that folder is named directly, and a folder outside the project is asked about (`external_directory`) before it is
+  removed from. Before, the link could be removed with only the file it leads to asked about.
 - **Terminal UI and Mini.** The warning stays while Always allow is chosen and while you type why you reject, and a
   request of several files warns too. Where a warning is too long to stay whole, or a path in it holds a warning's own
   words, a summary stays and the warning is in what scrolls, under the grant while Always allow is focused (the reject

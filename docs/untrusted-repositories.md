@@ -2568,7 +2568,14 @@ runs" is a permission.
   included, name that link too. A write goes through such a link, and its request names the file written to as before
   (`FileAccess.removedLink`; classes 3 and 8; `edit-link.test.ts`, "a file that is itself a link: what is shown is what
   runs", which checks the request, the disk and the result for each tool, trusted and not, and "a failure names what
-  was to be removed").
+  was to be removed"). Where a link of a folder above puts that link in another folder (`out/config` with `out` leading
+  to `~/.ssh`, whose `config` is a link to a dotfile), the place it is removed from is a subject of the Edit request's
+  deny and ask rules (`leads`), and its folder gets a question of its own when it is outside the project, marked
+  `escaped` when an untrusted project's link leads there, so Orbit's allows for its own folders do not answer it. Before,
+  only the spelling and the file the link leads to were checked, and a deny for the link's own folder became a question
+  about another one (classes 3 and 4; `edit-link.test.ts`, "the rules for the folder of a link that is removed decide
+  its removal": a deny, an ask and the folder question for a delete and a move's source, trusted and not, with the
+  folder named directly as the control, and the rows for Orbit's own folders and a link that stays in the project).
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob
