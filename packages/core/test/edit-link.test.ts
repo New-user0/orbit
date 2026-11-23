@@ -89,6 +89,8 @@ const run = (
     refuse?: { act: "remove" | "write"; name: string }
     // The agent's rules after its first one, which is for everything.
     rules?: Permission.Ruleset
+    // Orbit's data folder, which holds the project's memory folder.
+    data?: string
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -149,6 +151,7 @@ const run = (
           Image.node.replace(imagePassthrough),
           ...(options.refuse ? [Environment.node.replace(refusing(options.refuse))] : []),
           ...(options.trusted === false ? untrustedProjectNodes : []),
+          ...(options.data ? [Global.node.replace(Global.layerWith({ data: options.data }))] : []),
         ],
       ),
     ),
@@ -1028,6 +1031,103 @@ describe("the rules for the folder of a link that is removed decide its removal"
                 .flatMap((item) => item.resources)
                 .filter((resource) => resource === `${forward(folder)}/*`),
             ).toHaveLength(row.asked)
+          }),
+        (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+      ),
+    )
+})
+
+// Fix loop 7 (classes 3 and 8): a rule written for the path of a link as the project spells it decides a delete, or a
+// move's source, that removes that link, in an untrusted folder as in a trusted one. Until the folder is trusted, the
+// request of a link that leads out names the place it leads to, so the spelling of what is removed was no subject of the
+// rules, and the removal was neither refused nor asked about. The trusted rows are the control.
+describe("a rule for the spelling of a link that is removed decides its removal", () => {
+  const linkedFile = canLinkFile ? it.live : it.live.skip
+  const shapes = [
+    { name: "out", spelled: "shown.txt", link: ["proj", "shown"], real: ["outside", "real"] },
+    { name: "inside", spelled: "shown.txt", link: ["proj", "shown"], real: ["proj", "sub", "real"] },
+    { name: "in a linked folder out", spelled: "out/shown.txt", link: ["outside", "shown"], real: ["farther", "real"] },
+    { name: "in a linked folder inside", spelled: "alias/shown.txt", link: ["proj", "sub", "shown"], real: ["outside", "real"] },
+    { name: "in a folder linked to one above it", spelled: "up/shown.txt", link: ["shown"], real: ["farther", "real"] },
+  ]
+  for (const trusted of [true, false])
+    for (const act of ["delete", "move from"] as const)
+      for (const effect of ["deny", "ask"] as const)
+        for (const spelling of ["relative", "absolute"] as const)
+          for (const shape of shapes)
+            linkedFile(
+              `${effect} for its ${spelling} spelling: ${act}, ${shape.name}, in ${trusted ? "a trusted" : "an untrusted"} folder`,
+              () =>
+                Effect.acquireUseRelease(
+                  Effect.promise(() => tmpdir()),
+                  (root) =>
+                    Effect.gen(function* () {
+                      const world = yield* Effect.promise(() => makeWorld(root.path))
+                      const link = `${path.join(world.root, ...shape.link)}.txt`
+                      const real = `${path.join(world.root, ...shape.real)}.txt`
+                      yield* Effect.promise(async () => {
+                        await fs.writeFile(real, text)
+                        await fs.symlink(real, link, "file")
+                        await fs.symlink(world.root, path.join(world.project, "up"), "junction")
+                      })
+                      const resource =
+                        spelling === "relative" ? shape.spelled : forward(path.join(world.project, shape.spelled))
+                      const settled = yield* run(
+                        world.project,
+                        "Patch",
+                        patched(
+                          act === "delete" ? `*** Delete File: ${shape.spelled}` : update(shape.spelled, "plain/moved.txt"),
+                        ),
+                        { effect: "allow", trusted, rules: [{ action: "Edit", resource, effect }] },
+                      )
+                      const removed = effect === "ask"
+                      expect(Exit.isSuccess(settled.exit)).toBe(removed)
+                      const [linkThere, content] = yield* Effect.promise(async () => [
+                        await fs.lstat(link).then(
+                          (info) => info.isSymbolicLink(),
+                          () => false,
+                        ),
+                        await fs.readFile(real, "utf8"),
+                      ])
+                      expect(linkThere).toBe(!removed)
+                      expect(content).toBe(text)
+                      // Everything else is allowed, so the only question about the change is the one the rule asks.
+                      if (removed) expect(settled.request?.action).toBe("Edit")
+                    }),
+                  (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+                ),
+            )
+
+  // The memory folder is written without a question only while every place a call reaches is in its real folder. The
+  // spelling of a link that is removed joins the subjects only where an untrusted link leads out, so a delete in a memory
+  // folder reached through a linked data folder stays without a question, by either spelling (classes 3 and 4).
+  for (const spelling of ["linked", "real"] as const)
+    linkedFile(`a link in the memory folder is removed without a question, by the ${spelling} spelling of the data folder`, () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (root) =>
+          Effect.gen(function* () {
+            const world = yield* Effect.promise(() => makeWorld(root.path))
+            const data = path.join(world.root, "data")
+            const linked = path.join(world.root, "data-link")
+            const memory = path.join(data, "memory", Project.ID.global)
+            const real = path.join(memory, "kept.md")
+            const link = path.join(memory, "note.md")
+            yield* Effect.promise(async () => {
+              await fs.mkdir(memory, { recursive: true })
+              await fs.symlink(data, linked, "junction")
+              await fs.writeFile(real, text)
+              await fs.symlink(real, link, "file")
+            })
+            const at = path.join(spelling === "linked" ? linked : data, "memory", Project.ID.global, "note.md")
+            const settled = yield* run(world.project, "Patch", patched(`*** Delete File: ${at}`), {
+              trusted: false,
+              data: linked,
+            })
+            expect(Exit.isSuccess(settled.exit)).toBe(true)
+            expect(settled.asked).toEqual([])
+            expect(yield* Effect.promise(() => fs.lstat(link).then(() => true, () => false))).toBe(false)
+            expect(yield* Effect.promise(() => fs.readFile(real, "utf8"))).toBe(text)
           }),
         (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
       ),
