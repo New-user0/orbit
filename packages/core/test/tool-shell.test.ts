@@ -4823,13 +4823,21 @@ describe("ShellGuard: a deny for the spelling of a path a link leads out of", ()
             Effect.gen(function* () {
               const active = path.join(tmp.path, "active")
               const outside = path.join(tmp.path, "outside")
-              yield* Effect.promise(async () => {
+              const real = yield* Effect.promise(async () => {
                 await fs.mkdir(active)
                 await fs.mkdir(outside)
                 await fs.writeFile(path.join(outside, "s"), "secret")
                 await fs.symlink(outside, path.join(active, "cfg"), isWindows ? "junction" : "dir")
+                return fs.realpath(path.join(outside, "s"))
               })
-              const spellings = [undefined, "cfg/s", path.join(active, "cfg", "s").replaceAll("\\", "/"), "cfg/*"]
+              // The relative and absolute spellings in the project, a pattern, and the place the link leads to.
+              const spellings = [
+                undefined,
+                "cfg/s",
+                path.join(active, "cfg", "s").replaceAll("\\", "/"),
+                "cfg/*",
+                real.replaceAll("\\", "/"),
+              ]
               const decided = yield* withSession(active, () =>
                 Effect.gen(function* () {
                   const access = yield* FileAccess.Service
@@ -4852,12 +4860,23 @@ describe("ShellGuard: a deny for the spelling of a path a link leads out of", ()
                           portable: false,
                           base: { sessionID, agent: toolIdentity.agent },
                         }).pipe(Effect.flatMap(ShellGuard.denyPass), Effect.exit)
-                        const blocked =
-                          Exit.isFailure(exit) &&
-                          exit.cause.reasons.some(
-                            (reason) => Cause.isFailReason(reason) && reason.error instanceof Permission.BlockedError,
-                          )
-                        return { command: row.command, spelling, blocked, settled: blocked || Exit.isSuccess(exit) }
+                        const refusal = Exit.isFailure(exit)
+                          ? exit.cause.reasons.flatMap((reason) =>
+                              Cause.isFailReason(reason) && reason.error instanceof Permission.BlockedError
+                                ? [reason.error]
+                                : [],
+                            )[0]
+                          : undefined
+                        const blocked = refusal !== undefined
+                        // The refusal names the path as a trusted folder names it, with forward slashes on Windows too.
+                        const named = refusal?.resources.includes("cfg/s") ?? false
+                        return {
+                          command: row.command,
+                          spelling,
+                          blocked,
+                          named,
+                          settled: blocked || Exit.isSuccess(exit),
+                        }
                       }),
                     ),
                   ).pipe(Effect.map((items) => items.flat()))
@@ -4869,6 +4888,7 @@ describe("ShellGuard: a deny for the spelling of a path a link leads out of", ()
                     command: row.command,
                     spelling,
                     blocked: spelling !== undefined,
+                    named: spelling !== undefined,
                     settled: true,
                   })),
                 ),

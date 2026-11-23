@@ -150,7 +150,7 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
       targets: [
         ...[lexical, actual].flatMap((target) => (target ? [target.resource] : [])),
         ...(lexical.externalDirectory?.escaped
-          ? [path.relative(location.directory, lexical.absolute).replaceAll("\\", "/") || "."]
+          ? [path.relative(location.directory, lexical.absolute).replaceAll("\\", "/")]
           : []),
       ],
     }
