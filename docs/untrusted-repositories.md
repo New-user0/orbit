@@ -2572,11 +2572,16 @@ runs" is a permission.
   to `~/.ssh`, whose `config` is a link to a dotfile), the place it is removed from is a subject of the Edit request's
   deny and ask rules (`leads`), and its folder gets a question of its own when it is outside the project, marked
   `escaped` when an untrusted project's link leads there, so Orbit's allows for its own folders do not answer it. Before,
-  only the spelling and the file the link leads to were checked, and a deny for the link's own folder became a question
-  about another one (classes 3 and 4; `edit-link.test.ts`, "the rules for the folder of a link that is removed decide
-  its removal": a deny, an ask and the folder question for a delete and a move's source, trusted and not, with the
-  folder named directly as the control, and the rows for Orbit's own folders, a link that stays in the project and a
-  folder with no link, which is asked about once).
+  a deny for the link's own folder became a question about another one (classes 3 and 4; `edit-link.test.ts`, "the
+  rules for the folder of a link that is removed decide its removal": a deny, an ask and the folder question for a
+  delete and a move's source, trusted and not, with the folder named directly as the control, and the rows for Orbit's
+  own folders, a link that stays in the project and a folder with no link, which is asked about once). In an untrusted
+  project the request of a path that a link leads out names the place it leads to, so when such a path is removed, the
+  path as the project spells it joins the subjects of those rules too. Before, a deny or ask written for that path,
+  relative or absolute, did not apply there, and the link was removed without a question (classes 3 and 8;
+  `edit-link.test.ts`, "a rule for the spelling of a link that is removed decides its removal": a deny and an ask, by
+  each spelling, for a delete and a move's source of five shapes of link, trusted as the control and untrusted, and a
+  link in a memory folder reached through a linked data folder, which is still removed without a question).
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob

@@ -2721,6 +2721,10 @@ warned, for an Edit or Write of one file, and the full dialog dropped the warnin
   another link, a deny or ask rule for the folder it is removed from now decides the delete or move, as it does when
   that folder is named directly, and a folder outside the project is asked about (`external_directory`) before it is
   removed from. Before, the link could be removed with only the file it leads to asked about.
+- **A link removed in a folder that is not trusted yet.** Where a link of the project leads out, a deny or ask rule
+  written for the path of the link as the project spells it, relative or absolute, now also decides a Patch that deletes
+  that link or moves it away. Before, only the rules for the place the link leads to applied there, so the link could be
+  removed without a question.
 - **Terminal UI and Mini.** The warning stays while Always allow is chosen and while you type why you reject, and a
   request of several files warns too. Where a warning is too long to stay whole, or a path in it holds a warning's own
   words, a summary stays and the warning is in what scrolls, under the grant while Always allow is focused (the reject
