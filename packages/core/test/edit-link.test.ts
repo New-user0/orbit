@@ -1339,41 +1339,48 @@ describe("a policy for the spelling of a path a link leads out of refuses the ca
 
   // The leads never widen: a policy that allows only the spelling of a lead does not lift a deny of the resource, in a
   // trusted folder (where the resource is the spelling and the lead the real place) as in an untrusted one (the other
-  // way round). Merged into the aliases, the later allow would decide both.
+  // way round). Merged into the aliases, the later allow would decide both. In a trusted folder the link's absolute
+  // spelling is one of the resource's aliases, so an allow written with it must not reach the lead's pass either.
   for (const trusted of [true, false])
     for (const from of ["user", "organization"] as const)
-      it.live(
-        `a later allow of a lead's spelling keeps a ${from} deny of the real place (${trusted ? "trusted" : "untrusted"})`,
-        () =>
-          Effect.acquireUseRelease(
-            Effect.promise(() => tmpdir()),
-            (root) =>
-              Effect.gen(function* () {
-                const world = yield* Effect.promise(() => makeWorld(root.path))
-                const real = path.join(world.root, "outside", "b.txt")
-                yield* Effect.promise(() => fs.writeFile(real, text))
-                const settled = yield* run(world.project, "Edit", changes[0]!.input("out/b.txt", ""), {
-                  effect: "allow",
-                  trusted,
-                  rules: [{ action: "external_directory", resource: "*", effect: "allow" }],
-                  policy: {
-                    from,
-                    statements: [
-                      {
-                        action: "permission",
-                        resource: `Edit:${forward(path.join(world.root, "outside"))}/*`,
-                        effect: "deny",
-                      },
-                      { action: "permission", resource: "Edit:out/*", effect: "allow" },
-                    ],
-                  },
-                })
-                expect(Exit.isSuccess(settled.exit)).toBe(false)
-                expect(yield* Effect.promise(() => fs.readFile(real, "utf8"))).toBe(text)
-              }),
-            (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
-          ),
-      )
+      for (const spelling of ["relative", "absolute"] as const)
+        it.live(
+          `a later allow of a lead's ${spelling === "relative" ? "" : "absolute "}spelling keeps a ${from} deny of the real place (${trusted ? "trusted" : "untrusted"})`,
+          () =>
+            Effect.acquireUseRelease(
+              Effect.promise(() => tmpdir()),
+              (root) =>
+                Effect.gen(function* () {
+                  const world = yield* Effect.promise(() => makeWorld(root.path))
+                  const real = path.join(world.root, "outside", "b.txt")
+                  yield* Effect.promise(() => fs.writeFile(real, text))
+                  const settled = yield* run(world.project, "Edit", changes[0]!.input("out/b.txt", ""), {
+                    effect: "allow",
+                    trusted,
+                    rules: [{ action: "external_directory", resource: "*", effect: "allow" }],
+                    policy: {
+                      from,
+                      statements: [
+                        {
+                          action: "permission",
+                          resource: `Edit:${forward(path.join(world.root, "outside"))}/*`,
+                          effect: "deny",
+                        },
+                        {
+                          action: "permission",
+                          resource:
+                            spelling === "relative" ? "Edit:out/*" : `Edit:${forward(path.join(world.project, "out"))}/*`,
+                          effect: "allow",
+                        },
+                      ],
+                    },
+                  })
+                  expect(Exit.isSuccess(settled.exit)).toBe(false)
+                  expect(yield* Effect.promise(() => fs.readFile(real, "utf8"))).toBe(text)
+                }),
+              (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+            ),
+        )
 
   // The control: with no policy for the path, the same call runs.
   for (const trusted of [true, false])
