@@ -3760,7 +3760,8 @@ function formatSessionTranscript(
   tools = true,
 ) {
   const body = messages.flatMap((message) => {
-    if (message.type === "user") return [`## User\n\n${message.text}`]
+    // A slash command's prompt is the command the person ran, as the transcript draws it; the expansion is the model's.
+    if (message.type === "user") return [`## User\n\n${shownPrompt(message)}`]
     if (message.type === "shell")
       return [`## Shell\n\n\`\`\`\n$ ${message.command}\n${message.output?.output ?? ""}\n\`\`\``]
     if (message.type !== "assistant") return []

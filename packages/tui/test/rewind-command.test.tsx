@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { projectedPromptInput } from "../src/prompt/codec"
 import { tmpdir } from "./fixture/fixture"
-import { conversation, linesWith, listHeading, rewindApp, sessionID, until } from "./fixture/rewind"
+import { conversation, linesWith, listHeading, rewindApp, session, sessionID, until } from "./fixture/rewind"
 import { json } from "./fixture/tui-client"
 
 // m5-quality, FU-M5-002: a prompt the person gave as a slash command is shown and given back as they typed it,
@@ -195,4 +195,34 @@ test("a prompt of several lines is one line on its row", async () => {
   setup.mockInput.pressEnter()
   const list = await setup.waitForFrame((frame) => frame.includes(listHeading) && frame.includes("(current)"))
   expect(linesWith(list, "Rename the helper and every caller")).toBe(1)
+})
+
+// Review of fix loop 1: the Markdown transcript (`/copy`, and `/export` as Markdown, which write the same text) shows a
+// slash command's prompt as the command that was run, as the transcript on screen draws it and as the reference's export
+// does. The expansion is the model's and is not in it. A prompt with no command is its text (the control).
+test("the Markdown transcript shows a slash command's prompt as its command", async () => {
+  await using state = await tmpdir()
+  const written: string[] = []
+  await using setup = await rewindApp({
+    state: state.path,
+    messages: withCommand,
+    clipboard: {
+      read: async () => undefined,
+      write: async (value: string) => {
+        written.push(value)
+      },
+      dispose: async () => {},
+    },
+    answer: (request) =>
+      request.path === `/api/experimental/session/${sessionID}/export`
+        ? json({ data: { info: session, messages: withCommand } })
+        : undefined,
+  })
+  await setup.waitForFrame((frame) => frame.includes("Renamed it."))
+  await setup.mockInput.typeText("/copy")
+  setup.mockInput.pressEnter()
+  await until(() => written.length > 0, "the transcript on the clipboard")
+  expect(written[0]).toContain(`## User\n\n${SHOWN}\n`)
+  expect(written[0]).not.toContain("EXPANDED-BODY")
+  expect(written[0]).toContain("## User\n\nAdd the parser\n")
 })
