@@ -2586,7 +2586,12 @@ runs" is a permission.
   it for each escaped target, so Edit, Write, NotebookEdit, every file of a Patch and the door of Read carry it. Before, a deny written for the path in the project let a write land where the link leads (classes
   3 and 8; `edit-link.test.ts`, "a rule for the spelling of a path a link leads out of decides the call through it": a
   deny and an ask, by each spelling, for a file that is a link out and a file below a folder link out, trusted as the
-  control and untrusted).
+  control and untrusted). The shell checks a command's files against the person's Read and Edit denies before it asks
+  (`ShellGuard.facts`, the probes), and the probes of such a path carry that spelling too, relative to the session
+  folder as a trusted folder names it. Before, a deny written for it let `cat`, a redirect or `rm` read or write the file
+  the link leads to (classes 3 and 8; `tool-shell.test.ts`, "ShellGuard: a deny for the spelling of a path a link leads
+  out of": a deny by the relative path, the absolute path and a pattern, for `cat`, a redirect, `rm`, `bash -c` and,
+  where it is installed, PowerShell, trusted as the control and untrusted, and no deny as the control that passes).
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob

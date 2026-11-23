@@ -2728,7 +2728,9 @@ warned, for an Edit or Write of one file, and the full dialog dropped the warnin
 - **A file written or read through a link in a folder that is not trusted yet.** The same now holds for every file
   tool: where a link of the project leads out, a deny or ask rule written for the path as the project spells it decides
   an Edit, Write, NotebookEdit, Patch or Read through that path. Before, such a rule did not apply, so the file the link
-  leads to could be written or read without a question even where you had denied the path.
+  leads to could be written or read without a question even where you had denied the path. A Read or Edit deny written
+  that way also stops a shell command that reads, writes or removes the file through the link, as it does in a trusted
+  folder; before, such a command reached the file the link leads to.
 - **Terminal UI and Mini.** The warning stays while Always allow is chosen and while you type why you reject, and a
   request of several files warns too. Where a warning is too long to stay whole, or a path in it holds a warning's own
   words, a summary stays and the warning is in what scrolls, under the grant while Always allow is focused (the reject
