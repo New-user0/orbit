@@ -81,6 +81,15 @@ const misleading = (row: Row) => {
   const lexical = lexicalOf(raw)
   return (row.truth.places ?? []).some((place) => slashed(path.resolve(place)) === lexical) ? undefined : raw
 }
+// The links of a row's request, as the server put them there, and where each client's warning says they end
+// (m5-link-warning).
+type End = { place: string; outside: boolean }
+const linksOf = (row: Row) =>
+  ((row.request.metadata?.files ?? []) as { link?: End; fromLink?: End }[]).flatMap((file) =>
+    [file.link, file.fromLink].filter((link): link is End => link !== undefined),
+  )
+const ends = (link: End) => `Linkends${link.outside ? "outside" : "inside"}theproject`
+const tail = (value: string) => slashed(value.split(/[\\/]/).slice(-2).join("/"))
 const request = (row: Row): MiniPermissionRequest => ({
   id: "per_matrix",
   sessionID: "ses_matrix",
@@ -105,7 +114,7 @@ test("the matrix has every tool, every spelling and both trust states", () => {
     "Write",
   ])
   const spellings = new Set(golden.map((row) => row.id.split("/")[1]))
-  for (const name of ["relative path", "absolute path", "dot-dot path", "absolute path outside", "tilde path", "link"])
+  for (const name of ["relative path", "absolute path", "dot-dot path", "absolute path outside", "tilde path", "link", "link inside"])
     expect(spellings.has(name)).toBe(true)
   expect(golden.some((row) => row.id.endsWith("/trusted"))).toBe(true)
   expect(golden.some((row) => row.id.endsWith("/untrusted"))).toBe(true)
@@ -161,7 +170,9 @@ for (const row of rows)
   })
 
 // The real component, drawn: a place that is shown is on the screen, and so is no decoy.
-for (const row of rows.filter((item, index) => index % 4 === 0 || !item.id.startsWith("Edit"))) {
+for (const row of rows.filter(
+  (item, index) => index % 4 === 0 || !item.id.startsWith("Edit") || linksOf(item).length > 0,
+)) {
   test(`Mini draws the prompt for ${row.id} from the request`, async () => {
     for (const mono of [false, true]) {
       const app = await testRender(
@@ -187,6 +198,13 @@ for (const row of rows.filter((item, index) => index % 4 === 0 || !item.id.start
         for (const place of expected) expect(frame).toContain(toolPath(place, { home: true }))
         if (row.truth.url) expect(frame).toContain(row.truth.url)
         for (const resource of resourcesOf(row)) expect(frame).toContain(resource)
+        // A link warning only where the request names one, and then each place it ends at.
+        const joined = frame.replace(/[\s│┃█▀▄─]/g, "")
+        for (const link of linksOf(row)) {
+          expect(joined).toContain(ends(link))
+          expect(slashed(joined)).toContain(tail(link.place))
+        }
+        if (linksOf(row).length === 0) expect(joined).not.toMatch(/Linkends|linkedpaths/)
         // Every changed line of the request's patches is on the screen, as the changed text, and no decoy change is.
         if (!mono)
           for (const patch of patchesOf(row))
@@ -270,7 +288,7 @@ for (const row of rows.filter((item) => item.tool === "Edit" || item.tool === "W
     expect(flat).toContain("ReviewinginTestEditor")
     const file = ((row.request.metadata?.files ?? []) as { place?: string; link?: { outside: boolean } }[])[0]
     expect(flat).toContain(`Makethischangeto${path.basename(file!.place!)}?`)
-    if (file?.link) expect(flat).toContain(file.link.outside ? "outsidethesession'sfolder,throughalink" : "Thelinkleadsto")
+    if (file?.link) expect(flat).toContain(`Linkends${file.link.outside ? "outside" : "inside"}theproject`)
   })
 
 for (const row of rows.filter((item) => item.tool === "Edit" || item.tool === "Write"))
@@ -284,11 +302,10 @@ for (const row of rows.filter((item) => item.tool === "Edit" || item.tool === "W
     const file = ((row.request.metadata?.files ?? []) as { place?: string; link?: { place: string; outside: boolean } }[])[0]
     expect(flat).toContain(`Makethischangeto${path.basename(file!.place!)}?`)
     // A link warning only where the request names one: where the file really is, and whether that is outside.
-    const tail = (value: string) => value.split(/[\\/]/).slice(-2).join("/")
     if (file?.link) {
-      expect(flat).toContain(file.link.outside ? "outsidethesession'sfolder,throughalink" : "Thelinkleadsto")
-      expect(slashed(flat)).toContain(tail(slashed(file.link.place)))
-    } else expect(flat).not.toMatch(/throughalink|Thelinkleadsto/)
+      expect(flat).toContain(ends(file.link))
+      expect(slashed(flat)).toContain(tail(file.link.place))
+    } else expect(flat).not.toMatch(/Linkends|linkedpaths/)
   })
 
 // The prompt writes out the editor's name itself, whoever hands it the name.
@@ -301,13 +318,22 @@ test("the compact prompt writes out the editor name it is given", async () => {
 
 test("the link rows of the matrix name where the link leads", () => {
   // Without these the link checks above would be vacuous.
-  const linked = golden.filter((row) => row.id.startsWith("Edit/link/") || row.id.startsWith("Write/link/"))
-  expect(linked.length).toBeGreaterThan(0)
-  for (const row of linked)
-    expect([row.id, ((row.request.metadata?.files ?? []) as { link?: unknown }[])[0]?.link]).toEqual([
-      row.id,
-      { place: `${world.outside}/file.txt`, outside: true },
-    ])
+  const changes = ["Edit", "Write", "NotebookEdit", "Patch", "Patch (add over)", "Patch (move onto)", "Patch (move)"]
+  for (const tool of changes)
+    for (const spelling of ["link", "link inside"]) {
+      const linked = golden.filter((row) => row.id.startsWith(`${tool}/${spelling}/`))
+      expect([tool, spelling, linked.length]).toEqual([tool, spelling, 2])
+      for (const row of linked) {
+        const name = tool === "NotebookEdit" ? "file.ipynb" : tool.includes("move") ? "file-moved.txt" : "file.txt"
+        const folder = spelling === "link" ? world.outside : `${world.project}/src`
+        const files = (row.request.metadata?.files ?? []) as { from?: string; link?: End; fromLink?: End }[]
+        for (const file of files) {
+          expect([row.id, file.link]).toEqual([row.id, { place: `${folder}/${name}`, outside: spelling === "link" }])
+          const from = file.from === undefined ? undefined : { place: `${folder}/file.txt`, outside: spelling === "link" }
+          expect([row.id, file.fromLink]).toEqual([row.id, from])
+        }
+      }
+    }
 })
 
 // The model picks the order of an MCP call's arguments, so the value that matters can come after a long one. The argument

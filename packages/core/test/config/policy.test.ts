@@ -44,6 +44,7 @@ const evaluate = Effect.fn(function* (
   resources: string[],
   effect: Permission.Effect = "allow",
   aliases?: Record<string, string[]>,
+  leads?: Record<string, string[][]>,
 ) {
   const hooks = yield* PluginHooks.Service
   const event = yield* hooks.trigger("permission", "evaluate", {
@@ -51,6 +52,7 @@ const evaluate = Effect.fn(function* (
     action,
     resources,
     aliases,
+    leads,
     effect,
   })
   return { effect: event.effect, message: event.message }
@@ -201,6 +203,59 @@ describe("ConfigPolicyPlugin.Plugin", () => {
       // The spelling of one tool never reaches another.
       expect(yield* evaluate("Read", ["git push origin main"])).toEqual({ effect: "allow", message: undefined })
       expect(yield* evaluate("Bash", ["config/.env"])).toEqual({ effect: "allow", message: undefined })
+    }),
+  )
+
+  it.effect("a statement for another action decides no permission, by a resource, an alias or a lead", () =>
+    Effect.gen(function* () {
+      yield* addPlugin([document(provider("deny", "*"))])
+
+      expect(
+        yield* evaluate("Edit", ["a.txt"], "allow", { "a.txt": ["/p/a.txt"] }, { "a.txt": [["/real/a.txt"]] }),
+      ).toEqual({
+        effect: "allow",
+        message: undefined,
+      })
+    }),
+  )
+
+  // A lead is where a resource really leads through a link. A policy for it refuses the call, and an allow written only
+  // for a lead never lifts a deny of the resource (class 3).
+  it.effect("a lead only refuses: its deny decides and its allow lifts no deny of the resource", () =>
+    Effect.gen(function* () {
+      yield* addPlugin([
+        document(
+          permission("deny", "Edit:/real/*"),
+          permission("allow", "Edit:out/*"),
+          permission("deny", "Read:out/*"),
+        ),
+      ])
+
+      const leads = { "/real/b.txt": [["out/b.txt"]] }
+      expect((yield* evaluate("Edit", ["/real/b.txt"], "allow", undefined, leads)).effect).toBe("deny")
+      expect((yield* evaluate("Read", ["/real/b.txt"], "allow", undefined, leads)).effect).toBe("deny")
+      // The control: with no lead, nothing names the Read.
+      expect((yield* evaluate("Read", ["/real/b.txt"])).effect).toBe("allow")
+    }),
+  )
+
+  // The spellings of one place are one subject, as for a rule: a later allow of the project's spelling lifts a broad
+  // deny of the place. Two places a resource leads to are decided apart, so an allow of one never lifts a deny of the
+  // other (class 3).
+  it.effect("the spellings of one lead are decided together, and two leads apart", () =>
+    Effect.gen(function* () {
+      yield* addPlugin([
+        document(
+          permission("deny", "Edit:*"),
+          permission("allow", "Edit:plain/*"),
+          permission("allow", "Edit:/real/*"),
+        ),
+      ])
+
+      const together = { "plain/b.txt": [["/elsewhere/plain/b.txt", "plain/b.txt"]] }
+      expect((yield* evaluate("Edit", ["plain/b.txt"], "allow", undefined, together)).effect).toBe("allow")
+      const apart = { "plain/b.txt": [["/real/plain/b.txt"], ["/other/b.txt"]] }
+      expect((yield* evaluate("Edit", ["plain/b.txt"], "allow", undefined, apart)).effect).toBe("deny")
     }),
   )
 

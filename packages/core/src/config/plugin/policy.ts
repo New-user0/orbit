@@ -55,17 +55,26 @@ export const Plugin = define({
         const current = policies()
         // Like Permission.evaluate, a resource and its own aliases are one subject:
         // the last policy matching any of its spellings decides.
+        // A policy written with an old tool name (`shell:rm *`) still names the same action as `Bash:rm *`.
+        const decide = (spellings: ReadonlyArray<string>) => {
+          const subjects = ToolNames.spellings(event.action).flatMap((action) =>
+            spellings.map((spelling) => `${action}:${spelling}`),
+          )
+          return current.findLast(
+            (policy) =>
+              policy.action === "permission" && subjects.some((subject) => Wildcard.match(subject, policy.resource)),
+          )
+        }
+        // The places a resource leads to through a link are a separate pass that can only refuse, as Permission tries
+        // them: merged into the aliases, an allow written for a lead's spelling would lift a deny of the resource. A
+        // policy for the path as an untrusted project spells it meets the call here, since its resource is the real
+        // place the link leads to (class 3). The spellings of one place are one subject, as for a rule, so a later allow
+        // for the project's spelling of a place lifts a broad deny of it, while a second place is decided on its own.
         const denied = event.resources
-          .map((resource) => {
-            // A policy written with an old tool name (`shell:rm *`) still names the same action as `Bash:rm *`.
-            const subjects = ToolNames.spellings(event.action).flatMap((action) =>
-              [resource, ...(event.aliases?.[resource] ?? [])].map((spelling) => `${action}:${spelling}`),
-            )
-            return current.findLast(
-              (policy) =>
-                policy.action === "permission" && subjects.some((subject) => Wildcard.match(subject, policy.resource)),
-            )
-          })
+          .flatMap((resource) => [
+            decide([resource, ...(event.aliases?.[resource] ?? [])]),
+            ...(event.leads?.[resource] ?? []).map((spellings) => decide(spellings)),
+          ])
           .find((policy) => policy?.effect === "deny")
         if (!denied) return
         event.effect = "deny"

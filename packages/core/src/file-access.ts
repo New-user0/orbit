@@ -147,6 +147,16 @@ export interface Interface {
    * macOS's `/var`, is not reached through one of the repository's.
    */
   readonly link: (target: Target) => { readonly place: AbsolutePath; readonly outside: boolean } | undefined
+  /**
+   * What removing `target` removes when its last part is itself a link: that link, where it really is (`place`), and not
+   * the file it leads to, which stays (class 3). Undefined for any other target. It reads the link and follows only the
+   * folders above it, so it is asked after the target's external directory is. Where a link of a folder above leads the
+   * link outside the project, `outside` is the target for that folder's own question, which nothing asked yet: the one
+   * asked for `target` is about the folder of the file the link leads to.
+   */
+  readonly removedLink: (
+    target: Target,
+  ) => Effect.Effect<{ readonly place: AbsolutePath; readonly outside?: Target } | undefined, FSUtil.Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@orbit/FileAccess") {}
@@ -187,11 +197,20 @@ const shareFailure = (spelled: string) =>
  * somewhere else (a link leads out), where it is the place, so that an approval does not show the link as the file.
  */
 export const shownName = (target: Target) => (target.place === target.absolute ? target.resource : slash(target.place))
-/** The `leads` of a permission request for these targets: the real places they lead to, keyed by their resource. */
+/**
+ * The `leads` of a permission request for these targets, keyed by their resource: the real places they lead to, and, for
+ * a target that a link of an untrusted project leads out, the path as the project spells it. That target's resource is
+ * the place the link leads to, so without its spelling a deny or ask written for the path in the project would never
+ * meet the call (class 3).
+ */
 export const leadsOf = (targets: readonly Target[]) => {
-  const entries = targets.flatMap((target) =>
-    target.leads === undefined ? [] : [[target.resource, [target.leads]] as const],
-  )
+  const entries = targets.flatMap((target) => {
+    const leads = [
+      ...(target.leads === undefined ? [] : [target.leads]),
+      ...(target.externalDirectory?.escaped ? [target.absolute] : []),
+    ]
+    return leads.length === 0 ? [] : [[target.resource, leads] as const]
+  })
   return entries.length === 0 ? {} : { leads: Object.fromEntries(entries) }
 }
 /** Where a target really is once its links, and the links of every folder above it, are followed. */
@@ -556,15 +575,34 @@ const layer = Layer.effect(
       })
     })
 
+    // Whether `lead` is where `file` would be with no link of the repository on its way: its path under the folder's real
+    // path.
+    const unlinked = (file: string, lead: string) => {
+      const index = folders.findIndex((folder) => FSUtil.contains(folder, file))
+      const plainly = index === -1 ? file : path.join(real[index]!, path.relative(folders[index]!, file))
+      return FSUtil.contains(lead, plainly) && FSUtil.contains(plainly, lead)
+    }
+
     const link = (target: Target) => {
       const lead = realPlace(target)
-      const index = folders.findIndex((folder) => FSUtil.contains(folder, target.absolute))
-      // Where the target would be if no link of the repository were on its way: its path under the folder's real path.
-      const plainly =
-        index === -1 ? target.absolute : path.join(real[index]!, path.relative(folders[index]!, target.absolute))
-      if (FSUtil.contains(lead, plainly) && FSUtil.contains(plainly, lead)) return undefined
+      if (unlinked(target.absolute, lead)) return undefined
       return { place: lead, outside: !real.some((folder) => FSUtil.contains(folder, lead)) }
     }
+
+    const removedLink = Effect.fn("FileAccess.removedLink")(function* (target: Target) {
+      const itself = yield* fs.readLink(target.absolute).pipe(Effect.orElseSucceed(() => undefined))
+      if (itself === undefined) return undefined
+      const folder = path.dirname(target.absolute)
+      const lead = yield* trust.leads(folder)
+      if (unlinked(folder, lead)) return { place: target.absolute }
+      const place = AbsolutePath.make(path.join(lead, path.basename(target.absolute)))
+      if (real.some((item) => FSUtil.contains(item, place))) return { place }
+      // The folder the link is in is asked about as a link of the project leading out is: in a folder that is not trusted
+      // yet, Orbit's allows for its own folders do not decide it (class 3).
+      const escaped =
+        folders.some((item) => FSUtil.contains(item, folder)) && (yield* trust.escapes(folder)) !== undefined
+      return { place, outside: yield* external(place, "file", place, escaped) }
+    })
 
     return Service.of({
       resolve,
@@ -576,6 +614,7 @@ const layer = Layer.effect(
       inMemory,
       refuseTeamSecrets,
       link,
+      removedLink,
     })
   }),
 )

@@ -8,7 +8,7 @@ import os from "node:os"
 import path from "node:path"
 import { afterAll, expect, test } from "bun:test"
 import { permissionItem } from "../src/controller"
-import { approvalCard } from "../src/webview/approval"
+import { approvalCard, type Card } from "../src/webview/approval"
 import { excerpt } from "../src/webview/present"
 
 type Row = {
@@ -64,6 +64,28 @@ for (const row of rows)
     expect(item.files.map((file) => file.patch)).toEqual(patches)
     expect(item.files.flatMap((file) => excerpt(file.patch, 6))).toEqual(patches.flatMap((patch) => excerpt(patch, 6)))
     for (const line of item.files.flatMap((file) => excerpt(file.patch, 6))) expect(line.text).not.toContain("DECOY")
+  })
+
+// m5-link-warning: the card's warnings are the request's links, and there are none without one.
+type End = { place: string; outside: boolean }
+for (const row of rows)
+  test(`the VS Code card for ${row.id} warns of the request's links and no other`, () => {
+    const card: Card & { readonly warnings?: ReadonlyArray<string> } = approvalCard(
+      permissionItem({ id: "per_matrix", sessionID: "ses_matrix", ...row.request }),
+    )
+    const links = ((row.request.metadata?.files ?? []) as { link?: End; fromLink?: End }[]).flatMap((file) =>
+      [file.link, file.fromLink].filter((link): link is End => link !== undefined),
+    )
+    const warnings = card.warnings ?? []
+    for (const link of links)
+      expect(
+        warnings.some(
+          (line) =>
+            line.startsWith(`Link ends ${link.outside ? "outside" : "inside"} the project`) && line.endsWith(link.place),
+        ),
+      ).toBe(true)
+    if (links.length === 0) expect(warnings).toEqual([])
+    expect(JSON.stringify(warnings)).not.toContain("DECOY")
   })
 
 const cardOf = (request: Row["request"]) =>
@@ -141,6 +163,12 @@ const reviewWorld = {
 for (const folder of [reviewWorld.project, reviewWorld.outside])
   for (const name of ["file.txt", "file.ipynb", "src/file.txt", "src/file.ipynb"])
     await Bun.write(path.join(folder, name), "alpha\n")
+// The folders the link rows' places go through: the project's own link to its `src`.
+await fs.symlink(
+  path.join(reviewWorld.project, "src"),
+  path.join(reviewWorld.project, "alias"),
+  process.platform === "win32" ? "junction" : "dir",
+)
 afterAll(() => fs.rm(reviewRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
 const reviewRows = rows.map(
   (row): Row =>

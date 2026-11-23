@@ -706,9 +706,15 @@ describe("Permission resource aliases", () => {
       expect(yield* service.ask(webfetch())).toMatchObject({ effect: "allow" })
       expect(yield* service.ask(pastebin())).toMatchObject({ effect: "deny" })
       expect(yield* service.ask(assertion())).toMatchObject({ effect: "allow" })
+      expect(yield* service.ask(assertion({ action: "bash", resources: ["echo hi"] }))).toMatchObject({
+        effect: "allow",
+      })
       expect(seen).toEqual([
         { "docs.example.com": ["https://docs.example.com/a"] },
         { "pastebin.com": ["https://pastebin.com/raw/abc"] },
+        // A file tool's relative resource has its place joined to the session folder as an alias, as the rules try it.
+        { "src/index.ts": [path.resolve("/project", "src/index.ts")] },
+        // A request with no alias and no file place shows the hook no aliases at all, as before the place joined them.
         undefined,
       ])
     }),

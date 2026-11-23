@@ -1008,6 +1008,44 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
+  // The cells of a file the session wrote through a folder link that leads out (`cfg`, a junction on Windows), with a
+  // Read deny written for the path as the project spells it, relative or absolute (classes 3 and 8). Trusted, that deny
+  // skips the file, and with no deny its change is reported. With the project's trust revoked, the gate never reaches
+  // the rules: the name leads out of a project nobody trusts, so nothing of the file is reported whatever they say. The
+  // request it would ask with still names the spelling, so a deny for it is a deny of that request, as of the read tool's.
+  for (const trust of ["trusted", "revoked"] as const) {
+    it.live(`a Read deny for the spelling of a link out skips a file written through it (${trust})`, () =>
+      Effect.gen(function* () {
+        const outside = (yield* tmpdirScoped()).path
+        const h = yield* setup([allowAll])
+        const file = h.inside(path.join("cfg", "s"))
+        yield* Effect.promise(() => fs.symlink(outside, h.inside("cfg"), "junction"))
+        yield* h.write(file, text(twenty))
+        if (trust === "revoked") yield* h.trust.revoke()
+        const denies = [
+          { action: "Read", resource: "cfg/s", effect: "deny" },
+          { action: "Read", resource: slash(file), effect: "deny" },
+        ] satisfies Permission.Ruleset
+        const access = yield* FileAccess.Service
+        const permission = yield* Permission.Service
+        const target = yield* access.locate(file, "file")
+        const denied = permission.denied(FileChangeReminder.readRequest(target, { sessionID: h.session.id, agent: build }))
+        for (const deny of denies) {
+          yield* h.permit([allowAll, deny])
+          yield* h.change(file, text(["SECRET-MARKER"]))
+          const rows = yield* h.changes()
+          expect(rows).toEqual([])
+          expect(JSON.stringify(rows)).not.toContain("SECRET-MARKER")
+          expect(yield* denied).toBe(true)
+        }
+        yield* h.permit([allowAll])
+        expect(yield* denied).toBe(false)
+        yield* h.change(file, text(["changed"]))
+        expect(labels(yield* h.changes())).toEqual(trust === "trusted" ? [expect.stringContaining(file)] : [])
+      }),
+    )
+  }
+
   // The place each writing tool records is what lets an outside file be read again, so a file outside the project that
   // the session last changed with Edit or Patch is still reported, and one changed with NotebookEdit still has its
   // freshness refreshed. Write's row is "an outside file the session wrote with permission is reported" above.

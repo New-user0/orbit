@@ -41,6 +41,7 @@ import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { define } from "@orbit/plugin/effect/plugin"
 import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { ShellAnalysis } from "@orbit/core/shell/analysis"
+import { ShellGuard } from "@orbit/core/shell/guard"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { ToolNames } from "@orbit/core/tool/names"
 import { ToolScheduler } from "@orbit/core/session/runner/tool-scheduler"
@@ -4777,6 +4778,184 @@ describe("ShellTool: a location cmdlet spelled as a path", () => {
               expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
             }).pipe(Effect.scoped),
           pwsh ?? "powershell",
+        ),
+      { timeout: 120_000 },
+    )
+})
+
+// The shell checks the person's Read and Edit rules against the files a command names before it asks anything. Until a
+// folder is trusted, the request of a path that a link of the project leads out names the place it leads to, so the path
+// as the project spells it is checked too: a deny written for it, relative, absolute or as a pattern, stops the command
+// through the link as it does in a trusted folder (class 3). The gate runs without starting the command, so the rows run
+// on every platform; with no deny, the same call passes it.
+describe("ShellGuard: a deny for the spelling of a path a link leads out of", () => {
+  const pwsh = Bun.which("pwsh") ?? Bun.which("powershell")
+  // The real Permission and PowerShell parser, in a folder the core tests trust and in one that nothing trusts.
+  const guardIt = (trusted: boolean) =>
+    testEffect(
+      AppNodeBuilder.build(LayerNode.group([nodes, PermissionSaved.node, PowerShellParse.node]), [
+        SessionExecution.node.replace(executionNode),
+        Global.node.replace(tempGlobalLayer),
+        PluginSupervisor.node.replace(shellPluginSupervisor),
+        ...(trusted ? [] : [WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false }))]),
+        offlineModels,
+      ]),
+    )
+  const rows = [
+    { command: "cat cfg/s", shell: "sh", action: "Read" },
+    { command: "echo x > cfg/s", shell: "sh", action: "Edit" },
+    { command: "rm cfg/s", shell: "sh", action: "Edit" },
+    { command: "bash -c 'cat cfg/s'", shell: "sh", action: "Read" },
+    ...(pwsh
+      ? [
+          { command: "Get-Content cfg/s", shell: pwsh, action: "Read" },
+          { command: "Set-Content cfg/s x", shell: pwsh, action: "Edit" },
+        ]
+      : []),
+  ]
+  for (const trusted of [true, false])
+    guardIt(trusted).live(
+      `decides cat, a redirect, rm, bash -c and PowerShell through the link (${trusted ? "trusted" : "untrusted"})`,
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) =>
+            Effect.gen(function* () {
+              const active = path.join(tmp.path, "active")
+              const outside = path.join(tmp.path, "outside")
+              const real = yield* Effect.promise(async () => {
+                await fs.mkdir(active)
+                await fs.mkdir(outside)
+                await fs.writeFile(path.join(outside, "s"), "secret")
+                await fs.symlink(outside, path.join(active, "cfg"), isWindows ? "junction" : "dir")
+                return fs.realpath(path.join(outside, "s"))
+              })
+              // The relative and absolute spellings in the project, a pattern, and the place the link leads to.
+              const spellings = [
+                undefined,
+                "cfg/s",
+                path.join(active, "cfg", "s").replaceAll("\\", "/"),
+                "cfg/*",
+                real.replaceAll("\\", "/"),
+              ]
+              const decided = yield* withSession(active, () =>
+                Effect.gen(function* () {
+                  const access = yield* FileAccess.Service
+                  const cwd = yield* access.resolve({ path: active, kind: "directory" })
+                  return yield* Effect.forEach(rows, (row) =>
+                    Effect.forEach(spellings, (spelling) =>
+                      Effect.gen(function* () {
+                        yield* permissions([
+                          { action: "Bash", resource: "*", effect: "allow" },
+                          { action: "external_directory", resource: "*", effect: "allow" },
+                          ...(spelling === undefined
+                            ? []
+                            : [{ action: row.action, resource: spelling, effect: "deny" as const }]),
+                        ])
+                        const exit = yield* ShellGuard.prepare({
+                          command: row.command,
+                          shell: row.shell,
+                          cwd,
+                          env: {},
+                          portable: false,
+                          base: { sessionID, agent: toolIdentity.agent },
+                        }).pipe(Effect.flatMap(ShellGuard.denyPass), Effect.exit)
+                        const refusal = Exit.isFailure(exit)
+                          ? exit.cause.reasons.flatMap((reason) =>
+                              Cause.isFailReason(reason) && reason.error instanceof Permission.BlockedError
+                                ? [reason.error]
+                                : [],
+                            )[0]
+                          : undefined
+                        const blocked = refusal !== undefined
+                        // The refusal names the path as a trusted folder names it, with forward slashes on Windows too.
+                        const named = refusal?.resources.includes("cfg/s") ?? false
+                        return {
+                          command: row.command,
+                          spelling,
+                          blocked,
+                          named,
+                          settled: blocked || Exit.isSuccess(exit),
+                        }
+                      }),
+                    ),
+                  ).pipe(Effect.map((items) => items.flat()))
+                }),
+              )
+              expect(decided).toEqual(
+                rows.flatMap((row) =>
+                  spellings.map((spelling) => ({
+                    command: row.command,
+                    spelling,
+                    blocked: spelling !== undefined,
+                    named: spelling !== undefined,
+                    settled: true,
+                  })),
+                ),
+              )
+              // Nothing ran: the file the link leads to is as it was.
+              expect(yield* Effect.promise(() => fs.readFile(path.join(outside, "s"), "utf8"))).toBe("secret")
+            }),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+        ),
+      { timeout: 120_000 },
+    )
+
+  // From a session folder below the worktree the project spells the file `../cfg/s`. The shell keeps that spelling, and
+  // so do the file tools since fix loop 11 (edit-link.test.ts, "a rule for the ../ spelling"), so one rule decides both.
+  for (const trusted of [true, false])
+    guardIt(trusted).live(
+      `decides cat ../cfg/s from a session folder below the worktree (${trusted ? "trusted" : "untrusted"})`,
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) =>
+            Effect.gen(function* () {
+              const active = path.join(tmp.path, "active")
+              const below = path.join(active, "plain")
+              const outside = path.join(tmp.path, "outside")
+              yield* Effect.promise(async () => {
+                await fs.mkdir(below, { recursive: true })
+                await fs.mkdir(outside)
+                await fs.writeFile(path.join(outside, "s"), "secret")
+                await fs.symlink(outside, path.join(active, "cfg"), isWindows ? "junction" : "dir")
+              })
+              Bun.spawnSync(["git", "init", "-q", active])
+              const spellings = [undefined, "../cfg/s", "../cfg/*"]
+              const decided = yield* withSession(below, () =>
+                Effect.gen(function* () {
+                  const access = yield* FileAccess.Service
+                  const cwd = yield* access.resolve({ path: below, kind: "directory" })
+                  return yield* Effect.forEach(spellings, (spelling) =>
+                    Effect.gen(function* () {
+                      yield* permissions([
+                        { action: "Bash", resource: "*", effect: "allow" },
+                        { action: "external_directory", resource: "*", effect: "allow" },
+                        ...(spelling === undefined ? [] : [{ action: "Read", resource: spelling, effect: "deny" as const }]),
+                      ])
+                      const exit = yield* ShellGuard.prepare({
+                        command: "cat ../cfg/s",
+                        shell: "sh",
+                        cwd,
+                        env: {},
+                        portable: false,
+                        base: { sessionID, agent: toolIdentity.agent },
+                      }).pipe(Effect.flatMap(ShellGuard.denyPass), Effect.exit)
+                      const blocked =
+                        Exit.isFailure(exit) &&
+                        exit.cause.reasons.some(
+                          (reason) => Cause.isFailReason(reason) && reason.error instanceof Permission.BlockedError,
+                        )
+                      return { spelling, blocked, settled: blocked || Exit.isSuccess(exit) }
+                    }),
+                  )
+                }),
+              )
+              expect(decided).toEqual(
+                spellings.map((spelling) => ({ spelling, blocked: spelling !== undefined, settled: true })),
+              )
+            }),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
         ),
       { timeout: 120_000 },
     )

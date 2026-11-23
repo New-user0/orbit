@@ -125,7 +125,7 @@ test("a card under review says how to answer in the editor, and an answered one 
     action: "Edit",
     resources: ["a.txt"],
     canSave: true,
-    view: { places: ["/p/a.txt"] },
+    view: { places: ["/p/a.txt"], links: [] },
     files: [{ file: "a.txt", place: "/p/a.txt", patch: "@@ -1 +1 @@\n-a\n+b\n" }],
     revisable: true,
   }
@@ -142,4 +142,42 @@ test("a card under review says how to answer in the editor, and an answered one 
   ).toHaveLength(1)
   expect(text.filter((line) => line.startsWith("Allowed with your changes · "))).toHaveLength(1)
   expect(text.filter((line) => line.startsWith("Allowed · "))).toHaveLength(1)
+})
+
+// m5-link-warning: the drawn card, in each state it waits in. The warnings are their own nodes above the diff, outside
+// the list of resources, so that nothing scrolled or cut takes them away.
+test("a waiting card draws its link warnings above the diff, while it is reviewed too", async () => {
+  const { permissionItem } = await import("../src/controller")
+  const files = [
+    { file: "a.txt", place: "/out/a.txt", patch: "@@ -1 +1 @@\n-a\n+b\n", link: { place: "/out/a.txt", outside: true } },
+    { file: "b.txt", place: "/p/alias/b.txt", patch: "@@ -1 +1 @@\n-c\n+d\n", link: { place: "/p/src/b.txt", outside: false } },
+  ]
+  for (const row of [
+    { id: "per_link_one", files: files.slice(0, 1), reviewing: false },
+    { id: "per_link_reviewing", files: files.slice(1), reviewing: true },
+    { id: "per_link_several", files, reviewing: false },
+  ]) {
+    const asked = permissionItem({
+      id: row.id,
+      sessionID: "ses_view",
+      action: "Edit",
+      resources: ["a.txt"],
+      save: ["*"],
+      metadata: { paths: row.files.map((file) => file.place), files: row.files },
+    })
+    item({ ...asked, reviewing: row.reviewing })
+    const card = all(body).filter((node) => node.className === "permission").at(-1)!
+    const warned = card.children.flatMap((node, index) =>
+      all(node).some((part) => part.className.split(" ").includes("perm-warning")) ? [index] : [],
+    )
+    expect([row.id, warned.length > 0]).toEqual([row.id, true])
+    const diff = card.children.findIndex((node) => node.className === "mini-diff")
+    for (const index of warned) expect(index).toBeLessThan(diff)
+    const said = all(card)
+      .filter((node) => node.className.split(" ").includes("perm-warning"))
+      .map((node) => node.textContent)
+      .join("\n")
+    if (row.files.length === 2) expect(said).toContain("2 linked paths, 1 outside the project")
+    for (const file of row.files) expect(said).toContain(file.link.place)
+  }
 })
