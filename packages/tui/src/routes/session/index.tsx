@@ -2153,8 +2153,7 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
     return state() ?? "finished"
   }
   const heading = () => bodyText(`${state() === "completed" ? "↳" : "!"} ${actor()} ${status()}`)
-  const suffix = () =>
-    Locale.truncateWidth(bodyText(` · ${description()}`), Math.max(0, ctx.width - 3 - stringWidth(heading())))
+  const suffix = () => Locale.truncateWidth(bodyText(` · ${description()}`), Math.max(0, ctx.width - 3 - stringWidth(heading())))
   const color = () => {
     if (state() === "error") return theme.text.feedback.error.base
     if (state() === "cancelled") return theme.text.feedback.warning.base
@@ -3080,9 +3079,7 @@ function ShellDisplay(props: {
   const maxLines = 10
   const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6 - (isRunning() ? 2 : 0)))
   const prefix = createMemo(() => (workdir() && workdir() !== "." ? `cd ${workdir()} && ` : ""))
-  const input = createMemo(() =>
-    props.command ? bodyText(`${isRunning() ? "" : "$ "}${prefix()}${props.command}`) : "",
-  )
+  const input = createMemo(() => (props.command ? bodyText(`${isRunning() ? "" : "$ "}${prefix()}${props.command}`) : ""))
   const collapsed = createMemo(() => collapseShellOutput(input(), output(), maxLines, maxChars()))
   const limitedInput = createMemo(() => (expanded() ? input() : collapsed().input))
   const limitedOutput = createMemo(() => (expanded() ? output() : collapsed().output))
@@ -3727,8 +3724,7 @@ function Diagnostics(props: { diagnostics: unknown; filePath: string }) {
         <For each={errors()}>
           {(diagnostic) => (
             <text fg={theme.text.feedback.error.base}>
-              Error [{diagnostic.range.start.line + 1}:{diagnostic.range.start.character + 1}]{" "}
-              {bodyText(diagnostic.message)}
+              Error [{diagnostic.range.start.line + 1}:{diagnostic.range.start.character + 1}] {bodyText(diagnostic.message)}
             </text>
           )}
         </For>
