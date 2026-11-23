@@ -257,6 +257,10 @@ function sanitizeMessage(message: SessionMessage.Info): SessionMessage.Info {
       ...message,
       metadata: meta,
       text: redact("text", message.id, message.text),
+      // The arguments are what the person typed, so they go as the text does.
+      command: message.command
+        ? { name: message.command.name, arguments: redact("command-arguments", message.id, message.command.arguments) }
+        : undefined,
       files: message.files?.map((file, index) => ({
         ...file,
         data: "",

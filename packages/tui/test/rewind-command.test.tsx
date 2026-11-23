@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test"
 import { projectedPromptInput } from "../src/prompt/codec"
 import { tmpdir } from "./fixture/fixture"
-import { conversation, linesWith, listHeading, rewindApp, until } from "./fixture/rewind"
+import { conversation, linesWith, listHeading, rewindApp, sessionID, until } from "./fixture/rewind"
+import { json } from "./fixture/tui-client"
 
 // m5-quality, FU-M5-002: a prompt the person gave as a slash command is shown and given back as they typed it,
 // `/name args`, as the reference shows it, while the model got the command's expansion. The server records the command
@@ -97,6 +98,44 @@ test("a slash command's prompt is given back as `/name args`, and `/name ` with 
   ).toBe("/review ")
   // The control: a prompt with no command is given back as its text.
   expect(projectedPromptInput({ text: "Add the parser" } as Projected).text).toBe("Add the parser")
+})
+
+// Every other list of the person's prompts draws the command too: a queued prompt in the queue dock (and in the
+// transcript, from the inbox), the timeline and the fork list. The expansion is drawn nowhere.
+test("a queued slash command, the timeline and the fork list draw the command, not its expansion", async () => {
+  await using state = await tmpdir()
+  const queued = {
+    id: "msg_queued",
+    sessionID,
+    type: "user",
+    delivery: "queue",
+    payload: { text: "Check later. QUEUED-BODY", command: { name: "check", arguments: "src/later.ts" } },
+    time: { created: now },
+  }
+  await using setup = await rewindApp({
+    state: state.path,
+    messages: withCommand,
+    answer: (request) => (request.path.endsWith("/inbox") ? json({ data: [queued] }) : undefined),
+  })
+  const first = await setup.waitForFrame((frame) => frame.includes("Renamed it.") && frame.includes("/check src/later.ts"), {
+    maxPasses: 200,
+  })
+  expect(first).not.toContain("QUEUED-BODY")
+  expect(first).not.toContain("EXPANDED-BODY")
+
+  for (const [command, title] of [
+    ["/timeline", "Timeline"],
+    ["/fork", "Fork session"],
+  ]) {
+    await setup.mockInput.typeText(command)
+    setup.mockInput.pressEnter()
+    const list = await setup.waitForFrame((frame) => frame.includes(title) && frame.includes(SHOWN), {
+      maxPasses: 200,
+    })
+    expect(list).not.toContain("EXPANDED-BODY")
+    setup.mockInput.pressEscape()
+    await setup.waitForFrame((frame) => !frame.includes(title))
+  }
 })
 
 // m5-quality, item 9c: a skill activated for the session (a `skill` message, from `POST /api/session/:id/skill`) is a

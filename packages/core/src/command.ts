@@ -1,6 +1,7 @@
 export * as Command from "./command.js"
 
 import { Command } from "@orbit/schema/command"
+import type { PromptCommand } from "@orbit/schema/prompt"
 import type { PromptInput } from "@orbit/schema/prompt-input"
 import type { Session } from "@orbit/schema/session"
 import type { SessionInbox } from "@orbit/schema/session-inbox"
@@ -15,7 +16,11 @@ export { Event } from "@orbit/schema/command"
 
 export interface Invocation {
   readonly sessionID: Session.ID
-  readonly prompt: PromptInput.Prompt
+  /**
+   * The text typed after the command, with the prompt's attachments, and `command`, the record of what was run. A
+   * definition that admits a prompt passes them on (`...input.prompt`), so the prompt is shown as the command.
+   */
+  readonly prompt: PromptInput.Prompt & { readonly command?: PromptCommand }
   readonly delivery: SessionInbox.Delivery
 }
 

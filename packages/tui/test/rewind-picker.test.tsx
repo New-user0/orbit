@@ -97,6 +97,39 @@ test.each([64, 120])(
   },
 )
 
+// m5-quality, FU-M5-002 (class 9): a slash command's stored arguments and a skill's stored name are drawn on their rows,
+// in step 2's quote and in the transcript behind the picker, and each is written out there as a stored prompt is.
+test.each([64, 120])(
+  "a slash command's stored arguments and a skill's name are drawn with their control characters written out, at %i columns",
+  async (width) => {
+    await using state = await tmpdir()
+    const messages = [
+      ...conversation.slice(0, 2),
+      {
+        ...conversation[2],
+        text: "EXPANDED-BODY",
+        command: { name: "review", arguments: "src/\u001b]0;pwned\u0007x.ts" },
+      },
+      ...conversation.slice(3, 4),
+      { id: "msg_0004s", type: "skill", skill: "skl_x", name: "dep\u001b[2Kloy", text: "SKILL", time: conversation[3].time },
+      ...conversation.slice(4),
+    ]
+    await using setup = await rewindApp({ state: state.path, width, messages })
+    const frame = await openPicker(setup)
+    expect(controlFree(frame)).toBe(true)
+    expect(frame).toContain("/review src/\\x1b]0;pwned\\x07x.ts")
+    expect(frame).toContain("/dep\\x1b[2Kloy")
+    // A skill has no file-tool edits of its own, so its row asks for none, as a shell command's does not.
+    expect(setup.statsSent().sort()).toEqual(["prompt msg_0001", "prompt msg_0003", "prompt msg_0005"])
+
+    // Up from "(current)": the newest prompt, the skill, then the command's prompt.
+    await selectPrompt(setup, 3)
+    const confirm = await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+    expect(controlFree(confirm)).toBe(true)
+    expect(confirm).toContain("/review src/\\x1b]0;pwned\\x07x.ts")
+  },
+)
+
 test("step 2 offers the code options only when a dry run would change files, and Esc goes back to the list", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path })

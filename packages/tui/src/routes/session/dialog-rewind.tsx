@@ -12,13 +12,22 @@ import { useToast } from "../../ui/toast"
 import { errorMessage } from "../../util/error"
 import { Locale } from "../../util/locale"
 import { bodyText } from "../../util/renderer"
+import { shownPrompt } from "../../prompt/codec"
 import type { SessionMessageInfo } from "@orbit/client"
 
 /**
- * A person's prompt, or with `shell` a command they ran with `!`, whose text is then the command. `revision` changes
+ * A person's prompt, as it is drawn (a slash command's as `/name arguments`); with `shell` a command they ran with `!`,
+ * whose text is then the command; with `skill` a skill they activated, whose text is then `/name`. `revision` changes
  * when the prompt's own edits may have changed, and a drawn row then asks for its stats again.
  */
-export type RewindPrompt = { id: string; text: string; created: number; shell?: boolean; revision?: string }
+export type RewindPrompt = {
+  id: string
+  text: string
+  created: number
+  shell?: boolean
+  skill?: boolean
+  revision?: string
+}
 export type RewindOption = "both" | "conversation" | "code"
 export type RewindFileStat = { file: string; additions: number; deletions: number }
 export type RewindDryRun = {
@@ -311,10 +320,11 @@ export function DialogRewind(props: {
   function Row(row: { index: number }) {
     const prompt = () => prompts()[row.index]
     const active = () => selected() === row.index
-    // A shell command has no file-tool edits of its own to count: the prompt-scoped diff answers only for a prompt.
+    // A shell command or a skill has no file-tool edits of its own to count: the prompt-scoped diff answers only for a
+    // prompt.
     createEffect(() => {
       const current = prompt()
-      if (current && !current.shell) ask(current)
+      if (current && !current.shell && !current.skill) ask(current)
     })
     const files = () => {
       const current = prompt()
@@ -491,12 +501,15 @@ export function rewindPrompts(list: readonly SessionMessageInfo[]) {
   let switches: string[] = []
   for (let position = list.length - 1; position >= 0; position--) {
     const message = list[position]
-    if (message.type === "user" || message.type === "shell") {
+    if (message.type === "user" || message.type === "shell" || message.type === "skill") {
       const revision = [...tokens.slice(position + 1, end), ...switches].join(" ")
       rows.push(
         message.type === "shell"
           ? { id: message.id, text: message.command, created: message.time.created, shell: true, revision }
-          : { id: message.id, text: message.text, created: message.time.created, revision },
+          : message.type === "skill"
+            ? // A skill is listed by its name, never by its instructions, as the reference lists a person's skill.
+              { id: message.id, text: `/${message.name}`, created: message.time.created, skill: true, revision }
+            : { id: message.id, text: shownPrompt(message), created: message.time.created, revision },
       )
     }
     if (message.type !== "user") continue

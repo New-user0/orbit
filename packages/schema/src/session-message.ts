@@ -7,7 +7,7 @@ import { Content } from "./tool.js"
 import { Location } from "./location.js"
 import { Model } from "./model.js"
 import { Project } from "./project.js"
-import { Prompt } from "./prompt.js"
+import { Prompt, PromptCommand } from "./prompt.js"
 import { DateTimeUtcFromMillis, PositiveInt, RelativePath, statics } from "./schema.js"
 import { ascending } from "./identifier.js"
 import { Event } from "./event.js"
@@ -80,6 +80,8 @@ export const User = Schema.Struct({
   agents: Prompt.fields.agents,
   skills: Prompt.fields.skills,
   editor: Prompt.fields.editor,
+  /** The slash command the prompt was given as, when it was one; `text` is then the command's expansion. */
+  command: PromptCommand.pipe(optional),
   /** The turn options the prompt was admitted with. */
   turn: SessionTurn.Options.pipe(optional),
   /**

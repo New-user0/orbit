@@ -15,6 +15,7 @@ import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { AbsolutePath } from "@orbit/core/schema"
 import { Session } from "@orbit/core/session"
 import { SessionExecution } from "@orbit/core/session/execution"
+import { SessionInbox } from "@orbit/core/session/inbox"
 import { SessionProjector } from "@orbit/core/session/projector"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
@@ -43,7 +44,12 @@ const project = Effect.gen(function* () {
   yield* Effect.promise(() =>
     Bun.write(
       path.join(tmp.path, ".orbit", "orbit.json"),
-      JSON.stringify({ commands: { review: { template: "Review $ARGUMENTS carefully." } } }),
+      JSON.stringify({
+        commands: {
+          review: { template: "Review $ARGUMENTS carefully." },
+          survey: { template: "Survey $ARGUMENTS in a child.", subtask: true },
+        },
+      }),
     ),
   )
   return tmp
@@ -75,6 +81,41 @@ describe("a slash command's prompt", () => {
       yield* sessions.command({ sessionID: session.id, command: "review", text: "" })
       const [item] = yield* sessions.inbox(session.id)
       expect(item).toMatchObject({ type: "user", payload: { command: { name: "review", arguments: "" } } })
+    }),
+  )
+
+  // The message the prompt becomes on delivery carries the record, so a client reads it from the conversation.
+  it.live("carries the record onto the message the prompt becomes", () =>
+    Effect.gen(function* () {
+      const tmp = yield* project
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      const bus = yield* Bus.Service
+      const session = yield* sessions.create({ location: { directory: AbsolutePath.make(tmp.path) } })
+      yield* sessions.command({ sessionID: session.id, command: "review", text: "src/a.ts" })
+      yield* SessionInbox.promote(db, bus, session.id, "steer")
+      const [message] = yield* sessions.messages({ sessionID: session.id, order: "asc" })
+      expect(message).toMatchObject({
+        type: "user",
+        text: "Review src/a.ts carefully.",
+        command: { name: "review", arguments: "src/a.ts" },
+      })
+    }),
+  )
+
+  // A command that runs in a subagent prompts the child with what the harness built, which is no command the person
+  // ran in that child.
+  it.live("records no command on the prompt a subagent command gives its child", () =>
+    Effect.gen(function* () {
+      const tmp = yield* project
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({ location: { directory: AbsolutePath.make(tmp.path) } })
+      yield* sessions.command({ sessionID: session.id, command: "survey", text: "src" })
+      const [child] = (yield* sessions.list({ parentID: session.id })).data
+      expect(child?.parentID).toBe(session.id)
+      const [item] = yield* sessions.inbox(child!.id)
+      expect(item).toMatchObject({ type: "user", payload: { text: "Survey src in a child." } })
+      expect(item?.type === "user" && "command" in item.payload).toBe(false)
     }),
   )
 

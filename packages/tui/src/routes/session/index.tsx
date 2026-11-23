@@ -78,7 +78,7 @@ import { errorMessage } from "../../util/error"
 import { useToast } from "../../ui/toast"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
-import { projectedPromptInput } from "../../prompt/codec"
+import { projectedPromptInput, shownPrompt } from "../../prompt/codec"
 import { appendPrompt, usePromptHistory } from "../../prompt/history"
 import { useLog } from "../../context/log"
 import { DialogRewind, REWIND_GONE, rewindPrompts, type RewindDryRun, type RewindOption } from "./dialog-rewind"
@@ -240,7 +240,7 @@ export function Session(props: {
   const pendingDeliveries = createMemo(() => new Map(pendingUsers().map((item) => [item.id, item.delivery])))
   const queuedPrompts = createMemo(() =>
     pendingUsers().flatMap((item) =>
-      item.delivery === "queue" ? [{ id: item.id, text: item.payload.text, payload: item.payload }] : [],
+      item.delivery === "queue" ? [{ id: item.id, text: shownPrompt(item.payload), payload: item.payload }] : [],
     ),
   )
   const [composer, setComposer] = createStore({
@@ -734,6 +734,11 @@ export function Session(props: {
     if (message?.type === "shell") {
       prompt()?.set({ text: message.command, pasted: [] })
       prompt()?.setMode("shell")
+      return
+    }
+    // A skill goes back as the command that activates it, as a slash command's prompt does.
+    if (message?.type === "skill") {
+      prompt()?.set({ text: `/${message.name} `, pasted: [] })
       return
     }
     if (message?.type !== "user") return
@@ -2460,7 +2465,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
               ›
             </text>
             <text fg={theme.text.base} flexGrow={1} flexShrink={1}>
-              {bodyText(props.message.text)}
+              {bodyText(shownPrompt(props.message))}
             </text>
           </box>
           <Show when={skills().length}>

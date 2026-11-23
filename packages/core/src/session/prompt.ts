@@ -1,6 +1,6 @@
 export * as SessionPrompt from "./prompt.js"
 
-import { Base64, FileAttachment, Prompt } from "@orbit/schema/prompt"
+import { Base64, FileAttachment, Prompt, PromptCommand } from "@orbit/schema/prompt"
 import { PromptInput } from "@orbit/schema/prompt-input"
 import { SessionInbox } from "@orbit/schema/session-inbox"
 import type { Session } from "@orbit/schema/session"
@@ -29,6 +29,11 @@ export type Input = {
   skills?: PromptInput.Prompt["skills"]
   /** Not part of the plugin `session.prompt` hook payload: it is carried around the hook as admitted. */
   editor?: PromptInput.Prompt["editor"]
+  /**
+   * The slash command this prompt is the expansion of, from the command the server ran (`SessionCommand.execute`); no
+   * client input carries it. Not part of the plugin `session.prompt` hook payload either.
+   */
+  command?: PromptCommand
   metadata?: Record<string, unknown>
   /** Limits and a fallback for the turn this prompt belongs to. */
   turn?: SessionTurn.Options
@@ -102,6 +107,7 @@ export const prepare = Effect.fn("SessionPrompt.prepare")(function* (request: {
           skills: selected?.length ? selected : undefined,
           editor,
         }),
+        ...(request.input.command === undefined ? {} : { command: request.input.command }),
         metadata: event.metadata,
         turn: request.input.turn,
       }),
