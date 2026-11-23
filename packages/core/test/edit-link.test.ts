@@ -101,7 +101,7 @@ const run = (
     // Policy statements the real configuration policy plugin applies, from a person's document or their organization.
     policy?: { from: "user" | "organization"; statements: ConfigPolicy.Info[] }
     // Each `permission.evaluate` a plugin hook is shown: its action and the leads of each resource.
-    evaluations?: Array<{ action: string; leads?: Readonly<Record<string, ReadonlyArray<string>>> }>
+    evaluations?: Array<{ action: string; leads?: Readonly<Record<string, ReadonlyArray<ReadonlyArray<string>>>> }>
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -1399,6 +1399,81 @@ describe("a policy for the spelling of a path a link leads out of refuses the ca
     )
 })
 
+// Fix loop 12 (classes 3 and 8): a policy that denies everything and then allows a few paths decides a file tool as the
+// same allowlist written as rules does. The absolute spelling of a file tool's resource is one of its own spellings,
+// decided with it, so a later allow of the relative path lifts the broad deny; and the spellings of one place a link
+// leads to are one subject, so a project reached through a link is allowed by the path it spells. An allow written for
+// a link's own spelling still lifts no deny of the place it leads out to.
+describe("an allowlist policy decides a file tool as the same rules do", () => {
+  const tools = [
+    ...["Edit", "Write (new file)", "NotebookEdit", "Patch update"].map(
+      (name) => changes.find((change) => change.name === name)!,
+    ),
+    { name: "Read", tool: "Read", file: "b.txt", existing: text, input: (at: string) => ({ file_path: at }) },
+  ]
+  const places = [
+    { name: "no link", folder: "plain", session: "project", runs: true },
+    { name: "the project through a link", folder: "plain", session: "link", runs: true },
+    { name: "a link out", folder: "out", session: "project", runs: false },
+  ] as const
+  for (const place of places)
+    for (const trusted of [true, false])
+      for (const by of ["rules", "user", "organization"] as const)
+        for (const tool of tools)
+          it.live(
+            `${tool.name} with ${place.name}, by ${by === "rules" ? "rules" : `${by} policy`} (${trusted ? "trusted" : "untrusted"})`,
+            () =>
+              Effect.acquireUseRelease(
+                Effect.promise(() => tmpdir()),
+                (root) =>
+                  Effect.gen(function* () {
+                    const world = yield* Effect.promise(() => makeWorld(root.path))
+                    const session = place.session === "link" ? path.join(world.root, "projlink") : world.project
+                    const real = path.join(
+                      place.folder === "out" ? path.join(world.root, "outside") : path.join(world.project, "plain"),
+                      tool.file,
+                    )
+                    yield* Effect.promise(async () => {
+                      if (place.session === "link") await fs.symlink(world.project, session, "junction")
+                      if (tool.existing !== undefined) await fs.writeFile(real, tool.existing)
+                    })
+                    const action = tool.tool === "Read" ? "Read" : "Edit"
+                    const allowlist = [
+                      { resource: "*", effect: "deny" as const },
+                      { resource: `${place.folder}/*`, effect: "allow" as const },
+                    ]
+                    const at = `${place.folder}/${tool.file}`
+                    const settled = yield* run(session, tool.tool, tool.input(at, "plain/b.txt"), {
+                      effect: "allow",
+                      trusted,
+                      rules: [
+                        { action: "external_directory", resource: "*", effect: "allow" },
+                        ...(by === "rules" ? allowlist.map((rule) => ({ action, ...rule })) : []),
+                      ],
+                      ...(by === "rules"
+                        ? {}
+                        : {
+                            policy: {
+                              from: by,
+                              statements: allowlist.map((rule) => ({
+                                action: "permission",
+                                resource: `${action}:${rule.resource}`,
+                                effect: rule.effect,
+                              })),
+                            },
+                          }),
+                    })
+                    expect(Exit.isSuccess(settled.exit)).toBe(place.runs)
+                    expect(settled.asked.filter((request) => request.action === action)).toEqual([])
+                    const now = yield* Effect.promise(() => fs.readFile(real, "utf8").catch(() => undefined))
+                    if (place.runs && tool.tool !== "Read") expect(now).not.toBe(tool.existing)
+                    else expect(now).toBe(tool.existing)
+                  }),
+                (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+              ),
+          )
+})
+
 // Fix loop 11, GAP A (classes 3, 4 and 8): with the session folder below the worktree, the project spells a file under a
 // link out `../out/b.txt`. A trusted folder asks with that spelling, so a rule written for it decides; an untrusted one
 // asks for the place the link leads to with that spelling as a lead, which was tried relative to the session folder only
@@ -1560,7 +1635,7 @@ describe("a rule for the ../ spelling of a path a link leads out of decides the 
                   if (session === "a link") await fs.symlink(world.project, worktree, "junction")
                   await fs.writeFile(path.join(world.root, "outside", "b.txt"), text)
                 })
-                const evaluations: Array<{ action: string; leads?: Readonly<Record<string, ReadonlyArray<string>>> }> =
+                const evaluations: Array<{ action: string; leads?: Readonly<Record<string, ReadonlyArray<ReadonlyArray<string>>>> }> =
                   []
                 const settled = yield* run(
                   path.join(worktree, "plain"),
@@ -1577,7 +1652,7 @@ describe("a rule for the ../ spelling of a path a link leads out of decides the 
                 expect(Exit.isSuccess(settled.exit)).toBe(true)
                 const relatives = evaluations
                   .filter((evaluation) => evaluation.action === "Edit")
-                  .flatMap((evaluation) => Object.values(evaluation.leads ?? {}).flat())
+                  .flatMap((evaluation) => Object.values(evaluation.leads ?? {}).flat(2))
                   .filter((lead) => !path.isAbsolute(lead))
                 // A trusted folder asks with the `../` spelling itself, and its lead is the real place outside the
                 // project, which no project spells relative to the session folder.

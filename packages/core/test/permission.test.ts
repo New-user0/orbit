@@ -709,7 +709,8 @@ describe("Permission resource aliases", () => {
       expect(seen).toEqual([
         { "docs.example.com": ["https://docs.example.com/a"] },
         { "pastebin.com": ["https://pastebin.com/raw/abc"] },
-        undefined,
+        // A file tool's relative resource has its place joined to the session folder as an alias, as the rules try it.
+        { "src/index.ts": [path.resolve("/project", "src/index.ts")] },
       ])
     }),
   )

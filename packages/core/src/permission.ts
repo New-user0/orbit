@@ -502,16 +502,19 @@ const layer = Layer.effect(
       return [...places, ...relatives]
     }
 
-    // The `leads` a plugin hook is shown: each resource's leads in every spelling `stricter` tries, so a policy written for
-    // the path as an untrusted project spells it refuses the place a link there leads to, as a rule does (class 3). A file
-    // tool's resource relative to the session folder joins by where it is, as it does for the rules (`resolved`), so a
-    // policy written with the absolute path refuses it in a trusted folder as in an untrusted one.
-    const hookLeads = (input: Pick<AssertInput, "action" | "resources" | "leads">) => {
-      const entries = input.resources.flatMap((resource) => {
-        const leads = [...resolved(input.action, resource), ...(input.leads?.[resource] ?? []).flatMap(leadSpellings)]
-        return leads.length === 0 ? [] : [[resource, leads] as const]
+    // What a plugin hook is shown of each resource, keyed by that resource, leaving out a resource with nothing to show.
+    // Its aliases: the request's own, and a file tool's resource relative to the session folder joined by where it is,
+    // as the rules try it (`resolved`), so a policy written with the absolute path decides it in a trusted folder as in
+    // an untrusted one, and a later allow of either spelling lifts a broad deny of it. Its leads: one list per place it
+    // leads to, of every spelling `stricter` tries for that place, so a policy written for the path as an untrusted
+    // project spells it refuses the place a link there leads to, as a rule does (class 3), and the spellings of one place
+    // are decided together, as a rule decides them.
+    const byResource = <A>(resources: ReadonlyArray<string>, of: (resource: string) => ReadonlyArray<A>) => {
+      const entries = resources.flatMap((resource) => {
+        const values = of(resource)
+        return values.length === 0 ? [] : [[resource, values] as const]
       })
-      return entries.length === 0 ? {} : { leads: Object.fromEntries(entries) }
+      return entries.length === 0 ? undefined : Object.fromEntries(entries)
     }
 
     // What the rules say about the real places a resource leads to, when it is a deny or an ask. An allow written for such a
@@ -574,8 +577,11 @@ const layer = Layer.effect(
             agent: input.agent,
             action: input.action,
             resources: input.resources,
-            aliases: input.aliases,
-            ...hookLeads(input),
+            aliases: byResource(input.resources, (resource) => [
+              ...(input.aliases?.[resource] ?? []),
+              ...resolved(input.action, resource),
+            ]),
+            leads: byResource(input.resources, (resource) => (input.leads?.[resource] ?? []).map(leadSpellings)),
             metadata: input.metadata,
             source: input.source,
             effect,

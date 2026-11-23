@@ -68,11 +68,12 @@ export const Plugin = define({
         // The places a resource leads to through a link are a separate pass that can only refuse, as Permission tries
         // them: merged into the aliases, an allow written for a lead's spelling would lift a deny of the resource. A
         // policy for the path as an untrusted project spells it meets the call here, since its resource is the real
-        // place the link leads to (class 3).
+        // place the link leads to (class 3). The spellings of one place are one subject, as for a rule, so a later allow
+        // for the project's spelling of a place lifts a broad deny of it, while a second place is decided on its own.
         const denied = event.resources
           .flatMap((resource) => [
             decide([resource, ...(event.aliases?.[resource] ?? [])]),
-            ...(event.leads?.[resource] ?? []).map((lead) => decide([lead])),
+            ...(event.leads?.[resource] ?? []).map((spellings) => decide(spellings)),
           ])
           .find((policy) => policy?.effect === "deny")
         if (!denied) return
