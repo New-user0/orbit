@@ -2852,7 +2852,9 @@ folder. A policy here only refuses; it never allows what the rules do not.
 A file or folder you mention in a prompt (`@path`, sent as a file attachment) reached the model whole, even when a Read
 deny rule or a configuration policy refused it to the Read tool. Such a mention is now left out of the prompt with one
 log line, as the editor's selection already was, for a plain path and for one through a link, in a trusted and an
-untrusted folder. The prompt and its other mentions are sent as before.
+untrusted folder. A mention outside the project, and the editor's file there, are also left out when a deny for the
+folder they are in (`external_directory`) refuses that folder to the Read tool; a mentioned folder is decided by its own
+folder. The prompt and its other mentions are sent as before.
 
 **Affects:** people who refuse files with Read deny rules or policies and mention files in prompts, from any client.
 

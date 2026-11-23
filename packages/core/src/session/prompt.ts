@@ -158,35 +158,38 @@ const readableEditor = Effect.fn("SessionPrompt.readableEditor")(function* (
   if (!home && !path.isAbsolute(editor.path))
     return yield* dropped("path is not absolute")
   if (editor.selection && editor.selection.end < editor.selection.start) return yield* dropped("selection ends before it starts")
-  const refused = yield* unreadable(session, editor.path, "file")
+  const refused = yield* unreadable(session, editor.path)
   if (refused) return yield* dropped(refused)
   return editor
 })
 
 // Why the read rules, and through them the configuration policies, refuse `file` to the model at admission, where no
 // tool reads it, or undefined when they let it through. It resolves the path with the read tool's own resolver, asks
-// nobody and opens nothing.
-const unreadable = Effect.fn("SessionPrompt.unreadable")(function* (
-  session: Session.Info,
-  file: string,
-  kind?: "file",
-) {
+// nobody and opens nothing. A place outside the project is decided as the read tool decides it: the read rules, and a
+// deny for the folder it is in (`external_directory`), the folder itself for a folder (classes 3 and 8).
+const unreadable = Effect.fn("SessionPrompt.unreadable")(function* (session: Session.Info, file: string) {
   const access = yield* FileAccess.Service
   const permission = yield* Permission.Service
-  const target = yield* access.resolve({ path: file, kind }).pipe(Effect.option)
+  const target = yield* access.resolve({ path: file }).pipe(Effect.option)
   if (target._tag === "None") return "path could not be resolved"
-  const denied = yield* permission
-    .denied({
-      action: "Read",
-      resources: [target.value.resource],
-      save: ["*"],
-      metadata: { paths: [target.value.place] },
-      ...leadsOf([target.value]),
-      sessionID: session.id,
-      agent: session.agent,
-    })
-    .pipe(Effect.orElseSucceed(() => true))
-  return denied ? "a read rule denies the path" : undefined
+  const base = { sessionID: session.id, agent: session.agent }
+  const external = access.externalRequest([target.value], base)
+  const [read, folder] = yield* Effect.forEach(
+    [
+      {
+        action: "Read",
+        resources: [target.value.resource],
+        save: ["*"],
+        metadata: { paths: [target.value.place] },
+        ...leadsOf([target.value]),
+        ...base,
+      },
+      ...(external === undefined ? [] : [external]),
+    ],
+    (request) => permission.denied(request).pipe(Effect.orElseSucceed(() => true)),
+  )
+  if (read) return "a read rule denies the path"
+  return folder ? "a rule denies the folder the path is in" : undefined
 })
 
 // A mentioned file or folder that a read rule or a policy refuses is left out of the prompt with one log line, as the

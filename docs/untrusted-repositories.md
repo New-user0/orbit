@@ -2650,7 +2650,13 @@ runs" is a permission.
   refused (classes 3 and 8; `session-prompt-editor.test.ts`, "mentioned files at admission": a Read deny by the relative
   and the absolute path, and a user and an organization policy, for a plain file, a file through a folder link out and
   a file link out, trusted and untrusted, with a mention of another file kept as the control in each, and a mentioned
-  folder).
+  folder). A place outside the project is decided as the read tool decides it, by the Read rules and by a deny for the
+  folder it is in (`external_directory`, the folder itself for a mentioned folder), for a mention and for the editor
+  field, and a check that cannot be answered leaves them out (classes 3, 7 and 8; `session-prompt-editor.test.ts`, "a
+  deny for an outside folder leaves out a mention of what is in it" and "a deny for an outside folder drops a field of
+  a file in it": a file outside by its path and through a folder link out, a mentioned outside folder, trusted and
+  untrusted, a file in the project and a deny for another folder as the controls, and each left-out mention logged once;
+  "a check that cannot be answered leaves the editor field and the mention out").
 - The checks that run no plugin hook (`Permission.denied` and `Permission.allowed`: the editor field and a mentioned
   file at admission, the file-change reminder's re-read and its seeding from history, and the shell guard's Read and
   Edit probes) take the

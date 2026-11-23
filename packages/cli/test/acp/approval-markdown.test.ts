@@ -302,6 +302,8 @@ describe("acp: what a tool gave back reads as it is", () => {
       )
     for (const value of VALUES) expect((await output(value)).map(block)).toEqual([shown(value)])
     expect(await output("done")).toEqual(["done"])
+    // Output that ends with a line break closes its block on the next line, with no empty line drawn before the fence.
+    expect((await output("one\ntwo\n")).map(block)).toEqual([shown("one\ntwo")])
   })
 
   test("an error's text", async () => {
