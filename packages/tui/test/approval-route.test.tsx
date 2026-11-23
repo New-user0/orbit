@@ -144,6 +144,8 @@ async function open(width: number, height: number, asked: Asked | undefined, opt
   await setup.ready
   // What the docks hold is on screen before the question comes.
   await until((frame) => frame.includes("Orbit"))
+  // The banner names the model once the models have loaded, which can come after the frame has settled once.
+  await until((frame) => frame.includes("Model"))
   if (options.queued) await until((frame) => frame.includes("1 queued"))
   if (options.plan) await until((frame) => frame.includes("plan"))
   // The same screen with no question, which every dock row drawn beside one is a row of.
