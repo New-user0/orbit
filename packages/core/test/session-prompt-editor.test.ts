@@ -27,6 +27,8 @@ import { SessionTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location } from "./fixture/location"
+import { untrustedProjectNodes } from "./fixture/project-trust"
+import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 
@@ -36,7 +38,7 @@ import { it } from "./lib/effect"
 
 const sessionID = Session.ID.make("ses_prompt_editor")
 
-const provide = (project: string) =>
+const provide = (project: string, trusted = true) =>
   Effect.provide(
     Layer.mergeAll(
       AppNodeBuilder.build(
@@ -55,6 +57,7 @@ const provide = (project: string) =>
           FSUtil.node,
         ]),
         [
+          ...(trusted ? [] : untrustedProjectNodes),
           Location.node.replace(
             Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(project) }))),
           ),
@@ -241,6 +244,51 @@ describe("editor context at admission", () => {
       expect([...control]).toEqual(rows.map(([name, , kept, why]) => [name, why === "deny"] as const))
     }),
   )
+
+  // The cells of a path that a link leads out of (classes 3 and 8). In an untrusted folder the request names the place
+  // the link leads to, so a Read deny written for the path as the project spells it decides only because that spelling
+  // is one of the request's `leads`. The editor's path goes through a folder link out (`cfg/s`) or is a file link out
+  // (`key.txt`), and the rule names it by the relative and by the absolute path. A trusted folder is the control, and
+  // with no deny the field is kept in both.
+  for (const trusted of [true, false]) {
+    for (const link of ["folder", "file"] as const) {
+      const row = link === "file" && !canLinkFile ? it.live.skip : it.live
+      row(
+        `a Read deny for the spelling of a ${link} link out drops the field (${trusted ? "trusted" : "untrusted"})`,
+        () =>
+          Effect.gen(function* () {
+            const root = (yield* tmpdirScoped()).path
+            const project = path.join(root, "project")
+            const outside = path.join(root, "outside")
+            fs.mkdirSync(project)
+            fs.mkdirSync(outside)
+            fs.writeFileSync(path.join(outside, "s"), "SECRET-MARKER")
+            if (link === "folder") fs.symlinkSync(outside, path.join(project, "cfg"), "junction")
+            if (link === "file") fs.symlinkSync(path.join(outside, "s"), path.join(project, "key.txt"), "file")
+            const spelled = link === "folder" ? "cfg/s" : "key.txt"
+            const file = path.join(project, spelled)
+            const editor = { path: file, selection: { start: 1, end: 1, text: "SECRET-MARKER" } }
+            const rulesets: ReadonlyArray<readonly [string, Permission.Ruleset]> = [
+              ["no deny", [allow]],
+              ["relative deny", [allow, { action: "Read", resource: spelled, effect: "deny" }]],
+              ["absolute deny", [allow, { action: "Read", resource: file.replaceAll("\\", "/"), effect: "deny" }]],
+            ]
+            const kept = yield* Effect.forEach(rulesets, ([name, rules]) =>
+              Effect.gen(function* () {
+                yield* prepare(project, rules)
+                const payload = yield* admit({ text: "hi", editor })
+                return [name, payload.text, payload.editor !== undefined] as const
+              }).pipe(provide(project, trusted)),
+            )
+            expect(kept).toEqual([
+              ["no deny", "hi", true],
+              ["relative deny", "hi", false],
+              ["absolute deny", "hi", false],
+            ])
+          }),
+      )
+    }
+  }
 
   it.live("a ~ spelling is resolved before the rule decides", () =>
     Effect.gen(function* () {
