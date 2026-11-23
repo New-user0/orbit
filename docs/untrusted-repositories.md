@@ -2581,7 +2581,12 @@ runs" is a permission.
   relative or absolute, did not apply there, and the link was removed without a question (classes 3 and 8;
   `edit-link.test.ts`, "a rule for the spelling of a link that is removed decides its removal": a deny and an ask, by
   each spelling, for a delete and a move's source of five shapes of link, trusted as the control and untrusted, and a
-  link in a memory folder reached through a linked data folder, which is still removed without a question).
+  link in a memory folder reached through a linked data folder, which is still removed without a question). The same
+  spelling is a subject of every request that a file is written or read through such a link: `FileAccess.leadsOf` adds
+  it for each escaped target, so Edit, Write, NotebookEdit, every file of a Patch and the door of Read carry it. Before, a deny written for the path in the project let a write land where the link leads (classes
+  3 and 8; `edit-link.test.ts`, "a rule for the spelling of a path a link leads out of decides the call through it": a
+  deny and an ask, by each spelling, for a file that is a link out and a file below a folder link out, trusted as the
+  control and untrusted).
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob
