@@ -100,11 +100,20 @@ const run = (
     worktree?: string
     // Policy statements the real configuration policy plugin applies, from a person's document or their organization.
     policy?: { from: "user" | "organization"; statements: ConfigPolicy.Info[] }
+    // Each `permission.evaluate` a plugin hook is shown: its action and the leads of each resource.
+    evaluations?: Array<{ action: string; leads?: Readonly<Record<string, ReadonlyArray<string>>> }>
   } = {},
 ) =>
   Effect.gen(function* () {
     yield* seed(directory, options.effect ?? "ask", options.rules, options.worktree)
     if (options.policy) yield* installPolicy(options.policy.from, options.policy.statements)
+    const evaluations = options.evaluations
+    if (evaluations) {
+      const hooks = yield* PluginHooks.Service
+      yield* hooks.register("permission", "evaluate", (event) =>
+        Effect.sync(() => void evaluations.push({ action: event.action, leads: event.leads })),
+      )
+    }
     const tools = yield* Tool.Service
     const permission = yield* Permission.Service
     const access = yield* FileAccess.Service
@@ -1474,6 +1483,109 @@ describe("a rule for the ../ spelling of a path a link leads out of decides the 
         (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
       ),
     )
+
+  // The session folder reached through a link (`<root>/projlink/plain`, its worktree `<root>/projlink`): a lead the
+  // disk names by its real path is respelled under the worktree as the session spells it, and the `../` relative of
+  // that respelling is kept because its place is in the worktree as spelled, not as the disk has it. A rule and a
+  // policy for `../out/*` decide alike (class 3).
+  for (const trusted of [true, false])
+    for (const row of rows)
+      for (const kind of ["deny", "ask", "policy"] as const)
+        it.live(
+          `${kind} for its dot-dot spelling with the session folder through a link: ${row.name}, in ${trusted ? "a trusted" : "an untrusted"} folder`,
+          () =>
+            Effect.acquireUseRelease(
+              Effect.promise(() => tmpdir()),
+              (root) =>
+                Effect.gen(function* () {
+                  const world = yield* Effect.promise(() => makeWorld(root.path))
+                  const projlink = path.join(world.root, "projlink")
+                  const real = path.join(world.root, "outside", row.file)
+                  yield* Effect.promise(async () => {
+                    await fs.symlink(world.project, projlink, "junction")
+                    await fs.writeFile(path.join(world.project, "plain", "b.txt"), text)
+                    if (row.existing !== undefined) await fs.writeFile(real, row.existing)
+                  })
+                  const action = row.tool === "Read" ? "Read" : "Edit"
+                  const settled = yield* run(
+                    path.join(projlink, "plain"),
+                    row.tool,
+                    row.input(`../out/${row.file}`, "b.txt"),
+                    {
+                      effect: "allow",
+                      trusted,
+                      worktree: projlink,
+                      rules: [
+                        { action: "external_directory", resource: "*", effect: "allow" },
+                        ...(kind === "policy" ? [] : [{ action, resource: "../out/*", effect: kind }]),
+                      ],
+                      ...(kind === "policy"
+                        ? {
+                            policy: {
+                              from: "user" as const,
+                              statements: [
+                                { action: "permission", resource: `${action}:../out/*`, effect: "deny" as const },
+                              ],
+                            },
+                          }
+                        : {}),
+                    },
+                  )
+                  const asked = settled.asked.filter((request) => request.action === action)
+                  expect([Exit.isSuccess(settled.exit), asked.length]).toEqual(kind === "ask" ? [true, 1] : [false, 0])
+                  if (kind !== "ask")
+                    expect(yield* Effect.promise(() => fs.readFile(real, "utf8").catch(() => undefined))).toBe(
+                      row.existing,
+                    )
+                }),
+              (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+            ),
+        )
+
+  // What a plugin hook is shown: the spellings of a lead relative to the session folder are written with forward
+  // slashes, whatever the platform's separator, and the `../` one is there with the session folder reached directly or
+  // through a link, as the rules try it.
+  for (const trusted of [true, false])
+    for (const session of ["direct", "a link"] as const)
+      it.live(
+        `a hook is shown the ../ spelling of a lead, the session folder ${session} (${trusted ? "trusted" : "untrusted"})`,
+        () =>
+          Effect.acquireUseRelease(
+            Effect.promise(() => tmpdir()),
+            (root) =>
+              Effect.gen(function* () {
+                const world = yield* Effect.promise(() => makeWorld(root.path))
+                const worktree = session === "direct" ? world.project : path.join(world.root, "projlink")
+                yield* Effect.promise(async () => {
+                  if (session === "a link") await fs.symlink(world.project, worktree, "junction")
+                  await fs.writeFile(path.join(world.root, "outside", "b.txt"), text)
+                })
+                const evaluations: Array<{ action: string; leads?: Readonly<Record<string, ReadonlyArray<string>>> }> =
+                  []
+                const settled = yield* run(
+                  path.join(worktree, "plain"),
+                  "Edit",
+                  changes[0]!.input("../out/b.txt", ""),
+                  {
+                    effect: "allow",
+                    trusted,
+                    worktree,
+                    rules: [{ action: "external_directory", resource: "*", effect: "allow" }],
+                    evaluations,
+                  },
+                )
+                expect(Exit.isSuccess(settled.exit)).toBe(true)
+                const relatives = evaluations
+                  .filter((evaluation) => evaluation.action === "Edit")
+                  .flatMap((evaluation) => Object.values(evaluation.leads ?? {}).flat())
+                  .filter((lead) => !path.isAbsolute(lead))
+                // A trusted folder asks with the `../` spelling itself, and its lead is the real place outside the
+                // project, which no project spells relative to the session folder.
+                expect([...new Set(relatives)]).toEqual(trusted ? [] : ["../out/b.txt"])
+              }),
+            (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+          ),
+      )
 })
 
 // The name of a link that is removed: as it is spelled in the project, or where it is when an untrusted one leads out.
