@@ -279,6 +279,16 @@ describe.skipIf(process.platform === "win32")("a PostToolUse hook after an appro
         )
         expect(edit.tool_input).toMatchObject({ old_string: "beta", new_string: "BETA" })
         expect(edit.tool_input.replace_all).toBeUndefined()
+        // A Write's input rebuilt with the same content would read alike, so the model's call carries a key the tool's
+        // schema drops: the hook still reads it, since it is told the model's own input and not a rebuilt one.
+        const write = yield* run(
+          directory,
+          payload,
+          "Write",
+          { file_path: "b.txt", content: "proposed\n", note: "the model's own key" },
+          "proposed\n",
+        )
+        expect(write.tool_input).toMatchObject({ content: "proposed\n", note: "the model's own key" })
       }),
     ),
   )
