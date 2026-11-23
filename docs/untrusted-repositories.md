@@ -2586,7 +2586,15 @@ runs" is a permission.
   it for each escaped target, so Edit, Write, NotebookEdit, every file of a Patch and the door of Read carry it. Before, a deny written for the path in the project let a write land where the link leads (classes
   3 and 8; `edit-link.test.ts`, "a rule for the spelling of a path a link leads out of decides the call through it": a
   deny and an ask, by each spelling, for a file that is a link out and a file below a folder link out, trusted as the
-  control and untrusted). The shell checks a command's files against the person's Read and Edit denies before it asks
+  control and untrusted). Two checks that send a file's text to the model without the read tool build their Read request
+  the same way: the one that lets the editor's file and selection into a prompt, and the one the file-change reminder
+  makes before it shows a change. A Read deny for the path in the project drops the editor field in an untrusted folder
+  too (`session-prompt-editor.test.ts`, "a Read deny for the spelling of a folder link out drops the field" and its file
+  link row: the relative and the absolute path, trusted as the control and untrusted, and no deny keeps the field). The
+  reminder skips such a file in an untrusted folder before any rule is asked, because its name leads out of the project,
+  and its request still carries the spelling (`durable-reminders.test.ts`, "a Read deny for the spelling of a link out
+  skips a file written through it": trusted, the deny skips the file and no deny reports it; revoked, nothing is
+  reported, and the deny is a deny of the request). The shell checks a command's files against the person's Read and Edit denies before it asks
   (`ShellGuard.facts`, the probes), and the probes of such a path carry that spelling too, relative to the session
   folder as a trusted folder names it. Before, a deny written for it let `cat`, a redirect or `rm` read or write the file
   the link leads to (classes 3 and 8; `tool-shell.test.ts`, "ShellGuard: a deny for the spelling of a path a link leads
