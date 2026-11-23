@@ -1462,8 +1462,11 @@ describe("SessionTransfer", () => {
         {
           id: sourceMessageID,
           text: `[redacted:text:${sourceMessageID}]`,
-          // The arguments are what the person typed, so they are redacted as the text is; the name stays.
-          command: { name: "review", arguments: `[redacted:command-arguments:${sourceMessageID}]` },
+          // The arguments are what the person typed, so they are redacted as the text is, and the name as a skill's is.
+          command: {
+            name: `[redacted:command-name:${sourceMessageID}]`,
+            arguments: `[redacted:command-arguments:${sourceMessageID}]`,
+          },
           editor: {
             path: `[redacted:editor-path:${sourceMessageID}]`,
             selection: { start: 3, end: 4, text: `[redacted:editor-selection:${sourceMessageID}]` },
