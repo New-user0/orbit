@@ -97,14 +97,18 @@ const run = (
     yield* seed(directory, options.effect ?? "ask", options.rules)
     const tools = yield* Tool.Service
     const permission = yield* Permission.Service
-    const fiber = yield* (yield* tools.snapshot())
-      .execute({
-        sessionID,
-        ...identity,
-        call: { type: "tool-call", id: `call-${name}`, name, input },
-        progress: (update) => Effect.sync(() => void options.updates?.push(update)),
-      })
-      .pipe(Effect.forkScoped)
+    const access = yield* FileAccess.Service
+    // "Read" is the door that Read, Grep and LSP open a file through, so it stands for them without their own services.
+    const fiber = yield* (
+      name === "Read"
+        ? access.authorizeRead(String(input.file_path), { sessionID, ...identity, id: Tool.CallID.make("call-Read") })
+        : (yield* tools.snapshot()).execute({
+            sessionID,
+            ...identity,
+            call: { type: "tool-call", id: `call-${name}`, name, input },
+            progress: (update) => Effect.sync(() => void options.updates?.push(update)),
+          })
+    ).pipe(Effect.forkScoped)
     const asked: Permission.Request[] = []
     const drive = (): Effect.Effect<Exit.Exit<unknown, unknown>> =>
       Effect.gen(function* () {
@@ -1132,6 +1136,71 @@ describe("a rule for the spelling of a link that is removed decides its removal"
         (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
       ),
     )
+})
+
+// Fix loop 8 (classes 3 and 8): a rule written for a path as the project spells it decides every call that writes or
+// reads through a link there, in an untrusted folder as in a trusted one. Until the folder is trusted, a link that leads
+// out makes the request name the place it leads to, so the spelled path was no subject of the rules: a deny let the write
+// land outside and an ask asked nothing. The shapes are a file that is itself a link out of the project and a file below a
+// folder link out of it; "Read" is the door of Read, Grep and LSP. The trusted rows are the control.
+describe("a rule for the spelling of a path a link leads out of decides the call through it", () => {
+  const linkedFile = canLinkFile ? it.live : it.live.skip
+  const fileTools = [
+    { name: "Edit", file: "shown.txt", existing: text, input: (at: string) => changes[0]!.input(at, "") },
+    { name: "Write", file: "shown.txt", existing: text, input: (at: string) => ({ file_path: at, content: "new\n" }) },
+    { name: "NotebookEdit", file: "shown.ipynb", existing: notebook, input: (at: string) => changes[2]!.input(at, "") },
+    { name: "Patch update", file: "shown.txt", existing: text, input: (at: string) => patched(update(at)) },
+    { name: "Patch move to", file: "shown.txt", existing: text, input: (at: string) => patched(update("plain/b.txt", at)) },
+    { name: "Read", file: "shown.txt", existing: text, input: (at: string) => ({ file_path: at }) },
+  ]
+  const folderTools = [
+    ...changes.filter((change) => change.name !== "Patch delete" && change.name !== "Patch move from"),
+    { name: "Read", tool: "Read", file: "b.txt", existing: text, input: (at: string) => ({ file_path: at }) },
+  ]
+  const rows = [
+    ...fileTools.map((item) => ({ ...item, shape: "a file link", tool: item.name.split(" ")[0]!, at: item.file })),
+    ...folderTools.map((item) => ({ ...item, shape: "a folder link", at: `out/${item.file}` })),
+  ]
+  for (const trusted of [true, false])
+    for (const row of rows)
+      for (const effect of ["deny", "ask"] as const)
+        for (const spelling of ["relative", "absolute"] as const)
+          (row.shape === "a file link" ? linkedFile : it.live)(
+            `${effect} for its ${spelling} spelling: ${row.name} through ${row.shape}, in ${trusted ? "a trusted" : "an untrusted"} folder`,
+            () =>
+              Effect.acquireUseRelease(
+                Effect.promise(() => tmpdir()),
+                (root) =>
+                  Effect.gen(function* () {
+                    const world = yield* Effect.promise(() => makeWorld(root.path))
+                    const real = path.join(world.root, "outside", row.shape === "a file link" ? `real${path.extname(row.file)}` : row.file)
+                    yield* Effect.promise(async () => {
+                      await fs.writeFile(path.join(world.project, "plain", "b.txt"), text)
+                      if (row.existing !== undefined) await fs.writeFile(real, row.existing)
+                      if (row.shape === "a file link") await fs.symlink(real, path.join(world.project, row.at), "file")
+                    })
+                    const action = row.tool === "Read" ? "Read" : "Edit"
+                    const settled = yield* run(world.project, row.tool, row.input(row.at, "plain/b.txt"), {
+                      effect: "allow",
+                      trusted,
+                      rules: [
+                        { action: "external_directory", resource: "*", effect: "allow" },
+                        {
+                          action,
+                          resource: spelling === "relative" ? row.at : forward(path.join(world.project, row.at)),
+                          effect,
+                        },
+                      ],
+                    })
+                    const asked = settled.asked.filter((request) => request.action === action)
+                    expect([Exit.isSuccess(settled.exit), asked.length]).toEqual(effect === "deny" ? [false, 0] : [true, 1])
+                    // A deny leaves the place the link leads to as it was.
+                    if (effect === "deny")
+                      expect(yield* Effect.promise(() => fs.readFile(real, "utf8").catch(() => undefined))).toBe(row.existing)
+                  }),
+                (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
+              ),
+          )
 })
 
 // The name of a link that is removed: as it is spelled in the project, or where it is when an untrusted one leads out.

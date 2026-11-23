@@ -197,11 +197,20 @@ const shareFailure = (spelled: string) =>
  * somewhere else (a link leads out), where it is the place, so that an approval does not show the link as the file.
  */
 export const shownName = (target: Target) => (target.place === target.absolute ? target.resource : slash(target.place))
-/** The `leads` of a permission request for these targets: the real places they lead to, keyed by their resource. */
+/**
+ * The `leads` of a permission request for these targets, keyed by their resource: the real places they lead to, and, for
+ * a target that a link of an untrusted project leads out, the path as the project spells it. That target's resource is
+ * the place the link leads to, so without its spelling a deny or ask written for the path in the project would never
+ * meet the call (class 3).
+ */
 export const leadsOf = (targets: readonly Target[]) => {
-  const entries = targets.flatMap((target) =>
-    target.leads === undefined ? [] : [[target.resource, [target.leads]] as const],
-  )
+  const entries = targets.flatMap((target) => {
+    const leads = [
+      ...(target.leads === undefined ? [] : [target.leads]),
+      ...(target.externalDirectory?.escaped ? [target.absolute] : []),
+    ]
+    return leads.length === 0 ? [] : [[target.resource, leads] as const]
+  })
   return entries.length === 0 ? {} : { leads: Object.fromEntries(entries) }
 }
 /** Where a target really is once its links, and the links of every folder above it, are followed. */

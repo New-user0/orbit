@@ -330,22 +330,21 @@ export const Plugin = {
                 ])
                 // The link that a delete or a move removes is where it really is, which a link of a folder above can make
                 // a place that neither the resource nor its lead names. It joins the leads, so the person's deny or ask
-                // for that folder decides the removal (class 3). Where a link of an untrusted project leads out, the
-                // resource is the place it leads to, so the path as spelled in the project joins too: a rule written for
-                // the link that is removed decides its removal.
+                // for that folder decides the removal (class 3). The path as the project spells it is a lead already
+                // where a link of an untrusted project leads out (`FileAccess.leadsOf`).
                 const led = FileAccess.leadsOf(targets).leads ?? {}
-                const removing = prepared.flatMap((change) => {
-                  if (change.type === "add" || change.removes === undefined) return []
-                  const places = [
-                    ...(change.removes === change.target.absolute ? [] : [change.removes]),
-                    ...(change.target.externalDirectory?.escaped ? [change.target.absolute] : []),
-                  ]
-                  return places.length === 0 ? [] : [[change.target, places] as const]
-                })
+                const removing = prepared.flatMap((change) =>
+                  change.type !== "add" && change.removes !== undefined && change.removes !== change.target.absolute
+                    ? [[change.target, change.removes] as const]
+                    : [],
+                )
                 const leads = {
                   ...led,
                   ...Object.fromEntries(
-                    removing.map(([target, places]) => [target.resource, [...(led[target.resource] ?? []), ...places]]),
+                    removing.map(([target, removes]) => [
+                      target.resource,
+                      [...(led[target.resource] ?? []), removes],
+                    ]),
                   ),
                 }
                 yield* permission.assert({
