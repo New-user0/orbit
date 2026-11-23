@@ -281,6 +281,46 @@ test("the docks give an approval the rows it needs, from the bottom up, and pain
   expect(rows.slice(-2).join("")).toBe("")
 })
 
+// The reject stage's field grows with the answer up to the rows the stage is given, so it is given the rows above the
+// route's two blank ones and no more: a long answer leaves the bottom one blank.
+for (const height of [24, 40])
+  test(`the reject stage at 80x${height} keeps the route's blank row under it while a long answer is typed`, async () => {
+    await using app = await open(80, height, CASES.short.asked, { plan: 5 })
+    await app.press("3")
+    await app.until((frame) => frame.includes("Reject permission"))
+    await app.setup.mockInput.typeText(`${"because it leads away ".repeat(60)}AND-NO`)
+    const frame = await app.settled()
+    const rows = frame
+      .split("\n")
+      .slice(0, height)
+      .map((row) => row.trimEnd())
+    expect(rows.slice(-2)).toEqual([expect.stringMatching(/^ +┃$/), ""])
+    for (const part of ["AND-NO", "enter confirm", "esc cancel"])
+      expect([part, frame.includes(part)]).toEqual([part, true])
+  })
+
+// A question asked while the composer is open waits behind it: the composer keeps its rows and the route its blank ones.
+test("a question asked while the composer is open leaves the screen as it was, and is drawn once it closes", async () => {
+  await using app = await open(80, 12, undefined)
+  await app.press("\x1b[B")
+  await app.until((frame) => frame.includes("Subagents"))
+  const composing = await app.settled()
+  app.setup.events.emit({
+    id: "evt_asked",
+    created: 3,
+    type: "permission.asked",
+    data: { id: "per_route", sessionID: child.id, ...CASES.short.asked },
+  })
+  await Bun.sleep(50)
+  expect(await app.settled()).toBe(composing)
+  app.setup.mockInput.pressEscape()
+  expect(options(await app.until((frame) => frame.includes("1 Allow once")))).toEqual([
+    "›1Allowonce",
+    "2Alwaysallow",
+    "3Reject",
+  ])
+})
+
 // A dock that gives way loses whole rows: each row above the dialog is one the same screen drew before the question.
 for (const [width, height] of [
   [80, 24],
