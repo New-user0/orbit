@@ -146,6 +146,8 @@ async function open(width: number, height: number, asked: Asked | undefined, opt
   await until((frame) => frame.includes("Orbit"))
   if (options.queued) await until((frame) => frame.includes("1 queued"))
   if (options.plan) await until((frame) => frame.includes("plan"))
+  // The same screen with no question, which every dock row drawn beside one is a row of.
+  const before = await settled()
   if (asked) {
     const question = { id: "per_route", sessionID: child.id, ...asked }
     pending.push(question)
@@ -157,6 +159,7 @@ async function open(width: number, height: number, asked: Asked | undefined, opt
     replies,
     until,
     settled,
+    before,
     first: await settled(),
     async press(key: string, modifiers?: { ctrl?: boolean }) {
       setup.mockInput.pressKey(key, modifiers)
@@ -185,7 +188,10 @@ async function readByKeys(app: Awaited<ReturnType<typeof open>>, first: string) 
   }
   const rows = shots.flatMap((shot) => {
     const all = shot.split("\n").map(squash)
-    return all.slice(0, all.findIndex((row) => row.endsWith("1Allowonce")))
+    return all.slice(
+      0,
+      all.findIndex((row) => row.endsWith("1Allowonce")),
+    )
   })
   return [...new Set(rows)].join("").replaceAll("\\", "/")
 }
@@ -275,8 +281,28 @@ test("the docks give an approval the rows it needs, from the bottom up, and pain
   expect(rows.slice(-2).join("")).toBe("")
 })
 
-test("an edit leaves the plan none of its rows on an 80x24 screen", async () => {
+// A dock that gives way loses whole rows: each row above the dialog is one the same screen drew before the question.
+for (const [width, height] of [
+  [80, 24],
+  [100, 24],
+  [80, 25],
+] as const)
+  for (const docks of [{ plan: 2 }, { plan: 5 }, { plan: 5, queued: true }])
+    test(`at ${width}x${height} the docks above an edit give way in whole rows: ${JSON.stringify(docks)}`, async () => {
+      await using app = await open(width, height, CASES.short.asked, docks)
+      const drawn = new Set(app.before.split("\n"))
+      const rows = app.first.split("\n")
+      const top = rows.findLastIndex(
+        (row, index) => /^ *╭/.test(row) && rows.slice(index).some((rest) => rest.includes("1 Allow once")),
+      )
+      expect(top).toBeGreaterThan(0)
+      expect(rows.slice(0, top).filter((row) => !drawn.has(row))).toEqual([])
+      expect(options(app.first)).toEqual(["›1Allowonce", "2Alwaysallow", "3Reject"])
+    })
+
+test("an edit leaves the plan only its header row on an 80x24 screen", async () => {
   await using app = await open(80, 24, CASES.short.asked, { plan: 5 })
+  expect(app.first).toContain("◎ plan 0/5 ▾")
   expect(app.first).not.toContain("step 0")
   expect(options(app.first)).toEqual(["›1Allowonce", "2Alwaysallow", "3Reject"])
 })
@@ -333,9 +359,17 @@ test("the docks, the prompt and the route's blank rows come back once the questi
     type: "permission.replied",
     data: { sessionID: child.id, requestID: "per_route", reply: "once" },
   })
-  const frame = await app.until((shot) => !shot.includes("1 Allow once") && shot.includes("step 2") && promptReady(shot))
+  const frame = await app.until(
+    (shot) => !shot.includes("1 Allow once") && shot.includes("step 2") && promptReady(shot),
+  )
   expect(frame).toContain("plan")
-  expect((await app.settled()).split("\n").filter((row) => row !== "").at(-1)!.trim()).toBe("")
+  expect(
+    (await app.settled())
+      .split("\n")
+      .filter((row) => row !== "")
+      .at(-1)!
+      .trim(),
+  ).toBe("")
 })
 
 // The composer is in the docks that give way to an approval; with none asked it opens and closes as before.

@@ -1607,29 +1607,33 @@ export function Session(props: {
               </Show>
             </box>
             <box flexShrink={0} maxHeight={approving() ? approvalRows() : undefined}>
-              {/* What is docked above an approval gives it the rows that it needs, from the bottom up (class 8). */}
-              <box flexShrink={approving() ? 1 : 0} minHeight={0} overflow={approving() ? "hidden" : "visible"}>
-                <Show when={!composer.open && !disabled() && queuedPrompts().length > 0}>
-                  <QueuedPromptDock prompts={queuedPrompts()} onOpen={openQueuedPrompts} />
-                </Show>
-                <Slot path="session.composer.top" input={{ sessionID: route.sessionID }} />
-                <Composer
-                  sessionID={route.sessionID}
-                  open={composing()}
-                  defaultTab={composer.tab ?? (session()?.parentID ? "subagents" : undefined)}
-                  onClose={() => {
-                    const parent = session()?.parentID
-                    if (parent) {
-                      navigate({ type: "session", sessionID: parent })
-                      return
-                    }
-                    setComposer("open", false)
-                  }}
-                  visibleTerminalID={props.visibleTerminalID}
-                />
-                <Show when={!composer.open}>
-                  <PlanDock sessionID={route.sessionID} />
-                </Show>
+              {/* What is docked above an approval gives it the rows that it needs, from the bottom up and in whole rows
+                  (class 8). A scrolling box lays out what it holds at its full height, so the clip cuts whole rows where
+                  a hidden one would squeeze them onto each other. */}
+              <box flexShrink={approving() ? 1 : 0} minHeight={0} overflow={approving() ? "scroll" : "visible"}>
+                <box flexShrink={0}>
+                  <Show when={!composer.open && !disabled() && queuedPrompts().length > 0}>
+                    <QueuedPromptDock prompts={queuedPrompts()} onOpen={openQueuedPrompts} />
+                  </Show>
+                  <Slot path="session.composer.top" input={{ sessionID: route.sessionID }} />
+                  <Composer
+                    sessionID={route.sessionID}
+                    open={composing()}
+                    defaultTab={composer.tab ?? (session()?.parentID ? "subagents" : undefined)}
+                    onClose={() => {
+                      const parent = session()?.parentID
+                      if (parent) {
+                        navigate({ type: "session", sessionID: parent })
+                        return
+                      }
+                      setComposer("open", false)
+                    }}
+                    visibleTerminalID={props.visibleTerminalID}
+                  />
+                  <Show when={!composer.open}>
+                    <PlanDock sessionID={route.sessionID} />
+                  </Show>
+                </box>
               </box>
               <Switch>
                 <Match when={composing()}>{null}</Match>
@@ -1637,9 +1641,7 @@ export function Session(props: {
                   <Show when={promptedPermissions()[0]?.id} keyed>
                     {(_) => {
                       const request = promptedPermissions()[0]
-                      return request ? (
-                        <PermissionPrompt request={request} rows={approvalRows()} />
-                      ) : null
+                      return request ? <PermissionPrompt request={request} rows={approvalRows()} /> : null
                     }}
                   </Show>
                 </Match>
@@ -2151,7 +2153,8 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
     return state() ?? "finished"
   }
   const heading = () => bodyText(`${state() === "completed" ? "↳" : "!"} ${actor()} ${status()}`)
-  const suffix = () => Locale.truncateWidth(bodyText(` · ${description()}`), Math.max(0, ctx.width - 3 - stringWidth(heading())))
+  const suffix = () =>
+    Locale.truncateWidth(bodyText(` · ${description()}`), Math.max(0, ctx.width - 3 - stringWidth(heading())))
   const color = () => {
     if (state() === "error") return theme.text.feedback.error.base
     if (state() === "cancelled") return theme.text.feedback.warning.base
@@ -3077,7 +3080,9 @@ function ShellDisplay(props: {
   const maxLines = 10
   const maxChars = createMemo(() => maxLines * Math.max(20, ctx.width - 6 - (isRunning() ? 2 : 0)))
   const prefix = createMemo(() => (workdir() && workdir() !== "." ? `cd ${workdir()} && ` : ""))
-  const input = createMemo(() => (props.command ? bodyText(`${isRunning() ? "" : "$ "}${prefix()}${props.command}`) : ""))
+  const input = createMemo(() =>
+    props.command ? bodyText(`${isRunning() ? "" : "$ "}${prefix()}${props.command}`) : "",
+  )
   const collapsed = createMemo(() => collapseShellOutput(input(), output(), maxLines, maxChars()))
   const limitedInput = createMemo(() => (expanded() ? input() : collapsed().input))
   const limitedOutput = createMemo(() => (expanded() ? output() : collapsed().output))
@@ -3722,7 +3727,8 @@ function Diagnostics(props: { diagnostics: unknown; filePath: string }) {
         <For each={errors()}>
           {(diagnostic) => (
             <text fg={theme.text.feedback.error.base}>
-              Error [{diagnostic.range.start.line + 1}:{diagnostic.range.start.character + 1}] {bodyText(diagnostic.message)}
+              Error [{diagnostic.range.start.line + 1}:{diagnostic.range.start.character + 1}]{" "}
+              {bodyText(diagnostic.message)}
             </text>
           )}
         </For>
