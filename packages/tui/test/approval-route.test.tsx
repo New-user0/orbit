@@ -62,7 +62,7 @@ const CASES = {
 }
 
 type Asked = { action: string; resources: string[]; save: string[]; metadata: object }
-type Options = { plan?: number; queued?: boolean; messages?: object[]; sessionID?: string }
+type Options = { plan?: number; queued?: boolean; messages?: object[]; sessionID?: string; terminal?: object }
 
 async function open(width: number, height: number, asked: Asked | undefined, options: Options = {}) {
   const state = await tmpdir()
@@ -110,6 +110,8 @@ async function open(width: number, height: number, asked: Asked | undefined, opt
       if (url.pathname === `/api/session/${root.id}/message`)
         return json({ data: [...(options.plan ? [plan] : []), ...(options.messages ?? [])], cursor: {} })
       if (url.pathname === `/api/session/${root.id}/inbox`) return json({ data: inbox, cursor: {} })
+      if (options.terminal && url.pathname === `/api/experimental/session/${root.id}/terminal`)
+        return json({ data: [options.terminal] })
       if (/^\/api\/session\/[^/]+\/(message|inbox)$/.test(url.pathname)) return json({ data: [], cursor: {} })
       if (url.pathname === `/api/session/${child.id}/permission`) return json({ data: pending })
       if (url.pathname === `/api/session/${root.id}/permission`) return json({ data: [] })
@@ -432,4 +434,28 @@ test("the composer opens and closes in the session route, and a subagent's close
     const parent = await app.until((frame) => frame.includes("Demo session"))
     expect([parent.includes("Subagent session"), (await app.settled()).includes("Subagents")]).toEqual([false, false])
   }
+})
+
+// The composer's Terminals tab reads which terminal the session's pane shows (`visibleTerminalID`). Terminal panes need a
+// daemon that has no Windows build, so the tab is there only off Windows.
+test.skipIf(process.platform === "win32")("the composer in the session route lists the session's terminals", async () => {
+  const terminal = {
+    id: "pty_route",
+    sessionID: root.id,
+    title: "QTERM",
+    command: "/bin/sh",
+    args: [],
+    cwd: "/work",
+    status: "running",
+    pid: 1,
+    foregroundProcess: null,
+    size: { cols: 80, rows: 24 },
+    output: { head: 0, tail: 0 },
+  }
+  await using app = await open(80, 24, undefined, { terminal })
+  expect(await app.press("\x1b[B")).toContain("Terminals")
+  // The tabs are Subagents, Shell and Terminals; the right arrow moves one tab on.
+  await app.press("\x1b[C")
+  const shown = await app.press("\x1b[C")
+  expect([shown.includes("QTERM"), shown.includes("+ New terminal")]).toEqual([true, true])
 })
