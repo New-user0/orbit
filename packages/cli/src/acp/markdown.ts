@@ -27,6 +27,19 @@ export function literal(value: string, alone = true) {
   return codeSpan(text)
 }
 
+/**
+ * Text a tool gave back, such as a file's text, a command's output or an error, for content a client renders as
+ * Markdown: as it is when it is one line that Markdown draws letter for letter, and otherwise in a fenced code block
+ * whose fence is longer than any run of backticks in it, so no line of it closes the block. Its lines keep their breaks,
+ * and nothing a repository or a model wrote becomes a link, an image or a tag (classes 6 and 9).
+ */
+export function literalBlock(text: string) {
+  // `literal` writes a line break out, so text of several lines is never its own literal.
+  if (literal(text) === text) return text
+  const fence = "`".repeat(Math.max(2, ...(text.match(/`+/g) ?? []).map((run) => run.length)) + 1)
+  return `${fence}\n${text}${text.endsWith("\n") ? "" : "\n"}${fence}`
+}
+
 export function codeSpan(text: string) {
   const fence = "`".repeat(Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length)) + 1)
   const pad = text.startsWith("`") || text.endsWith("`") ? " " : ""

@@ -373,7 +373,7 @@ describe("acp tools", () => {
           },
         ],
       }).content,
-    ).toEqual([{ type: "content", content: { type: "text", text: "first\nsecond" } }])
+    ).toEqual([{ type: "content", content: { type: "text", text: "```\nfirst\nsecond\n```" } }])
 
     expect(
       completedToolUpdate({
@@ -393,7 +393,7 @@ describe("acp tools", () => {
           },
         ],
       }).content,
-    ).toEqual([{ type: "content", content: { type: "text", text: "a.ts\nsrc" } }])
+    ).toEqual([{ type: "content", content: { type: "text", text: "```\na.ts\nsrc\n```" } }])
   })
 
   test("sends completed tool calls as partial updates", () => {

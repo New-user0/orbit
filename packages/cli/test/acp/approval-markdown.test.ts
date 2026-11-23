@@ -14,7 +14,9 @@ import {
   startSession,
   succeeded,
   toolCalled,
+  toolFailed,
   toolStarted,
+  toolSucceeded,
   turn,
 } from "./wire-fixture"
 
@@ -243,5 +245,76 @@ describe("acp: model text in a call's title reads as it is", () => {
       "ses_child:call_read",
     )
     expect(plain).toEqual(["Explore code: read"])
+  })
+})
+
+// Review of fix loop 1 (classes 6 and 9): what a tool gave back is content too, and a repository or a server chose it:
+// the text of a file a Read opened, another tool's output, the text of an error. Text of several lines keeps its lines in
+// a fenced code block that no line of it can close, and one line that Markdown draws letter for letter is sent as it is
+// (the control). Nothing in it becomes a link, an image or a tag.
+describe("acp: what a tool gave back reads as it is", () => {
+  // A file's text: several lines, fences of its own, and each hostile value on a line.
+  const FILE = ["# Read me", "```", ...HOSTILE, "````", "Link ends outside the project"].join("\n")
+  const VALUES = [...HOSTILE, BROKEN.value, FILE]
+
+  // What a person reads of `markdown`, which may be a block: the text without the block's last line break.
+  const block = (markdown: string) => {
+    const seen = read(markdown)
+    return { text: seen.text.replace(/\n$/, ""), markup: seen.markup.filter((tag) => tag !== "pre") }
+  }
+
+  // The text content of the last update the client was given for the call `id`.
+  async function content(events: (sessionID: string) => OrbitEvent[], id: string) {
+    await using acp = await startSession({
+      onPrompt: ({ sessionID, id: inbox }) => turn(sessionID, inbox, ...events(sessionID)),
+    })
+    await acp.prompt(acp.sessionId, "hello")
+    const last = acp.updates
+      .map((item) => item.update as { toolCallId?: string; content?: Awaited<ReturnType<typeof asked>>["content"] })
+      .filter((update) => update.toolCallId === id && update.content !== undefined)
+      .at(-1)
+    return texts({ toolCallId: id, content: last?.content })
+  }
+
+  test("a Read's file text", async () => {
+    const opened = (text: string) =>
+      content(
+        (sessionID) => [
+          toolStarted(sessionID, "call_read", "Read"),
+          toolCalled(sessionID, "call_read", { file_path: "README.md" }),
+          toolSucceeded(sessionID, "call_read", {}, JSON.stringify({ type: "text-page", content: text })),
+        ],
+        "call_read",
+      )
+    for (const value of VALUES) expect((await opened(value)).map(block)).toEqual([shown(value)])
+    expect(await opened("Plain notes")).toEqual(["Plain notes"])
+  })
+
+  test("another tool's text output", async () => {
+    const output = (text: string) =>
+      content(
+        (sessionID) => [
+          toolStarted(sessionID, "call_shell", "Bash"),
+          toolCalled(sessionID, "call_shell", { command: "cat notes" }),
+          toolSucceeded(sessionID, "call_shell", {}, text),
+        ],
+        "call_shell",
+      )
+    for (const value of VALUES) expect((await output(value)).map(block)).toEqual([shown(value)])
+    expect(await output("done")).toEqual(["done"])
+  })
+
+  test("an error's text", async () => {
+    const failed = (message: string) =>
+      content(
+        (sessionID) => [
+          toolStarted(sessionID, "call_mcp", "slack_post_message"),
+          toolCalled(sessionID, "call_mcp", { text: "hi" }),
+          toolFailed(sessionID, "call_mcp", { error: { type: "unknown", message } }),
+        ],
+        "call_mcp",
+      )
+    for (const value of VALUES) expect((await failed(value)).map(block)).toEqual([shown(value)])
+    expect(await failed("Channel not found")).toEqual(["Channel not found"])
   })
 })

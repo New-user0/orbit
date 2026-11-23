@@ -7,7 +7,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Patch } from "@orbit/util/patch"
 import { Result } from "effect"
-import { literal } from "./markdown"
+import { literal, literalBlock } from "./markdown"
 
 export type ToolInput = Record<string, unknown>
 
@@ -202,14 +202,15 @@ export function completedToolUpdate(input: {
   readonly places?: ReadonlyArray<string>
 }): ToolCallUpdate {
   const normalized = toolContent(input.content)
-  // Read's model content is a JSON page envelope; show the clean text instead.
+  // Read's model content is a JSON page envelope; show the clean text instead, the file's own, written so Markdown shows
+  // it as it is (classes 6 and 9).
   const firstText = input.content.find((part) => part.type === "text")
   const read = input.toolName.toLocaleLowerCase() === "read" && firstText ? readDisplayText(firstText.text) : undefined
   const images = normalized.filter((part) => part.type === "content" && part.content.type === "image")
   const primary =
     read === undefined
       ? normalized.filter((part) => !images.includes(part))
-      : [{ type: "content" as const, content: { type: "text" as const, text: read } }]
+      : [{ type: "content" as const, content: { type: "text" as const, text: literalBlock(read) } }]
   // An Edit or Write draws the diff the tool recorded of what it wrote, never its input: an approval answered with the
   // person's own version writes that version, not the model's old_string and new_string (class 8). A call that recorded
   // no diff draws none.
@@ -258,7 +259,7 @@ export function errorToolUpdate(input: {
     title: toolTitle(input.toolName, input.input, undefined),
     locations: toLocations(input.toolName, input.input, input.cwd, input.places),
     rawInput: rawInput(input.toolName, input.input, input.cwd),
-    content: [...toolContent(input.content ?? []), { type: "content", content: { type: "text", text: input.error } }],
+    content: [...toolContent(input.content ?? []), { type: "content", content: { type: "text", text: literalBlock(input.error) } }],
     rawOutput: {
       ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
       error: input.error,
@@ -266,9 +267,10 @@ export function errorToolUpdate(input: {
   }
 }
 
+// What a tool gave back, which a file, a command or a server chose, written so Markdown shows it as it is.
 function toolContent(content: ToolContent): ToolCallContent[] {
   return content.flatMap((part): ToolCallContent[] => {
-    if (part.type === "text") return [{ type: "content", content: { type: "text", text: part.text } }]
+    if (part.type === "text") return [{ type: "content", content: { type: "text", text: literalBlock(part.text) } }]
     const match = /^data:([^;,]+)(?:;[^,]*)*;base64,(.*)$/.exec(part.uri)
     if (!match?.[1]?.startsWith("image/") || match[2] === undefined) return []
     return [{ type: "content", content: { type: "image", mimeType: match[1], data: match[2] } }]
