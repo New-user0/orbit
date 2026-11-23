@@ -975,16 +975,31 @@ describe("the rules for the folder of a link that is removed decide its removal"
             ),
           )
 
-  // Whether the folder of the link that is removed gets a question of its own. A link of a project that is not trusted
-  // yet leads to a folder of Orbit's own: that folder's allow does not answer for it, as it does not for a file the link
-  // leads to. In a trusted project, or through a link outside the project, which is not the repository's, the allow
-  // does. A link that stays in the project needs no folder question. `own` is the folder made Orbit's own.
+  // How many times the folder of the link that is removed is asked about. A link of a project that is not trusted yet
+  // leads to a folder of Orbit's own: that folder's allow does not answer for it, as it does not for a file the link leads
+  // to. In a trusted project, or through a link outside the project, which is not the repository's, the allow does. A
+  // link that stays in the project needs no folder question, and a folder named directly is asked about once, for the
+  // target. `own` makes the folder one of Orbit's own.
+  const own = { trusted: true, spelled: "out/config.txt", link: ["outside"], real: ["farther"], own: true }
+  const inside = { spelled: "alias/config.txt", link: ["proj", "sub"], real: ["farther"], own: false, asked: 0 }
+  const named = { spelled: path.join("elsewhere", "config.txt"), absolute: true, link: ["elsewhere"], real: ["farther"] }
   const folderRows = [
-    { name: "an own folder through the project's link", trusted: true, spelled: "out/config.txt", link: ["outside"], real: ["farther"], own: true, asked: false },
-    { name: "an own folder through the project's link", trusted: false, spelled: "out/config.txt", link: ["outside"], real: ["farther"], own: true, asked: true },
-    { name: "an own folder through a link outside the project", trusted: false, spelled: path.join("elsewhere", "alias", "config.txt"), absolute: true, link: ["farther"], real: ["outside"], own: true, asked: false },
-    { name: "a folder in the project through its link inside", trusted: true, spelled: "alias/config.txt", link: ["proj", "sub"], real: ["farther"], own: false, asked: false },
-    { name: "a folder in the project through its link inside", trusted: false, spelled: "alias/config.txt", link: ["proj", "sub"], real: ["farther"], own: false, asked: false },
+    { ...own, name: "an own folder through the project's link", asked: 0 },
+    { ...own, name: "an own folder through the project's link", trusted: false, asked: 1 },
+    {
+      name: "an own folder through a link outside the project",
+      trusted: false,
+      spelled: path.join("elsewhere", "alias", "config.txt"),
+      absolute: true,
+      link: ["farther"],
+      real: ["outside"],
+      own: true,
+      asked: 0,
+    },
+    { ...inside, name: "a folder in the project through its link inside", trusted: true },
+    { ...inside, name: "a folder in the project through its link inside", trusted: false },
+    { ...named, name: "a folder outside the project named directly", trusted: true, own: false, asked: 1 },
+    { ...named, name: "a folder outside the project named directly", trusted: false, own: false, asked: 1 },
   ]
   for (const row of folderRows)
     linkedFile(`${row.name}, in ${row.trusted ? "a trusted" : "an untrusted"} folder`, () =>
@@ -1011,8 +1026,8 @@ describe("the rules for the folder of a link that is removed decide its removal"
               settled.asked
                 .filter((item) => item.action === "external_directory")
                 .flatMap((item) => item.resources)
-                .includes(`${forward(folder)}/*`),
-            ).toBe(row.asked)
+                .filter((resource) => resource === `${forward(folder)}/*`),
+            ).toHaveLength(row.asked)
           }),
         (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
       ),
