@@ -9,6 +9,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Identifier } from "@orbit/core/id/id"
 import { tmpdir } from "./fixture/tmpdir"
+import { canLinkFile } from "./fixture/symlink"
 import { it } from "./lib/effect"
 
 const linkType = process.platform === "win32" ? "junction" : "dir"
@@ -100,6 +101,49 @@ describe("ToolOutput", () => {
         expect((yield* settleCall).metadata?.persisted).toMatchObject({ parts: 1, size: "the whole output".length })
         expect((yield* settleCall).metadata?.persisted).toBeUndefined()
       }),
+    ),
+  )
+
+  // m5-quality, item 9a (classes 4 and 15): the offered file is opened without following a link for the 64 MB cut too.
+  // A link planted at the offered name leads to a file over 64 MB (sparse, so it costs no disk): the call's result goes
+  // whole, nothing is saved, and the file the link leads to keeps its size. With the cut opened through the link, that
+  // file is cut and a copy of the link is saved. The control offers a real file of the same size, which is cut and saved.
+  describe.skipIf(!canLinkFile)("an offered file that is a link", () =>
+    it.live("is neither cut nor saved, and a real file of the same size is", () =>
+      withStore((output, _, root) =>
+        Effect.gen(function* () {
+          const target = path.join(root, "elsewhere.bin")
+          const link = path.join(root, "linked.out")
+          const real = path.join(root, "real.out")
+          yield* Effect.promise(async () => {
+            for (const file of [target, real]) {
+              const handle = await fs.open(file, "w")
+              await handle.truncate(ToolOutput.ADOPTED_BYTES + 1)
+              await handle.close()
+            }
+            await fs.symlink(target, link)
+          })
+          const settleCall = (callID: string, file: string) =>
+            Effect.gen(function* () {
+              const call = { sessionID: "ses_tool_output", messageID: "msg_0123abc", callID }
+              yield* output.adopt({ ...call, file })
+              return yield* output.settle({
+                ...call,
+                tool: "Bash",
+                limit: 100,
+                result: { content: [{ type: "text", text: "the" }] },
+              })
+            })
+          const linked = yield* settleCall("call_link", link)
+          expect(linked).toEqual({ content: [{ type: "text", text: "the" }] })
+          expect((yield* Effect.promise(() => fs.stat(target))).size).toBe(ToolOutput.ADOPTED_BYTES + 1)
+          expect(yield* Effect.promise(() => fs.readdir(path.join(output.root, "ses_tool_output")).catch(() => []))).toEqual([])
+
+          const saved = yield* settleCall("call_real", real)
+          expect(saved.metadata?.persisted).toMatchObject({ parts: 1, size: ToolOutput.ADOPTED_BYTES + 1 })
+          expect((yield* Effect.promise(() => fs.stat(real))).size).toBe(ToolOutput.ADOPTED_BYTES)
+        }),
+      ),
     ),
   )
 

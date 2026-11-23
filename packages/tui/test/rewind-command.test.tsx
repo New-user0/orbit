@@ -98,3 +98,18 @@ test("a slash command's prompt is given back as `/name args`, and `/name ` with 
   // The control: a prompt with no command is given back as its text.
   expect(projectedPromptInput({ text: "Add the parser" } as Projected).text).toBe("Add the parser")
 })
+
+// m5-quality, item 9b (class 15): a list row is one line, so a prompt of several lines is drawn on its row with its
+// breaks as spaces.
+test("a prompt of several lines is one line on its row", async () => {
+  await using state = await tmpdir()
+  const lines = conversation.map((message) =>
+    message.id === "msg_0003" ? { ...message, text: "Rename the helper\nand every caller" } : message,
+  )
+  await using setup = await rewindApp({ state: state.path, messages: lines })
+  await setup.waitForFrame((frame) => frame.includes("Renamed it."))
+  await setup.mockInput.typeText("/rewind")
+  setup.mockInput.pressEnter()
+  const list = await setup.waitForFrame((frame) => frame.includes(listHeading) && frame.includes("(current)"))
+  expect(linesWith(list, "Rename the helper and every caller")).toBe(1)
+})
