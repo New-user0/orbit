@@ -2860,6 +2860,57 @@ folder. The prompt and its other mentions are sent as before.
 
 **What to do:** Nothing. Allow the file, or paste what you need from it, if you meant the model to read it.
 
+### The terminal UI and the VS Code chat send the editor's file and selection with the prompt
+
+The file open in your editor and the text you selected used to reach the model as a hidden message that the terminal UI
+or the VS Code chat wrote itself, so no Read deny rule or policy was checked against that file. Both now send them with
+the prompt as its editor field, which the server leaves out, with one log line, when a Read rule, a policy or a deny for
+the file's outside folder refuses the file, as it does for a mention. The model reads the same kind of note as before.
+The terminal UI sends the first highlighted range when several are selected, and the VS Code chat no longer names the
+file's language. A message sent while the agent is still working keeps the field with the prompt, but the model is not
+shown it, as for any prompt. The VS Code chat still sends the problems it reports as a hidden message.
+
+**Affects:** people who select code in an editor connected to the terminal UI, or send with the VS Code chat's file
+chip on.
+
+**What to do:** Nothing. A file your rules refuse is no longer sent; allow it if you meant the model to read it.
+
+### ACP reads an editor's embedded file from disk, after your read rules
+
+An editor that sends an @-mentioned file to `orb acp` with its text (an embedded resource with a `file:` address) had
+that text passed to the model as it was. Orbit now sends it on as a mention of the file, with the lines of a `#L12-14`
+or `#L12:14` address as its range, so the server reads the file from disk once your Read rules and policies let its
+path through, and leaves it out when they refuse it. Unsaved changes in the editor are not sent; a file that cannot be
+read is named by its address, as a linked file is. A `file:` address that names another computer is never read. The
+text of a resource with any other address (an unsaved buffer, an MCP resource) is sent as before.
+
+**Affects:** ACP clients such as Zed that send embedded context.
+
+**What to do:** Save the file before you mention it if the model should read your latest edits.
+
+### ACP sends the rest of the text a model or a server chose so that it reads as it is
+
+Over ACP, a form's message (a subagent's title and the form's title) and its fields' titles, descriptions and option
+labels are sent as code spans when Markdown would change them, as approval titles already are. The model's own Markdown
+in message and thought chunks, live and on `session/load`, is sent as written except that an image's `![` is written
+`!\[` and a raw HTML tag's `<` is written `&lt;` outside code, so a client shows the image's text and address and
+never loads it. Command, model and mode names and descriptions, a session's title in `session/list` and a failed turn's
+error message are one line, with control characters written out.
+
+**Affects:** ACP clients that draw forms, Markdown or these names; scripts that match them.
+
+**What to do:** Match on the text Markdown shows, not on the raw characters.
+
+### A slash command's prompt is `/name args` in Copy, Mini, the VS Code chat and ACP
+
+The terminal UI's message menu Copy, Mini's replay of a resumed session, the VS Code chat when it reopens a session and
+an ACP client's `session/load` replay now show a slash command's prompt as the command you typed, `/name args`, as the
+terminal UI's rows and transcript do. The expansion is still what the model reads.
+
+**Affects:** people who copy or replay a command's prompt.
+
+**What to do:** Nothing.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
@@ -3858,7 +3909,7 @@ Three notes are now written while a user message is lowered, from fields the mes
 
 - A message that the person sent while the agent was working, and that is steered in right after a round of tool calls, gets a short note ahead of it saying so and that it must be acted on once the current task is done. The person's words stay outside the note, unchanged. Such a message gets only the note and its text: its `@agent` hints and its `editor` field are stored but not shown to the model, because only a prompt sent while idle carries them. A slash command typed mid-turn is steered like any other input, so its expanded text gets the note too (recorded as a deviation; see FU-M4-35). Input that waited in the queue, a first prompt, a prompt after idle, an interruption or a checkpoint, and a steer that follows a final text-only step get no note. A message that a subagent or workflow tool sent to a child session gets a note naming the parent agent as the sender.
 - Each distinct `agents` entry of a prompt adds one hint that the person asked for that agent and that the `Agent` tool starts it. Admission now drops entries that name an agent the tool cannot start (unknown or primary-only); before, a mention had no effect on the model at all.
-- A prompt can carry `editor`: the absolute path of the file open in the editor and, optionally, a 1-based inclusive line range with the selected text. The model reads one note, with the path and the text in a data block after it; the text is cut to 2,000 characters after line endings are normalized, and the note says how many were left out. Admission drops the field (and keeps the prompt) when the path is relative for the platform the server runs on (on Linux and macOS a Windows spelling such as `C:...`, `\...` or `\host...` is relative; a `~name/` spelling counts as relative; only `~`, `~/` and, on Windows, `~\` mean the home folder), cannot be resolved, is denied by a `Read` rule, or the range ends before it starts. `session.command` accepts the field but does not carry it. The VS Code chat and the terminal UI keep sending the editor context as a hidden item until a later change moves them.
+- A prompt can carry `editor`: the absolute path of the file open in the editor and, optionally, a 1-based inclusive line range with the selected text. The model reads one note, with the path and the text in a data block after it; the text is cut to 2,000 characters after line endings are normalized, and the note says how many were left out. Admission drops the field (and keeps the prompt) when the path is relative for the platform the server runs on (on Linux and macOS a Windows spelling such as `C:...`, `\...` or `\host...` is relative; a `~name/` spelling counts as relative; only `~`, `~/` and, on Windows, `~\` mean the home folder), cannot be resolved, is denied by a `Read` rule, or the range ends before it starts. `session.command` accepts the field but does not carry it. The VS Code chat and the terminal UI kept sending the editor context as a hidden item until m5-quality moved them onto the field ("The terminal UI and the VS Code chat send the editor's file and selection with the prompt").
 
 `orb run --bare` and vanilla instances keep the mid-turn note and drop the hints and the editor note. On a normal instance, compaction summaries and session generations (/btw and the keep-alive warm-up) lower a prompt like the main request, so they share its cache and see the selection; retained recent messages never carry the hints or the editor note. A redacted session export now replaces `editor.path` and the selected text.
 

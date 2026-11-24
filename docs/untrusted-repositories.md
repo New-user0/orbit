@@ -2565,7 +2565,21 @@ runs" is a permission.
     fenced code block whose fence is longer than any run of backticks in them, so they keep their lines and none of them
     becomes a link, an image or a tag (classes 6 and 9; the same file, "what a tool gave back reads as it is": a Read, a
     shell call's output and an MCP call's error, each with the hostile values, a line break and a file of several lines
-    with fences of its own, and one plain line as the control);
+    with fences of its own, and one plain line as the control). A form's message, its subagent's title (by the
+    subagent rule) and its own title, and the form's field titles, descriptions and option labels go through `literal`
+    too (the same file, "a form's message" and "a form's field titles": the hostile values, a line break and plain words
+    as the control). The model's own Markdown in message and thought chunks, streamed and replayed on `session/load`, goes
+    as it wrote it, except that outside code the `[` of an image's `![` is written `\[` and the `<` that opens a raw tag
+    `&lt;` (`withoutImages` in the same file, which carries code spans and fences across the stream's pieces), so a
+    client draws an image as its text and address and never fetches it, as the reference's renderer shows an image as
+    its address (classes 6 and 9; "the model's Markdown": an image, a reference image, a raw `img` and `picture`, each
+    split across pieces, and an image after a closed fence, with prose, links, code spans, fences and an autolink as the
+    controls; "a loaded session's replay"). Names and words that a client draws as plain text are one line with no
+    control or format character (`plain`): the available commands' names and descriptions, the model and mode names and
+    descriptions of the config options, a session's title in `session/list` and the message of a failed turn's error
+    (class 9; "a command's, a model's and a mode's name", "a session's title in the session list", each with a plain
+    control). `rawInput`, `rawOutput`, `_meta` and the child-session extension's `title` are data for an extension client
+    and are sent as they are;
   - the VS Code chat's card, and the title of its review or preview tab, which can answer while the card is hidden
     (`packages/vscode/test/approval-link.test.ts`, `webview-trust.test.ts`, `diff-review.test.ts`). A tab of the terminal
     UI's bridge has no warning in its title: the compact prompt beside it has it.
@@ -2644,7 +2658,7 @@ runs" is a permission.
   allow of a lead's spelling that keeps the deny, and no policy as the control that runs).
 - A mentioned file or folder (`@path`, which a client sends as a `file:` attachment) reaches the model whole at
   admission, without the read tool, so the same Read request is built for it before anything of it is opened
-  (`SessionPrompt.unreadable`, which the editor field shares). A Read deny rule or a policy that refuses it leaves it
+  (`SessionPrompt.readCheck`, which the editor field shares). A Read deny rule or a policy that refuses it leaves it
   out of the prompt with one log line, and the prompt and its other mentions are admitted, as the reference drops a
   mentioned file its read rules deny. Before, `@secret/x` sent a file that the Read tool, `cat` and the editor field
   refused (classes 3 and 8; `session-prompt-editor.test.ts`, "mentioned files at admission": a Read deny by the relative
@@ -2656,7 +2670,29 @@ runs" is a permission.
   deny for an outside folder leaves out a mention of what is in it" and "a deny for an outside folder drops a field of
   a file in it": a file outside by its path and through a folder link out, a mentioned outside folder, trusted and
   untrusted, a file in the project and a deny for another folder as the controls, and each left-out mention logged once;
-  "a check that cannot be answered leaves the editor field and the mention out").
+  "a check that cannot be answered leaves the editor field and the mention out"). The check returns the place it
+  decided, and that place is what admission stats and reads (`SessionPrompt.readCheck`), so the check and the read use
+  one value; the attachment keeps the mentioned name. An editor that sends an @-mention to ACP as an embedded resource
+  with a `file:` URI and the file's text (`promptCapabilities.embeddedContext`) has it sent on as a mention of that file,
+  with the lines of a `#L12-14` or `#L12:14` fragment as its range, and never its text, so the same check decides it and
+  the server reads the file; a `file:` URI that names another host is sent as its address and never read, and the text
+  of a resource with any other URI (an unsaved buffer, an MCP resource) is still sent as data (classes 3 and 8;
+  `packages/cli/test/acp/prompt-content.subprocess.test.ts`, "an embedded file that a read rule or policy refuses": a
+  Read rule and a policy leave it out and keep the file beside it, and no rule keeps both;
+  `packages/cli/test/acp/content.test.ts` for the URI forms). The terminal UI and the VS Code chat send the editor's open
+  file and its selection as the prompt's `editor` field, so the same check decides them; before, each sent them as a
+  hidden message it wrote itself, which no Read rule or policy checked (classes 3 and 8; as the reference drops the
+  selection and the opened file of a read-denied file. `packages/tui/test/editor-bridge-app.test.tsx`, "goes with the
+  prompt as its editor field, and as nothing else": a selection, one that ends at the start of a line and an open file
+  with nothing selected; `packages/vscode/test/controller.test.ts`, "the selection of ... reaches the model only when
+  its read is allowed": a Read rule and a policy refuse it and a file nothing denies is the control, through a real
+  server; each rule, policy, link and trust case of the field is a row of `session-prompt-editor.test.ts` above). The
+  terminal UI sends the first highlighted range, as the reference attaches one selection.
+- Some files reach the model with no Read check, as they do in the reference, and stay so: a file the person chose
+  themselves (a pasted image path, `orb run -f`, stream-json `files`, Mini's initial files), which the reference reads
+  without a deny check, and the files an instruction file imports with `@path`, to which the reference applies only its
+  own exclusion setting and no Read deny (FU-M5-019). The VS Code chat's problems summary is still a hidden message the
+  extension writes: it holds diagnostics, not the file's text.
 - The checks that run no plugin hook (`Permission.denied` and `Permission.allowed`: the editor field and a mentioned
   file at admission, the file-change reminder's re-read and its seeding from history, and the shell guard's Read and
   Edit probes) take the
@@ -3690,9 +3726,11 @@ The program-wide register of every follow-up, these gaps included, with each one
   with nothing or with a line break, so `ReminderText.neutralizeParts` escapes a tag cut across parts), the notice that a background or user shell command leaves (its output and
   command), a background subagent's reply, the instruction files `InstructionDiscovery` renders and the ones
   `SessionInstructions` loads when a file is read (baseline and updates), MCP server instructions, the git snapshot
-  (branch, user, status and commit subjects), and a checkpoint's summary and recent text (a summary checkpoint without recent text is the resume message of `to-llm-message.ts`, which escapes the summary the same way; the `<analysis>` draft never reaches a stored summary, pinned by the "analysis never stored" rows of `session-compaction.test.ts`). The clients that send editor context as a hidden message escape it before
-  they send it, with the rules in `@orbit/util/reminder-text`: the VS Code chat writes the selected text, and the terminal UI the path and the selection,
-  into a fenced block after their envelope (VS Code keeps its escaped one-line file name, language and problem messages inside it), and ACP escapes the assistant-audience text it submits.
+  (branch, user, status and commit subjects), and a checkpoint's summary and recent text (a summary checkpoint without recent text is the resume message of `to-llm-message.ts`, which escapes the summary the same way; the `<analysis>` draft never reaches a stored summary, pinned by the "analysis never stored" rows of `session-compaction.test.ts`). The editor's open file and selection reach the model as the prompt's
+  `editor` field, whose note `to-llm-message.ts` writes with the path and the selected text as data. The VS Code chat's
+  problems summary is the one editor context still sent as a hidden message; it escapes it with the rules in
+  `@orbit/util/reminder-text` (its one-line file name and problem messages inside the envelope), and ACP escapes the
+  assistant-audience text it submits.
   Synthetic messages are
   recognized by `metadata.source` (`shell`, `subagent`) or `metadata.instruction`, except a reminder row, which holds
   Orbit's own envelope; an unmarked synthetic stays as stored. Pinned by the sink table in `session-reminders.test.ts`
