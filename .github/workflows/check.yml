@@ -132,15 +132,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # cli, core and tui run as five, three and two jobs. `bun test --shard` splits a package's files by the Windows
+        # cli, core and tui run as six, three and two jobs. `bun test --shard` splits a package's files by the Windows
         # timings it keeps (test/timings.windows.json); `part` names the shard's coverage and timings artifacts.
         package: [server, vscode, flow, ai, client, codemode, compat, plugin, protocol, schema, sdk, theme, util]
         include:
-          - { package: cli, shard: "1/5", part: "-1of5" }
-          - { package: cli, shard: "2/5", part: "-2of5" }
-          - { package: cli, shard: "3/5", part: "-3of5" }
-          - { package: cli, shard: "4/5", part: "-4of5" }
-          - { package: cli, shard: "5/5", part: "-5of5" }
+          - { package: cli, shard: "1/6", part: "-1of6" }
+          - { package: cli, shard: "2/6", part: "-2of6" }
+          - { package: cli, shard: "3/6", part: "-3of6" }
+          - { package: cli, shard: "4/6", part: "-4of6" }
+          - { package: cli, shard: "5/6", part: "-5of6" }
+          - { package: cli, shard: "6/6", part: "-6of6" }
           - { package: core, shard: "1/3", part: "-1of3" }
           - { package: core, shard: "2/3", part: "-2of3" }
           - { package: core, shard: "3/3", part: "-3of3" }
