@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "files": {
+    "test/approval-link.test.ts": 51,
+    "test/approval-matrix.test.ts": 940,
+    "test/context.test.ts": 23,
+    "test/controller.test.ts": 18285,
+    "test/diff-review.test.ts": 119630,
+    "test/endpoint.test.ts": 13,
+    "test/extension-review.test.ts": 3409,
+    "test/extension-trust.test.ts": 81,
+    "test/ide-bridge.test.ts": 9454,
+    "test/manifest.test.ts": 70,
+    "test/notify.test.ts": 5,
+    "test/permission-save.test.ts": 21,
+    "test/present.test.ts": 13,
+    "test/program.test.ts": 31677,
+    "test/recovery.test.ts": 2203,
+    "test/runs.test.ts": 251,
+    "test/stall-notice.test.ts": 8,
+    "test/tool-name.test.ts": 7,
+    "test/trust-first.test.ts": 10650,
+    "test/trust-reference.test.ts": 7743,
+    "test/trust-text.test.ts": 9,
+    "test/trust.test.ts": 30071,
+    "test/webview-trust.test.ts": 54
+  }
+}
