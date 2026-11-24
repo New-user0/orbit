@@ -497,6 +497,8 @@ describe("acp: other text a model, a tool or a server chose", () => {
     "```\rcode\r```\rIMAGE",
     "```\r\ncode\r\n```\r\nIMAGE",
     "<!--\n```\n-->\nIMAGE",
+    // A shorter run inside a longer fence closes nothing, so the run that does close it opens no block after it.
+    "````\n```\n````\nIMAGE",
   ]
 
   test.each(OPENS_NO_CODE)("the model's Markdown %p: what follows a backtick that opens no code is prose", async (row) => {
@@ -517,6 +519,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
       "use `vec![1]` and `<img>` here",
       "1. Run:\n   ```rust\n   let v = vec![1]; // <img src=x>\n   ```\n2. Then",
       "~~~\n```\n<img src=x>\n~~~",
+      "````\n```\n<img src=x>\n````",
       "`a` and ``b ` c`` end",
       "``a ``` <img> `` end",
       "`<img>`\nnext line",
