@@ -49,6 +49,8 @@ const DEFINITIONS = [
   `[r]: ${ADDRESS} (`,
   `[r]: ${ADDRESS}\n"`,
   `[r]: ${ADDRESS}\n(`,
+  `[r]:\n${ADDRESS} "`,
+  `[r]:\n${ADDRESS} (`,
 ]
 
 const INLINE = [

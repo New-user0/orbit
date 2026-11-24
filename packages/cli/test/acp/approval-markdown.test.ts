@@ -879,6 +879,8 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ['M: a `"` title over a blank line', ['[r]: /u "\n\n```\n"\nIMAGE\n```']],
     ["M: a `(` title over a blank line", ["[r]: /u (\n\n```\n)\nIMAGE\n```"]],
     ["M: a label over a blank line", ["[\n\n```\n]: /u\nIMAGE\n```"]],
+    ['M: a `]:` alone, then a destination and a `"` title over a blank line', ['[r]:\n/u "\n\n```\n"\nIMAGE\n```']],
+    ["M: a `]:` alone, then a destination and a `(` title over a blank line", ["[r]:\n/u (\n\n```\n)\nIMAGE\n```"]],
     ["M: a label that one text ends with", ["[r]:\n", "```\nIMAGE\n```"]],
     ["M: a definition that one text ends with, and a title in the next", ["[r]: /u\n", '"\n```\n"\nIMAGE\n```']],
     ["M: a label that one message's text ends with", ["[r]:\n", "```\nIMAGE\n```"], "apart"],
@@ -953,6 +955,10 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["[a\\\n\n```\n<img>\n```", `[a\\\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ['[r]: /u "\na\n\n```\n<img>\n```', `[r]: /u "\na\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ['[r]: <u v> "\n\n```\n<img>\n```', `[r]: <${JOINER}u v> "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    // A `]:` with nothing after it waits for its destination on the next line, and a `"` or `(` title that line opens
+    // runs on over the blank line as well.
+    ['[r]:\n/u "\n\n```\n"\n<img>\n```', `[r]:\n/u "\n\n\`\`\`\n"\n<${JOINER}img>\n\`\`\``],
+    ["[r]:\n/u (\n\n```\n)\n<img>\n```", `[r]:\n/u (\n\n\`\`\`\n)\n<${JOINER}img>\n\`\`\``],
     // The controls: a definition that is whole, or that is no definition, ends at a blank line, so the block after it
     // is code, and so is one after a `'` title that a blank line ends.
     ["[r]: /u\n\n```\n<img>\n```", "[r]: /u\n\n```\n<img>\n```"],
@@ -961,6 +967,9 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ['[r]: /u\n"t"\n\n```\n<img>\n```', '[r]: /u\n"t"\n\n```\n<img>\n```'],
     ["[r]: /u '\n\n```\n<img>\n```", "[r]: /u '\n\n```\n<img>\n```"],
     ["[r]:\n/u '\n\n```\n<img>\n```", "[r]:\n/u '\n\n```\n<img>\n```"],
+    // A line under a `'` title still open is that title's, not a label of its own, so the blank line ends it.
+    ["[r]: /u '\n[s\n\n```\n<img>\n```", "[r]: /u '\n[s\n\n```\n<img>\n```"],
+    ["[r]: /u '\n[s]:\n/v \"\n\n```\n<img>\n```", "[r]: /u '\n[s]:\n/v \"\n\n```\n<img>\n```"],
     ["[r]:\n\n```\n<img>\n```", "[r]:\n\n```\n<img>\n```"],
     ["[a]: /u\n[r]:\n\n```\n<img>\n```", "[a]: /u\n[r]:\n\n```\n<img>\n```"],
     ["[r]\n\n```\n<img>\n```", "[r]\n\n```\n<img>\n```"],
