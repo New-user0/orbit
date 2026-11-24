@@ -2882,7 +2882,9 @@ that text passed to the model as it was. Orbit now sends it on as a mention of t
 or `#L12:14` address as its range, so the server reads the file from disk once your Read rules and policies let its
 path through, and leaves it out when they refuse it. Unsaved changes in the editor are not sent; a file that cannot be
 read is named by its address, as a linked file is. A `file:` address that names another computer is never read. The
-text of a resource with any other address (an unsaved buffer, an MCP resource) is sent as before.
+scheme is read in any case, so `FILE:` and `File:` addresses, and one with a space before it, are mentions too, for an
+embedded resource and a resource link alike. The text of a resource with any other address (an unsaved buffer, an MCP
+resource) is sent as before.
 
 **Affects:** ACP clients such as Zed that send embedded context.
 
@@ -2893,8 +2895,12 @@ text of a resource with any other address (an unsaved buffer, an MCP resource) i
 Over ACP, a form's message (a subagent's title and the form's title) and its fields' titles, descriptions and option
 labels are sent as code spans when Markdown would change them, as approval titles already are. The model's own Markdown
 in message and thought chunks, live and on `session/load`, is sent as written except that an image's `![` is written
-`!\[` and a raw HTML tag's `<` is written `&lt;` outside code, so a client shows the image's text and address and
-never loads it. Command, model and mode names and descriptions, a session's title in `session/list` and a failed turn's
+`!\[` and a raw HTML tag's `<` is written `&lt;` outside code, so a client shows the image's text and address. Only a
+fenced block and a code span that closes on its own line count as code. A code span is sent once it closes, so its
+text reaches the client a moment later than the words before it. A backtick that opens no span (a lone or escaped one,
+or one in a link's address) leaves the rest as prose. Code in a span that runs over a line, in a span with a `|`, after
+a link whose address has a space or a title, or in any fence after one written on a list item's own line or more than
+three spaces in, can show `!\[` or `&lt;`. Command, model and mode names and descriptions, a session's title in `session/list` and a failed turn's
 error message are one line, with control characters written out.
 
 **Affects:** ACP clients that draw forms, Markdown or these names; scripts that match them.

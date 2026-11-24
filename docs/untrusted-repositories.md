@@ -2569,12 +2569,23 @@ runs" is a permission.
     subagent rule) and its own title, and the form's field titles, descriptions and option labels go through `literal`
     too (the same file, "a form's message" and "a form's field titles": the hostile values, a line break and plain words
     as the control). The model's own Markdown in message and thought chunks, streamed and replayed on `session/load`, goes
-    as it wrote it, except that outside code the `[` of an image's `![` is written `\[` and the `<` that opens a raw tag
-    `&lt;` (`withoutImages` in the same file, which carries code spans and fences across the stream's pieces), so a
-    client draws an image as its text and address and never fetches it, as the reference's renderer shows an image as
-    its address (classes 6 and 9; "the model's Markdown": an image, a reference image, a raw `img` and `picture`, each
-    split across pieces, and an image after a closed fence, with prose, links, code spans, fences and an autolink as the
-    controls; "a loaded session's replay"). Names and words that a client draws as plain text are one line with no
+    as it wrote it, except that outside code the `[` of an image's `![` is written `\[` and the `<` that opens a raw tag,
+    comment or declaration `&lt;` (`withoutImages` in the same file), so a client draws an image as its text and address,
+    as the reference's renderer shows an image as its address. Text counts as code only where Markdown is sure to read it
+    so: a fenced block opened by a line of three or more backticks or tildes after at most three spaces, and a code span
+    held back from its opening run until a run of the same length closes it on the same line. A backtick that a
+    backslash escapes, or that is inside a link's address or an autolink, opens nothing; a span that its line or the
+    text ends first, or that holds a `|` a table can split on, is written as prose, and the backticks in the rest of
+    that paragraph then open nothing; after a fence behind a list's or a quote's mark, more than three spaces in, or
+    left by a line to the left of its opening one, no later fence in the text counts as code, since renderers differ on
+    which block is open. Each text of a message starts afresh, and its end writes what is still held (classes 6 and 9;
+    "the model's Markdown": an image, a reference image, a raw `img` and `picture`, each split across pieces, and an
+    image after a closed fence, with prose, links, code spans, fences and an autolink as the controls; one row each for
+    a lone, an escaped and a broken backtick, a backtick in a link's address, a title, an autolink and a table cell, a
+    fence line with a backtick after its run or four spaces in, a hidden fence and line ends of `\r` and `\r\n`, each with an image and an `img` tag, whole and one character a piece;
+    "a code span held back until it closes" for the controls; "each text of a message starts afresh"; 20,000 random
+    texts in random pieces drawn by the same renderer; "a loaded session's replay"). A client whose renderer reads
+    Markdown in a way this does not foresee is not covered by a test. Names and words that a client draws as plain text are one line with no
     control or format character (`plain`): the available commands' names and descriptions, the model and mode names and
     descriptions of the config options, a session's title in `session/list` and the message of a failed turn's error
     (class 9; "a command's, a model's and a mode's name", "a session's title in the session list", each with a plain
@@ -2676,10 +2687,13 @@ runs" is a permission.
   with a `file:` URI and the file's text (`promptCapabilities.embeddedContext`) has it sent on as a mention of that file,
   with the lines of a `#L12-14` or `#L12:14` fragment as its range, and never its text, so the same check decides it and
   the server reads the file; a `file:` URI that names another host is sent as its address and never read, and the text
-  of a resource with any other URI (an unsaved buffer, an MCP resource) is still sent as data (classes 3 and 8;
+  of a resource with any other URI (an unsaved buffer, an MCP resource) is still sent as data. The scheme is read in any
+  case and as a URL parser reads it, so `FILE:`, `File:` and ` file:` are `file:` for an embedded resource and a
+  resource link alike, and a `file:` URI that does not parse is sent as its address (classes 3 and 8;
   `packages/cli/test/acp/prompt-content.subprocess.test.ts`, "an embedded file that a read rule or policy refuses": a
   Read rule and a policy leave it out and keep the file beside it, and no rule keeps both;
-  `packages/cli/test/acp/content.test.ts` for the URI forms). The terminal UI and the VS Code chat send the editor's open
+  `packages/cli/test/acp/content.test.ts` for the URI forms, "a file resource spelled ..." with the lower-case spelling
+  as the control, and "a file scheme that is no URL"). The terminal UI and the VS Code chat send the editor's open
   file and its selection as the prompt's `editor` field, so the same check decides them; before, each sent them as a
   hidden message it wrote itself, which no Read rule or policy checked (classes 3 and 8; as the reference drops the
   selection and the opened file of a read-denied file. `packages/tui/test/editor-bridge-app.test.tsx`, "goes with the
