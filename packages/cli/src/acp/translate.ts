@@ -279,8 +279,7 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
     case "session.reasoning.delta":
     case "session.text.ended":
     case "session.reasoning.ended": {
-      // The model's Markdown goes as it wrote it, except that no image or raw tag in it is fetched by a client. A code
-      // span is held back until it closes, so the end of the text writes what is still held.
+      // The model's Markdown goes as it wrote it, except that no image or raw tag in it is fetched by a client.
       const message = event.type === "session.text.delta" || event.type === "session.text.ended"
       const messageId = message
         ? event.data.assistantMessageID
@@ -291,11 +290,10 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
         kind: message ? "message" : "thought",
         key: messageId,
         delta: ended ? "" : event.data.delta,
-        end: ended,
       })
       return {
         state: { ...state, texts: next },
-        // A piece that is all held back sends nothing.
+        // The end of a text sends nothing.
         outputs: text
           ? send({
               sessionUpdate: message ? "agent_message_chunk" : "agent_thought_chunk",
@@ -549,7 +547,6 @@ export function* replayMessage(
         kind: thought ? "thought" : "message",
         key: messageId,
         delta: part.text,
-        end: true,
       })
       carried = next
       yield {
@@ -621,22 +618,22 @@ export function* replayMessage(
 // piece of another was sent there is written for a client that joins it to that one and for one that does not.
 function piece(
   current: Texts,
-  at: { channel: string; kind: "message" | "thought"; key: string; delta: string; end: boolean },
+  at: { channel: string; kind: "message" | "thought"; key: string; delta: string },
 ): [Texts, string] {
   const stream = current.streams.get(at.channel) ?? {}
   const own = current.prose.get(at.key) ?? prose
   const previous = stream[at.kind]
-  const [start, released] =
+  const start =
     stream.last === at.key
-      ? [own, ""]
+      ? own
       : follow(own, (previous === undefined ? undefined : current.prose.get(previous)) ?? prose)
-  const [next, written] = withoutImages(start, at.delta, at.end)
+  const [next, written] = withoutImages(start, at.delta)
   return [
     {
       prose: new Map(current.prose).set(at.key, next),
       streams: new Map(current.streams).set(at.channel, { ...stream, last: at.key, [at.kind]: at.key }),
     },
-    released + written,
+    written,
   ]
 }
 

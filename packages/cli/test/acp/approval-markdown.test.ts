@@ -474,14 +474,13 @@ describe("acp: other text a model, a tool or a server chose", () => {
         if (!deltas.join("").includes("[ref]:")) expect(reached(markdown)).toContain(address)
       }
     }
-    // The controls: prose keeps its emphasis and links, and code keeps its marks.
-    for (const markdown of [
-      "*bold* and [a link](https://example.com/)",
-      "use `vec![1]` and `<img>` here",
-      "a span of two marks holds one: ``a ` ![x](u) ``",
-      "```\nlet v = vec![1]; // <img src=x>\n```",
-    ])
+    // The controls: prose keeps its emphasis and links, and a fenced block keeps its marks.
+    for (const markdown of ["*bold* and [a link](https://example.com/)", "```\nlet v = vec![1]; // <img src=x>\n```"])
       expect(await streamed([markdown])).toEqual([markdown, markdown])
+    // A code span is not sure to be code to every renderer, so its marks take joiners as prose does.
+    expect(await streamed(["use `vec![1]` and `<img>` here"])).toEqual(
+      Array(2).fill(`use \`vec!${JOINER}[1]\` and \`<${JOINER}img>\` here`),
+    )
     // An autolink's `<` takes a word joiner as a tag's does, and its address is still a link.
     const autolink = await streamed(["see <https://example.com/>"])
     expect(autolink).toEqual(Array(2).fill(`see <${JOINER}https://example.com/>`))
@@ -568,7 +567,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
   // Markdown reads the second line as code, so its block holds the image; a renderer that takes that line as the
   // closing one reads the block from the third line to the fifth, and the image as prose. So the tracker gives up there.
   test("the model's Markdown: after a closing run further in, no later block is taken as code", () => {
-    expect(withoutImages(prose, "```\n    ```\n```\nx\n```\n![x](u)", true)[1]).toBe(
+    expect(withoutImages(prose, "```\n    ```\n```\nx\n```\n![x](u)")[1]).toBe(
       `\`\`\`\n    \`\`\`\n\`\`\`\nx\n\`\`\`\n!${JOINER}[x](u)`,
     )
   })
@@ -577,45 +576,87 @@ describe("acp: other text a model, a tool or a server chose", () => {
   // them does, and a fence line after it opens no block: md4c reads that block as code, so at most a mark in it shows
   // escaped.
   test("the model's Markdown: a fence line after a quoted table is not taken as code", () => {
-    expect(withoutImages(prose, "> a | b\n> --|--\n```\n![x](u)\n```", true)[1]).toBe(
+    expect(withoutImages(prose, "> a | b\n> --|--\n```\n![x](u)\n```")[1]).toBe(
       `> a | b\n> --|--\n\`\`\`\n!${JOINER}[x](u)\n\`\`\``,
     )
   })
 
-  test("the model's Markdown: a code span held back until it closes is written as it is, and so is a fenced block", async () => {
+  // Fix loop 8 (classes 6 and 9, decision 1b): text is left as written only in a fenced block that every renderer reads
+  // as code, one that opens at the text's start or after a blank line, outside any paragraph, list item, quote, table or
+  // definition. Whole and in pieces of one character.
+  test("the model's Markdown: a fenced block at the text's start or after a blank line is written as it is", async () => {
     for (const markdown of [
-      "use `vec![1]` and `<img>` here",
-      "1. Run:\n   ```rust\n   let v = vec![1]; // <img src=x>\n   ```\n2. Then",
       "~~~\n```\n<img src=x>\n~~~",
       "````\n```\n<img src=x>\n````",
-      "`a` and ``b ` c`` end",
-      "``a ``` <img> `` end",
-      "`<img>`\nnext line",
-      "see [a](b c)\n\nuse `<img>` here",
-      "end with `<img>`",
-      // A closing run three spaces in closes the block, so the block after it is code too.
-      "```\n<img src=x>\n   ```\n```\n<img src=y>\n```",
+      "Code:\n\n```\n<img src=x>\n```",
+      "   ```\n   <img src=x>\n   ```",
+      // A closing run three spaces in closes the block, so the block after it and a blank line is code too.
+      "```\n<img src=x>\n   ```\n\n```\n<img src=y>\n```",
       // A run of the other mark, or a shorter one, closes nothing at any indentation.
       "```\n    ~~~\n\t``\n<img src=x>\n```",
-      // A blank line ends a table, and a task item with words is not empty, so the block after either is code.
+      // A blank line ends a table, a paragraph and a task item with words, and a line at no indentation after it ends
+      // a list.
       "| a | b |\n|---|---|\n| 1 | 2 |\n\n```\n<img src=x>\n```",
-      "- [ ] Do it\n```\n<img src=x>\n```",
-      "- [ ]\nDo it\n```\n<img src=x>\n```",
-      // A delimiter row with no header above it, as at the start or after a block, is a paragraph's line, which a
-      // fence ends.
-      "-|-\n```\n<img src=x>\n```",
-      "```\na\n```\n-|-\n```\n<img src=x>\n```",
-      "Code:\n```\na\n```\n-|-\n```\n<img src=x>\n```",
-      // A delimiter row needs a pipe and a dash, so neither a heading's underline nor a row of pipes makes a table.
-      "Title\n---\n```\n<img src=x>\n```",
-      "a\n| |\n```\n<img src=x>\n```",
+      "- [ ] Do it\n\n```\n<img src=x>\n```",
+      "- [ ]\nDo it\n\n```\n<img src=x>\n```",
+      "- a\n\n```\n<img src=x>\n```",
     ])
       expect(await streamed(markdown.split(""))).toEqual([markdown, markdown])
-    // A span that the text ends before it closes is written as prose at the end.
+    // A span that the text ends before it closes is prose like any other.
     expect(await streamed(["see `", "![x](u)"])).toEqual(Array(2).fill(`see \`!${JOINER}[x](u)`))
-    // After the start of an address that GFM links by itself, no span is sure, so the one after it takes joiners.
     expect(await streamed(["a [link](https://example.com/) and `<img>`"])).toEqual(
       Array(2).fill(`a [link](https://example.com/) and \`<${JOINER}img>\``),
+    )
+  })
+
+  // Review 8's shapes: a code span, a fence line right after a paragraph's line, a fence in a list item, a fence right
+  // after another block's closing line and one with a pipe in its info string are not code to every renderer, so their
+  // marks take joiners. Neither renderer draws an image or a tag from any row, the controls included.
+  test.each([
+    ["a `<img src=x>` b", `a \`<${JOINER}img src=x>\` b`],
+    ["`![x](https://e/p.png)`", `\`!${JOINER}[x](https://e/p.png)\``],
+    // The cost: inline code such as a type's parameters carries a joiner a person does not see.
+    ["`Vec<T>`", `\`Vec<${JOINER}T>\``],
+    ["> ```\n> <img src=x>\n> ```", `> \`\`\`\n> <${JOINER}img src=x>\n> \`\`\``],
+    ["``a ` <img src=x> ``", `\`\`a \` <${JOINER}img src=x> \`\``],
+    ["para\n```\n<img src=x>\n```", `para\n\`\`\`\n<${JOINER}img src=x>\n\`\`\``],
+    ["para\n~~~\n![x](u)\n~~~", `para\n~~~\n!${JOINER}[x](u)\n~~~`],
+    ["- item\n\n  ```\n  ![x](u)\n  ```", `- item\n\n  \`\`\`\n  !${JOINER}[x](u)\n  \`\`\``],
+    ["1. item\n\n   ```\n   <img src=x>\n   ```", `1. item\n\n   \`\`\`\n   <${JOINER}img src=x>\n   \`\`\``],
+    ["- a\n\nb\n\n   ```\n   <img src=x>\n   ```", `- a\n\nb\n\n   \`\`\`\n   <${JOINER}img src=x>\n   \`\`\``],
+    ["```\na\n```\n```\n<img src=x>\n```", `\`\`\`\na\n\`\`\`\n\`\`\`\n<${JOINER}img src=x>\n\`\`\``],
+    ["```a|b\n-|-\n<img src=x>\n```", `\`\`\`a|b\n-|-\n<${JOINER}img src=x>\n\`\`\``],
+    // A carriage return and a line feed end one line, so the fence line is right after the paragraph's.
+    ["para\r\n```\r\n<img src=x>\r\n```", `para\r\n\`\`\`\r\n<${JOINER}img src=x>\r\n\`\`\``],
+    // A fence line that opens no block the tracker is sure of, a closing run with anything after it, and a line that
+    // starts to the left of an indented opening line each leave it unsure of every later block: here the renderers
+    // read the last tag as prose.
+    ["1. ```\n```\n\n```\n<img src=x>\n```", `1. \`\`\`\n\`\`\`\n\n\`\`\`\n<${JOINER}img src=x>\n\`\`\``],
+    ["```\n```js\n\n```\n<img src=x>\n```", `\`\`\`\n\`\`\`js\n\n\`\`\`\n<${JOINER}img src=x>\n\`\`\``],
+    ["   ```\nx\n\n```\n<img src=x>\n```", `   \`\`\`\nx\n\n\`\`\`\n<${JOINER}img src=x>\n\`\`\``],
+    // The controls: a fence at the text's start, after a blank line, and at no indentation after a list.
+    ["```\n<img src=x>\n```", "```\n<img src=x>\n```"],
+    ["para\n\n```\n<img src=x>\n```", "para\n\n```\n<img src=x>\n```"],
+    ["- item\n\n```\n<img src=x>\n```", "- item\n\n```\n<img src=x>\n```"],
+  ])("the model's Markdown %p: only a fenced block every renderer reads as code is left as written", (value, written) => {
+    const [, out] = withoutImages(prose, value)
+    expect(out).toBe(written)
+    for (const html of [Bun.markdown.html(out, RENDERER), marked.parse(out, { gfm: true, async: false }) as string])
+      expect([value, html]).not.toEqual([value, expect.stringMatching(/<img\b/i)])
+  })
+
+  // A client that joins two texts reads a fence line a few spaces in at the second's start as part of a list item that
+  // the first ends with, so it takes joiners; at no indentation it is code in either reading.
+  test("the model's Markdown: a fence line that starts a text after a list that the text before ends with", () => {
+    const [before] = withoutImages(prose, "- item\n\n")
+    expect(withoutImages(follow(prose, before), "  ```\n  <img src=x>\n  ```")[1]).toBe(
+      `  \`\`\`\n  <${JOINER}img src=x>\n  \`\`\``,
+    )
+    expect(withoutImages(follow(prose, before), "```\n<img src=x>\n```")[1]).toBe("```\n<img src=x>\n```")
+    // A title that the text before leaves open runs on over a blank line to `marked`.
+    const [title] = withoutImages(prose, '[r]: /u "\n')
+    expect(withoutImages(follow(prose, title), "\n```\n<img src=x>\n```")[1]).toBe(
+      `\n\`\`\`\n<${JOINER}img src=x>\n\`\`\``,
     )
   })
 
@@ -749,7 +790,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
         textEnded(s, "msg_a", `\`a ${image} \``),
       ],
     ],
-    // A span held back while a subagent's text is sent comes after that text in a client that appends.
+    // A span left open while a subagent's text is sent goes on after that text in a client that appends.
     [
       "a span held while a subagent's text is sent",
       (s, image) => [
@@ -868,66 +909,58 @@ describe("acp: other text a model, a tool or a server chose", () => {
     },
   )
 
-  // Where the tracker is unsure, a span or a block takes joiners as prose does: after a tilde, after the start of an
-  // address that GFM links by itself, on that line and on every line after it, and after a closing run that anything
-  // but spaces follows. Code it is sure of is as written.
+  // Where the tracker is unsure, a fenced block takes joiners as prose does, even one after a blank line: after a line
+  // with a tilde or the start of an address that GFM links by itself, after a fence line it is not sure of, and after a
+  // closing run that anything but spaces follows. A block it is sure of is as written.
   test.each([
-    ["~`![x](u)`", `~\`!${JOINER}[x](u)\``],
-    ["a ~ b\n`![x](u)`", `a ~ b\n\`!${JOINER}[x](u)\``],
     ["~/x\n\n```\n<img>\n```", `~/x\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ["see www.example.com\n\n`<img>`", `see www.example.com\n\n\`<${JOINER}img>\``],
+    ["see www.example.com\n\n```\n<img>\n```", `see www.example.com\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ["see http://e\n\n```\n<img>\n```", `see http://e\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ["ftp://e `<img>`", `ftp://e \`<${JOINER}img>\``],
-    // GFM links an address's start in any case, and a line with one leaves every later paragraph unsure too.
-    ["HTTP://e `<img>`", `HTTP://e \`<${JOINER}img>\``],
-    ["WWW.example.com `<img>`", `WWW.example.com \`<${JOINER}img>\``],
-    ["see ftp://e\n\n`<img>`", `see ftp://e\n\n\`<${JOINER}img>\``],
-    ["see FTP://e\n\n`<img>`", `see FTP://e\n\n\`<${JOINER}img>\``],
-    ["1. ~~~\n~~~\n`<img>`", `1. ~~~\n~~~\n\`<${JOINER}img>\``],
-    ["```\n```js\n```\n`<img>`", `\`\`\`\n\`\`\`js\n\`\`\`\n\`<${JOINER}img>\``],
+    // GFM links an address's start in any case.
+    ["ftp://e\n\n```\n<img>\n```", `ftp://e\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["HTTP://e\n\n```\n<img>\n```", `HTTP://e\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["WWW.example.com\n\n```\n<img>\n```", `WWW.example.com\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["see FTP://e\n\n```\n<img>\n```", `see FTP://e\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["1. ~~~\n~~~\n\n```\n<img>\n```", `1. ~~~\n~~~\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["```\n```js\n```\n\n```\n<img>\n```", `\`\`\`\n\`\`\`js\n\`\`\`\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     // The controls: a tilde fence, a closing run that only spaces follow, and an address's start cut by a line break
     // leave the tracker sure.
-    ["~~~\n<img>\n~~~\n`<img>`", "~~~\n<img>\n~~~\n`<img>`"],
-    ["```\n<img>\n```  \n`<img>`", "```\n<img>\n```  \n`<img>`"],
-    ["www\n.`<img>`", "www\n.`<img>`"],
-    // Fix loop 7: after a `[` that no `]` has closed, a backtick opens no span for the rest of the paragraph, so code
-    // in a link's text takes joiners too.
+    ["~~~\n<img>\n~~~\n\n```\n<img>\n```", "~~~\n<img>\n~~~\n\n```\n<img>\n```"],
+    ["```\n<img>\n```  \n\n```\n<img>\n```", "```\n<img>\n```  \n\n```\n<img>\n```"],
+    ["www\n.\n\n```\n<img>\n```", "www\n.\n\n```\n<img>\n```"],
+    // A code span takes joiners wherever it stands, in a link's text or not.
     ["[b`] `<img>`", `[b\`] \`<${JOINER}img>\``],
     ["[`<img>`](u)", `[\`<${JOINER}img>\`](u)`],
-    ["[x\ny `<img>`", `[x\ny \`<${JOINER}img>\``],
-    ["[b\\] `<img>`", `[b\\] \`<${JOINER}img>\``],
-    // The controls: a closed, an escaped or a parted `[` leaves a span after it as code.
-    ["[a](u) `<img>`", "[a](u) `<img>`"],
-    ["\\[b `<img>`", "\\[b `<img>`"],
-    ["[b\n\n`<img>`", "[b\n\n`<img>`"],
-    ["a [b\n```\nx\n```\n`<img>`", "a [b\n```\nx\n```\n`<img>`"],
-    // A fence line that a link reference definition may still take opens no block, and leaves the tracker unsure.
+    ["[a](u) `<img>`", `[a](u) \`<${JOINER}img>\``],
+    ["\[b `<img>`", `\[b \`<${JOINER}img>\``],
+    ["a [b\n```\nx\n```\n`<img>`", `a [b\n\`\`\`\nx\n\`\`\`\n\`<${JOINER}img>\``],
+    // A fence line that a link reference definition may still take opens no block, and leaves the tracker unsure: one
+    // right after it, and one after a blank line that `marked` reads a label or a `"` or `(` title on over.
     ["[r]:\n```\n<img>\n```", `[r]:\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ['[r]: /u "\n```\n<img>\n```', `[r]: /u "\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ["[r]: /u (a\n```\n<img>\n```", `[r]: /u (a\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ['[r]: /u\n"a\n```\n<img>\n```', `[r]: /u\n"a\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ['[r]: /u "\n\n```\n<img>\n```', `[r]: /u "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ["[a\nb\n```\n<img>\n```", `[a\nb\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ["[r]:\n/u '\n```\n<img>\n```", `[r]:\n/u '\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ["[a\\\n```\n<img>\n```", `[a\\\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ["[a]: /u\n[r]:\n```\n<img>\n```", `[a]: /u\n[r]:\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ['[r]: /u "\na\n```\n<img>\n```', `[r]: /u "\na\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ['[r]: <u v> "\n```\n<img>\n```', `[r]: <${JOINER}u v> "\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    // The controls: a definition that is whole, or that is no definition, leaves the block after it as code, and so
-    // does a `'` title that a blank line ends.
-    ["[r]: /u\n```\n<img>\n```", "[r]: /u\n```\n<img>\n```"],
-    ['[r]: /u "t"\n```\n<img>\n```', '[r]: /u "t"\n```\n<img>\n```'],
-    ["[r]: /u (t)\n```\n<img>\n```", "[r]: /u (t)\n```\n<img>\n```"],
-    ['[r]: /u\n"t"\n```\n<img>\n```', '[r]: /u\n"t"\n```\n<img>\n```'],
+    ["[r]: /u (a\n\n```\n<img>\n```", `[r]: /u (a\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u\n"a\n\n```\n<img>\n```', `[r]: /u\n"a\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[a\nb\n\n```\n<img>\n```", `[a\nb\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[a\\n\n```\n<img>\n```", `[a\\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u "\na\n\n```\n<img>\n```', `[r]: /u "\na\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: <u v> "\n\n```\n<img>\n```', `[r]: <${JOINER}u v> "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    // The controls: a definition that is whole, or that is no definition, ends at a blank line, so the block after it
+    // is code, and so is one after a `'` title that a blank line ends.
+    ["[r]: /u\n\n```\n<img>\n```", "[r]: /u\n\n```\n<img>\n```"],
+    ['[r]: /u "t"\n\n```\n<img>\n```', '[r]: /u "t"\n\n```\n<img>\n```'],
+    ["[r]: /u (t)\n\n```\n<img>\n```", "[r]: /u (t)\n\n```\n<img>\n```"],
+    ['[r]: /u\n"t"\n\n```\n<img>\n```', '[r]: /u\n"t"\n\n```\n<img>\n```'],
     ["[r]: /u '\n\n```\n<img>\n```", "[r]: /u '\n\n```\n<img>\n```"],
+    ["[r]:\n/u '\n\n```\n<img>\n```", "[r]:\n/u '\n\n```\n<img>\n```"],
     ["[r]:\n\n```\n<img>\n```", "[r]:\n\n```\n<img>\n```"],
-    ["[r]\n```\n<img>\n```", "[r]\n```\n<img>\n```"],
-    ["[r]: <u\n```\n<img>\n```", `[r]: <${JOINER}u\n\`\`\`\n<img>\n\`\`\``],
-    ["[r]: /u x\n```\n<img>\n```", "[r]: /u x\n```\n<img>\n```"],
-    ['[r]: /u"t\n```\n<img>\n```', '[r]: /u"t\n```\n<img>\n```'],
-    ["[a[b]:\n```\n<img>\n```", "[a[b]:\n```\n<img>\n```"],
+    ["[a]: /u\n[r]:\n\n```\n<img>\n```", "[a]: /u\n[r]:\n\n```\n<img>\n```"],
+    ["[r]\n\n```\n<img>\n```", "[r]\n\n```\n<img>\n```"],
+    ["[r]: <u\n\n```\n<img>\n```", `[r]: <${JOINER}u\n\n\`\`\`\n<img>\n\`\`\``],
+    ["[r]: /u x\n\n```\n<img>\n```", "[r]: /u x\n\n```\n<img>\n```"],
+    ['[r]: /u"t\n\n```\n<img>\n```', '[r]: /u"t\n\n```\n<img>\n```'],
+    ["[a[b]:\n\n```\n<img>\n```", "[a[b]:\n\n```\n<img>\n```"],
   ])("the model's Markdown %p: where the tracker is unsure, code takes joiners", (value, written) => {
-    expect(withoutImages(prose, value, true)[1]).toBe(written)
+    expect(withoutImages(prose, value)[1]).toBe(written)
   })
 
   // In prose a joiner follows a `<` that opens a tag, a closing tag, a comment or a processing instruction, in any
@@ -944,17 +977,17 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["a!b and !(c)", "a!b and !(c)"],
     ["a < b <3 <-", "a < b <3 <-"],
   ])("the model's Markdown %p: a `<` or a `!` takes a joiner only before a tag or an image", (value, written) => {
-    expect(withoutImages(prose, value, true)[1]).toBe(written)
+    expect(withoutImages(prose, value)[1]).toBe(written)
   })
 
-  // A carriage return and a line feed end one line only when nothing comes between them, a backtick held back for a
-  // span too, so the text is never changed. Whole and cut at every point.
+  // A carriage return and a line feed end one line only when nothing comes between them, so the text is never
+  // changed. Whole and cut at every point.
   test.each(["x\r`y\nz", "``a``\r`\n", "a\r`b`\nc", "a\r\n`b`\r\n"])(
     "the model's Markdown %p: a line break after a carriage return keeps its place",
     (value) => {
       for (const cut of Array.from({ length: value.length + 1 }, (_, index) => index)) {
         const [state, first] = withoutImages(prose, value.slice(0, cut))
-        expect(first + withoutImages(state, value.slice(cut), true)[1]).toBe(value)
+        expect(first + withoutImages(state, value.slice(cut))[1]).toBe(value)
       }
     },
   )
@@ -965,11 +998,16 @@ describe("acp: other text a model, a tool or a server chose", () => {
       updates
         .flatMap((update) => (update.messageId === id && update.content?.text ? [update.content.text] : []))
         .join("")
-    // A text that ends at the start of a line with nothing open leaves the next as it is.
-    const clean = await chunked((s) => [...text(s, "msg_a", "Here is the code:\n"), ...text(s, "msg_a", code, 1)])
-    expect(sent(clean.updates, "msg_a")).toBe(`Here is the code:\n${code}`)
-    // Only a backtick that starts the next text is escaped after one that ends a text, so later spans are as written.
-    for (const next of [" and `pwd` here", "\n`pwd` here"]) {
+    // A text that ends after a blank line with nothing open leaves the next as it is, and one that ends after a line of
+    // a paragraph leaves a fence line that starts the next one unsure, as a client that joins them reads it there.
+    const clean = await chunked((s) => [...text(s, "msg_a", "Here is the code:\n\n"), ...text(s, "msg_a", code, 1)])
+    expect(sent(clean.updates, "msg_a")).toBe(`Here is the code:\n\n${code}`)
+    const joined = await chunked((s) => [...text(s, "msg_a", "Here is the code:\n"), ...text(s, "msg_a", code, 1)])
+    expect(sent(joined.updates, "msg_a")).toBe(
+      `Here is the code:\n${code.replace("!", `!${JOINER}`).replace("<", `<${JOINER}`)}`,
+    )
+    // A backtick is never escaped, at a text's start or anywhere else.
+    for (const next of [" and `pwd` here", "\n`pwd` here", "` next"]) {
       const spans = await chunked((s) => [...text(s, "msg_a", "Run `ls`"), ...text(s, "msg_a", next, 1)])
       expect(sent(spans.updates, "msg_a")).toBe(`Run \`ls\`${next}`)
     }
@@ -1094,7 +1132,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ).flatMap((text) => {
       const cut = random(text.length + 1)
       const [state, first] = withoutImages(prose, text.slice(0, cut))
-      const [, second] = withoutImages(state, text.slice(cut), true)
+      const [, second] = withoutImages(state, text.slice(cut))
       return drawsImage(first + second) ? [text] : []
     })
     expect(drawn).toEqual([])
@@ -1107,10 +1145,9 @@ describe("acp: other text a model, a tool or a server chose", () => {
     const random = seeded(20261125)
     const draw = () => Array.from({ length: 2 + random(8) }, () => marks[random(marks.length)]).join("")
     const drawn = Array.from({ length: 20000 }, () => [draw(), draw()] as const).flatMap(([one, two]) => {
-      const [before, first] = withoutImages(prose, one, true)
-      const [start, released] = follow(prose, before)
-      const second = released + withoutImages(start, two, true)[1]
-      const same = withoutImages(before, two, true)[1]
+      const [before, first] = withoutImages(prose, one)
+      const second = withoutImages(follow(prose, before), two)[1]
+      const same = withoutImages(before, two)[1]
       return [first, second, first + second, first + same].some(drawsImage) ? [[one, two]] : []
     })
     expect(drawn).toEqual([])
@@ -1138,7 +1175,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
       time: { created: 1 },
     } as unknown as SessionMessageInfo
     expect(replayed(assistant)).toEqual([
-      `\`vec![1]\` and !${JOINER}[x](https://evil.example/p.png)`,
+      `\`vec!${JOINER}[1]\` and !${JOINER}[x](https://evil.example/p.png)`,
       `<${JOINER}img src=https://evil.example/p.png>`,
     ])
     const user = (command?: { name: string; arguments: string }) =>
