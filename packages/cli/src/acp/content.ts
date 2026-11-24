@@ -49,7 +49,7 @@ export function contentBlockToParts(block: ContentBlock): PromptPart[] {
     case "resource_link":
       return [resourceLinkToPart(block)]
     case "resource":
-      if (block.resource.uri.startsWith("file:")) return [fileResource(block.resource.uri, block.resource.mimeType)]
+      if (fileURI(block.resource.uri)) return [fileResource(block.resource.uri, block.resource.mimeType)]
       if ("text" in block.resource) {
         // Sent as a text attachment, not as prompt text: the core escapes an attachment's text as data, while a plain
         // text part would reach the model as the person's own words.
@@ -185,11 +185,19 @@ function fileResource(uri: string, mime: string | null | undefined): PromptPart 
   return { type: "file", url: url.href, filename: resourceLabel(uri), mime: mime ?? "text/plain" }
 }
 
+// A URI's scheme is read without regard to case, and a URL parser drops the spaces and controls around it, so each such
+// spelling of `file:` names a file and goes through the same check as `file:` itself (classes 3 and 8).
+function fileURI(uri: string) {
+  return /^file:/i.test(uri) || (URL.canParse(uri) && new URL(uri).protocol === "file:")
+}
+
 function resourceLinkToPart(link: ResourceLink): PromptPart {
-  if (link.uri.startsWith("file://")) {
+  if (fileURI(link.uri)) {
+    if (!URL.canParse(link.uri)) return linkReference(link.name, link.uri)
     return {
       type: "file",
-      url: link.uri,
+      // As the parser writes it, with the scheme in lower case, as the client's own check of a file part reads it.
+      url: new URL(link.uri).href,
       filename: link.name || filenameFromUri(link.uri) || "file",
       mime: link.mimeType ?? "text/plain",
     }

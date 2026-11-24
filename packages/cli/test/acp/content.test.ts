@@ -141,6 +141,29 @@ describe("acp content conversion", () => {
     ).toEqual([{ type: "file", url: "file:///tmp/notes.md", filename: "/tmp/notes.md", mime: "text/plain" }])
   })
 
+  // m5-quality fix loop 3 (classes 3 and 8, spellings): a scheme is read without regard to case, and a URL parser drops
+  // the spaces around it, so each spelling of `file:` is a mention that the server checks, never the editor's text. The
+  // lower-case row is the control.
+  test.each(["file:///tmp/notes.md", "FILE:///tmp/notes.md", "File:///tmp/notes.md", " file:///tmp/notes.md"])(
+    "a file resource spelled %p is a mention of that file, and a resource link so spelled is one too",
+    (uri) => {
+      const parts = contentBlockToParts({ type: "resource", resource: { uri, text: "EMBEDDED-COPY" } })
+      expect(parts).toEqual([{ type: "file", url: "file:///tmp/notes.md", filename: "/tmp/notes.md", mime: "text/plain" }])
+      expect(contentBlockToParts({ type: "resource_link", uri, name: "notes.md" })).toEqual([
+        { type: "file", url: "file:///tmp/notes.md", filename: "notes.md", mime: "text/plain" },
+      ])
+    },
+  )
+
+  test("a resource or a resource link with a file scheme that is no URL is only its address, and reads nothing", () => {
+    expect(contentBlockToParts({ type: "resource_link", uri: "FILE://[bad", name: "bad" })).toEqual([
+      { type: "text", text: "[bad](FILE://[bad)" },
+    ])
+    expect(contentBlockToParts({ type: "resource", resource: { uri: "FILE://[bad", text: "EMBEDDED-COPY" } })).toEqual([
+      { type: "text", text: "FILE://[bad" },
+    ])
+  })
+
   test("a file resource that names another host is never read: only its address goes", () => {
     expect(
       contentBlockToParts({
