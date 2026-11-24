@@ -6,13 +6,23 @@
 // break is written out, so no value starts a line that reads as one of Orbit's. A value that Markdown leaves alone is
 // sent as it is (the control). Through the real ACP translation over the wire.
 import { describe, expect, test } from "bun:test"
-import type { EventSubscribeOutput, OrbitEvent } from "@orbit/client/promise"
+import type { EventSubscribeOutput, OrbitEvent, SessionMessageInfo } from "@orbit/client/promise"
+import { availableCommands, buildModelSelectOption, buildModeSelectOption } from "../../src/acp/config-option"
+import { ACPElicitation } from "../../src/acp/elicitation"
+import { ACPTranslate } from "../../src/acp/translate"
 import {
   childCreated,
+  delivered,
   durableEvent,
+  ephemeralEvent,
+  makeSession,
   permissionAsked,
+  reasoningDelta,
+  reviewCommand,
   startSession,
+  startWire,
   succeeded,
+  textDelta,
   toolCalled,
   toolFailed,
   toolStarted,
@@ -318,5 +328,221 @@ describe("acp: what a tool gave back reads as it is", () => {
       )
     for (const value of VALUES) expect((await failed(value)).map(block)).toEqual([shown(value)])
     expect(await failed("Channel not found")).toEqual(["Channel not found"])
+  })
+})
+
+// Review of fix loop 1 (classes 6, 8 and 9): the rest of what ACP sends that a model, a tool, a subagent or an MCP server
+// chose. A form's message (a subagent's title and the form's title) and its fields' words read as they are; the model's
+// own Markdown goes as written except that no image or raw tag in it is fetched, as the reference's renderer shows an
+// image as its address; and names, titles and error messages that a client draws as plain text are one line with no
+// control character, as the terminal UI draws them.
+describe("acp: other text a model, a tool or a server chose", () => {
+  const value = (raw: string) => (raw === BROKEN.value ? BROKEN.shown : raw)
+  const form = (sessionID: string, title: string) =>
+    ephemeralEvent("form.created", {
+      form: {
+        id: "frm_markdown",
+        sessionID,
+        title,
+        metadata: { kind: "question", tool: { messageID: "msg_tools", id: "call_child" } },
+        fields: [{ key: "q0", title: "Runtime", type: "string", options: [{ value: "Bun", label: "Bun" }] }],
+      },
+    })
+
+  test("a form's message: a subagent's title and the form's title", async () => {
+    const message = async (child: string, title: string) => {
+      await using acp = await startSession({
+        capabilities: { elicitation: true },
+        onPrompt: ({ sessionID, id }) => [
+          delivered(sessionID, id),
+          childCreated("ses_child", sessionID, child),
+          durableEvent("session.execution.started", { sessionID: "ses_child" }),
+          form("ses_child", title),
+        ],
+        elicitation: () => ({ action: "accept", content: { q0: "Bun" } }),
+        onFormReply: ({ sessionID }) => [succeeded(sessionID), succeeded(acp.sessionId)],
+      })
+      await acp.prompt(acp.sessionId, "hello")
+      expect(acp.elicitations).toHaveLength(1)
+      return acp.elicitations[0]!.message
+    }
+    for (const raw of [...HOSTILE, BROKEN.value]) {
+      expect(read(await message(raw, "Questions"))).toEqual(shown(`${value(raw)}: Questions`))
+      expect(read(await message("Explore code", raw))).toEqual(shown(`Explore code: ${value(raw)}`))
+    }
+    expect(await message("Explore code", "Questions")).toBe("Explore code: Questions")
+  })
+
+  test("a form's field titles, descriptions and option labels", () => {
+    const fields = (text: string) =>
+      ACPElicitation.requestedSchema(
+        {
+          id: "frm_test",
+          sessionID: "ses_test",
+          title: "Test",
+          metadata: { kind: "question" },
+          fields: [
+            {
+              key: "q0",
+              title: text,
+              description: text,
+              type: "string",
+              options: [{ value: "a", label: text, description: text }],
+              custom: true,
+            },
+          ],
+        },
+        { childSessionUpdates: false, formElicitation: true },
+      )?.properties as Record<string, { title?: string; description?: string; oneOf?: { title: string; description?: string }[] }>
+    for (const raw of [...HOSTILE, BROKEN.value]) {
+      const schema = fields(raw)
+      const words = [
+        schema.q0?.title,
+        schema.q0?.description,
+        schema.q0?.oneOf?.[0]?.title,
+        schema.q0?.oneOf?.[0]?.description,
+      ]
+      expect(words.map((word) => read(String(word)))).toEqual(Array(4).fill(shown(value(raw))))
+      expect(read(String(schema.q0_custom?.title))).toEqual(shown(`${value(raw)} (other)`))
+    }
+    const plain = fields("Runtime")
+    expect([plain.q0?.title, plain.q0?.oneOf?.[0]?.title, plain.q0_custom?.title]).toEqual([
+      "Runtime",
+      "Runtime",
+      "Runtime (other)",
+    ])
+  })
+
+  // What the client was given of a message streamed in `deltas`, as a message and as a thought.
+  async function streamed(deltas: string[]) {
+    await using acp = await startSession({
+      onPrompt: ({ sessionID, id }) =>
+        turn(
+          sessionID,
+          id,
+          ...deltas.map((delta) => textDelta(sessionID, "msg_markdown", delta)),
+          ...deltas.map((delta) => reasoningDelta(sessionID, "msg_markdown", delta)),
+        ),
+    })
+    await acp.prompt(acp.sessionId, "hello")
+    const chunks = (kind: string) =>
+      acp.updates
+        .map((item) => item.update as { sessionUpdate: string; content?: { type: string; text?: string } })
+        .flatMap((update) => (update.sessionUpdate === kind && update.content?.text ? [update.content.text] : []))
+        .join("")
+    return [chunks("agent_message_chunk"), chunks("agent_thought_chunk")]
+  }
+
+  test("the model's Markdown: an image or a raw tag is never fetched, whole or in pieces, and prose and code are as written", async () => {
+    const address = "https://evil.example/p.png"
+    for (const deltas of [
+      [`![x](${address})`],
+      [`![x][ref]\n\n[ref]: ${address}`],
+      [`<img src=${address} onerror=alert(1)>`],
+      [`<picture><source srcset=${address}></picture>`],
+      ["!", `[x](${address})`],
+      ["<", `img src=${address}>`],
+      ["<im", `g src=${address}>`],
+      ["```\ncode\n```\n", `![x](${address})`],
+    ]) {
+      for (const markdown of await streamed(deltas)) {
+        const seen = Bun.markdown.html(markdown, { autolinks: true, strikethrough: true, tables: true, tasklists: true })
+        expect([deltas, seen]).not.toEqual([deltas, expect.stringMatching(/<(img|picture|source)\b/i)])
+        // A reference definition is never drawn, so only an inline address is read in the text.
+        if (!deltas.join("").includes("[ref]:")) expect(read(markdown).text).toContain(address)
+      }
+    }
+    // The controls: prose keeps its emphasis and links, code keeps its marks, and an autolink is a link.
+    for (const markdown of [
+      "*bold* and [a link](https://example.com/)",
+      "use `vec![1]` and `<img>` here",
+      "a span of two marks holds one: ``a ` ![x](u) ``",
+      "```\nlet v = vec![1]; // <img src=x>\n```",
+      "see <https://example.com/>",
+    ])
+      expect(await streamed([markdown])).toEqual([markdown, markdown])
+    // Code split across pieces is still code.
+    expect(await streamed(["``", "`\n![x](y)\n``", "`"])).toEqual(Array(2).fill("```\n![x](y)\n```"))
+  })
+
+  test("a loaded session's replay: the model's Markdown as it streams, and a slash command's prompt as its command", () => {
+    const replayed = (message: SessionMessageInfo) =>
+      [...ACPTranslate.replayMessage(message, "/workspace")].flatMap((update) =>
+        (update.sessionUpdate === "user_message_chunk" ||
+          update.sessionUpdate === "agent_message_chunk" ||
+          update.sessionUpdate === "agent_thought_chunk") &&
+        update.content.type === "text"
+          ? [update.content.text]
+          : [],
+      )
+    const assistant = {
+      id: "msg_a",
+      type: "assistant",
+      agent: "build",
+      model: { providerID: "test", id: "test-model" },
+      content: [
+        { type: "text", text: "![x](https://evil.example/p.png) and `vec![1]`" },
+        { type: "reasoning", text: "<img src=https://evil.example/p.png>" },
+      ],
+      time: { created: 1 },
+    } as unknown as SessionMessageInfo
+    expect(replayed(assistant)).toEqual([
+      "!\\[x](https://evil.example/p.png) and `vec![1]`",
+      "&lt;img src=https://evil.example/p.png>",
+    ])
+    const user = (command?: { name: string; arguments: string }) =>
+      ({
+        id: "msg_u",
+        type: "user",
+        text: "Review the callers. EXPANDED-BODY",
+        ...(command ? { command } : {}),
+        time: { created: 1 },
+      }) as unknown as SessionMessageInfo
+    expect(replayed(user({ name: "review", arguments: "src/a.ts" }))).toEqual(["/review src/a.ts"])
+    expect(replayed(user({ name: "review", arguments: "" }))).toEqual(["/review"])
+    expect(replayed(user())).toEqual(["Review the callers. EXPANDED-BODY"])
+  })
+
+  // Class 9: names and words that a client draws as plain text.
+  const CONTROL = "evil\u001b]0;pwned\u0007\nnext‮"
+  const clean = (text: string | undefined) => expect(String(text)).not.toMatch(/[\u0000-\u001f\u007f‮]/)
+
+  test("a command's, a model's and a mode's name and words, and an error's message, are one line with no control character", () => {
+    const [command] = availableCommands({ commands: [{ ...reviewCommand, name: CONTROL, description: CONTROL }] } as never)
+    clean(command?.name)
+    clean(command?.description)
+    const model = buildModelSelectOption({
+      providers: [{ id: "p", name: CONTROL, models: [{ id: "m", name: CONTROL }] }],
+      currentModel: { providerID: "p", modelID: "m" },
+    })
+    const named = (option: { name?: string; description?: string | null }) =>
+      option.name === undefined ? [] : [option.name, option.description ?? ""]
+    const models = model.type === "select" ? model.options.flatMap(named) : []
+    expect(models).toHaveLength(2)
+    models.forEach(clean)
+    const mode = buildModeSelectOption({ modes: [{ id: "m", name: CONTROL, description: CONTROL }], currentModeId: "m" })
+    const modes = mode.type === "select" ? mode.options.flatMap(named) : []
+    expect(modes).toHaveLength(2)
+    modes.forEach(clean)
+    const failure = ACPTranslate.failure({
+      ...ACPTranslate.initial,
+      stepError: { type: "provider.stream", message: CONTROL },
+    })
+    clean(failure?._tag === "ACPServiceFailureError" ? failure.safeMessage : undefined)
+    // The controls: plain words are unchanged.
+    const [plain] = availableCommands({ commands: [reviewCommand] } as never)
+    expect(plain).toEqual({ name: "review", description: "Review changes" })
+  })
+
+  test("a session's title in the session list is one line with no control character", async () => {
+    await using acp = await startWire()
+    await acp.initialize()
+    const created = await acp.request("session/new", { cwd: "/workspace", mcpServers: [] })
+    acp.server.sessions.set(created.sessionId, { ...makeSession(created.sessionId), title: CONTROL })
+    const listed = await acp.request("session/list", { cwd: "/workspace" })
+    expect(listed.sessions).toHaveLength(1)
+    clean(listed.sessions[0]?.title ?? undefined)
+    acp.server.sessions.set(created.sessionId, { ...makeSession(created.sessionId), title: "Fix the parser" })
+    expect((await acp.request("session/list", { cwd: "/workspace" })).sessions[0]?.title).toBe("Fix the parser")
   })
 })

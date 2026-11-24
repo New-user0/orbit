@@ -11,9 +11,10 @@ import { PermissionView } from "@orbit/schema/permission-view"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { ToolNames } from "@orbit/schema/tool-names"
 import { TokenUsage } from "@orbit/schema/token-usage"
+import { plain } from "@orbit/util/plain"
 import { partsToContentChunks, type ReplayPart } from "./content"
 import { ACPError } from "./error"
-import { subagentName } from "./markdown"
+import { prose, subagentName, withoutImages, type Prose } from "./markdown"
 import { completedToolUpdate, errorToolUpdate, pendingToolCall, runningToolUpdate, type ToolInput } from "./tool"
 
 export const ChildSessionUpdatesCapability = "orbit/child-session-updates"
@@ -83,6 +84,8 @@ export type TurnState = {
   readonly openChildren: ReadonlySet<string>
   /** Forms asked of the client that the server has not yet answered or cancelled. */
   readonly forms: ReadonlySet<string>
+  /** What each streamed message's text so far leaves open, by the message ID its chunks carry (`withoutImages`). */
+  readonly prose?: ReadonlyMap<string, Prose>
   readonly finish?: SessionMessageAssistant["finish"]
   readonly usage?: { readonly turn: TokenUsageInfo; readonly last: TokenUsageInfo }
   readonly stepError?: SessionStructuredError
@@ -247,23 +250,22 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
       }
     }
     case "session.text.delta":
+    case "session.reasoning.delta": {
+      // The model's Markdown goes as it wrote it, except that no image or raw tag in it is fetched by a client.
+      const messageId =
+        event.type === "session.text.delta"
+          ? event.data.assistantMessageID
+          : `${event.data.assistantMessageID}:reasoning:${event.data.ordinal}`
+      const [written, text] = withoutImages(state.prose?.get(messageId) ?? prose, event.data.delta)
       return {
-        state,
+        state: { ...state, prose: new Map(state.prose).set(messageId, written) },
         outputs: send({
-          sessionUpdate: "agent_message_chunk",
-          messageId: event.data.assistantMessageID,
-          content: { type: "text", text: event.data.delta },
+          sessionUpdate: event.type === "session.text.delta" ? "agent_message_chunk" : "agent_thought_chunk",
+          messageId,
+          content: { type: "text", text },
         }),
       }
-    case "session.reasoning.delta":
-      return {
-        state,
-        outputs: send({
-          sessionUpdate: "agent_thought_chunk",
-          messageId: `${event.data.assistantMessageID}:reasoning:${event.data.ordinal}`,
-          content: { type: "text", text: event.data.delta },
-        }),
-      }
+    }
     case "session.tool.input.started":
       return {
         state: {
@@ -402,7 +404,8 @@ export function failure(state: TurnState) {
   if (error?.type === "provider.auth") return new ACPError.AuthRequiredError()
   if (error && error.type !== "aborted" && error.type !== "provider.content-filter") {
     return new ACPError.ServiceFailureError({
-      safeMessage: error.message || "Orbit prompt failed",
+      // A provider's or a tool's words: one line with no control or format character (class 9).
+      safeMessage: plain(error.message) || "Orbit prompt failed",
       service: "session",
       errorName: error.type,
     })
@@ -460,7 +463,10 @@ export function abandonTools(state: TurnState, ctx: Context): Step {
 /** Lazy, so a message that fails to translate part way still replays the updates before the failure. */
 export function* replayMessage(message: SessionMessageInfo, cwd: string): Generator<SessionUpdate> {
   if (message.type === "user") {
-    yield { sessionUpdate: "user_message_chunk", messageId: message.id, content: { type: "text", text: message.text } }
+    // A slash command's prompt is replayed as the command that was run, `/name arguments`, as the terminal UI shows it;
+    // its text is the command's expansion, which only the model reads.
+    const text = message.command ? `/${message.command.name} ${message.command.arguments}`.trimEnd() : message.text
+    yield { sessionUpdate: "user_message_chunk", messageId: message.id, content: { type: "text", text } }
     const files: ReplayPart[] = (message.files ?? []).map((file) => ({
       type: "file",
       url: file.source.type === "uri" ? file.source.uri : `data:${file.mime};base64,${file.data}`,
@@ -486,14 +492,18 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
   let reasoningOrdinal = 0
   for (const part of message.content) {
     if (part.type === "text") {
-      yield { sessionUpdate: "agent_message_chunk", messageId: message.id, content: { type: "text", text: part.text } }
+      yield {
+        sessionUpdate: "agent_message_chunk",
+        messageId: message.id,
+        content: { type: "text", text: withoutImages(prose, part.text)[1] },
+      }
       continue
     }
     if (part.type === "reasoning") {
       yield {
         sessionUpdate: "agent_thought_chunk",
         messageId: `${message.id}:reasoning:${reasoningOrdinal++}`,
-        content: { type: "text", text: part.text },
+        content: { type: "text", text: withoutImages(prose, part.text)[1] },
       }
       continue
     }

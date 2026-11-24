@@ -252,7 +252,7 @@ export function make(input: {
             sessionId: session.id,
             cwd: session.location.directory,
             ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
-            title: withTimestampedFallback(session),
+            title: plain(withTimestampedFallback(session)),
             updatedAt: new Date(session.time.updated).toISOString(),
           }
         }),

@@ -49,6 +49,7 @@ export function contentBlockToParts(block: ContentBlock): PromptPart[] {
     case "resource_link":
       return [resourceLinkToPart(block)]
     case "resource":
+      if (block.resource.uri.startsWith("file:")) return [fileResource(block.resource.uri, block.resource.mimeType)]
       if ("text" in block.resource) {
         // Sent as a text attachment, not as prompt text: the core escapes an attachment's text as data, while a plain
         // text part would reach the model as the person's own words.
@@ -166,6 +167,22 @@ function resourceLabel(uri: string) {
     }
   })()
   return `${path.sep === "\\" ? decoded.replace(/\\/g, "/") : decoded}${line ? `:${line}` : ""}`
+}
+
+// An embedded resource with a `file:` URI is the editor's copy of a file on disk, which an editor sends for an
+// @-mention. It goes as a mention of that file, as a resource link does, so the server reads it only after the person's
+// read rules and policies have decided its path, and leaves it out when they refuse it (classes 3 and 8). The lines of a
+// `#L12-14` or `#L12:14` fragment become the mention's range. A URI that names another host is never read.
+function fileResource(uri: string, mime: string | null | undefined): PromptPart {
+  const url = URL.canParse(uri) ? new URL(uri) : undefined
+  if (url?.protocol !== "file:" || (url.host !== "" && url.host !== "localhost")) return linkReference(undefined, uri)
+  const lines = /^#L(\d+)(?:[-:]L?(\d+))?$/.exec(url.hash)
+  url.hash = ""
+  if (lines?.[1]) {
+    url.searchParams.set("start", lines[1])
+    url.searchParams.set("end", lines[2] ?? lines[1])
+  }
+  return { type: "file", url: url.href, filename: resourceLabel(uri), mime: mime ?? "text/plain" }
 }
 
 function resourceLinkToPart(link: ResourceLink): PromptPart {

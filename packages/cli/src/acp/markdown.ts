@@ -56,8 +56,69 @@ export function subagentName(title: string | undefined) {
   const whole = plainPath(title.trim())
   const characters = Array.from(whole)
   const text =
-    characters.length > NAME_LENGTH ? `${characters.slice(0, NAME_LENGTH - 3).join("").trimEnd()}...` : whole
+    characters.length > NAME_LENGTH
+      ? `${characters
+          .slice(0, NAME_LENGTH - 3)
+          .join("")
+          .trimEnd()}...`
+      : whole
   return WARNING_WORDS.test(whole) ? codeSpan(text) : literal(text)
+}
+
+/** What one piece of a model's streamed text leaves open for the next: see `withoutImages`. */
+export type Prose = {
+  /** The length of the backtick run that opened the code the text is in, or 0 outside code. */
+  readonly code: number
+  /** The backticks at the end of the text so far, whose run may go on in the next piece. */
+  readonly run: number
+  /** The last character of the text so far. */
+  readonly last: string
+}
+
+export const prose: Prose = { code: 0, run: 0, last: "" }
+
+// A raw HTML tag opens with `<` and a letter; an autolink (`<https://...>`) names a scheme and a colon first.
+const TAG = /^[a-z]/i
+const AUTOLINK = /^[a-z][a-z0-9+.-]{1,31}:/i
+
+/**
+ * A model's own Markdown, for a client that renders it: prose and code stay as written, but nothing in it is an image or
+ * a raw HTML tag, which a client would fetch from an address that a model, or a repository that steers it, chose
+ * (classes 6 and 9). Outside code, the `[` of an image's `![` is written `\[`, so the image reads as its text and its
+ * address, as the reference's own renderer shows it; and the `<` that opens a tag is written `&lt;`, which a Markdown
+ * client draws as `<`. Code spans and fenced blocks are left alone. Text arrives in pieces, so `state` carries what one
+ * piece leaves open to the next; a `<` that ends a piece is written `&lt;`, since the tag it may open is not known yet.
+ */
+export function withoutImages(state: Prose, text: string): [Prose, string] {
+  const out: string[] = []
+  // By UTF-16 unit, so an index is a position in `text`; every mark looked at is one unit.
+  const next = text.split("").reduce<Prose>((current, char, index) => {
+    if (char === "`") {
+      out.push(char)
+      return { ...current, run: current.run + 1, last: char }
+    }
+    // A run of backticks has ended: it opens code, or closes the code a run of its length (or a fence, a longer one) opened.
+    const code =
+      current.run === 0
+        ? current.code
+        : current.code === 0
+          ? current.run
+          : current.run === current.code || (current.code >= 3 && current.run >= current.code)
+            ? 0
+            : current.code
+    const rest = text.slice(index + 1)
+    out.push(
+      code !== 0
+        ? char
+        : char === "[" && current.last === "!"
+          ? "\\["
+          : char === "<" && (rest === "" || (TAG.test(rest) && !AUTOLINK.test(rest)))
+            ? "&lt;"
+            : char,
+    )
+    return { code, run: 0, last: char }
+  }, state)
+  return [next, out.join("")]
 }
 
 export * as ACPMarkdown from "./markdown"
