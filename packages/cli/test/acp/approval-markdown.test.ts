@@ -472,8 +472,9 @@ describe("acp: other text a model, a tool or a server chose", () => {
 
   // m5-quality fix loop 3 (classes 6 and 9): a backtick is code only where Markdown is sure to read it so. A lone, an
   // escaped or a broken one, one inside a link's address, an autolink or a table cell, and a fence that a list or a
-  // line ending other than `\n` hides, each leaves what follows it as prose, so an image or a tag after it is never drawn.
+  // line ending other than `\n` hides, each leaves what follows it as prose, so no image or tag after it is drawn.
   const ADDRESS = "https://evil.example/p.png"
+  const RENDERER = { autolinks: true, strikethrough: true, tables: true, tasklists: true }
   const OPENS_NO_CODE = [
     "Press the ` key. IMAGE",
     "Press the \\` key. IMAGE",
@@ -503,7 +504,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
       const whole = row.replace("IMAGE", image)
       for (const deltas of [[whole], whole.split("")]) {
         for (const markdown of await streamed(deltas)) {
-          const seen = Bun.markdown.html(markdown, { autolinks: true, strikethrough: true, tables: true, tasklists: true })
+          const seen = Bun.markdown.html(markdown, RENDERER)
           expect([whole, seen]).not.toEqual([whole, expect.stringMatching(/<img\b/i)])
           expect(read(markdown).text).toContain(ADDRESS)
         }
@@ -551,8 +552,8 @@ describe("acp: other text a model, a tool or a server chose", () => {
   })
 
   test("the model's Markdown: no text a renderer draws with an image or a tag, over random text in random pieces", () => {
-    const pieces = ["`", "``", "```", "~~~", "\n", "\n\n", "\r", "   ", " ", "\t", "- ", "1. ", "> ", "\\", "](", "[", "]"]
-    const more = ["(", ")", "!", "|", '"', "a", "<", ">", "<!--", "<https://a.example/", "[r]: ", "    "]
+    const pieces = ["`", "``", "```", "~~~", "\n", "\n\n", "\r", "   ", " ", "\t", "- ", "1. ", "> ", "\\", "](", "["]
+    const more = ["]", "(", ")", "!", "|", '"', "a", "<", ">", "<!--", "<https://a.example/", "[r]: ", "    "]
     const marks = [...pieces, ...more, `![x](${ADDRESS})`, `<img src=${ADDRESS}>`]
     // A seeded generator, so a failure names a text that fails again.
     const random = (() => {
@@ -570,7 +571,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
       const cut = random(text.length + 1)
       const [state, first] = withoutImages(prose, text.slice(0, cut))
       const [, second] = withoutImages(state, text.slice(cut), true)
-      const html = Bun.markdown.html(first + second, { autolinks: true, strikethrough: true, tables: true, tasklists: true })
+      const html = Bun.markdown.html(first + second, RENDERER)
       return /<(img|picture|source)\b/i.test(html) ? [text] : []
     })
     expect(drawn).toEqual([])

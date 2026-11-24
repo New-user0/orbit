@@ -148,7 +148,9 @@ describe("acp content conversion", () => {
     "a file resource spelled %p is a mention of that file, and a resource link so spelled is one too",
     (uri) => {
       const parts = contentBlockToParts({ type: "resource", resource: { uri, text: "EMBEDDED-COPY" } })
-      expect(parts).toEqual([{ type: "file", url: "file:///tmp/notes.md", filename: "/tmp/notes.md", mime: "text/plain" }])
+      expect(parts).toEqual([
+        { type: "file", url: "file:///tmp/notes.md", filename: "/tmp/notes.md", mime: "text/plain" },
+      ])
       expect(contentBlockToParts({ type: "resource_link", uri, name: "notes.md" })).toEqual([
         { type: "file", url: "file:///tmp/notes.md", filename: "notes.md", mime: "text/plain" },
       ])

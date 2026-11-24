@@ -72,9 +72,9 @@ export type Prose = {
   /** The fenced code block the text is in. */
   readonly fence?: Fence
   /**
-   * Whether a fenced block may be open that the tracker cannot follow: one behind a list's or a quote's mark or more than
-   * three spaces in, or one that a line left by starting to the left of its opening line. Its closing line may open a
-   * block for one renderer and close one for another, so from then on no block is thought open.
+   * Whether a fenced block may be open that the tracker cannot follow: one behind a list's or a quote's mark or more
+   * than three spaces in, or one that a line left by starting to the left of its opening line. Its closing line may
+   * open a block for one renderer and close one for another, so from then on no block is thought open.
    */
   readonly lost: boolean
   /** A backtick run that may open a code span, with the text after it on its line, held back until the span closes. */
@@ -132,8 +132,8 @@ const FENCE_LINE = /^(?:[ \t>]|[-+*][ \t]|\d{1,9}[.)][ \t])*(?:`{3}|~{3})/
  *   line. A run that a backslash escapes, or that is inside a link's address after its `](` or an autolink, opens
  *   nothing. An address or autolink that is not a plain run up to its `)` or `>` may hold a title or a backtick of its
  *   own, so the backticks in the rest of that paragraph open nothing. A span that its line or the text ends before it
- *   closes is written as prose, and so is one with a `|`, which a table splits into two cells; the backticks in the rest
- *   of that paragraph then open nothing too.
+ *   closes is written as prose, and so is one with a `|`, which a table splits into two cells; the backticks in the
+ *   rest of that paragraph then open nothing too.
  *
  * Text arrives in pieces, so `state` carries what one piece leaves open to the next, and `end` writes what is still
  * held when the text ends. A `<` that ends a piece is written `&lt;`, since the tag it may open is not known yet.
@@ -173,7 +173,8 @@ function step(state: Prose, char: string, rest: () => string, out: string[]): Pr
 // Prose: a backtick run that may open a span starts to be held back, and anything else is written, with an image's `[`
 // and a tag's `<` escaped.
 function write(state: Prose, char: string, rest: () => string, out: string[]): Prose {
-  if (char === "`" && !state.escape && !state.mixed && state.until === "") return { ...state, held: char, open: 0, run: 0 }
+  if (char === "`" && !state.escape && !state.mixed && state.until === "")
+    return { ...state, held: char, open: 0, run: 0 }
   const after = char === "<" ? rest() : ""
   const autolink = char === "<" && AUTOLINK.test(after)
   out.push(
