@@ -5,7 +5,16 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { runProgram } from "../../../core/test/fixture/run-program"
-import { approval, linkCheck, linkRows, linkSetup, type Run } from "./approval-harness"
+import {
+  approval,
+  canLinkDirectory,
+  globMarker,
+  linkCheck,
+  linkRows,
+  linkSetup,
+  toolResult,
+  type Run,
+} from "./approval-harness"
 
 // A path that names the project through another spelling of its own folder is decided where it really is. Over a real
 // `orb acp` in an untrusted folder, a call under such a spelling meets the same folder question and the same rules as
@@ -160,5 +169,125 @@ export function spellingMatrix(rows: typeof linkRows) {
           ),
         90_000,
       )
+    }
+}
+
+// A link of the repository whose target is a share, in any spelling of it, including one that names the person's own
+// config folder through `\\localhost\C$`. The person's rules name that folder as a drive path, so a question about the
+// share's spelling would turn their deny into an ask, and approving it connects to the host. The place the link leads to
+// is refused as a share given directly is: `file.spelling`, before any question and before anything is opened, whatever
+// the tool. The deny row and the trusted row are the controls, as are the junction rows above (class 4, class 8,
+// class 12; permissions-23). A symlink to a share needs Developer Mode, so these rows run on Windows with it.
+const shareTargets =
+  process.platform === "win32" && canLinkDirectory
+    ? [
+        {
+          name: "a localhost admin share",
+          target: (root: string) => `\\\\localhost\\${root[0]}$\\${root.slice(3)}\\config`,
+        },
+        {
+          name: "a 127.0.0.1 admin share",
+          target: (root: string) => `\\\\127.0.0.1\\${root[0]}$\\${root.slice(3)}\\config`,
+        },
+        {
+          name: "a \\\\?\\UNC admin share",
+          target: (root: string) => `\\\\?\\UNC\\localhost\\${root[0]}$\\${root.slice(3)}\\config`,
+        },
+        {
+          name: "a \\\\?\\Volume path",
+          target: (root: string) => `\\\\?\\Volume{00000000-0000-0000-0000-000000000000}\\${root.slice(3)}\\config`,
+        },
+        {
+          name: "a \\\\.\\Volume path",
+          target: (root: string) => `\\\\.\\Volume{00000000-0000-0000-0000-000000000000}\\${root.slice(3)}\\config`,
+        },
+        { name: "a share host", target: () => "\\\\orbit-share-host.invalid\\share\\config" },
+      ]
+    : []
+const shareLinkSetup = (target: (root: string) => string) => async (root: string) => {
+  await Bun.write(path.join(root, "config", "AGENTS.md"), "The person's own instructions.\n")
+  await Bun.write(path.join(root, "config", globMarker), "marker\n")
+  await fs.symlink(target(root), path.join(root, "workspace", "cfg"), "dir")
+}
+const refusedAsShare = async (run: Run, row: (typeof linkRows)[number]) => {
+  expect(run.permissions).toHaveLength(0)
+  expect(await row.acted(run.root, run.bodies)).toBe(false)
+  expect(toolResult(run)).toContain("file.spelling")
+}
+/** Registers the share-target rows for the given link rows: each through every share spelling, refused before a question. */
+export function shareMatrix(rows: typeof linkRows) {
+  for (const row of rows)
+    for (const share of shareTargets) {
+      test.concurrent(
+        `an untrusted ${row.name} through a repository link to ${share.name} is refused as a share, with no question, answered once`,
+        () =>
+          approval(
+            {
+              tool: row.tool,
+              rule: row.rule,
+              shell: "shell" in row ? row.shell : undefined,
+              reply: "once",
+              args: () => row.args,
+              setup: shareLinkSetup(share.target),
+            },
+            (run) => refusedAsShare(run, row),
+          ),
+        90_000,
+      )
+      if (share !== shareTargets[0]) continue
+      test.concurrent(
+        `an untrusted ${row.name} through a repository link to ${share.name} under the person's deny of the config folder is refused as a share, not asked about`,
+        () =>
+          approval(
+            {
+              tool: row.tool,
+              rule: row.rule,
+              shell: "shell" in row ? row.shell : undefined,
+              permissions: (root) => [
+                { action: row.rule, resource: "*", effect: "ask" },
+                {
+                  action: "external_directory",
+                  resource: `${path.join(root, "config").replaceAll("\\", "/")}/*`,
+                  effect: "deny",
+                },
+              ],
+              reply: "once",
+              args: () => row.args,
+              setup: shareLinkSetup(share.target),
+            },
+            (run) => refusedAsShare(run, row),
+          ),
+        90_000,
+      )
+      // The owner trusted the folder (2026-10-13: a trusted folder asks before a tool touches a link to a share): no
+      // spelling refuses the call, and one folder question names the share. A reject keeps everything unopened.
+      for (const reply of ["once", "reject"] as const)
+        test.concurrent(
+          `a trusted ${row.name} through a repository link to ${share.name} is not refused and asks one folder question that names the share, answered ${reply} (control)`,
+          () =>
+            approval(
+              {
+                tool: row.tool,
+                rule: row.rule,
+                shell: "shell" in row ? row.shell : undefined,
+                trusted: true,
+                reply,
+                args: () => row.args,
+                setup: shareLinkSetup(share.target),
+              },
+              async (run) => {
+                expect(toolResult(run)).not.toContain("file.spelling")
+                const folder = run.permissions.filter((item) =>
+                  String(item.toolCall.title).includes("external directory"),
+                )
+                expect(folder).toHaveLength(1)
+                // The question shows the share as the request resolved it, in forward slashes.
+                expect(String(folder[0]?.toolCall.title)).toContain(`//localhost/${run.root[0]}$/`)
+                expect(folder[0]?.toolCall.locations?.[0]?.path).toStartWith(`//localhost/${run.root[0]}$/`)
+                if (reply === "reject") expect(await row.acted(run.root, run.bodies)).toBe(false)
+              },
+            ),
+          90_000,
+        )
     }
 }

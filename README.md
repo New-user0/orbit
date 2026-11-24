@@ -103,7 +103,7 @@ run serially because their files are small, and a worker costs about a second pe
 runs them in parallel too. Each core worker gets its own `ORBIT_TEST_HOME`, XDG and temp folders, and its own `HOME` only on
 Windows (on Linux and macOS `HOME` stays the shared root). `ORBIT_TEST_WORKERS=1` still gives each file of those five packages a
 fresh module registry (`--isolate`), as a parallel run does. The ACP approval matrix in cli (`acp/permission-files.subprocess.test.ts`,
-`acp/permission-spellings.subprocess.test.ts` and `acp/spelling-matrix-*.subprocess.test.ts`) runs its rows 4 at a time inside each
+`acp/permission-spellings.subprocess.test.ts`, `acp/spelling-matrix-*` and `acp/share-links-*`) runs its rows 4 at a time inside each
 file, so two of its files in one CI job start no more `orb acp` children than the matrix did as one file; pass
 `--max-concurrency=1` to run them one by one.
 
