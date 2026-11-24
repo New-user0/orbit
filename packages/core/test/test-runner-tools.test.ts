@@ -85,11 +85,13 @@ describe("runTests", () => {
       await using dir = await tmpdir()
       // bun ends an idle worker and starts the next file at once, so a real run seldom shows a live worker whose last
       // line ends a file. This stand-in for `bun test` writes such a line as a worker would, then lives past the deadline.
+      // A worker names its file by its full path, as Bun.main gives it.
+      const file = JSON.stringify(path.join(dir.path, "test", "a.test.ts"))
       const worker = (lines: string[]) => [
         "-e",
         [
           `const log = require("node:path").join(process.env.ORBIT_TEST_HEARTBEAT, String(process.pid))`,
-          ...lines.map((line) => `require("node:fs").appendFileSync(log, Date.now() + " ${line} test/a.test.ts\\n")`),
+          ...lines.map((line) => `require("node:fs").appendFileSync(log, Date.now() + " ${line} " + ${file} + "\\n")`),
           `setTimeout(() => {}, 3000)`,
         ].join("\n"),
       ]
