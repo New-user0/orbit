@@ -101,9 +101,10 @@ Tests run per package, never from the root: `cd packages/core && bun run test`.
 least two. `ORBIT_TEST_WORKERS=<n>` sets the count, and `ORBIT_TEST_WORKERS=1` gives a serial run for debugging. The other packages
 run serially because their files are small, and a worker costs about a second per file on Windows; setting `ORBIT_TEST_WORKERS`
 runs them in parallel too. Each core worker gets its own `ORBIT_TEST_HOME`, XDG and temp folders, and its own `HOME` only on
-Windows (on Linux and macOS `HOME` stays the shared root). The ACP approval matrix in cli
-(`acp/permission-files.subprocess.test.ts` and `permission-spellings.subprocess.test.ts`) runs its rows 8 at a time
-inside each file; pass `--max-concurrency=1` to run them one by one.
+Windows (on Linux and macOS `HOME` stays the shared root). `ORBIT_TEST_WORKERS=1` still gives each file of those five packages a
+fresh module registry (`--isolate`), as a parallel run does. The ACP approval matrix in cli (`acp/permission-files.subprocess.test.ts`,
+`permission-spellings.subprocess.test.ts` and `spelling-matrix.subprocess.test.ts`) runs its rows 8 at a time inside each file;
+pass `--max-concurrency=1` to run them one by one.
 
 A parallel run stops a test file that is still running past its deadline, names it on stderr and exits with code 1, instead of
 waiting for it forever. The deadline is `ORBIT_TEST_FILE_DEADLINE_MS` (ten minutes by default) or three times the file's
