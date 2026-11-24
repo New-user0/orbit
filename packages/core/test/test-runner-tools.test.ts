@@ -64,11 +64,10 @@ describe("runTests", () => {
   )
 
   test(
-    "gives a file three times its measured time, and a worker that ended its last file is not stuck",
+    "gives a file three times its measured time",
     async () => {
       await using dir = await tmpdir()
-      // Four seconds at the top level: past a 1.5 s deadline, inside three times a 2 s measurement. The other worker
-      // ends the quick file at once and waits while the slow one runs.
+      // Four seconds at the top level: past a 1.5 s deadline, inside three times a 2 s measurement.
       await suite(
         dir.path,
         { "slow.test.ts": `import { test } from "bun:test"\nawait Bun.sleep(4000)\ntest("slow", () => {})\n`, "a.test.ts": quick },
@@ -76,6 +75,28 @@ describe("runTests", () => {
       )
       const code = await runTests(args(dir.path), { ...process.env, ORBIT_TEST_FILE_DEADLINE_MS: "1500" }, dir.path)
       expect(code).toBe(0)
+    },
+    60_000,
+  )
+
+  test(
+    "counts a worker as in a file only while its last line starts one",
+    async () => {
+      await using dir = await tmpdir()
+      // bun ends an idle worker and starts the next file at once, so a real run seldom shows a live worker whose last
+      // line ends a file. This stand-in for `bun test` writes such a line as a worker would, then lives past the deadline.
+      const worker = (lines: string[]) => [
+        "-e",
+        [
+          `const log = require("node:path").join(process.env.ORBIT_TEST_HEARTBEAT, String(process.pid))`,
+          ...lines.map((line) => `require("node:fs").appendFileSync(log, Date.now() + " ${line} test/a.test.ts\\n")`),
+          `setTimeout(() => {}, 3000)`,
+        ].join("\n"),
+      ]
+      const env = { ...process.env, ORBIT_TEST_FILE_DEADLINE_MS: "1000" }
+      expect(await runTests(worker(["start", "end"]), env, dir.path)).toBe(0)
+      // Control: the same worker still in its file is stopped.
+      expect(await runTests(worker(["start"]), env, dir.path)).toBe(1)
     },
     60_000,
   )
