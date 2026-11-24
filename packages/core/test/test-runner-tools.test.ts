@@ -236,14 +236,17 @@ describe("runProgram", () => {
   test("kills a program that runs past its deadline and fails with the command and what it printed", async () => {
     const started = Date.now()
     const failure = await runProgram(
-      [process.execPath, "-e", "process.stdout.write(String(6 * 7)); setTimeout(() => {}, 60_000)"],
+      [process.execPath, "-e", "process.stdout.write(String(process.pid)); setTimeout(() => {}, 60_000)"],
       { deadline: 1_000 },
     ).catch((error: Error) => error)
     expect(Date.now() - started).toBeLessThan(10_000)
     expect(failure).toBeInstanceOf(Error)
     expect((failure as Error).message).toContain("did not end within 1 s")
-    // What it printed, which its command line does not hold.
-    expect((failure as Error).message).toContain("stdout:\n42\n")
+    // What it printed, which its command line does not hold: its own pid.
+    const pid = Number(/^stdout:\n(\d+)$/m.exec((failure as Error).message)?.[1])
+    expect(pid).toBeGreaterThan(0)
+    // Killed, not left to wait out its minute.
+    expect(await until(5_000, () => (running(pid) ? undefined : true))).toBe(true)
     if (process.platform === "linux") expect((failure as Error).message).toContain("processes:")
   })
 })
