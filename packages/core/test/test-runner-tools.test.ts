@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { testArgs } from "../../../tools/test/args"
 import { mergeTimings } from "../../../tools/test/timings"
@@ -26,43 +27,85 @@ const args = (root: string) => [
   "--only-failures",
 ]
 
+const quick = `import { test } from "bun:test"\ntest("quick", () => {})\n`
+
+// The heartbeat folders this worker's runs left in the temporary folder.
+const heartbeats = async () =>
+  (await fs.readdir(os.tmpdir())).filter((name) => name.startsWith("orbit-heartbeat-")).length
+
 describe("runTests", () => {
   test(
-    "stops a file that blocks past the deadline, returns 1 and stops its worker",
+    "stops a file that blocks past the deadline within a poll, returns 1, stops its worker and removes its folder",
     async () => {
       await using dir = await tmpdir()
-      const pidFile = path.join(dir.path, "pid")
+      const startFile = path.join(dir.path, "started")
       await suite(dir.path, {
-        "a.test.ts": `import { test } from "bun:test"\ntest("a", () => {})\n`,
+        "a.test.ts": quick,
         "stuck.test.ts": [
           `import { test } from "bun:test"`,
           `import { writeFileSync } from "node:fs"`,
-          `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))`,
+          `writeFileSync(${JSON.stringify(startFile)}, JSON.stringify({ pid: process.pid, at: Date.now() }))`,
           `test("spins", () => { const end = Date.now() + 40_000; while (Date.now() < end) {} })`,
         ].join("\n"),
       })
-      const started = Date.now()
-      const code = await runTests(args(dir.path), { ...process.env, ORBIT_TEST_FILE_DEADLINE_MS: "2000" }, dir.path)
+      const before = await heartbeats()
+      const code = await runTests(args(dir.path), { ...process.env, ORBIT_TEST_FILE_DEADLINE_MS: "1000" }, dir.path)
+      const ended = Date.now()
       expect(code).toBe(1)
-      expect(Date.now() - started).toBeLessThan(20_000)
-      const pid = Number(await Bun.file(pidFile).text())
-      expect(() => process.kill(pid, 0)).toThrow()
+      const started = (await Bun.file(startFile).json()) as { pid: number; at: number }
+      // A one-second deadline is looked at every quarter second, so the run ends soon after it, not at a 5 s poll.
+      expect(ended - started.at).toBeLessThan(4_000)
+      expect(() => process.kill(started.pid, 0)).toThrow()
+      expect(await heartbeats()).toBe(before)
     },
     60_000,
   )
 
   test(
-    "gives a file three times its measured time when that is longer than the deadline",
+    "gives a file three times its measured time, and a worker that ended its last file is not stuck",
     async () => {
       await using dir = await tmpdir()
-      // Four seconds at the top level: past a 1.5 s deadline, inside three times a 2 s measurement.
+      // Four seconds at the top level: past a 1.5 s deadline, inside three times a 2 s measurement. The other worker
+      // ends the quick file at once and waits while the slow one runs.
       await suite(
         dir.path,
-        { "slow.test.ts": `import { test } from "bun:test"\nawait Bun.sleep(4000)\ntest("slow", () => {})\n` },
+        { "slow.test.ts": `import { test } from "bun:test"\nawait Bun.sleep(4000)\ntest("slow", () => {})\n`, "a.test.ts": quick },
         { "test/slow.test.ts": 2000 },
       )
       const code = await runTests(args(dir.path), { ...process.env, ORBIT_TEST_FILE_DEADLINE_MS: "1500" }, dir.path)
       expect(code).toBe(0)
+    },
+    60_000,
+  )
+
+  test(
+    "names no file when a worker dies in one: bun restarts the worker and reports the file itself",
+    async () => {
+      await using dir = await tmpdir()
+      await suite(dir.path, {
+        "crash.test.ts": `process.kill(process.pid, "SIGKILL")\n`,
+        ...Object.fromEntries(
+          [1, 2, 3, 4, 5, 6].map((n) => [
+            `wait-${n}.test.ts`,
+            `import { test } from "bun:test"\ntest("waits", () => Bun.sleep(1500))\n`,
+          ]),
+        ),
+      })
+      const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "../../../tools/test/run.ts")], {
+        cwd: dir.path,
+        env: { ...process.env, ORBIT_TEST_WORKERS: "2", ORBIT_TEST_FILE_DEADLINE_MS: "3000" },
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ])
+      expect(code).toBe(1)
+      expect(stdout + stderr).toContain("crash.test.ts")
+      expect(stdout + stderr).not.toContain("Test file stuck")
     },
     60_000,
   )

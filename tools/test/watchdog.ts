@@ -40,20 +40,16 @@ export async function runTests(args: string[], env: Record<string, string | unde
   const relative = (file: string) => path.relative(cwd, file).split(path.sep).join("/")
   const deadline = (file: string) => Math.max(base, 3 * (measured[relative(file)] ?? 0))
   const stuck = Promise.withResolvers<true>()
-  // A read that outlasts the interval must not start a second one, or a stuck file would be reported twice.
-  const reading = { now: false }
-  const watch = setInterval(async () => {
-    if (reading.now) return
-    reading.now = true
-    const found = (await Promise.all(fs.readdirSync(folder).map((pid) => lastStart(folder, pid)))).find(
-      (entry) => entry !== undefined && Date.now() - entry.at > deadline(entry.file) && alive(entry.pid),
-    )
-    reading.now = false
+  // The folder is read synchronously, so one look ends before the next can start and a file is reported once.
+  const watch = setInterval(() => {
+    const found = fs
+      .readdirSync(folder)
+      .map((pid) => lastStart(folder, pid))
+      .find((entry) => entry !== undefined && Date.now() - entry.at > deadline(entry.file) && alive(entry.pid))
     if (!found) return
     clearInterval(watch)
     report(found, relative(found.file), deadline(found.file))
-    await stop(child)
-    stuck.resolve(true)
+    void stop(child).then(() => stuck.resolve(true))
   }, Math.min(5_000, base / 4))
   const code = await Promise.race([child.exited, stuck.promise])
   clearInterval(watch)
@@ -64,7 +60,6 @@ export async function runTests(args: string[], env: Record<string, string | unde
   return code === true ? 1 : code
 }
 
-
 function timings(args: string[]): Record<string, number> {
   const file = args.find((arg) => arg.startsWith("--timings="))?.slice("--timings=".length)
   if (!file || !fs.existsSync(file)) return {}
@@ -72,8 +67,8 @@ function timings(args: string[]): Record<string, number> {
 }
 
 // The file a worker is in: its last line, when that line starts a file.
-async function lastStart(folder: string, pid: string) {
-  const line = (await Bun.file(path.join(folder, pid)).text()).trimEnd().split("\n").at(-1) ?? ""
+function lastStart(folder: string, pid: string) {
+  const line = fs.readFileSync(path.join(folder, pid), "utf8").trimEnd().split("\n").at(-1) ?? ""
   const match = /^(\d+) start (.+)$/.exec(line)
   if (!match) return undefined
   return { pid: Number(pid), at: Number(match[1]), file: match[2] }
