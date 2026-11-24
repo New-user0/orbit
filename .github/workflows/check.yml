@@ -57,20 +57,21 @@ jobs:
   test:
     name: test (${{ matrix.package }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ubuntu-latest
-    # A stopped or hung worker must fail the job instead of holding it for hours.
-    # The cli job took 29.7 min on 2 CPUs in Docker, and CI runners are 1.25x to 1.5x slower; 90 leaves headroom.
-    timeout-minutes: 90
+    # A stuck test file fails the run within its deadline (tools/test/watchdog.ts, ten minutes by default), so the limit
+    # only has to cover the longest job, not a hang.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         # sdk holds the contract-identity tests (SDK, Core, Server and Client must share one set of contracts);
         # theme holds the theme resolution tests; compat holds the compatibility switch and root discovery tests.
-        package: [ai, client, codemode, compat, core, flow, plugin, protocol, schema, sdk, server, theme, tui, util, vscode]
-        # cli is the longest suite (about 34 min), so it runs as two jobs. `bun test --shard` splits the files by the
-        # package's committed test/timings.json; `part` names the shard's coverage artifact.
+        # cli runs as three jobs. `bun test --shard` splits a package's files by the Linux timings it keeps
+        # (test/timings.json); `part` names the shard's coverage and timings artifacts.
+        package: [core, tui, server, vscode, flow, ai, client, codemode, compat, plugin, protocol, schema, sdk, theme, util]
         include:
-          - { package: cli, shard: "1/2", part: "-1of2" }
-          - { package: cli, shard: "2/2", part: "-2of2" }
+          - { package: cli, shard: "1/3", part: "-1of3" }
+          - { package: cli, shard: "2/3", part: "-2of3" }
+          - { package: cli, shard: "3/3", part: "-3of3" }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
@@ -89,9 +90,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          bun run test ${SHARD:+--shard=$SHARD} --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
             echo "::group::Failures"
-            grep -E '^\(fail\)|^error:|Unhandled error' "$RUNNER_TEMP/test.log" | tail -60
+            grep -E '^\(fail\)|^error:|Unhandled error|^Test file stuck' "$RUNNER_TEMP/test.log" | tail -60
             echo "::endgroup::"
             exit 1
           }
@@ -104,25 +105,40 @@ jobs:
           path: packages/${{ matrix.package }}/coverage/lcov.info
           if-no-files-found: warn
           retention-days: 14
+      # What each job measured (`--update-timings`). `bun tools/test/timings.ts --run <id>` merges a run's artifacts into
+      # the committed timings files. A package that runs serially writes none.
+      - name: Upload timings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: timings-linux-${{ matrix.package }}${{ matrix.part }}
+          path: packages/${{ matrix.package }}/test/timings.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   windows:
     name: test on Windows (${{ matrix.package }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: windows-latest
-    # Windows runners are slower than Linux ones, and core and cli are the longest suites there.
-    timeout-minutes: 240
+    # Windows runners are slower than Linux ones; a stuck file still fails the run within its deadline.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        package: [ai, client, codemode, compat, flow, plugin, protocol, schema, sdk, server, theme, tui, util, vscode]
-        # cli (about 52 min) and core (about 25 min) set the length of every run, so they run as three and two jobs.
-        # `bun test --shard` splits the files by the package's committed test/timings.json; `part` names the shard's
-        # coverage artifact.
+        # cli, core and tui run as six, three and two jobs. `bun test --shard` splits a package's files by the Windows
+        # timings it keeps (test/timings.windows.json); `part` names the shard's coverage and timings artifacts.
+        package: [server, vscode, flow, ai, client, codemode, compat, plugin, protocol, schema, sdk, theme, util]
         include:
-          - { package: cli, shard: "1/3", part: "-1of3" }
-          - { package: cli, shard: "2/3", part: "-2of3" }
-          - { package: cli, shard: "3/3", part: "-3of3" }
-          - { package: core, shard: "1/2", part: "-1of2" }
-          - { package: core, shard: "2/2", part: "-2of2" }
+          - { package: cli, shard: "1/6", part: "-1of6" }
+          - { package: cli, shard: "2/6", part: "-2of6" }
+          - { package: cli, shard: "3/6", part: "-3of6" }
+          - { package: cli, shard: "4/6", part: "-4of6" }
+          - { package: cli, shard: "5/6", part: "-5of6" }
+          - { package: cli, shard: "6/6", part: "-6of6" }
+          - { package: core, shard: "1/3", part: "-1of3" }
+          - { package: core, shard: "2/3", part: "-2of3" }
+          - { package: core, shard: "3/3", part: "-3of3" }
+          - { package: tui, shard: "1/2", part: "-1of2" }
+          - { package: tui, shard: "2/2", part: "-2of2" }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
@@ -168,9 +184,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          bun run test ${SHARD:+--shard=$SHARD} --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
             echo "::group::Failures"
-            grep -E '^\(fail\)|^error:|Unhandled error' "$RUNNER_TEMP/test.log" | tail -60
+            grep -E '^\(fail\)|^error:|Unhandled error|^Test file stuck' "$RUNNER_TEMP/test.log" | tail -60
             echo "::endgroup::"
             exit 1
           }
@@ -181,6 +197,14 @@ jobs:
           name: lcov-windows-${{ matrix.package }}${{ matrix.part }}
           path: packages/${{ matrix.package }}/coverage/lcov.info
           if-no-files-found: warn
+          retention-days: 14
+      - name: Upload timings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: timings-windows-${{ matrix.package }}${{ matrix.part }}
+          path: packages/${{ matrix.package }}/test/timings.windows.json
+          if-no-files-found: ignore
           retention-days: 14
 
   artifact:
