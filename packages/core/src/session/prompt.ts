@@ -158,20 +158,20 @@ const readableEditor = Effect.fn("SessionPrompt.readableEditor")(function* (
   if (!home && !path.isAbsolute(editor.path))
     return yield* dropped("path is not absolute")
   if (editor.selection && editor.selection.end < editor.selection.start) return yield* dropped("selection ends before it starts")
-  const refused = yield* unreadable(session, editor.path)
-  if (refused) return yield* dropped(refused)
+  const decided = yield* readCheck(session, editor.path)
+  if (decided.refused !== undefined) return yield* dropped(decided.refused)
   return editor
 })
 
 // Why the read rules, and through them the configuration policies, refuse `file` to the model at admission, where no
-// tool reads it, or undefined when they let it through. It resolves the path with the read tool's own resolver, asks
-// nobody and opens nothing. A place outside the project is decided as the read tool decides it: the read rules, and a
-// deny for the folder it is in (`external_directory`), the folder itself for a folder (classes 3 and 8).
-const unreadable = Effect.fn("SessionPrompt.unreadable")(function* (session: Session.Info, file: string) {
+// tool reads it, or the place they let through, which is the one to read. It resolves the path with the read tool's own
+// resolver, asks nobody and opens nothing. A place outside the project is decided as the read tool decides it: the read
+// rules, and a deny for the folder it is in (`external_directory`), the folder itself for a folder (classes 3 and 8).
+const readCheck = Effect.fn("SessionPrompt.readCheck")(function* (session: Session.Info, file: string) {
   const access = yield* FileAccess.Service
   const permission = yield* Permission.Service
   const target = yield* access.resolve({ path: file }).pipe(Effect.option)
-  if (target._tag === "None") return "path could not be resolved"
+  if (target._tag === "None") return { refused: "path could not be resolved" }
   const base = { sessionID: session.id, agent: session.agent }
   const external = access.externalRequest([target.value], base)
   const [read, folder] = yield* Effect.forEach(
@@ -188,8 +188,9 @@ const unreadable = Effect.fn("SessionPrompt.unreadable")(function* (session: Ses
     ],
     (request) => permission.denied(request).pipe(Effect.orElseSucceed(() => true)),
   )
-  if (read) return "a read rule denies the path"
-  return folder ? "a rule denies the folder the path is in" : undefined
+  if (read) return { refused: "a read rule denies the path" }
+  if (folder) return { refused: "a rule denies the folder the path is in" }
+  return { place: target.value.place }
 })
 
 // A mentioned file or folder that a read rule or a policy refuses is left out of the prompt with one log line, as the
@@ -268,7 +269,7 @@ const readFileAttachment = Effect.fn("SessionPrompt.readFileAttachment")(functio
     return yield* new AttachmentError({ uri, message: `Unsupported attachment URI: ${uri}` })
   const start = positiveInt(url.searchParams.get("start"))
   const end = positiveInt(url.searchParams.get("end"))
-  const target = yield* Effect.try({
+  const file = yield* Effect.try({
     try: () => {
       url.search = ""
       url.hash = ""
@@ -276,13 +277,14 @@ const readFileAttachment = Effect.fn("SessionPrompt.readFileAttachment")(functio
     },
     catch: () => new AttachmentError({ uri, message: `Invalid file URI: ${uri}` }),
   })
-  // Decided before anything of the path is opened, as the read tool decides it.
-  const refused = yield* unreadable(session, target)
-  if (refused)
+  // Decided before anything of the path is opened, as the read tool decides it, and the place decided is what is read.
+  const decided = yield* readCheck(session, file)
+  if (decided.refused !== undefined)
     return yield* Effect.logWarning("A mentioned file was dropped from the prompt").pipe(
-      Effect.annotateLogs({ reason: refused, sessionID: session.id, uri }),
+      Effect.annotateLogs({ reason: decided.refused, sessionID: session.id, uri }),
       Effect.as(undefined),
     )
+  const target = decided.place
   const info = yield* fs
     .stat(target)
     .pipe(Effect.mapError(() => new AttachmentError({ uri, message: `Unable to read attachment: ${uri}` })))
@@ -301,7 +303,7 @@ const readFileAttachment = Effect.fn("SessionPrompt.readFileAttachment")(functio
       source: { type: "uri" as const, uri },
       start: undefined,
       end: undefined,
-      name: path.basename(target),
+      name: path.basename(file),
       mime: "application/x-directory",
     }
   }
@@ -314,7 +316,7 @@ const readFileAttachment = Effect.fn("SessionPrompt.readFileAttachment")(functio
   const bytes = yield* fs
     .readFile(target)
     .pipe(Effect.mapError(() => new AttachmentError({ uri, message: `Unable to read attachment: ${uri}` })))
-  return { bytes, source: { type: "uri" as const, uri }, start, end, name: path.basename(target), mime: undefined }
+  return { bytes, source: { type: "uri" as const, uri }, start, end, name: path.basename(file), mime: undefined }
 })
 
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
