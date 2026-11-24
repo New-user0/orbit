@@ -889,6 +889,14 @@ describe("acp: other text a model, a tool or a server chose", () => {
       ["[r]: /u\n", '"\n```\n"\nIMAGE\n```'],
       "apart",
     ],
+    // Fix loop 10, N: `marked` takes a backslash in a `"` title with the quote after it, so a backslash at the line's
+    // end or before a quote keeps the title open over the blank line and the fence line, and it reads a `<` destination
+    // to the first `>` that a title or the line's end follows, a `<` or a later `>` in it too.
+    ['N: a `"` title whose line ends with a backslash', ['[r]: /u "x\\\n\n```\n"\nIMAGE\n```']],
+    ['N: a `"` title whose quote has a backslash before it', ['[r]: /u "x\\\\"\n\n```\n"\nIMAGE\n```']],
+    ["N: a `<` destination with a `<` in it", ['[r]: <a<b>\n"\n\n```\n"\nIMAGE\n```']],
+    ["N: a `<` destination with a `>` in it", ['[r]: <a>b>\n"\n\n```\n"\nIMAGE\n```']],
+    ['N: a `<` destination with a `>` in it and a `"` title', ['[r]: <a>b> "\n\n```\n"\nIMAGE\n```']],
     // The controls: a definition does not start inside a paragraph or past a quote's marks for `marked`.
     ["M's control: a label after a line of text", ["a\n[r]:\n```\nIMAGE\n```"]],
     ["M's control: a label in a quote", ["> [r]:\n> ```\n> IMAGE\n> ```"]],
@@ -978,6 +986,18 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["[r]\n\n```\n<img>\n```", "[r]\n\n```\n<img>\n```"],
     ["[r]: <u\n\n```\n<img>\n```", `[r]: <${JOINER}u\n\n\`\`\`\n<img>\n\`\`\``],
     ["[r]: /u x\n\n```\n<img>\n```", "[r]: /u x\n\n```\n<img>\n```"],
+    // A backslash at a `"` title's line end or before its quote keeps it open to `marked`, and so the block after the
+    // blank line takes joiners; one before a letter does not. A `<` destination with a `<` in it is one, whose title
+    // may stand on the next line, and one with two `>` leaves the tracker unsure where it ends.
+    ['[r]: /u "x\\\n\n```\n<img>\n```', `[r]: /u "x\\\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u "x\\\\"\n\n```\n<img>\n```', `[r]: /u "x\\\\"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u "x\\"\n\n```\n<img>\n```', `[r]: /u "x\\"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: <a<b>\n"\n\n```\n<img>\n```', `[r]: <${JOINER}a<${JOINER}b>\n"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: <a>b>\n\n```\n<img>\n```", `[r]: <${JOINER}a>b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: <a>b> "\n\n```\n<img>\n```', `[r]: <${JOINER}a>b> "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u "x\\y"\n\n```\n<img>\n```', '[r]: /u "x\\y"\n\n```\n<img>\n```'],
+    ['[r]: <a<b> "t"\n\n```\n<img>\n```', `[r]: <${JOINER}a<${JOINER}b> "t"\n\n\`\`\`\n<img>\n\`\`\``],
+    ["[r]: <a<b>\n\n```\n<img>\n```", `[r]: <${JOINER}a<${JOINER}b>\n\n\`\`\`\n<img>\n\`\`\``],
     ['[r]: /u"t\n\n```\n<img>\n```', '[r]: /u"t\n\n```\n<img>\n```'],
     ["[a[b]:\n\n```\n<img>\n```", "[a[b]:\n\n```\n<img>\n```"],
   ])("the model's Markdown %p: where the tracker is unsure, code takes joiners", (value, written) => {

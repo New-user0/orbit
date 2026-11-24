@@ -75,9 +75,9 @@ export type Prose = {
    * Whether the tracker is unsure what is code from here on: after a fence line that opens no block it is sure of, a
    * fenced block that it cannot follow (one that a line left by starting to the left of its opening line, or whose
    * closing run stands more than three spaces or a tab in or has anything but spaces after it), after a line with a
-   * tilde or the start of an address that GFM links by itself, or in a text that a client may join to another's
-   * (`follow`). Renderers then differ on which block is open, so from then on no block is thought code, and a `!` or a
-   * `<` in it takes a word joiner as in prose.
+   * tilde or the start of an address that GFM links by itself, after a link reference definition whose `<` destination
+   * holds a second `>`, or in a text that a client may join to another's (`follow`). Renderers then differ on which
+   * block is open, so from then on no block is thought code, and a `!` or a `<` in it takes a word joiner as in prose.
    */
   readonly lost: boolean
   /** The current line so far. */
@@ -136,8 +136,11 @@ const CONTAINER = /^(?:[ \t>]|[-+*][ \t]|\d{1,9}[.)][ \t])*/
 // The parts of a link reference definition, as `marked` reads them: a label has no unescaped bracket, a destination is
 // `<...>` on one line or a run with no space, and a title is quoted or in parentheses and may run over several lines.
 const LABEL = /^(?:\\.|[^[\]\\])*/
-const DESTINATION = /^[ \t]*(?:<[^<>]*>|[^<\s]\S*)/
-const TITLE = { '"': /^(?:\\.|[^"\\])*/, "'": /^(?:\\.|[^'\\])*/, ")": /^[^()]*/ }
+const DESTINATION = /^[ \t]*(?:<[^>]*>|[^<\s]\S*)/
+// `marked` takes a backslash in a `"` title with the quote after it, if there is one, so a backslash before a quote or
+// at a line's end keeps the title open. Its `'` and `(` titles have no escapes, and reading one as the tracker does
+// keeps it open at least as long.
+const TITLE = { '"': /^(?:\\"?|[^"\\])*/, "'": /^(?:\\.|[^'\\])*/, ")": /^[^()]*/ }
 const TITLE_OPENER: Record<string, Title | undefined> = { '"': '"', "'": "'", "(": ")" }
 // A label, a `"` title and a `(` title run on over a blank line to `marked`.
 const OVER_BLANK: Definition[] = ["label", '"', ")"]
@@ -159,7 +162,8 @@ const OVER_BLANK: Definition[] = ["label", '"', ")"]
  * spaces in, with only spaces after it. A fence line anywhere else opens no block the tracker is sure of, so it gives up
  * (`lost`) and from then on writes joiners in every block. It gives up as well where a line left a block by starting to
  * the left of its opening line, at a closing run further in, after a tab or before anything but spaces, and after a line
- * with a tilde or the start of an address that GFM links by itself.
+ * with a tilde or the start of an address that GFM links by itself or a definition whose `<` destination holds a second
+ * `>`, which `marked` may end at either.
  *
  * Text arrives in pieces, so `state` carries what one piece leaves open to the next. A `!` or a `<` that ends a piece
  * takes a joiner too, since what follows it is not known yet.
@@ -225,21 +229,25 @@ function newline(state: Prose, char: string, out: string[]): Prose {
   }
   const blank = /^[ \t]*$/.test(state.line)
   const fence = opens(state)
+  const reading = definition(state.definition, state.line, blank)
   return {
     ...next,
     fence,
-    // A fence line that opens no block leaves the tracker unsure, and so does a line with a tilde or the start of an
-    // address that GFM links by itself.
-    lost: state.lost || (fence === undefined && (FENCE_LINE.test(state.line) || UNSURE.test(state.line))),
-    definition: definition(state.definition, state.line, blank),
+    // A fence line that opens no block leaves the tracker unsure, and so do a line with a tilde or the start of an
+    // address that GFM links by itself and a definition it cannot follow.
+    lost:
+      state.lost ||
+      reading === undefined ||
+      (fence === undefined && (FENCE_LINE.test(state.line) || UNSURE.test(state.line))),
+    definition: reading ?? "",
     paragraph: blank ? (state.paragraph === "task" ? "task" : "") : EMPTY_TASK.test(state.line) ? "task" : "text",
     list: state.list || LIST_ITEM.test(state.line),
   }
 }
 
-// Where a line leaves a link reference definition that `marked` may read over the next line. Any line that starts with
-// a `[` may start one, as far as the tracker knows.
-function definition(before: Definition, line: string, blank: boolean): Definition {
+// Where a line leaves a link reference definition that `marked` may read over the next line, or undefined where the
+// tracker cannot tell. Any line that starts with a `[` may start one, as far as the tracker knows.
+function definition(before: Definition, line: string, blank: boolean): Definition | undefined {
   if (blank) return OVER_BLANK.includes(before) ? before : ""
   const text = line.replace(CONTAINER, "")
   const opener = TITLE_OPENER[text.charAt(0)]
@@ -250,14 +258,17 @@ function definition(before: Definition, line: string, blank: boolean): Definitio
   return title(before, text)
 }
 
-function label(text: string): Definition {
+function label(text: string): Definition | undefined {
   const rest = text.slice(LABEL.exec(text)?.[0].length)
   if (rest === "" || rest === "\\") return "label"
   return rest.startsWith("]:") ? destination(rest.slice(2)) : ""
 }
 
-function destination(text: string): Definition {
+function destination(text: string): Definition | undefined {
   if (/^[ \t]*$/.test(text)) return "destination"
+  // `marked` ends a `<` destination at the first `>` of its line that the line's end or a title follows, and moves on
+  // to the next `>` when that title fails lines later, so with two of them the tracker cannot tell where it ends.
+  if (/^[ \t]*<[^>]*>[^>]*>/.test(text)) return undefined
   const found = DESTINATION.exec(text)
   if (!found) return ""
   const rest = text.slice(found[0].length)

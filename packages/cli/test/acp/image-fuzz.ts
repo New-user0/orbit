@@ -51,6 +51,13 @@ const DEFINITIONS = [
   `[r]: ${ADDRESS}\n(`,
   `[r]:\n${ADDRESS} "`,
   `[r]:\n${ADDRESS} (`,
+  // Fix loop 10: a `"` title with a backslash at its line's end or before a quote, which `marked` keeps open, and a
+  // `<` destination with a `<` or a second `>` in it.
+  `[r]: ${ADDRESS} "x\\`,
+  `[r]: ${ADDRESS} "x\\\\"`,
+  "[r]: <a<b>",
+  "[r]: <a>b>",
+  '[r]: <a>b> "',
 ]
 
 const INLINE = [
