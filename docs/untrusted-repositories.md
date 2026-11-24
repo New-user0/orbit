@@ -2589,9 +2589,12 @@ runs" is a permission.
     the tracker is sure of, so it gives up (`lost`) and no later fence in the text counts as code, and it gives up as
     well after a closing run more than three spaces or a tab in or with anything but spaces after it (`marked` closes
     on a run with more backticks or tildes after it and not on one with a tab after it), after a line that starts to
-    the left of an indented opening line, and after a line with a tilde or the start of a bare address (`www.`, `http`,
-    `ftp:`). A carriage return and a line feed end one line only when nothing comes between them. ACP gives a chunk no
-    text boundary: a client may draw the chunks of a message ID as one block, or append every chunk of a kind to the
+    the left of an indented opening line, after a line with a tilde or the start of a bare address (`www.`, `http`,
+    `ftp:`), and after a definition whose `<...>` destination holds a second `>` (`marked` ends it at the first `>` that
+    a title or the line's end follows and tries the next when that title fails later; a `"` title with a backslash at
+    its line's end or before a quote stays open, as `marked` takes the backslash with the quote). A carriage return
+    and a line feed end one line only when nothing comes between them. ACP gives a chunk no text boundary: a client
+    may draw the chunks of a message ID as one block, or append every chunk of a kind to the
     last block until a tool call or a chunk of the other kind, across texts and messages (a cut-off reply and its retry
     under a new ID, the parts of a replayed session). So a text that picks up after a piece of another was sent starts
     as it would alone only where both stand at the start of a line with no block or unfinished definition open and the
@@ -2630,9 +2633,11 @@ runs" is a permission.
     `http` and after an address one text ends with, a reference whose label holds a backtick, and a definition before
     a fence line in each of its open states, drawn by both renderers; "where the tracker is unsure, code takes
     joiners": a tilde, a bare address's start in any case, a list fence and a closer with words after it before a
-    fence after a blank line, and a definition still open over a blank line, with a tilde fence, a closer with spaces
+    fence after a blank line, a definition still open over a blank line, and a `"` title with a backslash at its end or
+    before its quote and a `<` destination with a `<` or a second `>` in it, with a tilde fence, a closer with spaces
     after it, an address's start cut by a line break and whole definitions or lines that are no definition as the
-    controls; "a `<` or a `!` takes a joiner only before a tag or an image"; four rows of a carriage return before a
+    controls, a `"` title with a backslash before a letter and a `<` destination with a `<` in it among them; "a `<` or
+    a `!` takes a joiner only before a tag or an image"; four rows of a carriage return before a
     backtick, cut at every point; and `packages/cli/test/acp/image-fuzz.test.ts`, which runs `image-fuzz.ts` in a
     child process with a deadline, seed 20261124, over 20,000 fuzzed cases for each renderer: fences of both marks at
     any indentation, behind list and quote marks and with info strings, spans, links, tables, task items, HTML blocks,

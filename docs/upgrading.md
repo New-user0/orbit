@@ -2908,7 +2908,9 @@ closes with a run of the same mark at least as long, at most three spaces in, wi
 below a line of text, in a list item or a quote, or after a list item that holds only a task box such as `- [ ]` takes
 joiners, and so does every later fence in the text after a fence line that opens no such block, after a closing run
 four or more spaces or a tab in or with anything but spaces after it, after a line that starts to the left of an
-indented opening fence, and after a line with a tilde or the start of a bare address (`www.`, `http`, `ftp:`). A text
+indented opening fence, after a line with a tilde or the start of a bare address (`www.`, `http`, `ftp:`), and after
+a link reference definition whose `<...>` destination holds a second `>`. A definition's `"` title with a backslash at
+its line's end or before a quote counts as still open, as `marked` reads it. A text
 that follows, with no tool call between, a text that ended inside a block, a line or a definition that may go on (a
 reply cut off at its output limit and its retry, for example) takes joiners in every fence, since a client may draw the
 two as one block; a fence that starts it is sent unchanged only where it would be after the lines that ended the text
