@@ -169,6 +169,63 @@ describe("tools/test/run.ts on a stuck file", () => {
   )
 })
 
+// On Linux and macOS `bun test` runs in its own process group, so a terminal's Ctrl-C and CI's SIGTERM reach only the
+// runner, which passes them on to the group. Windows has no such signals to pass on: there the runner is ended outright.
+describe.skipIf(process.platform === "win32")("tools/test/run.ts on a signal", () => {
+  for (const name of ["SIGINT", "SIGTERM"] as const)
+    test(
+      `passes ${name} on to bun test, so the run and its workers end with it`,
+      async () => {
+        await using dir = await tmpdir()
+        const pidFile = path.join(dir.path, "pid")
+        await suite(dir.path, {
+          "a.test.ts": quick,
+          "wait.test.ts": [
+            `import { test } from "bun:test"`,
+            `import { writeFileSync } from "node:fs"`,
+            `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))`,
+            `await Bun.sleep(40_000)`,
+            `test("never reached", () => {})`,
+          ].join("\n"),
+        })
+        const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "../../../tools/test/run.ts")], {
+          cwd: dir.path,
+          env: { ...process.env, ORBIT_TEST_WORKERS: "2" },
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "ignore",
+        })
+        const worker = await until(30_000, async () => Number(await Bun.file(pidFile).text().catch(() => "")) || undefined)
+        const signalled = Date.now()
+        child.kill(name)
+        await child.exited
+        // Without the signal passed on, the runner ends at once and the worker sleeps on in its own group.
+        expect(await until(10_000, () => (running(worker) ? undefined : true))).toBe(true)
+        expect(Date.now() - signalled).toBeLessThan(10_000)
+      },
+      60_000,
+    )
+})
+
+async function until<T>(limit: number, look: () => T | undefined | Promise<T | undefined>) {
+  const end = Date.now() + limit
+  while (Date.now() < end) {
+    const found = await look()
+    if (found !== undefined) return found
+    await Bun.sleep(50)
+  }
+  throw new Error(`nothing within ${limit} ms`)
+}
+
+function running(pid: number) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
 describe("runProgram", () => {
   test("returns what the program printed and its exit code", async () => {
     const result = await runProgram([process.execPath, "-e", "process.stdout.write('out'); process.stderr.write('err'); process.exit(3)"])
