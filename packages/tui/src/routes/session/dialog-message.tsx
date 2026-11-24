@@ -4,6 +4,7 @@ import { DialogSelect } from "../../ui/dialog-select"
 import { useClipboard } from "../../context/clipboard"
 import { useToast } from "../../ui/toast"
 import { DialogFork } from "./dialog-fork"
+import { shownPrompt } from "../../prompt/codec"
 
 export function DialogMessage(props: {
   messageID: string
@@ -44,7 +45,7 @@ export function DialogMessage(props: {
             if (!value) return
             const text =
               value.type === "user"
-                ? value.text
+                ? shownPrompt(value)
                 : value.type === "assistant"
                   ? value.content
                       .filter((content) => content.type === "text")

@@ -55,15 +55,47 @@ async function editor(state: string) {
   }
 }
 
-function render(state: string) {
+// What the app sent: each prompt's body and each other admission to a session (a synthetic message, a command).
+type Sent = { prompts: Record<string, unknown>[]; admissions: string[] }
+
+function render(state: string, sent: Sent = { prompts: [], admissions: [] }) {
+  const sessions = new Map<string, Record<string, unknown>>()
+  const info = (record: Record<string, unknown>) => ({
+    ...record,
+    location: { directory: location.directory },
+    projectID: "project",
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 0, updated: 0 },
+  })
   return createAppFixture({
     state,
     width: 120,
     config: { animations: false },
-    fetch: (url) => {
+    fetch: async (url, request) => {
       if (url.pathname === "/api/fs/list") return json({ location, data: [] })
       if (url.pathname === "/api/location") return json(location)
+      if (url.pathname === "/api/session" && request.method === "POST") {
+        const record: Record<string, unknown> = await request.json()
+        sessions.set(String(record.id), record)
+        return json({ data: info(record) })
+      }
       if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
+      if (/^\/api\/session\/[^/]+\/prompt$/.test(url.pathname)) {
+        sent.prompts.push(await request.json())
+        return json({ data: {} })
+      }
+      if (/^\/api\/session\/[^/]+\/(synthetic|command)$/.test(url.pathname)) {
+        sent.admissions.push(url.pathname.split("/").at(-1) ?? "")
+        return json({ data: {} })
+      }
+      if (/^\/api\/session\/[^/]+\/(message|inbox|permission)$/.test(url.pathname))
+        return json({ data: [], cursor: {} })
+      if (/^\/api\/session\/[^/]+\/(agent|model)$/.test(url.pathname)) return new Response(null, { status: 204 })
+      if (/^\/api\/session\/[^/]+$/.test(url.pathname)) {
+        const record = sessions.get(url.pathname.split("/")[3] ?? "")
+        return record ? json({ data: info(record) }) : json({ message: "not found" }, { status: 404 })
+      }
       if (url.pathname === "/api/agent")
         return json({ location, data: [{ id: "build", mode: "primary", hidden: false, permissions: [] }] })
       if (url.pathname === "/api/provider") return json({ location, data: [{ id: "provider", name: "Provider" }] })
@@ -135,6 +167,52 @@ test("a mention from the editor puts @path in the prompt, with the lines when th
     const frame = setup.captureCharFrame()
     expect(frame).not.toContain("\u001b")
     expect(frame).not.toContain("pwned")
+  } finally {
+    await bridge.stop()
+  }
+})
+
+// Review of m5-quality fix loop 1 (classes 3 and 8): the editor's open file and selection go with the prompt as its
+// editor field, which the server leaves out when the person's read rules or policies refuse the file (the core rows of
+// session-prompt-editor.test.ts decide each rule, policy, link and trust case). Nothing goes as text the terminal UI
+// wrote, which the server could not check. A range that ends at the first character of a later line stops at the line
+// before it, and an open file with nothing selected goes as its path alone.
+test.each([
+  [
+    "a selection",
+    { start: { line: 3, character: 1 }, end: { line: 9, character: 4 } },
+    { path: "/work/open.ts", selection: { start: 3, end: 9, text: "SELECTED-TEXT" } },
+  ],
+  [
+    "a selection that ends at the start of a line",
+    { start: { line: 3, character: 2 }, end: { line: 9, character: 1 } },
+    { path: "/work/open.ts", selection: { start: 3, end: 8, text: "SELECTED-TEXT" } },
+  ],
+  [
+    "an open file with nothing selected",
+    { start: { line: 3, character: 2 }, end: { line: 3, character: 2 } },
+    { path: "/work/open.ts" },
+  ],
+])("%s goes with the prompt as its editor field, and as nothing else", async (_, selection, field) => {
+  await using state = await tmpdir()
+  const bridge = await editor(state.path)
+  const sent: Sent = { prompts: [], admissions: [] }
+  await using setup = await render(state.path, sent)
+  try {
+    await setup.waitForFrame(promptReady)
+    while (!bridge.connected()) await Bun.sleep(20)
+    await Bun.sleep(100)
+    bridge.send({ type: "selection", filePath: "/work/open.ts", text: "SELECTED-TEXT", selection })
+    await setup.waitForFrame((frame) => frame.includes("open.ts"))
+
+    await setup.mockInput.typeText("What is this?")
+    setup.mockInput.pressEnter()
+    await setup.waitForFrame(() => sent.prompts.length === 1)
+
+    expect(sent.prompts[0]).toMatchObject({ text: "What is this?" })
+    expect(sent.prompts[0]?.editor).toEqual(field)
+    expect(sent.admissions).toEqual([])
+    expect(JSON.stringify(sent.prompts[0]?.text)).not.toContain("SELECTED-TEXT")
   } finally {
     await bridge.stop()
   }

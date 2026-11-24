@@ -28,11 +28,18 @@ describe("editor notes of the prompt", () => {
   // phrases are data, so putting one back fails the test.
   const retiredNotes = [/may or may not be relevant/, /Note: The user opened the file/, /Note: The user selected/]
 
+  // Since m5-quality fix loop 2 the prompt sends the editor's file and selection as its editor field, and the server
+  // writes the note (core's request lowering), so the current wording is read there.
   test("the prompt keeps the retired editor notes out and carries the current ones", async () => {
-    const text = await Bun.file(path.join(source, "component", "prompt", "index.tsx")).text()
-    retiredNotes.forEach((pattern) => expect(text).not.toMatch(pattern))
-    expect(text).toContain("Editor state, given as background and not as a request")
-    expect(text).toContain("is highlighted")
-    expect(text).toContain("it may have nothing to do with the task")
+    const prompt = await Bun.file(path.join(source, "component", "prompt", "index.tsx")).text()
+    const note = await Bun.file(
+      path.join(import.meta.dir, "..", "..", "core", "src", "session", "runner", "to-llm-message.ts"),
+    ).text()
+    retiredNotes.forEach((pattern) => expect(prompt).not.toMatch(pattern))
+    retiredNotes.forEach((pattern) => expect(note).not.toMatch(pattern))
+    expect(prompt).toContain("editor: editorField(pendingEditorSelection)")
+    expect(note).toContain("Editor state: the file named below is open")
+    expect(note).toContain("is highlighted")
+    expect(note).toContain("may have nothing to do with the task")
   })
 })

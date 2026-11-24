@@ -226,3 +226,40 @@ test("the Markdown transcript shows a slash command's prompt as its command", as
   expect(written[0]).not.toContain("EXPANDED-BODY")
   expect(written[0]).toContain("## User\n\nAdd the parser\n")
 })
+
+// Review of fix loop 2: the message menu's "Copy" writes a slash command's prompt as the command that was run, as the
+// row it was opened from draws it. A prompt with no command copies its text (the control).
+test.each([
+  ["a slash command's prompt copies as its command", "/review src", SHOWN],
+  ["a plain prompt copies as its text", "Add the parser", "Add the parser"],
+])("the message menu's Copy: %s", async (_, filter, copied) => {
+  await using state = await tmpdir()
+  const written: string[] = []
+  await using setup = await rewindApp({
+    state: state.path,
+    messages: withCommand,
+    clipboard: {
+      read: async () => undefined,
+      write: async (value: string) => {
+        written.push(value)
+      },
+      dispose: async () => {},
+    },
+  })
+  await setup.waitForFrame((frame) => frame.includes("Renamed it."))
+  await setup.mockInput.typeText("/timeline")
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Timeline"))
+  // A select dialog focuses its search field a moment after it is drawn.
+  await Bun.sleep(50)
+  await setup.mockInput.typeText(filter)
+  await setup.waitForFrame((frame) => frame.includes(copied))
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => frame.includes("Message Actions"))
+  await Bun.sleep(50)
+  await setup.mockInput.typeText("Copy")
+  await setup.waitForFrame((frame) => frame.includes("message text to clipboard"))
+  setup.mockInput.pressEnter()
+  await until(() => written.length > 0, "the prompt on the clipboard")
+  expect(written).toEqual([copied])
+})

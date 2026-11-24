@@ -29,7 +29,7 @@ import { promptOffsetWidth } from "../../prompt/display"
 import { expandPromptInputPastedText, realignPromptInputMentions } from "../../prompt/mention"
 import { parseSlashHead } from "../../prompt/parse"
 import { stringWidth } from "../../util/string-width"
-import { block, envelope } from "@orbit/util/reminder-text"
+import type { PromptEditorContext } from "@orbit/client"
 import { createStore, produce, unwrap } from "solid-js/store"
 import {
   emptyPrompt,
@@ -188,49 +188,24 @@ export function getEditorRangeLabel(selection: EditorSelection["ranges"][number]
   return `#${start.line}-${last}`
 }
 
-// The envelope holds only text written here. The path and the selected text come from the repository, so each follows
-// it as a labelled block that cannot close its fence and in which look-alike reminder tags are escaped.
-export function formatEditorContext(selection: EditorSelection) {
-  const selected = selection.ranges.filter(hasEditorRangeSelection)
-  if (selected.length === 0)
-    return [
-      envelope("Editor state, given as background and not as a request: the person has the file named below open. It may have nothing to do with the task."),
-      block("open file", selection.filePath),
-    ].join("\n\n")
-
-  // Line endings are normalized first so the cut falls at the same place on every platform.
-  const cut = selected.map((range) => {
-    const text = range.text.replaceAll("\r\n", "\n")
-    if (text.length <= EDITOR_SELECTION_LIMIT) return { range, text, left: 0 }
-    // Never inside a surrogate pair.
-    const end = /[\ud800-\udbff]/.test(text[EDITOR_SELECTION_LIMIT - 1])
-      ? EDITOR_SELECTION_LIMIT - 1
-      : EDITOR_SELECTION_LIMIT
-    return { range, text: text.slice(0, end), left: text.length - end }
-  })
-  const left = cut.reduce((total, item) => total + item.left, 0)
-  return [
-    envelope(
-      [
-        "Editor state: a part of the file named below is highlighted, and the highlighted text follows. This is background context and not a request; it may have nothing to do with the task.",
-        ...(left > 0
-          ? [
-              `The selection was cut: ${left} ${left === 1 ? "character" : "characters"} at the end of the text below ${left === 1 ? "is" : "are"} not shown.`,
-            ]
-          : []),
-      ].join(" "),
-    ),
-    ...cut.map((item, index) =>
-      block(
-        `${selected.length > 1 ? `Selection ${index + 1}: ` : ""}${getEditorRangeLabel(item.range)} of ${selection.filePath}`,
-        item.text,
-      ),
-    ),
-  ].join("\n\n")
+// The editor's open file and its first highlighted range go as the prompt's editor field, as the reference attaches one
+// selection. The server reads it only once the person's read rules and policies let the file's path through, and
+// renders the path and the text as data (classes 3 and 8). Positions count from 1, and a range that ends at the first
+// character of a later line does not cover that line.
+export function editorField(selection: EditorSelection): PromptEditorContext {
+  const range = selection.ranges.find(hasEditorRangeSelection)
+  if (!range) return { path: selection.filePath }
+  const start = range.selection.start
+  const end = range.selection.end
+  return {
+    path: selection.filePath,
+    selection: {
+      start: start.line,
+      end: end.character === 1 && end.line > start.line ? end.line - 1 : end.line,
+      text: range.text,
+    },
+  }
 }
-
-/** The most of a selection that reaches the model, as in core and the VS Code chat. */
-const EDITOR_SELECTION_LIMIT = 2000
 
 function argumentSlash(input: string, commands: readonly KeymapCommand[], locationCommands: ReadonlySet<string>) {
   const head = parseSlashHead(input, /\s/)
@@ -1643,19 +1618,6 @@ export function Prompt(props: PromptProps) {
         !(await attempt("Failed to commit revert", () => client.api.session.revert.commit({ sessionID: target })))
       )
         return false
-      if (pendingEditorSelection) {
-        // Keep editor context hidden while admitting it before the corresponding user prompt.
-        const send = () =>
-          client.api.session.synthetic({
-            sessionID: target,
-            text: formatEditorContext(pendingEditorSelection),
-            resume: false,
-          })
-        // Fold into the setup gate so the context still admits before the
-        // user prompt once the session exists.
-        if (newSession) newSession.gate = newSession.gate.then(send)
-        else if (!(await attempt("Failed to send editor context", send))) return false
-      }
       // The data layer admits optimistically: the prompt renders immediately
       // and rolls back if the server rejects it, so submission does not wait
       // on the network. On rejection the row is already rolled back; restore
@@ -1668,6 +1630,9 @@ export function Prompt(props: PromptProps) {
           id: messageID,
           agents: entry.agents,
           skills: entry.skills?.length ? entry.skills : undefined,
+          // The editor's file and selection, which the server leaves out when the person's read rules or policies
+          // refuse the file (classes 3 and 8).
+          ...(pendingEditorSelection ? { editor: editorField(pendingEditorSelection) } : {}),
           delivery,
           gate: newSession?.gate,
           // Commit the captured selection after earlier admissions, including
