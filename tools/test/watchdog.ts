@@ -39,7 +39,7 @@ export async function runTests(args: string[], env: Record<string, string | unde
   // Files are named as the timings name them: relative to the package, with forward slashes.
   const relative = (file: string) => path.relative(cwd, file).split(path.sep).join("/")
   const deadline = (file: string) => Math.max(base, 3 * (measured[relative(file)] ?? 0))
-  const stuck = Promise.withResolvers<true>()
+  const stuck: { stopping?: Promise<unknown> } = {}
   // The folder is read synchronously, so one look ends before the next can start and a file is reported once.
   const watch = setInterval(() => {
     const found = fs
@@ -49,15 +49,16 @@ export async function runTests(args: string[], env: Record<string, string | unde
     if (!found) return
     clearInterval(watch)
     report(found, relative(found.file), deadline(found.file))
-    void stop(child).then(() => stuck.resolve(true))
+    stuck.stopping = stop(child)
   }, Math.min(5_000, base / 4))
-  const code = await Promise.race([child.exited, stuck.promise])
+  const code = await child.exited
   clearInterval(watch)
-  await child.exited
+  // A stopped run ends with the signal's code; it fails with 1 once every worker is gone.
+  await stuck.stopping
   process.off("SIGINT", interrupt)
   process.off("SIGTERM", terminate)
   fs.rmSync(folder, { recursive: true, force: true })
-  return code === true ? 1 : code
+  return stuck.stopping ? 1 : code
 }
 
 function timings(args: string[]): Record<string, number> {
