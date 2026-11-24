@@ -5,6 +5,7 @@ import path from "path"
 import { testArgs } from "../../../tools/test/args"
 import { mergeTimings } from "../../../tools/test/timings"
 import { runTests } from "../../../tools/test/watchdog"
+import { runProgram } from "./fixture/run-program"
 import { tmpdir } from "./fixture/tmpdir"
 
 // The parts of tools/test that test-runner-deadline.test.ts and ci-shards.test.ts reach only through a child process or
@@ -121,6 +122,61 @@ describe("runTests", () => {
     },
     60_000,
   )
+})
+
+describe("tools/test/run.ts on a stuck file", () => {
+  test(
+    "annotates the file for GitHub, and on Linux prints what the worker was doing",
+    async () => {
+      await using dir = await tmpdir()
+      await suite(dir.path, {
+        "stuck.test.ts": `import { test } from "bun:test"\ntest("spins", () => { const end = Date.now() + 40_000; while (Date.now() < end) {} })\n`,
+      })
+      const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "../../../tools/test/run.ts")], {
+        cwd: dir.path,
+        env: { ...process.env, ORBIT_TEST_WORKERS: "2", ORBIT_TEST_FILE_DEADLINE_MS: "1000", GITHUB_ACTIONS: "true" },
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ])
+      expect(code).toBe(1)
+      expect(stderr).toMatch(/^Test file stuck: test\/stuck\.test\.ts has run for \d+ s, past its deadline of 1 s \(worker \d+\)/m)
+      expect(stderr).toContain("::error title=Test file stuck::test/stuck.test.ts")
+      if (process.platform === "linux") {
+        expect(stderr).toMatch(/^worker \d+: State:\s+R/m)
+        expect(stderr).toMatch(/^threads: \d+ R/m)
+        expect(stderr).toMatch(/^children: /m)
+      }
+      expect(stdout).not.toContain("Test file stuck")
+    },
+    60_000,
+  )
+})
+
+describe("runProgram", () => {
+  test("returns what the program printed and its exit code", async () => {
+    const result = await runProgram([process.execPath, "-e", "process.stdout.write('out'); process.stderr.write('err'); process.exit(3)"])
+    expect([result.exitCode, result.success, result.stdout.toString(), result.stderr.toString()]).toEqual([3, false, "out", "err"])
+    expect((await runProgram([process.execPath, "-e", "0"])).success).toBe(true)
+  })
+
+  test("kills a program that runs past its deadline and fails with the command and what it printed", async () => {
+    const started = Date.now()
+    const failure = await runProgram(
+      [process.execPath, "-e", "process.stdout.write('so far'); setTimeout(() => {}, 60_000)"],
+      { deadline: 1_000 },
+    ).catch((error: Error) => error)
+    expect(Date.now() - started).toBeLessThan(10_000)
+    expect(failure).toBeInstanceOf(Error)
+    expect((failure as Error).message).toContain("did not end within 1 s")
+    expect((failure as Error).message).toContain("so far")
+    if (process.platform === "linux") expect((failure as Error).message).toContain("processes:")
+  })
 })
 
 describe("testArgs", () => {
