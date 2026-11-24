@@ -1,8 +1,7 @@
-// The ACP approval rows of acp/permission-files.subprocess.test.ts through other spellings of the workspace folder and
-// of a link's target, and the NotebookEdit row of the approval matrix. Each row has its own folder, model and `orb acp`
-// child, and the rows run as many at a time as `--max-concurrency` allows (packages/cli/package.json). The file is not
-// beside the first half: CI's `--shard` gives each job a run of files in path order, and the two halves together, each
-// starting `orb acp` children at once, overloaded one Windows job until rows timed out.
+// The ACP approval rows of permission-files.subprocess.test.ts through other spellings of the workspace folder and of
+// a link's target, and the NotebookEdit row of the approval matrix. The rows of a repository's link through each
+// spelling are in spelling-matrix-*.subprocess.test.ts. Each row has its own folder, model and `orb acp` child, and the
+// rows run as many at a time as `--max-concurrency` allows (packages/cli/package.json).
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
@@ -15,15 +14,14 @@ import {
   shownAt,
   toolResult,
   type Run,
-} from "./acp/approval-harness"
+} from "./approval-harness"
 import {
   denyMarkerSent,
   realSpellings,
   refusedSpellings,
   spellArgs,
   spellingLinks,
-  spellingMatrix,
-} from "./acp/spelling-rows"
+} from "./spelling-rows"
 
 for (const spelling of realSpellings) {
   const through = async (root: string) => path.join(await spelling.spelled(root), "cfg", "orbit.json")
@@ -139,9 +137,6 @@ for (const spelling of refusedSpellings)
       90_000,
     )
 
-// The rows of a repository's link through each real spelling, for the Bash rows; spelling-matrix.subprocess.test.ts
-// has the rest, so that each file is a share of a CI shard (acp/spelling-rows.ts).
-spellingMatrix(linkRows.slice(0, 5))
 
 // A share or device spelling is refused before any question whatever the tool, trusted or not.
 const refusedRows = linkRows.filter((row) => ["Bash workdir", "Grep path", "Write file_path"].includes(row.name))

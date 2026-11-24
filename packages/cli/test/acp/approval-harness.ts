@@ -1,4 +1,4 @@
-// What the ACP approval rows of permission-files.subprocess.test.ts and ../permission-spellings.subprocess.test.ts
+// What the ACP approval rows of permission-files.subprocess.test.ts and the spelling files beside it
 // share: the `approval` harness, which runs one row over a real `orb acp` process with its own folder and scripted model,
 // and the rows of a repository's link into the person's global config folder with their check.
 import { expect } from "bun:test"

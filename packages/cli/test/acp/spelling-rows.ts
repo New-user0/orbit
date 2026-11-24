@@ -1,5 +1,5 @@
 // The spellings of the workspace folder that the ACP approval rows go through, and the matrix of a repository's link
-// rows through each of them, which permission-spellings.subprocess.test.ts and spelling-matrix.subprocess.test.ts share.
+// rows through each of them, which permission-spellings.subprocess.test.ts and spelling-matrix-*.subprocess.test.ts share.
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
