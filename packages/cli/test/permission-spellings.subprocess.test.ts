@@ -1,12 +1,13 @@
-// The ACP approval rows of permission-files.subprocess.test.ts through other spellings of the workspace folder and of a
-// link's target, and the NotebookEdit row of the approval matrix, in a file of their own so that CI's shards can balance
-// them. Each row has its own folder, model and `orb acp` child, and the rows run as many at a time as `--max-concurrency`
-// allows (packages/cli/package.json).
+// The ACP approval rows of acp/permission-files.subprocess.test.ts through other spellings of the workspace folder and
+// of a link's target, and the NotebookEdit row of the approval matrix. Each row has its own folder, model and `orb acp`
+// child, and the rows run as many at a time as `--max-concurrency` allows (packages/cli/package.json). The file is not
+// beside the first half: CI's `--shard` gives each job a run of files in path order, and the two halves together, each
+// starting `orb acp` children at once, overloaded one Windows job until rows timed out.
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { runProgram } from "../../../core/test/fixture/run-program"
+import { runProgram } from "../../core/test/fixture/run-program"
 import {
   approval,
   canLinkDirectory,
@@ -18,7 +19,7 @@ import {
   shownAt,
   toolResult,
   type Run,
-} from "./approval-harness"
+} from "./acp/approval-harness"
 
 // A path that names the project through another spelling of its own folder is decided where it really is. Over a real
 // `orb acp` in an untrusted folder, a call under such a spelling meets the same folder question and the same rules as
