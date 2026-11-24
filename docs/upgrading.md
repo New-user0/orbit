@@ -2900,8 +2900,11 @@ fenced block and a code span that closes on its own line count as code. A code s
 text reaches the client a moment later than the words before it. A backtick that opens no span (a lone or escaped one,
 or one in a link's address) leaves the rest as prose. Code in a span that runs over a line, in a span with a `|`, after
 a link whose address has a space or a title, or in any fence after one written on a list item's own line or more than
-three spaces in, can show `!\[` or `&lt;`. Command, model and mode names and descriptions, a session's title in `session/list` and a failed turn's
-error message are one line, with control characters written out.
+three spaces in, or after a fence's closing run four or more spaces or a tab in, can show `!\[` or `&lt;`. So can code
+in a text that follows, with no tool call between, a text that ended inside a block, a span or a line (a reply cut off
+at its output limit and its retry, for example), since a client may draw the two as one block. Command, model and
+mode names and descriptions, a session's title in `session/list` and a failed turn's error message are one line, with
+control characters written out.
 
 **Affects:** ACP clients that draw forms, Markdown or these names; scripts that match them.
 

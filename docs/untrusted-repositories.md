@@ -2572,18 +2572,34 @@ runs" is a permission.
     as it wrote it, except that outside code the `[` of an image's `![` is written `\[` and the `<` that opens a raw tag,
     comment or declaration `&lt;` (`withoutImages` in the same file), so a client draws an image as its text and address,
     as the reference's renderer shows an image as its address. Text counts as code only where Markdown is sure to read it
-    so: a fenced block opened by a line of three or more backticks or tildes after at most three spaces, and a code span
-    held back from its opening run until a run of the same length closes it on the same line. A backtick that a
+    so: a fenced block opened by a line of three or more backticks or tildes after at most three spaces and closed by a
+    line of a run of the same mark at least as long after at most three spaces, and a code span held back from its
+    opening run until a run of the same length closes it on the same line. A backtick that a
     backslash escapes, or that is inside a link's address or an autolink, opens nothing; a span that its line or the
     text ends first, or that holds a `|` a table can split on, is written as prose, and the backticks in the rest of
     that paragraph then open nothing; after a fence behind a list's or a quote's mark, more than three spaces in, or
-    left by a line to the left of its opening one, no later fence in the text counts as code, since renderers differ on
-    which block is open. Each text of a message starts afresh, and its end writes what is still held (classes 6 and 9;
+    left by a line to the left of its opening one, and after a closing run more than three spaces or a tab in, no later
+    fence in the text counts as code, since renderers differ on which block is open. The end of a text writes what is
+    still held. ACP gives a chunk no text boundary: a client may draw the chunks of a message ID as one block, or append
+    every chunk of a kind to the last block until a tool call or a chunk of the other kind, across texts and messages
+    (a cut-off reply and its retry under a new ID, the parts of a replayed session). So a text that picks up after a
+    piece of another was sent starts as it would alone only where both stand at the start of a line with no block, span
+    or mixed paragraph open; anywhere else what it holds is written as prose and nothing more of it counts as code, so
+    either client at most shows a mark escaped. A tool call, a prompt and a subagent's updates that the client takes
+    apart start a new block (`follow` in the same file and `piece` in `acp/translate.ts`; classes 6 and 9;
     "the model's Markdown": an image, a reference image, a raw `img` and `picture`, each split across pieces, and an
     image after a closed fence, with prose, links, code spans, fences and an autolink as the controls; one row each for
     a lone, an escaped and a broken backtick, a backtick in a link's address, a title, an autolink and a table cell, a
     fence line with a backtick after its run or four spaces in, a hidden fence and line ends of `\r` and `\r\n`, each with an image and an `img` tag, whole and one character a piece;
-    "a code span held back until it closes" for the controls; "each text of a message starts afresh"; 20,000 random
+    "a code span held back until it closes" for the controls, with a closer three spaces in and a run of the other mark
+    four in; four rows of a closing run four spaces or a tab in and "after a closing run further in"; "draws no image or
+    tag in a client that joins texts or not": a fence, a code block, a span, a line and a mixed paragraph that one text
+    leaves open and a fence it has lost, each before text 1 of the same message and before a new message's, two
+    reasoning parts, a subagent's text on the session's own updates, a fence and a span a tool call cuts and a span held
+    while a subagent's text is sent, each drawn as each message's block, as each kind's block until a tool call and as
+    each run of one kind; "a `!` that ends a text"; "what follows a clean text, a tool call or another channel" for the
+    controls; "what one text part or message leaves open reaches the next" for the replay, with a
+    compaction, a running one and a message that fails part way between, and a tool call and a prompt as the controls; 20,000 random
     texts in random pieces drawn by the same renderer; "a loaded session's replay"). A client whose renderer reads
     Markdown in a way this does not foresee is not covered by a test. Names and words that a client draws as plain text are one line with no
     control or format character (`plain`): the available commands' names and descriptions, the model and mode names and
