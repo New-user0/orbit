@@ -6,6 +6,7 @@
 // break is written out, so no value starts a line that reads as one of Orbit's. A value that Markdown leaves alone is
 // sent as it is (the control). Through the real ACP translation over the wire.
 import { describe, expect, test } from "bun:test"
+import { marked } from "marked"
 import type { EventSubscribeOutput, OrbitEvent, SessionMessageInfo } from "@orbit/client/promise"
 import { availableCommands, buildModelSelectOption, buildModeSelectOption } from "../../src/acp/config-option"
 import { ACPElicitation } from "../../src/acp/elicitation"
@@ -48,6 +49,14 @@ const read = (markdown: string) => {
     .replace(/&amp;/g, "&")
     .replace(/\n$/, "")
   return { text, markup: [...new Set(tags.filter((tag) => tag !== "p" && tag !== "code"))] }
+}
+// U+2060 WORD JOINER, which the filter writes after a `!` or a `<` that could open an image or a tag.
+const JOINER = String.fromCharCode(0x2060)
+// What a person reads of `markdown` and the address of each link in it, such as the link an image becomes once a word
+// joiner parts its `!` from its `[`.
+const reached = (markdown: string) => {
+  const html = Bun.markdown.html(markdown, { autolinks: true, strikethrough: true, tables: true, tasklists: true })
+  return [read(markdown).text, ...[...html.matchAll(/href="([^"]*)"/g)].map((found) => found[1])].join("\n")
 }
 
 // Values a model or a file can choose, each at most 40 characters so that no title's cut changes what is read.
@@ -462,18 +471,21 @@ describe("acp: other text a model, a tool or a server chose", () => {
         })
         expect([deltas, seen]).not.toEqual([deltas, expect.stringMatching(/<(img|picture|source)\b/i)])
         // A reference definition is never drawn, so only an inline address is read in the text.
-        if (!deltas.join("").includes("[ref]:")) expect(read(markdown).text).toContain(address)
+        if (!deltas.join("").includes("[ref]:")) expect(reached(markdown)).toContain(address)
       }
     }
-    // The controls: prose keeps its emphasis and links, code keeps its marks, and an autolink is a link.
+    // The controls: prose keeps its emphasis and links, and code keeps its marks.
     for (const markdown of [
       "*bold* and [a link](https://example.com/)",
       "use `vec![1]` and `<img>` here",
       "a span of two marks holds one: ``a ` ![x](u) ``",
       "```\nlet v = vec![1]; // <img src=x>\n```",
-      "see <https://example.com/>",
     ])
       expect(await streamed([markdown])).toEqual([markdown, markdown])
+    // An autolink's `<` takes a word joiner as a tag's does, and its address is still a link.
+    const autolink = await streamed(["see <https://example.com/>"])
+    expect(autolink).toEqual(Array(2).fill(`see <${JOINER}https://example.com/>`))
+    for (const markdown of autolink) expect(reached(markdown)).toContain("https://example.com/")
     // Code split across pieces is still code.
     expect(await streamed(["``", "`\n![x](y)\n``", "`"])).toEqual(Array(2).fill("```\n![x](y)\n```"))
   })
@@ -546,7 +558,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
           for (const markdown of await streamed(deltas)) {
             const seen = Bun.markdown.html(markdown, RENDERER)
             expect([whole, seen]).not.toEqual([whole, expect.stringMatching(/<img\b/i)])
-            expect(read(markdown).text).toContain(ADDRESS)
+            expect(reached(markdown)).toContain(ADDRESS)
           }
         }
       }
@@ -557,7 +569,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
   // closing one reads the block from the third line to the fifth, and the image as prose. So the tracker gives up there.
   test("the model's Markdown: after a closing run further in, no later block is taken as code", () => {
     expect(withoutImages(prose, "```\n    ```\n```\nx\n```\n![x](u)", true)[1]).toBe(
-      "```\n    ```\n```\nx\n```\n!\\[x](u)",
+      `\`\`\`\n    \`\`\`\n\`\`\`\nx\n\`\`\`\n!${JOINER}[x](u)`,
     )
   })
 
@@ -566,7 +578,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
   // escaped.
   test("the model's Markdown: a fence line after a quoted table is not taken as code", () => {
     expect(withoutImages(prose, "> a | b\n> --|--\n```\n![x](u)\n```", true)[1]).toBe(
-      "> a | b\n> --|--\n```\n!\\[x](u)\n```",
+      `> a | b\n> --|--\n\`\`\`\n!${JOINER}[x](u)\n\`\`\``,
     )
   })
 
@@ -580,7 +592,6 @@ describe("acp: other text a model, a tool or a server chose", () => {
       "``a ``` <img> `` end",
       "`<img>`\nnext line",
       "see [a](b c)\n\nuse `<img>` here",
-      "a [link](https://example.com/) and `<img>`",
       "end with `<img>`",
       // A closing run three spaces in closes the block, so the block after it is code too.
       "```\n<img src=x>\n   ```\n```\n<img src=y>\n```",
@@ -601,7 +612,11 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ])
       expect(await streamed(markdown.split(""))).toEqual([markdown, markdown])
     // A span that the text ends before it closes is written as prose at the end.
-    expect(await streamed(["see `", "![x](u)"])).toEqual(Array(2).fill("see `!\\[x](u)"))
+    expect(await streamed(["see `", "![x](u)"])).toEqual(Array(2).fill(`see \`!${JOINER}[x](u)`))
+    // After the start of an address that GFM links by itself, no span is sure, so the one after it takes joiners.
+    expect(await streamed(["a [link](https://example.com/) and `<img>`"])).toEqual(
+      Array(2).fill(`a [link](https://example.com/) and \`<${JOINER}img>\``),
+    )
   })
 
   // Fix loop 4 (classes 6 and 9): ACP gives a chunk no text boundary. A client may draw the chunks of each message ID
@@ -637,7 +652,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
     const seen = blocks(updates)
     for (const block of seen.all)
       expect([label, Bun.markdown.html(block, RENDERER)]).not.toEqual([label, expect.stringMatching(/<img\b/i)])
-    if (shown) expect(seen.appended.map((block) => read(block).text).join("\n")).toContain(ADDRESS)
+    if (shown) expect(seen.appended.map(reached).join("\n")).toContain(ADDRESS)
   }
   const text = (sessionID: string, id: string, value: string, ordinal = 0) => [
     textDelta(sessionID, id, value, ordinal),
@@ -772,6 +787,70 @@ describe("acp: other text a model, a tool or a server chose", () => {
     const seen = await chunked((s) => [...text(s, "msg_a", "see !"), ...text(s, "msg_b", `[x](${ADDRESS})`)])
     noImage("!", seen.updates)
   })
+
+  // Fix loop 6 (classes 6 and 9): what image-fuzz.test.ts found with `marked` as the renderer. `marked` reads a link's
+  // text again after unescaping it (H), takes a run with more backticks or tildes after it, and not one with a tab, as
+  // a closing line (I and K), and runs a bare address on over a backtick (J). So an escape, a block or a span that the
+  // tracker was sure of did not hold there. Each text goes through the wire as one or two texts of one message, and no
+  // block a client draws of them has an image or a tag, with md4c or with `marked`.
+  const MARKED_ROWS: Array<[string, string[]]> = [
+    ["H: an image in a link's text after a `[`", ["[[IMAGE]()"]],
+    ["H across two texts of one message", ["[", "[IMAGE]()"]],
+    ["I: a backtick fence closed by a run with a tilde after it", ["```\n```~\nIMAGE"]],
+    ["I with carriage returns", ["```\r```~\rIMAGE"]],
+    ["I: a closing run with a tab after it", ["```\nx\n```\t\nok\n```\nIMAGE\n```"]],
+    ["J: a span after `www.`", ["www.m`IMAGE`"]],
+    ["J: a span after `http`", ["http://e`IMAGE`"]],
+    ["J: a span after an address that one text ends with", ["http://e", "```IMAGE```"]],
+    ["K: a tilde fence closed by a run with a backtick after it", ["~~~\n~~~`\nIMAGE"]],
+  ]
+
+  test.each(MARKED_ROWS)("the model's Markdown, %s: no image or tag with either renderer", async (_, texts) => {
+    for (const image of [`![x](${ADDRESS})`, `<img src=${ADDRESS}>`]) {
+      const seen = await chunked((s) =>
+        texts.flatMap((value, ordinal) => text(s, "msg_a", value.replaceAll("IMAGE", image), ordinal)),
+      )
+      for (const block of blocks(seen.updates).all)
+        for (const html of [
+          Bun.markdown.html(block, RENDERER),
+          marked.parse(block, { gfm: true, async: false }) as string,
+        ])
+          expect([texts, html]).not.toEqual([texts, expect.stringMatching(/<img\b/i)])
+    }
+  })
+
+  // Where the tracker is unsure, a span or a block takes joiners as prose does: after a tilde, after the start of an
+  // address that GFM links by itself, on that line and on every line after it, and after a closing run that anything
+  // but spaces follows. Code it is sure of is as written.
+  test.each([
+    ["~`![x](u)`", `~\`!${JOINER}[x](u)\``],
+    ["a ~ b\n`![x](u)`", `a ~ b\n\`!${JOINER}[x](u)\``],
+    ["~/x\n\n```\n<img>\n```", `~/x\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["see www.example.com\n\n`<img>`", `see www.example.com\n\n\`<${JOINER}img>\``],
+    ["see http://e\n\n```\n<img>\n```", `see http://e\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["ftp://e `<img>`", `ftp://e \`<${JOINER}img>\``],
+    ["1. ~~~\n~~~\n`<img>`", `1. ~~~\n~~~\n\`<${JOINER}img>\``],
+    ["```\n```js\n```\n`<img>`", `\`\`\`\n\`\`\`js\n\`\`\`\n\`<${JOINER}img>\``],
+    // The controls: a tilde fence, a closing run that only spaces follow, and an address's start cut by a line break
+    // leave the tracker sure.
+    ["~~~\n<img>\n~~~\n`<img>`", "~~~\n<img>\n~~~\n`<img>`"],
+    ["```\n<img>\n```  \n`<img>`", "```\n<img>\n```  \n`<img>`"],
+    ["www\n.`<img>`", "www\n.`<img>`"],
+  ])("the model's Markdown %p: where the tracker is unsure, code takes joiners", (value, written) => {
+    expect(withoutImages(prose, value, true)[1]).toBe(written)
+  })
+
+  // A carriage return and a line feed end one line only when nothing comes between them, a backtick held back for a
+  // span too, so the text is never changed. Whole and cut at every point.
+  test.each(["x\r`y\nz", "``a``\r`\n", "a\r`b`\nc", "a\r\n`b`\r\n"])(
+    "the model's Markdown %p: a line break after a carriage return keeps its place",
+    (value) => {
+      for (const cut of Array.from({ length: value.length + 1 }, (_, index) => index)) {
+        const [state, first] = withoutImages(prose, value.slice(0, cut))
+        expect(first + withoutImages(state, value.slice(cut), true)[1]).toBe(value)
+      }
+    },
+  )
 
   test("the model's Markdown: what follows a clean text, a tool call or another channel is as written", async () => {
     const code = "```\nlet v = vec![1]; // <img src=x>\n```"
@@ -946,14 +1025,14 @@ describe("acp: other text a model, a tool or a server chose", () => {
       agent: "build",
       model: { providerID: "test", id: "test-model" },
       content: [
-        { type: "text", text: "![x](https://evil.example/p.png) and `vec![1]`" },
+        { type: "text", text: "`vec![1]` and ![x](https://evil.example/p.png)" },
         { type: "reasoning", text: "<img src=https://evil.example/p.png>" },
       ],
       time: { created: 1 },
     } as unknown as SessionMessageInfo
     expect(replayed(assistant)).toEqual([
-      "!\\[x](https://evil.example/p.png) and `vec![1]`",
-      "&lt;img src=https://evil.example/p.png>",
+      `\`vec![1]\` and !${JOINER}[x](https://evil.example/p.png)`,
+      `<${JOINER}img src=https://evil.example/p.png>`,
     ])
     const user = (command?: { name: string; arguments: string }) =>
       ({

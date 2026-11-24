@@ -72,10 +72,12 @@ export type Prose = {
   /** The fenced code block the text is in. */
   readonly fence?: Fence
   /**
-   * Whether a fenced block may be open that the tracker cannot follow: one behind a list's or a quote's mark or more
-   * than three spaces in, one that a line left by starting to the left of its opening line, one whose closing run
-   * stands more than three spaces or a tab in, or one in a text that a client may join to another's (`follow`). Its
-   * closing line may open a block for one renderer and close one for another, so from then on no block is thought open.
+   * Whether the tracker is unsure what is code from here on: after a fenced block that it cannot follow (one behind a
+   * list's or a quote's mark or more than three spaces in, one that a line left by starting to the left of its opening
+   * line, one whose closing run stands more than three spaces or a tab in or has anything but spaces after it), after a
+   * line with a tilde or the start of an address that GFM links by itself, or in a text that a client may join to
+   * another's (`follow`). Renderers then differ on what is code, so from then on no block or span is thought code, and
+   * a `!` or a `<` in either takes a word joiner as in prose.
    */
   readonly lost: boolean
   /** A backtick run that may open a code span, with the text after it on its line, held back until the span closes. */
@@ -88,6 +90,8 @@ export type Prose = {
   readonly line: string
   /** The last character written. */
   readonly last: string
+  /** The last four characters of the current line, held ones too. */
+  readonly tail: string
   /** Whether that character is a backslash that escapes the next one. */
   readonly escape: boolean
   /** The mark that ends the link address or autolink the text is in: `)` or `>`, or "" outside one. */
@@ -119,6 +123,7 @@ export const prose: Prose = {
   run: 0,
   line: "",
   last: "",
+  tail: "",
   escape: false,
   until: "",
   mixed: false,
@@ -126,9 +131,12 @@ export const prose: Prose = {
   joined: false,
 }
 
-// `<` and a letter, `/`, `!` or `?` opens a raw HTML tag, comment or declaration; an autolink (`<https://...>`) names a
-// scheme and a colon first.
+// `<` and a letter, `/`, `!` or `?` opens a raw HTML tag, comment or declaration, and `!` and `[` open an image. A word
+// joiner (U+2060) between the two marks is drawn as nothing and read as text by every renderer, so it parts them
+// anywhere, even in a link's text that `marked` unescapes and reads again, where an escape would not hold.
 const TAG = /^[a-z/!?]/i
+const JOINER = String.fromCharCode(0x2060)
+// An autolink (`<https://...>`) names a scheme and a colon after its `<`.
 const AUTOLINK = /^[a-z][a-z0-9+.-]{1,31}:/i
 // A mark that can make a link's address or an autolink other than a plain run up to its end: a space or a line break,
 // a quote or a parenthesis of a title, an angle bracket, a backslash or a backtick.
@@ -139,32 +147,38 @@ const FENCE_LINE = /^(?:[ \t>]|[-+*][ \t]|\d{1,9}[.)][ \t])*(?:`{3}|~{3})/
 const DELIMITER_ROW = /^[ \t>]*(?=[^|]*\|)(?=[^-]*-)[-|: \t]+$/
 // A list item that holds only a task box, behind any indentation and any list or quote marks.
 const EMPTY_TASK = /^(?:[ \t>]*(?:[-+*]|\d{1,9}[.)])[ \t]+)+\[[ xX]\][ \t]*$/
+// The start of an address that GFM links by itself, which `marked` runs on over a backtick, and a tilde, after which
+// `marked` takes a backtick as text: after either no backtick is sure to open a span.
+const LINK_START = /^(?:www\.|http|ftp:)$/i
+const UNSURE = /~|www\.|http|ftp:/i
 
 /**
  * A model's own Markdown, for a client that renders it: prose and code stay as written, but nothing in it is an image or
  * a raw HTML tag, which a client would fetch from an address that a model, or a repository that steers it, chose
- * (classes 6 and 9). In prose, the `[` of an image's `![` is written `\[`, so the image reads as its text and its
- * address, as the reference's own renderer shows it; and the `<` that opens a tag is written `&lt;`, which a Markdown
- * client draws as `<`. Text is left as written only where Markdown is sure to read it as code:
+ * (classes 6 and 9). Outside code, a word joiner (U+2060) follows every `!` before a `[` and every `<` before a letter,
+ * `/`, `!` or `?`: it is drawn as nothing, so a person reads the text as written, while the image becomes a link to its
+ * address that nothing fetches and the tag reads as text. Text is left as written only where Markdown is sure to read
+ * it as code, and the tracker that decides so gives up (`lost`) wherever renderers may differ:
  *
  * - A fenced block, opened by a line of three or more backticks or tildes after at most three spaces, and ended by a
- *   line of a run of the same mark at least as long after at most three spaces. A line of such a run further in, or
- *   after a tab, is code to Markdown, and so is a line that starts to the left of the opening one, which may yet end
- *   the list item that holds the block. After either, or a fence behind a list's or a quote's mark or more than three
- *   spaces in, renderers differ on which block is open, so the tracker gives up: the block is no longer thought open
- *   and no later block in the text is taken as code. It gives up as well at a fence line in a table, from the
- *   delimiter row under the table's header to a blank line, and at a fence line that is the first line not blank
- *   after a list item that holds only a task box, as md4c reads either line as text.
+ *   line of a run of the same mark at least as long after at most three spaces, with only spaces after it. A line of
+ *   such a run further in, after a tab or before anything else is code to Markdown, and so is a line that starts to
+ *   the left of the opening one, which may yet end the list item that holds the block. After any of them, or a fence
+ *   behind a list's or a quote's mark or more than three spaces in, renderers differ on which block is open, so the
+ *   tracker gives up. It gives up as well at a fence line in a table, from the delimiter row under the table's header
+ *   to a blank line, and at a fence line that is the first line not blank after a list item that holds only a task box,
+ *   as md4c reads either line as text.
  * - A code span, whose text is held back from its opening run until a run of the same length closes it on the same
  *   line. A run that a backslash escapes, or that is inside a link's address after its `](` or an autolink, opens
  *   nothing. An address or autolink that is not a plain run up to its `)` or `>` may hold a title or a backtick of its
- *   own, so the backticks in the rest of that paragraph open nothing. A span that its line or the text ends before it
- *   closes is written as prose, and so is one with a `|`, which a table splits into two cells; the backticks in the
- *   rest of that paragraph then open nothing too.
+ *   own, so the backticks in the rest of that paragraph open nothing, and so do the backticks after a tilde or the
+ *   start of an address that GFM links by itself, which the tracker then gives up at. A span that its line or the text
+ *   ends before it closes is written as prose, and so is one with a `|`, which a table splits into two cells; the
+ *   backticks in the rest of that paragraph then open nothing too.
  *
  * Text arrives in pieces, so `state` carries what one piece leaves open to the next, and `end` writes what is still
- * held when the text ends; the state it then returns is what the text leaves for one sent after it (`follow`). A `<`
- * that ends a piece is written `&lt;`, since the tag it may open is not known yet.
+ * held when the text ends; the state it then returns is what the text leaves for one sent after it (`follow`). A `!` or
+ * a `<` that ends a piece takes a joiner too, since what follows it is not known yet.
  */
 export function withoutImages(state: Prose, text: string, end = false): [Prose, string] {
   const out: string[] = []
@@ -187,7 +201,7 @@ export function withoutImages(state: Prose, text: string, end = false): [Prose, 
  * table or an empty task item that ends the text before. Anywhere else what is held is written as prose and nothing
  * more of the text is taken as code; this text's first line continues the line the text before left, and a backtick
  * that starts it after one that ended the text before is written escaped, so it lengthens no run that closed a span.
- * Either reading then at most shows a mark escaped, as md4c reads them (classes 6 and 9).
+ * Either reading then at most carries a joiner in code (classes 6 and 9).
  */
 export function follow(state: Prose, before: Prose): [Prose, string] {
   // A client that joins the two reads a fence line that starts this text after the lines that ended the text before.
@@ -201,8 +215,6 @@ export function follow(state: Prose, before: Prose): [Prose, string] {
       fence: undefined,
       lost: true,
       mixed: true,
-      // A `!` that ended the text before may make an image of a `[` that starts this one.
-      last: before.last === "!" ? before.last : released.last,
       // A client that joins the two continues the line the text before left, so this text's first line break ends
       // that line rather than a blank one.
       line: before.line + released.line,
@@ -217,8 +229,9 @@ function clear(state: Prose) {
 }
 
 function step(state: Prose, char: string, rest: () => string, out: string[]): Prose {
-  // A carriage return ends a line as a line feed does, and the two together end one line.
-  if (char === "\n" && state.last === "\r") {
+  // A carriage return ends a line as a line feed does, and the two together end one line: only when nothing came
+  // between them, as a held backtick leaves `last` as it was.
+  if (char === "\n" && state.last === "\r" && state.line === "") {
     out.push(char)
     return { ...state, last: char }
   }
@@ -229,7 +242,13 @@ function step(state: Prose, char: string, rest: () => string, out: string[]): Pr
     out.push(char)
     return { ...state, line: state.line + char, last: char }
   }
-  const current = { ...state, line: state.line + char }
+  const tail = (state.tail + char).slice(-4)
+  const current = {
+    ...state,
+    line: state.line + char,
+    tail,
+    mixed: state.mixed || char === "~" || LINK_START.test(tail),
+  }
   if (current.held === "") return write(current, char, rest, out)
   if (char === "`") return { ...current, held: current.held + char, run: current.open === 0 ? 0 : current.run + 1 }
   if (current.open === 0) return { ...current, held: current.held + char, open: current.held.length }
@@ -237,21 +256,19 @@ function step(state: Prose, char: string, rest: () => string, out: string[]): Pr
   return { ...current, held: current.held + char, run: 0 }
 }
 
-// Prose: a backtick run that may open a span starts to be held back, and anything else is written, with an image's `[`
-// and a tag's `<` escaped.
+// Prose: a backtick run that may open a span starts to be held back, unless the tracker is unsure, and anything else is
+// written, with a word joiner after a `!` or a `<` that the piece's end or what opens an image or a tag follows.
 function write(state: Prose, char: string, rest: () => string, out: string[]): Prose {
-  if (char === "`" && !state.escape && !state.mixed && !state.joined && state.until === "")
+  if (char === "`" && !state.escape && !state.mixed && !state.joined && !state.lost && state.until === "")
     return { ...state, held: char, open: 0, run: 0 }
-  const after = char === "<" ? rest() : ""
+  const after = char === "<" || char === "!" ? rest() : ""
   const autolink = char === "<" && AUTOLINK.test(after)
   out.push(
-    char === "[" && state.last === "!"
-      ? "\\["
-      : char === "<" && (after === "" || (TAG.test(after) && !autolink))
-        ? "&lt;"
-        : char === "`" && state.joined
-          ? "\\`"
-          : char,
+    (char === "!" && (after === "" || after.startsWith("["))) || (char === "<" && (after === "" || TAG.test(after)))
+      ? char + JOINER
+      : char === "`" && state.joined
+        ? "\\`"
+        : char,
   )
   const ends = state.until !== "" && char === state.until
   const unplain = state.until !== "" && !ends && UNPLAIN.test(char)
@@ -306,6 +323,7 @@ function newline(state: Prose, char: string, out: string[]): Prose {
     ...state,
     line: "",
     last: char,
+    tail: "",
     escape: false,
     until: "",
     mixed: state.mixed || state.until !== "",
@@ -323,7 +341,9 @@ function newline(state: Prose, char: string, out: string[]): Prose {
   return {
     ...next,
     fence,
-    lost: state.lost || (fence === undefined && FENCE_LINE.test(state.line)),
+    // A fence line that opens no block leaves the tracker unsure, and so does a line with a tilde or the start of an
+    // address that GFM links by itself.
+    lost: state.lost || (fence === undefined && (FENCE_LINE.test(state.line) || UNSURE.test(state.line))),
     // A blank line ends the paragraph, and so does a fence.
     mixed: fence === undefined && !blank && next.mixed,
     paragraph: fence ? "" : blank ? (state.paragraph === "task" ? "task" : "") : paragraph(state.paragraph, state.line),
@@ -347,14 +367,16 @@ function opens(line: string): Fence | undefined {
   return { mark: run.charAt(0), length: run.length, indent: indent.length }
 }
 
-// A run of the block's mark, at least as long as its opening run, closes it after at most three spaces. Further in, or
-// after a tab, Markdown reads the line as code, but a renderer that took it as the closing line would read the real
-// one as a new opening line, so that is where the tracker gives up.
+// A run of the block's mark, at least as long as its opening run, closes it after at most three spaces when only spaces
+// follow it. Renderers differ on the rest: Markdown reads a run further in, after a tab, or before anything but spaces
+// and tabs as code; `marked` closes the block on a run with more backticks or tildes after it, and not on one with a
+// tab after it. A renderer that read such a line otherwise would take the next fence line the other way, so that is
+// where the tracker gives up.
 function closes(fence: Fence, line: string) {
-  const found = /^([ \t]*)(`+|~+)[ \t]*$/.exec(line)
+  const found = /^([ \t]*)(`+|~+)(.*)$/.exec(line)
   const run = found?.[2] ?? ""
   if (run.charAt(0) !== fence.mark || run.length < fence.length) return "open"
-  return /^ {0,3}$/.test(found?.[1] ?? "") ? "closed" : "unsure"
+  return /^ {0,3}$/.test(found?.[1] ?? "") && /^ *$/.test(found?.[3] ?? "") ? "closed" : "unsure"
 }
 
 export * as ACPMarkdown from "./markdown"
