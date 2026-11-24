@@ -959,6 +959,9 @@ describe("acp: other text a model, a tool or a server chose", () => {
     // runs on over the blank line as well.
     ['[r]:\n/u "\n\n```\n"\n<img>\n```', `[r]:\n/u "\n\n\`\`\`\n"\n<${JOINER}img>\n\`\`\``],
     ["[r]:\n/u (\n\n```\n)\n<img>\n```", `[r]:\n/u (\n\n\`\`\`\n)\n<${JOINER}img>\n\`\`\``],
+    // A definition up to three spaces in is one too: `marked` reads its `"` title on over the blank line and the block.
+    ['   [r]: /u "\n\n```\n<img>\n```', `   [r]: /u "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['  [r]:\n/u "\n\n```\n<img>\n```', `  [r]:\n/u "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     // The controls: a definition that is whole, or that is no definition, ends at a blank line, so the block after it
     // is code, and so is one after a `'` title that a blank line ends.
     ["[r]: /u\n\n```\n<img>\n```", "[r]: /u\n\n```\n<img>\n```"],
