@@ -634,6 +634,15 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["1. ```\n```\n\n```\n<img src=x>\n```", `1. \`\`\`\n\`\`\`\n\n\`\`\`\n<${JOINER}img src=x>\n\`\`\``],
     ["```\n```js\n\n```\n<img src=x>\n```", `\`\`\`\n\`\`\`js\n\n\`\`\`\n<${JOINER}img src=x>\n\`\`\``],
     ["   ```\nx\n\n```\n<img src=x>\n```", `   \`\`\`\nx\n\n\`\`\`\n<${JOINER}img src=x>\n\`\`\``],
+    // The same left line, inside the block: from it on the tracker writes joiners, even where Markdown reads code.
+    ["   ```\nx\n<img src=x>\n   ```", `   \`\`\`\nx\n<${JOINER}img src=x>\n   \`\`\``],
+    // Bun and `marked` read a run four spaces in, or after a tab, as a line of the block, so the fence line after the
+    // blank line closes the block and both draw the image after it: a tracker that took the run as closing would open a
+    // block at that fence line and leave the image whole.
+    ["```\n    ```\n\n```\n![x](u)\n```", `\`\`\`\n    \`\`\`\n\n\`\`\`\n!${JOINER}[x](u)\n\`\`\``],
+    ["```\n\t```\n\n```\n![x](u)\n```", `\`\`\`\n\t\`\`\`\n\n\`\`\`\n!${JOINER}[x](u)\n\`\`\``],
+    // A fence line four spaces in is indented code to Markdown and no fence, so it opens no block the tracker is sure of.
+    ["    ```\n    <img src=x>\n    ```", `    \`\`\`\n    <${JOINER}img src=x>\n    \`\`\``],
     // The controls: a fence at the text's start, after a blank line, and at no indentation after a list.
     ["```\n<img src=x>\n```", "```\n<img src=x>\n```"],
     ["para\n\n```\n<img src=x>\n```", "para\n\n```\n<img src=x>\n```"],
