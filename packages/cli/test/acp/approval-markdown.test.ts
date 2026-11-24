@@ -897,6 +897,10 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["N: a `<` destination with a `<` in it", ['[r]: <a<b>\n"\n\n```\n"\nIMAGE\n```']],
     ["N: a `<` destination with a `>` in it", ['[r]: <a>b>\n"\n\n```\n"\nIMAGE\n```']],
     ['N: a `<` destination with a `>` in it and a `"` title', ['[r]: <a>b> "\n\n```\n"\nIMAGE\n```']],
+    // The test gate of fix loop 10: `marked`'s `<` destination runs over a space to the later `>`, and stands any number
+    // of spaces after the `]:`.
+    ["N: a `<` destination with a space and a `>` in it", ['[r]: <a> b>\n"\n\n```\n"\nIMAGE\n```']],
+    ["N: a `<` destination with a `>` in it, two spaces after the `]:`", ['[r]:  <a>b>\n"\n\n```\n"\nIMAGE\n```']],
     // The controls: a definition does not start inside a paragraph or past a quote's marks for `marked`.
     ["M's control: a label after a line of text", ["a\n[r]:\n```\nIMAGE\n```"]],
     ["M's control: a label in a quote", ["> [r]:\n> ```\n> IMAGE\n> ```"]],
@@ -995,6 +999,10 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ['[r]: <a<b>\n"\n\n```\n<img>\n```', `[r]: <${JOINER}a<${JOINER}b>\n"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ["[r]: <a>b>\n\n```\n<img>\n```", `[r]: <${JOINER}a>b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ['[r]: <a>b> "\n\n```\n<img>\n```', `[r]: <${JOINER}a>b> "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    // The second `>` may stand after a space, and the destination after more than one space or a tab.
+    ["[r]: <a> b>\n\n```\n<img>\n```", `[r]: <${JOINER}a> b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]:  <a>b>\n\n```\n<img>\n```", `[r]:  <${JOINER}a>b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]:\t<a>b>\n\n```\n<img>\n```", `[r]:\t<${JOINER}a>b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ['[r]: /u "x\\y"\n\n```\n<img>\n```', '[r]: /u "x\\y"\n\n```\n<img>\n```'],
     ['[r]: <a<b> "t"\n\n```\n<img>\n```', `[r]: <${JOINER}a<${JOINER}b> "t"\n\n\`\`\`\n<img>\n\`\`\``],
     ["[r]: <a<b>\n\n```\n<img>\n```", `[r]: <${JOINER}a<${JOINER}b>\n\n\`\`\`\n<img>\n\`\`\``],
