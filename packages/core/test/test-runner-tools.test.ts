@@ -233,12 +233,19 @@ describe("testArgs", () => {
 })
 
 describe("mergeTimings", () => {
-  test("joins every shard of a platform, keeps the platforms apart, sorts by name and drops files that are gone", async () => {
+  test("joins every shard of a platform into the committed times, keeps the platforms apart, sorts by name and drops files that are gone", async () => {
     await using root = await tmpdir()
     await using downloads = await tmpdir()
     await fs.mkdir(path.join(root.path, "packages", "cli", "test"), { recursive: true })
     await Promise.all(
-      ["b.test.ts", "a.test.ts", "c.test.ts"].map((name) => Bun.write(path.join(root.path, "packages", "cli", "test", name), "")),
+      ["b.test.ts", "a.test.ts", "c.test.ts", "d.test.ts"].map((name) =>
+        Bun.write(path.join(root.path, "packages", "cli", "test", name), ""),
+      ),
+    )
+    // Committed: a time the run replaces, one for a file no job measured, which stays, and one for a file that is gone.
+    await Bun.write(
+      path.join(root.path, "packages", "cli", "test", "timings.json"),
+      JSON.stringify({ version: 1, files: { "test/a.test.ts": 100, "test/d.test.ts": 7, "test/old.test.ts": 5 } }),
     )
     const artifact = async (name: string, file: string, files: Record<string, number>) => {
       await fs.mkdir(path.join(downloads.path, name))
@@ -249,10 +256,13 @@ describe("mergeTimings", () => {
     await artifact("timings-windows-cli", "timings.windows.json", { "test/c.test.ts": 3 })
     await fs.mkdir(path.join(downloads.path, "lcov-linux-cli-1of2"))
     const lines = await mergeTimings(downloads.path, root.path)
-    expect(lines.toSorted()).toEqual(["cli: 1 files in test/timings.windows.json", "cli: 3 files in test/timings.json"])
+    expect(lines.toSorted()).toEqual(["cli: 1 files in test/timings.windows.json", "cli: 4 files in test/timings.json"])
     const linux = await Bun.file(path.join(root.path, "packages", "cli", "test", "timings.json")).json()
-    expect(linux).toEqual({ version: 1, files: { "test/a.test.ts": 1, "test/b.test.ts": 2, "test/c.test.ts": 4 } })
-    expect(Object.keys(linux.files)).toEqual(["test/a.test.ts", "test/b.test.ts", "test/c.test.ts"])
+    expect(linux).toEqual({
+      version: 1,
+      files: { "test/a.test.ts": 1, "test/b.test.ts": 2, "test/c.test.ts": 4, "test/d.test.ts": 7 },
+    })
+    expect(Object.keys(linux.files)).toEqual(["test/a.test.ts", "test/b.test.ts", "test/c.test.ts", "test/d.test.ts"])
     expect(await Bun.file(path.join(root.path, "packages", "cli", "test", "timings.windows.json")).json()).toEqual({
       version: 1,
       files: { "test/c.test.ts": 3 },

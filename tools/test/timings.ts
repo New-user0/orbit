@@ -51,26 +51,25 @@ export async function mergeTimings(folder: string, root = repo) {
     [...artifacts].map(async ([key, list]) => {
       const [pkg, platform] = key.split("/")
       const file = platform === "windows" ? "timings.windows.json" : "timings.json"
-      const measured = await Promise.all(
-        list.map(async (artifact) =>
-          Object.entries(
-            ((await Bun.file(path.join(folder, artifact.name, file)).json()) as { files: Record<string, number> }).files,
-          ),
-        ),
-      )
+      const target = path.join(root, "packages", pkg, "test", file)
+      const read = async (from: string) =>
+        (await Bun.file(from).exists())
+          ? Object.entries(((await Bun.file(from).json()) as { files: Record<string, number> }).files)
+          : []
+      // The committed times first, then what the run measured, so a file that no job measured (a job that was stopped
+      // uploads nothing) keeps its time.
+      const measured = [
+        await read(target),
+        ...(await Promise.all(list.map((artifact) => read(path.join(folder, artifact.name, file))))),
+      ].flat()
       // An unsharded job keeps what it read for files it did not run, so a file that is gone is dropped here.
       const kept = await Promise.all(
-        measured
-          .flat()
-          .map(async ([name, ms]) =>
-            (await Bun.file(path.join(root, "packages", pkg, name)).exists()) ? [[name, ms] as const] : [],
-          ),
+        measured.map(async ([name, ms]) =>
+          (await Bun.file(path.join(root, "packages", pkg, name)).exists()) ? [[name, ms] as const] : [],
+        ),
       )
       const files = Object.fromEntries(kept.flat().sort(([a], [b]) => a.localeCompare(b)))
-      await Bun.write(
-        path.join(root, "packages", pkg, "test", file),
-        JSON.stringify({ version: 1, files }, null, 2) + "\n",
-      )
+      await Bun.write(target, JSON.stringify({ version: 1, files }, null, 2) + "\n")
       return `${pkg}: ${Object.keys(files).length} files in test/${file}`
     }),
   )
