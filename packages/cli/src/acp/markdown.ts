@@ -94,7 +94,23 @@ export type Prose = {
   readonly until: string
   /** Whether a backtick in the rest of the paragraph may belong to something other than a code span. */
   readonly mixed: boolean
+  /**
+   * What the lines since the last blank line or fence make, as far as a fence line after them goes: "" for nothing,
+   * "text" for a paragraph, "table" for a table, whose rows run to a blank line and take a fence line as one more row,
+   * or "task" for a list item that holds only a task box, which takes the next line that is not blank as its text,
+   * a fence line too.
+   */
+  readonly paragraph: Paragraph
+  /**
+   * Whether the text before this one ended in a backtick that a client joining the two would run on into a backtick
+   * that starts this one, so that one is written escaped.
+   */
+  readonly joined: boolean
 }
+
+type Paragraph = "" | "text" | "table" | "task"
+// From the least to the most a fence line after it is unsure.
+const PARAGRAPHS: Paragraph[] = ["", "text", "table", "task"]
 
 export const prose: Prose = {
   lost: false,
@@ -106,6 +122,8 @@ export const prose: Prose = {
   escape: false,
   until: "",
   mixed: false,
+  paragraph: "",
+  joined: false,
 }
 
 // `<` and a letter, `/`, `!` or `?` opens a raw HTML tag, comment or declaration; an autolink (`<https://...>`) names a
@@ -117,6 +135,10 @@ const AUTOLINK = /^[a-z][a-z0-9+.-]{1,31}:/i
 const UNPLAIN = /[\s"'()<>\\`]/
 // A fence's run behind any indentation and any list or quote marks.
 const FENCE_LINE = /^(?:[ \t>]|[-+*][ \t]|\d{1,9}[.)][ \t])*(?:`{3}|~{3})/
+// A table's delimiter row under its header, such as `|---|:-:|` or `--|--`, at any indentation and behind quote marks.
+const DELIMITER_ROW = /^[ \t>]*(?=[^|]*\|)(?=[^-]*-)[-|: \t]+$/
+// A list item that holds only a task box, behind any indentation and any list or quote marks.
+const EMPTY_TASK = /^(?:[ \t>]*(?:[-+*]|\d{1,9}[.)])[ \t]+)+\[[ xX]\][ \t]*$/
 
 /**
  * A model's own Markdown, for a client that renders it: prose and code stay as written, but nothing in it is an image or
@@ -130,7 +152,9 @@ const FENCE_LINE = /^(?:[ \t>]|[-+*][ \t]|\d{1,9}[.)][ \t])*(?:`{3}|~{3})/
  *   after a tab, is code to Markdown, and so is a line that starts to the left of the opening one, which may yet end
  *   the list item that holds the block. After either, or a fence behind a list's or a quote's mark or more than three
  *   spaces in, renderers differ on which block is open, so the tracker gives up: the block is no longer thought open
- *   and no later block in the text is taken as code.
+ *   and no later block in the text is taken as code. It gives up as well at a fence line in a table, from the
+ *   delimiter row under the table's header to a blank line, and at a fence line that is the first line not blank
+ *   after a list item that holds only a task box, as md4c reads either line as text.
  * - A code span, whose text is held back from its opening run until a run of the same length closes it on the same
  *   line. A run that a backslash escapes, or that is inside a link's address after its `](` or an autolink, opens
  *   nothing. An address or autolink that is not a plain run up to its `)` or `>` may hold a title or a backtick of its
@@ -150,23 +174,42 @@ export function withoutImages(state: Prose, text: string, end = false): [Prose, 
     .reduce<Prose>((current, char, index) => step(current, char, () => text.slice(index + 1), out), state)
   if (!end) return [next, out.join("")]
   // `settle` writes what is held before the pieces are joined.
-  return [settle(next, out), out.join("")]
+  const settled = settle(next, out)
+  // A client that joins this text to the next would run a backtick that ends it on into one that starts that text.
+  return [{ ...settled, joined: settled.last === "`" }, out.join("")]
 }
 
 /**
  * Where a text picks up after a client was sent a piece of another: a client may draw it in a block of its own, or
  * append it to the block that holds the text sent before it, as some do with every chunk until a tool call (`before`
  * is the state that text left). The two read it alike only where both texts stand at the start of a line with no
- * block, span or mixed paragraph open. Anywhere else what is held is written as prose, and nothing more of the text
- * is taken as code, so either reading at most shows a mark escaped (classes 6 and 9).
+ * block, span or mixed paragraph open, and even there a fence line that starts this text is not taken as code after a
+ * table or an empty task item that ends the text before. Anywhere else what is held is written as prose and nothing
+ * more of the text is taken as code; this text's first line continues the line the text before left, and a backtick
+ * that starts it after one that ended the text before is written escaped, so it lengthens no run that closed a span.
+ * Either reading then at most shows a mark escaped, as md4c reads them (classes 6 and 9).
  */
 export function follow(state: Prose, before: Prose): [Prose, string] {
-  if (clear(state) && clear(before)) return [state, ""]
+  // A client that joins the two reads a fence line that starts this text after the lines that ended the text before.
+  const strictest = PARAGRAPHS[Math.max(PARAGRAPHS.indexOf(state.paragraph), PARAGRAPHS.indexOf(before.paragraph))]
+  if (clear(state) && clear(before)) return [{ ...state, paragraph: strictest ?? "" }, ""]
   const out: string[] = []
   const released = state.held === "" ? state : release(state, out)
-  // A `!` that ended the text before may make an image of a `[` that starts this one.
-  const last = before.last === "!" ? before.last : released.last
-  return [{ ...released, fence: undefined, lost: true, mixed: true, last }, out.join("")]
+  return [
+    {
+      ...released,
+      fence: undefined,
+      lost: true,
+      mixed: true,
+      // A `!` that ended the text before may make an image of a `[` that starts this one.
+      last: before.last === "!" ? before.last : released.last,
+      // A client that joins the two continues the line the text before left, so this text's first line break ends
+      // that line rather than a blank one.
+      line: before.line + released.line,
+      joined: before.last === "`" || released.joined,
+    },
+    out.join(""),
+  ]
 }
 
 function clear(state: Prose) {
@@ -197,7 +240,7 @@ function step(state: Prose, char: string, rest: () => string, out: string[]): Pr
 // Prose: a backtick run that may open a span starts to be held back, and anything else is written, with an image's `[`
 // and a tag's `<` escaped.
 function write(state: Prose, char: string, rest: () => string, out: string[]): Prose {
-  if (char === "`" && !state.escape && !state.mixed && state.until === "")
+  if (char === "`" && !state.escape && !state.mixed && !state.joined && state.until === "")
     return { ...state, held: char, open: 0, run: 0 }
   const after = char === "<" ? rest() : ""
   const autolink = char === "<" && AUTOLINK.test(after)
@@ -206,13 +249,16 @@ function write(state: Prose, char: string, rest: () => string, out: string[]): P
       ? "\\["
       : char === "<" && (after === "" || (TAG.test(after) && !autolink))
         ? "&lt;"
-        : char,
+        : char === "`" && state.joined
+          ? "\\`"
+          : char,
   )
   const ends = state.until !== "" && char === state.until
   const unplain = state.until !== "" && !ends && UNPLAIN.test(char)
   return {
     ...state,
     last: char,
+    joined: false,
     escape: char === "\\" && !state.escape,
     until:
       ends || unplain
@@ -256,20 +302,39 @@ function release(state: Prose, out: string[]) {
 function newline(state: Prose, char: string, out: string[]): Prose {
   out.push(char)
   // An address or autolink that a line break cuts is not plain.
-  const next = { ...state, line: "", last: char, escape: false, until: "", mixed: state.mixed || state.until !== "" }
+  const next = {
+    ...state,
+    line: "",
+    last: char,
+    escape: false,
+    until: "",
+    mixed: state.mixed || state.until !== "",
+    joined: false,
+  }
   if (state.fence) {
     const closing = closes(state.fence, state.line)
     if (closing === "open") return next
     return { ...next, fence: undefined, lost: state.lost || closing === "unsure" }
   }
-  const fence = state.lost ? undefined : opens(state.line)
+  // md4c reads a fence line in a table's rows, or after a list item that holds only a task box, as text, where other
+  // renderers open a block, so a fence line after either opens none.
+  const fence = state.lost || state.paragraph === "table" || state.paragraph === "task" ? undefined : opens(state.line)
+  const blank = /^[ \t]*$/.test(state.line)
   return {
     ...next,
     fence,
     lost: state.lost || (fence === undefined && FENCE_LINE.test(state.line)),
     // A blank line ends the paragraph, and so does a fence.
-    mixed: fence === undefined && !/^[ \t]*$/.test(state.line) && next.mixed,
+    mixed: fence === undefined && !blank && next.mixed,
+    paragraph: fence ? "" : blank ? (state.paragraph === "task" ? "task" : "") : paragraph(state.paragraph, state.line),
   }
+}
+
+// What a line that is neither blank nor a fence makes of the lines before it.
+function paragraph(before: Paragraph, line: string): Paragraph {
+  if (EMPTY_TASK.test(line)) return "task"
+  if (before === "table" || (before === "text" && DELIMITER_ROW.test(line))) return "table"
+  return "text"
 }
 
 function opens(line: string): Fence | undefined {

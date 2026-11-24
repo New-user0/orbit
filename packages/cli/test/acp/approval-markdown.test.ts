@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test"
 import type { EventSubscribeOutput, OrbitEvent, SessionMessageInfo } from "@orbit/client/promise"
 import { availableCommands, buildModelSelectOption, buildModeSelectOption } from "../../src/acp/config-option"
 import { ACPElicitation } from "../../src/acp/elicitation"
-import { prose, withoutImages } from "../../src/acp/markdown"
+import { follow, prose, withoutImages } from "../../src/acp/markdown"
 import { ACPTranslate } from "../../src/acp/translate"
 import {
   childCreated,
@@ -513,6 +513,24 @@ describe("acp: other text a model, a tool or a server chose", () => {
     "```\n\t```\n```\nIMAGE",
     "~~~\n    ~~~\n~~~\nIMAGE",
     "Code:\n\n```md\n    ```\n```\n\nIMAGE\n",
+    // Fix loop 5: md4c reads a fence line in a table's rows as one more row, up to a blank line, so the lines after it
+    // are cells and not code.
+    "| a | b |\n|---|---|\n| 1 | 2 |\n```\nIMAGE\n```",
+    "| a | b |\n|---|---|\n| 1 | 2 |\n~~~\nIMAGE\n~~~",
+    "a | b\n--|--\n```\nIMAGE\n```",
+    "| a |\n|---|\n```\n| IMAGE |\n```",
+    "-|-\n-|-\r~~~\nIMAGE",
+    "a | b\n|---|---|\n# h\n```\nIMAGE\n```",
+    // And it reads the next line that is not blank after a list item that holds only a task box as that item's text,
+    // a fence line too.
+    "- [ ]\n```\nIMAGE\n```",
+    "- [ ]\n\n```\nIMAGE\n```",
+    "* [ ]\n```\nIMAGE\n```",
+    "* [x]\n\n~~~\nIMAGE\n~~~",
+    "1. [ ]\n```\nIMAGE\n```",
+    "1. [ ]\n\n\n```\nIMAGE\n```",
+    "- [ ] \n```\nIMAGE\n```",
+    "> - [ ]\n```\nIMAGE\n```",
   ]
 
   test.each(OPENS_NO_CODE)(
@@ -555,6 +573,14 @@ describe("acp: other text a model, a tool or a server chose", () => {
       "```\n<img src=x>\n   ```\n```\n<img src=y>\n```",
       // A run of the other mark, or a shorter one, closes nothing at any indentation.
       "```\n    ~~~\n\t``\n<img src=x>\n```",
+      // A blank line ends a table, and a task item with words is not empty, so the block after either is code.
+      "| a | b |\n|---|---|\n| 1 | 2 |\n\n```\n<img src=x>\n```",
+      "- [ ] Do it\n```\n<img src=x>\n```",
+      "- [ ]\nDo it\n```\n<img src=x>\n```",
+      // A delimiter row with no header above it, as at the start or after a block, is a paragraph's line, which a
+      // fence ends.
+      "-|-\n```\n<img src=x>\n```",
+      "```\na\n```\n-|-\n```\n<img src=x>\n```",
     ])
       expect(await streamed(markdown.split(""))).toEqual([markdown, markdown])
     // A span that the text ends before it closes is written as prose at the end.
@@ -564,8 +590,8 @@ describe("acp: other text a model, a tool or a server chose", () => {
   // Fix loop 4 (classes 6 and 9): ACP gives a chunk no text boundary. A client may draw the chunks of each message ID
   // as one block, append every chunk of a kind to the last block until a tool call, or start a block at each chunk of
   // the other kind, so what one text leaves open reaches the next text, of the same message or of a retry under a new
-  // ID, in a reasoning part as in a message, live and on a session/load replay. What a client draws in any of the three
-  // has no image or tag.
+  // ID, in a reasoning part as in a message, live and on a session/load replay. In the rows below, what md4c draws for
+  // any of the three has no image or tag.
   type Chunk = { sessionUpdate: string; messageId?: string; content?: { type: string; text?: string } }
   const blocks = (updates: Chunk[]) => {
     const byMessage = new Map<string, string>()
@@ -609,16 +635,37 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["a paragraph that text 0 leaves mixed", "a ` b\n", "c ` IMAGE `"],
     ["a fence that text 0 has lost", "1. ~~~\n", "~~~\nIMAGE"],
   ]
+  // Fix loop 5: a backtick that starts text 1 lengthens the run that closed text 0's span in a client that joins
+  // them, and text 1's first line break ends text 0's line rather than a blank one.
+  const RUNS_ON: Array<[string, string, string]> = [
+    ["a span that closes at text 0's end", "Run `IMAGE`", "` next"],
+    ["a span of two marks that closes at text 0's end", "Run ``a``", "` IMAGE ` x"],
+    ["a line that text 0 leaves after a run", "a```", "\n```IMAGE```"],
+  ]
+  // A fence line that starts text 1 is a row of the table, or the text of the task item, that text 0 ends with.
+  const ENDS_WITH: Array<[string, string, string]> = [
+    ["a table that text 0 ends with", "| a | b |\n|---|---|\n", "```\nIMAGE\n```"],
+    ["an empty task item that text 0 ends with", "- [ ]\n\n", "```\nIMAGE\n```"],
+  ]
   const JOINS: Array<[string, (sessionID: string, image: string) => OrbitEvent[]]> = [
-    ...PAIRS.flatMap(([label, first, then]): typeof JOINS =>
+    ...[...PAIRS, ...RUNS_ON, ...ENDS_WITH].flatMap(([label, first, then]): typeof JOINS =>
       (["msg_a", "msg_b"] as const).map((id) => [
         `${label}, then ${id === "msg_a" ? "text 1 of the same message" : "a text of a new message"}`,
         (s, image) => [
-          ...text(s, "msg_a", first),
+          ...text(s, "msg_a", first.replace("IMAGE", image)),
           ...text(s, id, then.replace("IMAGE", image), id === "msg_a" ? 1 : 0),
         ],
       ]),
     ),
+    // A client that joins a message ID's chunks joins text 1 to text 0 across another message's text between them.
+    ...RUNS_ON.map(([label, first, then]): (typeof JOINS)[number] => [
+      `${label}, then a clean text of another message, then text 1`,
+      (s, image) => [
+        ...text(s, "msg_a", first.replace("IMAGE", image)),
+        ...text(s, "msg_b", "x\n"),
+        ...text(s, "msg_a", then.replace("IMAGE", image), 1),
+      ],
+    ]),
     [
       "two reasoning parts",
       (s, image) => [
@@ -703,6 +750,11 @@ describe("acp: other text a model, a tool or a server chose", () => {
     // A text that ends at the start of a line with nothing open leaves the next as it is.
     const clean = await chunked((s) => [...text(s, "msg_a", "Here is the code:\n"), ...text(s, "msg_a", code, 1)])
     expect(sent(clean.updates, "msg_a")).toBe(`Here is the code:\n${code}`)
+    // Only a backtick that starts the next text is escaped after one that ends a text, so later spans are as written.
+    for (const next of [" and `pwd` here", "\n`pwd` here"]) {
+      const spans = await chunked((s) => [...text(s, "msg_a", "Run `ls`"), ...text(s, "msg_a", next, 1)])
+      expect(sent(spans.updates, "msg_a")).toBe(`Run \`ls\`${next}`)
+    }
     // After a tool call, a client draws the next text in a block of its own.
     const cut = await chunked((s) => [
       ...text(s, "msg_a", "```\n"),
@@ -750,6 +802,14 @@ describe("acp: other text a model, a tool or a server chose", () => {
 
   test("a loaded session's replay: what one text part or message leaves open reaches the next", async () => {
     for (const image of [`![x](${ADDRESS})`, `<img src=${ADDRESS}>`]) {
+      for (const [label, first, then] of [...RUNS_ON, ...ENDS_WITH]) {
+        const [before, after] = [first.replace("IMAGE", image), then.replace("IMAGE", image)]
+        noImage(`${label} in two parts`, await replayed([assistant("msg_a", part(before), part(after))]))
+        noImage(
+          `${label} in two messages`,
+          await replayed([assistant("msg_a", part(before)), assistant("msg_b", part(after))]),
+        )
+      }
       const after = `\`\`\`\n${image}\n\`\`\``
       noImage("two parts", await replayed([assistant("msg_a", part("```\n"), part(after))]))
       noImage("two messages", await replayed([assistant("msg_a", part("```\n")), assistant("msg_b", part(after))]))
@@ -792,28 +852,48 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ).toBe(code)
   })
 
+  const pieces = ["`", "``", "```", "~~~", "\n", "\n\n", "\r", "   ", " ", "\t", "- ", "1. ", "> ", "\\", "](", "["]
+  const more = ["]", "(", ")", "!", "|", '"', "a", "<", ">", "<!--", "<https://a.example/", "[r]: ", "    "]
+  // Fix loop 5: a table's delimiter row and a list item that holds only a task box.
+  const structures = ["|---|", "-|-", "- [ ] ", "- [ ]\n"]
+  const marks = [...pieces, ...more, ...structures, `![x](${ADDRESS})`, `<img src=${ADDRESS}>`]
+  // A seeded generator, so a failure names a text that fails again.
+  const seeded = (start: number) => {
+    let seed = start
+    return (limit: number) => {
+      seed = (seed + 0x6d2b79f5) | 0
+      const mixed = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+      const value = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed
+      return ((value ^ (value >>> 14)) >>> 0) % limit
+    }
+  }
+  const drawsImage = (markdown: string) => /<(img|picture|source)\b/i.test(Bun.markdown.html(markdown, RENDERER))
+
   test("the model's Markdown: no text a renderer draws with an image or a tag, over random text in random pieces", () => {
-    const pieces = ["`", "``", "```", "~~~", "\n", "\n\n", "\r", "   ", " ", "\t", "- ", "1. ", "> ", "\\", "](", "["]
-    const more = ["]", "(", ")", "!", "|", '"', "a", "<", ">", "<!--", "<https://a.example/", "[r]: ", "    "]
-    const marks = [...pieces, ...more, `![x](${ADDRESS})`, `<img src=${ADDRESS}>`]
-    // A seeded generator, so a failure names a text that fails again.
-    const random = (() => {
-      let seed = 20261124
-      return (limit: number) => {
-        seed = (seed + 0x6d2b79f5) | 0
-        const mixed = Math.imul(seed ^ (seed >>> 15), 1 | seed)
-        const value = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed
-        return ((value ^ (value >>> 14)) >>> 0) % limit
-      }
-    })()
+    const random = seeded(20261124)
     const drawn = Array.from({ length: 20000 }, () =>
       Array.from({ length: 4 + random(16) }, () => marks[random(marks.length)]).join(""),
     ).flatMap((text) => {
       const cut = random(text.length + 1)
       const [state, first] = withoutImages(prose, text.slice(0, cut))
       const [, second] = withoutImages(state, text.slice(cut), true)
-      const html = Bun.markdown.html(first + second, RENDERER)
-      return /<(img|picture|source)\b/i.test(html) ? [text] : []
+      return drawsImage(first + second) ? [text] : []
+    })
+    expect(drawn).toEqual([])
+  })
+
+  // Two texts as the translation writes them: the second a new text after the first (`follow`), drawn as each one's
+  // own block and as a client that appends the second to the first draws them, or the next text of the same message,
+  // which every client draws after the first.
+  test("the model's Markdown: no pair of texts a renderer draws with an image or a tag, apart or joined", () => {
+    const random = seeded(20261125)
+    const draw = () => Array.from({ length: 2 + random(8) }, () => marks[random(marks.length)]).join("")
+    const drawn = Array.from({ length: 20000 }, () => [draw(), draw()] as const).flatMap(([one, two]) => {
+      const [before, first] = withoutImages(prose, one, true)
+      const [start, released] = follow(prose, before)
+      const second = released + withoutImages(start, two, true)[1]
+      const same = withoutImages(before, two, true)[1]
+      return [first, second, first + second, first + same].some(drawsImage) ? [[one, two]] : []
     })
     expect(drawn).toEqual([])
   })
