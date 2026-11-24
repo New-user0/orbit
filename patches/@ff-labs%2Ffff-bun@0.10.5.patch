@@ -1,3 +1,6 @@
+diff --git a/node_modules/@ff-labs/fff-bun/.bun-tag-2ffbf8fed8b4a0fd b/.bun-tag-2ffbf8fed8b4a0fd
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/src/download.ts b/src/download.ts
 index 74918f3d27917197f4dce589937d0d8fa9956226..6515c40223fec909f9f80e5721b82ed1e4d87fcc 100644
 --- a/src/download.ts
@@ -88,3 +91,55 @@ index 3b54b82d03bd5d37f3665d59c91273dc62118c1b..17bf456ea78d6b1f432d514f12eb430c
    getTriple,
 -} from "./platform";
 +} from "./platform.js";
+diff --git a/src/platform.ts b/src/platform.ts
+index 11070e2068c32c323c0f62c9682991d9c7dd9179..9acd05f18864578a5854b5219c508e993245f547 100644
+--- a/src/platform.ts
++++ b/src/platform.ts
+@@ -2,7 +2,7 @@
+  * Platform detection utilities for downloading the correct binary
+  */
+ 
+-import { execSync } from "node:child_process";
++import { readFileSync } from "node:fs";
+ 
+ /**
+  * Get the platform triple (e.g., "x86_64-unknown-linux-gnu")
+@@ -29,22 +29,25 @@ export function getTriple(): string {
+ }
+ 
+ /**
+- * Detect whether we're on musl or glibc Linux
++ * Detect whether we're on musl or glibc Linux.
++ *
++ * Orbit's patch: decided from files and the process report, as detect-libc does first, and never by starting
++ * `ldd --version`. In Bun on Linux a synchronous spawn sometimes never returns after its child has exited, which held
++ * the first load of this library (and every test worker that made it) for good, whatever its timeout.
+  */
+ function detectLinuxLibc(): string {
+-  let output = "";
++  let ldd = "";
+   try {
+-    output = execSync("ldd --version 2>&1", {
+-      encoding: "utf-8",
+-      timeout: 5000,
+-    });
+-  } catch (e: unknown) {
+-    // Alpine/musl: `ldd --version` exits with code 1 but still prints
+-    // "musl libc ..." — execSync surfaces that on the error object.
+-    const err = e as { stdout?: string | Buffer; stderr?: string | Buffer };
+-    output = String(err?.stdout ?? "") + String(err?.stderr ?? "");
+-  }
+-  if (output.toLowerCase().includes("musl")) {
++    // glibc's ldd is a script naming the GNU C Library; musl's is a link to its dynamic loader, whose text names musl.
++    ldd = readFileSync("/usr/bin/ldd", "latin1");
++  } catch {}
++  if (ldd.includes("musl")) return "unknown-linux-musl";
++  if (ldd.includes("GNU C Library")) return "unknown-linux-gnu";
++  const report = process.report?.getReport?.() as
++    | { header?: { glibcVersionRuntime?: string }; sharedObjects?: string[] }
++    | undefined;
++  if (report?.header?.glibcVersionRuntime) return "unknown-linux-gnu";
++  if (report?.sharedObjects?.some((file) => file.includes("libc.musl-") || file.includes("ld-musl-"))) {
+     return "unknown-linux-musl";
+   }
+   return "unknown-linux-gnu";
