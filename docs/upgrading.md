@@ -2901,8 +2901,11 @@ text reaches the client a moment later than the words before it. A backtick that
 or one in a link's address) leaves the rest as prose. Code in a span that runs over a line, in a span with a `|`, after
 a link whose address has a space or a title, or in any fence after one written on a list item's own line or more than
 three spaces in, or after a fence's closing run four or more spaces or a tab in, can show `!\[` or `&lt;`. So can code
-in a text that follows, with no tool call between, a text that ended inside a block, a span or a line (a reply cut off
-at its output limit and its retry, for example), since a client may draw the two as one block. Command, model and
+in a fence directly below a table (with no blank line between) or after a list item that holds only a task box such as
+`- [ ]`, and code in a text that follows, with no tool call between, a text that ended inside a block, a span or a line
+(a reply cut off at its output limit and its retry, for example), or that ended with a table or such a task item, since
+a client may draw the two as one block. A backtick that starts a text right after a backtick that ended the text before
+is sent as `` \` ``, which a client draws as a backtick. Command, model and
 mode names and descriptions, a session's title in `session/list` and a failed turn's error message are one line, with
 control characters written out.
 

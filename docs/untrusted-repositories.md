@@ -2578,29 +2578,42 @@ runs" is a permission.
     backslash escapes, or that is inside a link's address or an autolink, opens nothing; a span that its line or the
     text ends first, or that holds a `|` a table can split on, is written as prose, and the backticks in the rest of
     that paragraph then open nothing; after a fence behind a list's or a quote's mark, more than three spaces in, or
-    left by a line to the left of its opening one, and after a closing run more than three spaces or a tab in, no later
-    fence in the text counts as code, since renderers differ on which block is open. The end of a text writes what is
-    still held. ACP gives a chunk no text boundary: a client may draw the chunks of a message ID as one block, or append
-    every chunk of a kind to the last block until a tool call or a chunk of the other kind, across texts and messages
-    (a cut-off reply and its retry under a new ID, the parts of a replayed session). So a text that picks up after a
-    piece of another was sent starts as it would alone only where both stand at the start of a line with no block, span
-    or mixed paragraph open; anywhere else what it holds is written as prose and nothing more of it counts as code, so
-    either client at most shows a mark escaped. A tool call, a prompt and a subagent's updates that the client takes
+    left by a line to the left of its opening one, after a closing run more than three spaces or a tab in, at a fence
+    line in a table (from the delimiter row under its header to a blank line, where md4c reads the fence line as one
+    more row) and at a fence line that is the first line not blank after a list item holding only a task box (which
+    md4c reads as that item's text), no later fence in the text counts as code, since renderers differ on which block
+    is open. The end of a text writes what is still held. ACP gives a chunk no text boundary: a client may draw the
+    chunks of a message ID as one block, or append every chunk of a kind to the last block until a tool call or a chunk
+    of the other kind, across texts and messages (a cut-off reply and its retry under a new ID, the parts of a replayed
+    session). So a text that picks up after a piece of another was sent starts as it would alone only where both stand
+    at the start of a line with no block, span or mixed paragraph open, and even then a table or an empty task item
+    that the text before ends with keeps a fence line at the start of the next text from counting as code. Anywhere
+    else what it holds is written as prose and nothing more of it counts as code, its first line break continues the
+    line the text before left rather than making a blank line, and a backtick that starts it right after a backtick
+    that ended a text (of the same message or the one before) is written `` \` `` so it cannot lengthen a span's closing
+    run. A client that draws them apart or joins them then at most shows a mark escaped, as far as md4c, the renderer
+    the tests draw with, reads them. A tool call, a prompt and a subagent's updates that the client takes
     apart start a new block (`follow` in the same file and `piece` in `acp/translate.ts`; classes 6 and 9;
     "the model's Markdown": an image, a reference image, a raw `img` and `picture`, each split across pieces, and an
     image after a closed fence, with prose, links, code spans, fences and an autolink as the controls; one row each for
     a lone, an escaped and a broken backtick, a backtick in a link's address, a title, an autolink and a table cell, a
     fence line with a backtick after its run or four spaces in, a hidden fence and line ends of `\r` and `\r\n`, each with an image and an `img` tag, whole and one character a piece;
     "a code span held back until it closes" for the controls, with a closer three spaces in and a run of the other mark
-    four in; four rows of a closing run four spaces or a tab in and "after a closing run further in"; "draws no image or
+    four in, and a table that a blank line ends, a task item with words and a delimiter row with no header above it;
+    four rows of a closing run four spaces or a tab in and "after a closing run further in"; six rows of a fence line in
+    a table and eight after an empty task item; "draws no image or
     tag in a client that joins texts or not": a fence, a code block, a span, a line and a mixed paragraph that one text
-    leaves open and a fence it has lost, each before text 1 of the same message and before a new message's, two
+    leaves open, a fence it has lost, a span of one or two marks that closes at its end, a line it leaves after a run,
+    and a table and an empty task item it ends with, each before text 1 of the same message and before a new message's,
+    the three run-on rows again with another message's text between, two
     reasoning parts, a subagent's text on the session's own updates, a fence and a span a tool call cuts and a span held
     while a subagent's text is sent, each drawn as each message's block, as each kind's block until a tool call and as
     each run of one kind; "a `!` that ends a text"; "what follows a clean text, a tool call or another channel" for the
-    controls; "what one text part or message leaves open reaches the next" for the replay, with a
+    controls, with later spans after a span that ends a text; "what one text part or message leaves open reaches the
+    next" for the replay, with the run-on, table and task rows in two parts and two messages, a
     compaction, a running one and a message that fails part way between, and a tool call and a prompt as the controls; 20,000 random
-    texts in random pieces drawn by the same renderer; "a loaded session's replay"). A client whose renderer reads
+    texts in random pieces and 20,000 random pairs of texts (apart, appended and as one message) drawn by the same
+    renderer, with delimiter rows and task boxes among the marks; "a loaded session's replay"). A client whose renderer reads
     Markdown in a way this does not foresee is not covered by a test. Names and words that a client draws as plain text are one line with no
     control or format character (`plain`): the available commands' names and descriptions, the model and mode names and
     descriptions of the config options, a session's title in `session/list` and the message of a failed turn's error
