@@ -49,8 +49,14 @@ beforeAll(async () => {
     path.join(root, "config", "orbit.json"),
     JSON.stringify({
       model: "test/test-model",
-      // Edits inside the workspace are allowed by default; ask, so the chat shows the approval with its diff.
-      permissions: [{ action: "edit", resource: "*", effect: "ask" }],
+      // Edits inside the workspace are allowed by default; ask, so the chat shows the approval with its diff. The read
+      // rule and the policy decide the editor field's rows below.
+      permissions: [
+        { action: "edit", resource: "*", effect: "ask" },
+        { action: "Read", resource: "secret/*", effect: "deny" },
+      ],
+      experimental: { policies: [{ action: "permission", resource: "Read:private/*", effect: "deny" }] },
+      commands: { review: { template: "Review $ARGUMENTS with care. EXPANDED-BODY" } },
       providers: {
         test: {
           name: "Test",
@@ -319,6 +325,70 @@ test("a context the server will not admit costs only itself: one log line, and t
   const history = (await real.message.list({ sessionID, limit: 50, order: "asc" })).data
   expect(history.map((message) => message.type)).toContain("user")
   expect(history.map((message) => message.type)).not.toContain("synthetic")
+  controller.dispose()
+}, 60_000)
+
+// Review of m5-quality fix loop 1 (classes 3 and 8): the open file and its selection go as the prompt's editor field, so
+// the server decides the file by the person's read rules and policies before the model is shown the selection, as it
+// decides a mention. A file nothing denies is the control.
+test.each([
+  ["a file a Read rule denies", "secret/key.ts", false],
+  ["a file a policy denies", "private/key.ts", false],
+  ["a file nothing denies", "src/open.ts", true],
+])(
+  "the selection of %s reaches the model only when its read is allowed",
+  async (_, file, kept) => {
+    const client = connect()
+    const first = steps.length
+    const { controller, busy } = await chat(client)
+
+    await controller.send("What is selected?", undefined, "1 line selected", {
+      path: path.join(workspace, file),
+      selection: { start: 1, end: 1, text: "SELECTED-MARKER" },
+    })
+    await until(() => (busy.at(-1) === false && steps.length > first ? true : undefined))
+
+    const sent = JSON.stringify(steps[first])
+    expect(sent).toContain("What is selected?")
+    if (kept) expect(sent).toContain("SELECTED-MARKER")
+    else expect(sent).not.toContain("SELECTED-MARKER")
+    controller.dispose()
+  },
+  60_000,
+)
+
+// Review of m5-quality fix loop 1: reopening a session draws a slash command's prompt as the command that was run, as
+// the terminal UI does; its expansion is the model's. A plain prompt is drawn as its text (the control).
+test("reopening a session shows a slash command's prompt as its command and a plain prompt as its text", async () => {
+  const client = connect()
+  const first = steps.length
+  const { controller, busy } = await chat(client)
+  await controller.send("Plain question")
+  await until(() => (busy.at(-1) === false && steps.length > first ? true : undefined))
+  const sessionID = (await controller.sessions())[0]?.id ?? ""
+
+  await client.session.command({ sessionID, name: "review", text: "src/a.ts" })
+  const answered = async () => {
+    const history = (await client.message.list({ sessionID, limit: 50, order: "asc" })).data
+    return history.at(-1)?.type === "assistant" && history.filter((message) => message.type === "user").length === 2
+  }
+  const deadline = Date.now() + 30_000
+  while (!(await answered()) && Date.now() < deadline) await Bun.sleep(50)
+
+  const replayed = new Map<string, Item>()
+  const other = new Controller(
+    client,
+    workspace,
+    (update) => {
+      if (update.type === "item") replayed.set(update.item.id, update.item)
+    },
+    neverAsked,
+  )
+  await other.open(sessionID)
+  const users = [...replayed.values()].flatMap((item) => (item.type === "user" ? [item.text] : []))
+  expect(users).toEqual(["Plain question", "/review src/a.ts"])
+  expect(JSON.stringify([...replayed.values()])).not.toContain("EXPANDED-BODY")
+  other.dispose()
   controller.dispose()
 }, 60_000)
 
