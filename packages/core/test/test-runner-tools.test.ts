@@ -126,15 +126,24 @@ describe("runTests", () => {
 
 describe("tools/test/run.ts on a stuck file", () => {
   test(
-    "annotates the file for GitHub, and on Linux prints what the worker was doing",
+    "annotates the file for GitHub, prints on Linux what the worker was doing, and uses no inherited heartbeat folder",
     async () => {
       await using dir = await tmpdir()
       await suite(dir.path, {
         "stuck.test.ts": `import { test } from "bun:test"\ntest("spins", () => { const end = Date.now() + 40_000; while (Date.now() < end) {} })\n`,
       })
+      // The folder of a run that started this one: the run under test must keep its own.
+      const outer = path.join(dir.path, "outer-heartbeat")
+      await fs.mkdir(outer)
       const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "../../../tools/test/run.ts")], {
         cwd: dir.path,
-        env: { ...process.env, ORBIT_TEST_WORKERS: "2", ORBIT_TEST_FILE_DEADLINE_MS: "1000", GITHUB_ACTIONS: "true" },
+        env: {
+          ...process.env,
+          ORBIT_TEST_WORKERS: "2",
+          ORBIT_TEST_FILE_DEADLINE_MS: "1000",
+          GITHUB_ACTIONS: "true",
+          ORBIT_TEST_HEARTBEAT: outer,
+        },
         stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",
@@ -153,6 +162,7 @@ describe("tools/test/run.ts on a stuck file", () => {
         expect(stderr).toMatch(/^children: /m)
       }
       expect(stdout).not.toContain("Test file stuck")
+      expect(await fs.readdir(outer)).toEqual([])
     },
     60_000,
   )
@@ -168,13 +178,14 @@ describe("runProgram", () => {
   test("kills a program that runs past its deadline and fails with the command and what it printed", async () => {
     const started = Date.now()
     const failure = await runProgram(
-      [process.execPath, "-e", "process.stdout.write('so far'); setTimeout(() => {}, 60_000)"],
+      [process.execPath, "-e", "process.stdout.write(String(6 * 7)); setTimeout(() => {}, 60_000)"],
       { deadline: 1_000 },
     ).catch((error: Error) => error)
     expect(Date.now() - started).toBeLessThan(10_000)
     expect(failure).toBeInstanceOf(Error)
     expect((failure as Error).message).toContain("did not end within 1 s")
-    expect((failure as Error).message).toContain("so far")
+    // What it printed, which its command line does not hold.
+    expect((failure as Error).message).toContain("stdout:\n42\n")
     if (process.platform === "linux") expect((failure as Error).message).toContain("processes:")
   })
 })
@@ -234,14 +245,14 @@ describe("mergeTimings", () => {
       await Bun.write(path.join(downloads.path, name, file), JSON.stringify({ version: 1, files }))
     }
     await artifact("timings-linux-cli-1of2", "timings.json", { "test/b.test.ts": 2, "test/gone.test.ts": 9 })
-    await artifact("timings-linux-cli-2of2", "timings.json", { "test/a.test.ts": 1 })
+    await artifact("timings-linux-cli-2of2", "timings.json", { "test/a.test.ts": 1, "test/c.test.ts": 4 })
     await artifact("timings-windows-cli", "timings.windows.json", { "test/c.test.ts": 3 })
     await fs.mkdir(path.join(downloads.path, "lcov-linux-cli-1of2"))
     const lines = await mergeTimings(downloads.path, root.path)
-    expect(lines.toSorted()).toEqual(["cli: 1 files in test/timings.windows.json", "cli: 2 files in test/timings.json"])
+    expect(lines.toSorted()).toEqual(["cli: 1 files in test/timings.windows.json", "cli: 3 files in test/timings.json"])
     const linux = await Bun.file(path.join(root.path, "packages", "cli", "test", "timings.json")).json()
-    expect(linux).toEqual({ version: 1, files: { "test/a.test.ts": 1, "test/b.test.ts": 2 } })
-    expect(Object.keys(linux.files)).toEqual(["test/a.test.ts", "test/b.test.ts"])
+    expect(linux).toEqual({ version: 1, files: { "test/a.test.ts": 1, "test/b.test.ts": 2, "test/c.test.ts": 4 } })
+    expect(Object.keys(linux.files)).toEqual(["test/a.test.ts", "test/b.test.ts", "test/c.test.ts"])
     expect(await Bun.file(path.join(root.path, "packages", "cli", "test", "timings.windows.json")).json()).toEqual({
       version: 1,
       files: { "test/c.test.ts": 3 },

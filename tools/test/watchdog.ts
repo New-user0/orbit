@@ -114,10 +114,16 @@ function linuxState(pid: number) {
 }
 
 // Stops `bun test` and every worker under it. On Windows taskkill is started by its full path, never by its name, which
-// Windows would look up in the package's folder first (class 10).
+// Windows would look up in the package's folder first (class 10). Elsewhere the whole process group is killed, and the
+// run waits (a few seconds at most) until the killed workers have been reaped, so none is left when it ends.
 async function stop(child: Bun.Subprocess) {
-  if (process.platform !== "win32") return process.kill(-child.pid, "SIGKILL")
-  const taskkill = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe")
-  await Bun.spawn([taskkill, "/T", "/F", "/PID", String(child.pid)], { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
-    .exited
+  if (process.platform === "win32") {
+    const taskkill = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe")
+    await Bun.spawn([taskkill, "/T", "/F", "/PID", String(child.pid)], { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
+      .exited
+    return
+  }
+  process.kill(-child.pid, "SIGKILL")
+  const until = Date.now() + 5_000
+  while (Date.now() < until && alive(-child.pid)) await Bun.sleep(50)
 }
