@@ -2894,18 +2894,23 @@ resource) is sent as before.
 
 Over ACP, a form's message (a subagent's title and the form's title) and its fields' titles, descriptions and option
 labels are sent as code spans when Markdown would change them, as approval titles already are. The model's own Markdown
-in message and thought chunks, live and on `session/load`, is sent as written except that an image's `![` is written
-`!\[` and a raw HTML tag's `<` is written `&lt;` outside code, so a client shows the image's text and address. Only a
-fenced block and a code span that closes on its own line count as code. A code span is sent once it closes, so its
-text reaches the client a moment later than the words before it. A backtick that opens no span (a lone or escaped one,
-or one in a link's address) leaves the rest as prose. Code in a span that runs over a line, in a span with a `|`, after
-a link whose address has a space or a title, or in any fence after one written on a list item's own line or more than
-three spaces in, or after a fence's closing run four or more spaces or a tab in, can show `!\[` or `&lt;`. So can code
-in a fence directly below a table (with no blank line between) or after a list item that holds only a task box such as
-`- [ ]`, and code in a text that follows, with no tool call between, a text that ended inside a block, a span or a line
-(a reply cut off at its output limit and its retry, for example), or that ended with a table or such a task item, since
-a client may draw the two as one block. A backtick that starts a text right after a backtick that ended the text before
-is sent as `` \` ``, which a client draws as a backtick. Command, model and
+in message and thought chunks, live and on `session/load`, is sent as written except that an invisible word joiner
+(U+2060) follows every `!` before a `[` and every `<` before a letter, `/`, `!` or `?` outside code, and a `!` or a `<`
+that ends a chunk. A client draws the text as the model wrote it, but an image becomes a link to its address, which
+nothing fetches, a raw HTML tag reads as text, and an autolink such as `<https://example.com/>` shows its angle
+brackets around a link. Text copied out of the client carries the joiners, which some editors, terminals and compilers
+do not ignore. Only a fenced block and a code span that closes on its own line count as code, and they are sent
+unchanged. A code span is sent once it closes, so its text reaches the client a moment later than the words before it.
+A backtick that opens no span (a lone or escaped one, or one in a link's address) leaves the rest as prose. Code gains
+joiners where renderers may disagree on what is code: in a span that runs over a line, in a span with a `|`, after a
+link whose address has a space or a title, after a tilde or the start of a bare address (`www.`, `http`, `ftp:`) on its
+line, and in any span or fence on a later line of such a text; in any fence after one written on a list item's own line
+or more than three spaces in, or after a fence's closing run four or more spaces or a tab in, or with anything but
+spaces after it; in a fence directly below a table (with no blank line between) or after a list item that holds only a
+task box such as `- [ ]`; and in a text that follows, with no tool call between, a text that ended inside a block, a
+span or a line (a reply cut off at its output limit and its retry, for example), or that ended with a table or such a
+task item, since a client may draw the two as one block. A backtick that starts a text right after a backtick that
+ended the text before is sent as `` \` ``, which a client draws as a backtick. Command, model and
 mode names and descriptions, a session's title in `session/list` and a failed turn's error message are one line, with
 control characters written out.
 

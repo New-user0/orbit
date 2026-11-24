@@ -2569,20 +2569,27 @@ runs" is a permission.
     subagent rule) and its own title, and the form's field titles, descriptions and option labels go through `literal`
     too (the same file, "a form's message" and "a form's field titles": the hostile values, a line break and plain words
     as the control). The model's own Markdown in message and thought chunks, streamed and replayed on `session/load`, goes
-    as it wrote it, except that outside code the `[` of an image's `![` is written `\[` and the `<` that opens a raw tag,
-    comment or declaration `&lt;` (`withoutImages` in the same file), so a client draws an image as its text and address,
-    as the reference's renderer shows an image as its address. Text counts as code only where Markdown is sure to read it
-    so: a fenced block opened by a line of three or more backticks or tildes after at most three spaces and closed by a
-    line of a run of the same mark at least as long after at most three spaces, and a code span held back from its
-    opening run until a run of the same length closes it on the same line. A backtick that a
-    backslash escapes, or that is inside a link's address or an autolink, opens nothing; a span that its line or the
-    text ends first, or that holds a `|` a table can split on, is written as prose, and the backticks in the rest of
-    that paragraph then open nothing; after a fence behind a list's or a quote's mark, more than three spaces in, or
-    left by a line to the left of its opening one, after a closing run more than three spaces or a tab in, at a fence
-    line in a table (from the delimiter row under its header to a blank line, where md4c reads the fence line as one
-    more row) and at a fence line that is the first line not blank after a list item holding only a task box (which
-    md4c reads as that item's text), no later fence in the text counts as code, since renderers differ on which block
-    is open. The end of a text writes what is still held. ACP gives a chunk no text boundary: a client may draw the
+    as it wrote it, except that outside code a word joiner (U+2060) follows every `!` before a `[` and every `<` before a
+    letter, `/`, `!` or `?`, and a `!` or a `<` that ends a chunk (`withoutImages` in the same file). The joiner is drawn
+    as nothing and every renderer reads it as text, so an image becomes a link to its address that nothing fetches and
+    a tag, comment or declaration reads as text, even where a renderer such as `marked` unescapes a link's text and
+    reads it again (an escape such as `!\[` did not hold there). The cost is that text copied out of a client carries
+    the joiners. Text counts as code, and is sent unchanged, only where Markdown is sure to read it so: a fenced block
+    opened by a line of three or more backticks or tildes after at most three spaces and closed by a line of a run of
+    the same mark at least as long after at most three spaces with only spaces after it, and a code span held back from
+    its opening run until a run of the same length closes it on the same line. A backtick that a backslash escapes, or
+    that is inside a link's address or an autolink, opens nothing; a span that its line or the text ends first, or that
+    holds a `|` a table can split on, is written as prose, and the backticks in the rest of that paragraph then open
+    nothing, nor do those after a tilde or the start of a bare address (`www.`, `http`, `ftp:`), which `marked` runs on
+    over a backtick. Wherever renderers may differ, the tracker gives up (`lost`) and no later span or fence in the text
+    counts as code: after a line with a tilde or the start of a bare address, after a fence behind a list's or a
+    quote's mark, more than three spaces in, or left by a line to the left of its opening one, after a closing run more
+    than three spaces or a tab in or with anything but spaces after it (`marked` closes on a run with more backticks or
+    tildes after it and not on one with a tab after it), at a fence line in a table (from the delimiter row under its
+    header to a blank line, where md4c reads the fence line as one more row) and at a fence line that is the first line
+    not blank after a list item holding only a task box (which md4c reads as that item's text). The end of a text
+    writes what is still held, and a carriage return and a line feed end one line only when nothing, a held backtick
+    included, comes between them. ACP gives a chunk no text boundary: a client may draw the
     chunks of a message ID as one block, or append every chunk of a kind to the last block until a tool call or a chunk
     of the other kind, across texts and messages (a cut-off reply and its retry under a new ID, the parts of a replayed
     session). So a text that picks up after a piece of another was sent starts as it would alone only where both stand
@@ -2591,8 +2598,8 @@ runs" is a permission.
     else what it holds is written as prose and nothing more of it counts as code, its first line break continues the
     line the text before left rather than making a blank line, and a backtick that starts it right after a backtick
     that ended a text (of the same message or the one before) is written `` \` `` so it cannot lengthen a span's closing
-    run. A client that draws them apart or joins them then at most shows a mark escaped, as far as md4c, the renderer
-    the tests draw with, reads them. A tool call, a prompt and a subagent's updates that the client takes
+    run. A client that draws them apart or joins them then at most shows joiners in code, as far as md4c and `marked`,
+    the renderers the tests draw with, read them. A tool call, a prompt and a subagent's updates that the client takes
     apart start a new block (`follow` in the same file and `piece` in `acp/translate.ts`; classes 6 and 9;
     "the model's Markdown": an image, a reference image, a raw `img` and `picture`, each split across pieces, and an
     image after a closed fence, with prose, links, code spans, fences and an autolink as the controls; one row each for
@@ -2613,8 +2620,20 @@ runs" is a permission.
     next" for the replay, with the run-on, table and task rows in two parts and two messages, a
     compaction, a running one and a message that fails part way between, and a tool call and a prompt as the controls; 20,000 random
     texts in random pieces and 20,000 random pairs of texts (apart, appended and as one message) drawn by the same
-    renderer, with delimiter rows and task boxes among the marks; "a loaded session's replay"). A client whose renderer reads
-    Markdown in a way this does not foresee is not covered by a test. Names and words that a client draws as plain text are one line with no
+    renderer, with delimiter rows and task boxes among the marks; "a loaded session's replay"; for `marked`, one row
+    each for an image in a link's text after a `[`, whole and across two texts, a fence closed by a run with a tilde or
+    a backtick after it or a tab after it, and a span after `www.`, after `http` and after an address one text ends
+    with, drawn by both renderers; "where the tracker is unsure, code takes joiners" with a tilde fence, a closer with
+    spaces after it and an address's start cut by a line break as the controls; four rows of a carriage return before
+    a held backtick, cut at every point; and `packages/cli/test/acp/image-fuzz.test.ts`, which runs
+    `image-fuzz.ts` in a child process with a deadline, seed 20261124, over 20,000 fuzzed cases for each renderer:
+    fences of both marks at any indentation, behind list and quote marks and with info strings, spans, links, tables,
+    task items, HTML blocks, line ends of `\n`, `\r\n` and `\r`, and images and raw tags anywhere, cut into random
+    chunks over texts, messages and kinds, through `ACPTranslate.step` and `replayMessage`, and drawn as each text
+    alone, per message ID and appended, with no image or tag drawn and the same grammar with neither coming back as
+    written but for joiners and a text's first backtick escaped after one that ended the text before). A client whose
+    renderer reads Markdown in a way neither md4c nor `marked` does is not
+    covered by a test. Names and words that a client draws as plain text are one line with no
     control or format character (`plain`): the available commands' names and descriptions, the model and mode names and
     descriptions of the config options, a session's title in `session/list` and the message of a failed turn's error
     (class 9; "a command's, a model's and a mode's name", "a session's title in the session list", each with a plain
