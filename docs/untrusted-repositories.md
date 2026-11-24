@@ -2926,7 +2926,9 @@ kind in turn.
 - Never hand a bare name to `exec`, `execSync`, a `shell` option or `cmd /c` outside the spawner: each one starts a
   `cmd.exe`, and only the spawner makes sure that the program gets the variable whatever environment it is handed. Give
   a system tool its full path. Stopping a process on Windows runs the `taskkill.exe` of `%SystemRoot%\System32` with
-  `execFile`, where it used to run `taskkill` by name through `exec`.
+  `execFile`, where it used to run `taskkill` by name through `exec`. The test runner's watchdog
+  (`tools/test/watchdog.ts`) stops a stuck run the same way, and `test-runner-deadline.test.ts` plants `taskkill.exe`,
+  `cmd.exe` and `taskkill.bat` decoys in the package folder to show it.
 - A `Bun.spawn` without an `env` hands its child the environment that the process started with, and not a variable that
   `install()` set after that. `ProgramLookup.install()` stops Bun from finding a `cmd.exe` of the working folder, but
   the `cmd.exe` that it starts has no variable and looks in the folder for what it runs by name (measured with Bun 1.4.2
@@ -3229,6 +3231,10 @@ applied to gates, allowlists and platform skips.
   the PR, in a container or WSL, or mark the test unverified.
 - Generated files carry `eol=lf` in `.gitattributes` (`packages/protocol/openapi.json` and the generated client
   directories).
+- A gate that hangs says nothing. Test code starts programs with `runProgram`
+  (`packages/core/test/fixture/run-program.ts`), never with a synchronous spawn, which on Linux can fail to return and
+  stops the worker's timers (`test-sync-spawn.test.ts` lists any that remain), and the package runners stop a test file
+  that runs past its deadline and name it (`tools/test/watchdog.ts`, `test-runner-deadline.test.ts`).
 - A flaky test is fixed in the PR that meets it, or that PR names it and says why it stays: the repository has no list
   of known failures to put it in yet (Known gaps). A test that the milestone plan names as a gate must pass, not be
   "known".

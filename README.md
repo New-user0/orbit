@@ -100,10 +100,21 @@ Tests run per package, never from the root: `cd packages/core && bun run test`.
 `bun run test` runs the big packages (core, cli, tui, server, vscode) in parallel, in worker processes: half the logical cores, at
 least two. `ORBIT_TEST_WORKERS=<n>` sets the count, and `ORBIT_TEST_WORKERS=1` gives a serial run for debugging. The other packages
 run serially because their files are small, and a worker costs about a second per file on Windows; setting `ORBIT_TEST_WORKERS`
-runs them in parallel too. Core, cli, tui, server and vscode each keep a `test/timings.json` that starts the slowest files first, and
-`bun run test:timings` refreshes it (ordinary runs never write it). Each core worker gets its own `ORBIT_TEST_HOME`, XDG and temp folders, and its own `HOME` only on Windows (on Linux and macOS `HOME` stays the shared root). The
-ACP approval matrix in cli (`permission-files.subprocess.test.ts`) runs its rows 8 at a time inside its one file; pass
-`--max-concurrency=1` to run them one by one.
+runs them in parallel too. Each core worker gets its own `ORBIT_TEST_HOME`, XDG and temp folders, and its own `HOME` only on
+Windows (on Linux and macOS `HOME` stays the shared root). The ACP approval matrix in cli
+(`acp/permission-files.subprocess.test.ts` and `acp/permission-files-spellings.subprocess.test.ts`) runs its rows 8 at a time
+inside each file; pass `--max-concurrency=1` to run them one by one.
+
+A parallel run stops a test file that is still running past its deadline, names it on stderr and exits with code 1, instead of
+waiting for it forever. The deadline is `ORBIT_TEST_FILE_DEADLINE_MS` (ten minutes by default) or three times the file's
+measured time, whichever is longer (`tools/test/watchdog.ts`). Test code starts programs with `runProgram`
+(`packages/core/test/fixture/run-program.ts`) and never synchronously.
+
+Core, cli, tui, server and vscode each keep the time each test file took: `test/timings.json` measured on Linux and
+`test/timings.windows.json` measured on Windows. A run starts the slowest files first, and CI's `--shard` jobs split a package by
+them. `bun run test:timings` writes the file of the platform it runs on. Every CI test job uploads what it measured as a
+`timings-<os>-<package><part>` artifact, and `bun tools/test/timings.ts --run <run id>` merges a run's artifacts into the
+committed files.
 
 ## Brand gate
 
