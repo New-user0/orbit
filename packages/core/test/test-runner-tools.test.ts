@@ -203,10 +203,15 @@ describe("testArgs", () => {
   test("a serial run gets no workers, no heartbeat, no timings and does not write them", async () => {
     await using dir = await tmpdir()
     await suite(dir.path, {}, {})
+    // A parallel package asked for one worker still gives each file a fresh module registry; a --serial package does not.
     expect(withWorkers("1", () => testArgs(["--update-timings", "--only-failures"], dir.path, "linux"))).toEqual([
       "test",
+      "--isolate",
       "--only-failures",
     ])
+    expect(
+      withWorkers("1", () => testArgs(["--serial", "--update-timings", "--only-failures"], dir.path, "linux")),
+    ).toEqual(["test", "--only-failures"])
   })
 
   test("a parallel run preloads the heartbeat and writes the platform's timings, made or not", async () => {

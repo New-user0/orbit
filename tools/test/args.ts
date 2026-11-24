@@ -23,7 +23,10 @@ export function testArgs(extra: string[], cwd = process.cwd(), platform = proces
   const windows = path.join(cwd, "test", "timings.windows.json")
   const timings =
     platform === "win32" && (update || fs.existsSync(windows)) ? windows : path.join(cwd, "test", "timings.json")
-  if (workers === 1) return ["test", ...rest.filter((arg) => arg !== "--update-timings")]
+  // A package that runs in parallel by default keeps a fresh module registry for each file when ORBIT_TEST_WORKERS=1
+  // asks for one worker, as its parallel run has, so files that share a fixture module each get their own copy.
+  if (workers === 1)
+    return ["test", ...(serial ? [] : ["--isolate"]), ...rest.filter((arg) => arg !== "--update-timings")]
   return [
     "test",
     `--parallel=${workers}`,
