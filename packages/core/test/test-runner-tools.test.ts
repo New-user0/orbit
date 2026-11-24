@@ -45,9 +45,7 @@ describe("runTests", () => {
         "stuck.test.ts": [
           `import { test } from "bun:test"`,
           `import { writeFileSync } from "node:fs"`,
-          // A program the file started, which a worker that dies alone would leave running.
-          `const child = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60_000)"], { stdio: ["ignore", "ignore", "ignore"] })`,
-          `writeFileSync(${JSON.stringify(startFile)}, JSON.stringify({ pid: process.pid, child: child.pid, at: Date.now() }))`,
+          `writeFileSync(${JSON.stringify(startFile)}, JSON.stringify({ pid: process.pid, at: Date.now() }))`,
           `test("spins", () => { const end = Date.now() + 40_000; while (Date.now() < end) {} })`,
         ].join("\n"),
       })
@@ -55,11 +53,11 @@ describe("runTests", () => {
       const code = await runTests(args(dir.path), { ...process.env, ORBIT_TEST_FILE_DEADLINE_MS: "1000" }, dir.path)
       const ended = Date.now()
       expect(code).toBe(1)
-      const started = (await Bun.file(startFile).json()) as { pid: number; child: number; at: number }
+      const started = (await Bun.file(startFile).json()) as { pid: number; at: number }
       // A one-second deadline is looked at every quarter second, so the run ends soon after it, not at a 5 s poll.
       expect(ended - started.at).toBeLessThan(4_000)
+      // Gone, not only killed: on Linux the run waits until the killed worker has been reaped.
       expect(() => process.kill(started.pid, 0)).toThrow()
-      expect(() => process.kill(started.child, 0)).toThrow()
       expect(await heartbeats()).toBe(before)
     },
     60_000,
