@@ -932,7 +932,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["[b`] `<img>`", `[b\`] \`<${JOINER}img>\``],
     ["[`<img>`](u)", `[\`<${JOINER}img>\`](u)`],
     ["[a](u) `<img>`", `[a](u) \`<${JOINER}img>\``],
-    ["\[b `<img>`", `\[b \`<${JOINER}img>\``],
+    ["\\[b `<img>`", `\\[b \`<${JOINER}img>\``],
     ["a [b\n```\nx\n```\n`<img>`", `a [b\n\`\`\`\nx\n\`\`\`\n\`<${JOINER}img>\``],
     // A fence line that a link reference definition may still take opens no block, and leaves the tracker unsure: one
     // right after it, and one after a blank line that `marked` reads a label or a `"` or `(` title on over.
@@ -941,7 +941,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["[r]: /u (a\n\n```\n<img>\n```", `[r]: /u (a\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ['[r]: /u\n"a\n\n```\n<img>\n```', `[r]: /u\n"a\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ["[a\nb\n\n```\n<img>\n```", `[a\nb\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ["[a\\n\n```\n<img>\n```", `[a\\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[a\\\n\n```\n<img>\n```", `[a\\\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ['[r]: /u "\na\n\n```\n<img>\n```', `[r]: /u "\na\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ['[r]: <u v> "\n\n```\n<img>\n```', `[r]: <${JOINER}u v> "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     // The controls: a definition that is whole, or that is no definition, ends at a blank line, so the block after it
