@@ -2581,19 +2581,25 @@ runs" is a permission.
     that is inside a link's address or an autolink, opens nothing; a span that its line or the text ends first, or that
     holds a `|` a table can split on, is written as prose, and the backticks in the rest of that paragraph then open
     nothing, nor do those after a tilde or the start of a bare address (`www.`, `http`, `ftp:`), which `marked` runs on
-    over a backtick. Wherever renderers may differ, the tracker gives up (`lost`) and no later span or fence in the text
+    over a backtick, nor those after a `[` that no `]` has closed in the paragraph, since a reference's label takes a
+    backtick from a span (md4c for a full reference, `marked` for a collapsed or shortcut one too). Wherever renderers
+    may differ, the tracker gives up (`lost`) and no later span or fence in the text
     counts as code: after a line with a tilde or the start of a bare address, after a fence behind a list's or a
     quote's mark, more than three spaces in, or left by a line to the left of its opening one, after a closing run more
     than three spaces or a tab in or with anything but spaces after it (`marked` closes on a run with more backticks or
     tildes after it and not on one with a tab after it), at a fence line in a table (from the delimiter row under its
     header to a blank line, where md4c reads the fence line as one more row) and at a fence line that is the first line
-    not blank after a list item holding only a task box (which md4c reads as that item's text). The end of a text
+    not blank after a list item holding only a task box (which md4c reads as that item's text), and at a fence line
+    that a link reference definition may still take, where `marked` reads it into the definition: one whose label is
+    left open, whose `]:` has no destination yet, or whose title's quote or parenthesis is left open on its line or
+    opened on the next, a `"` or `(` title and a label over a blank line too; any line that starts with a `[` behind
+    indentation and list or quote marks may start one. The end of a text
     writes what is still held, and a carriage return and a line feed end one line only when nothing, a held backtick
     included, comes between them. ACP gives a chunk no text boundary: a client may draw the
     chunks of a message ID as one block, or append every chunk of a kind to the last block until a tool call or a chunk
     of the other kind, across texts and messages (a cut-off reply and its retry under a new ID, the parts of a replayed
     session). So a text that picks up after a piece of another was sent starts as it would alone only where both stand
-    at the start of a line with no block, span or mixed paragraph open, and even then a table or an empty task item
+    at the start of a line with no block, span, mixed paragraph, open `[` or unfinished definition, and even then a table or an empty task item
     that the text before ends with keeps a fence line at the start of the next text from counting as code. Anywhere
     else what it holds is written as prose and nothing more of it counts as code, its first line break continues the
     line the text before left rather than making a blank line, and a backtick that starts it right after a backtick
@@ -2623,12 +2629,21 @@ runs" is a permission.
     renderer, with delimiter rows and task boxes among the marks; "a loaded session's replay"; for `marked`, one row
     each for an image in a link's text after a `[`, whole and across two texts, a fence closed by a run with a tilde or
     a backtick after it or a tab after it, and a span after `www.`, after `http` and after an address one text ends
-    with, drawn by both renderers; "where the tracker is unsure, code takes joiners" with a tilde fence, a closer with
-    spaces after it and an address's start cut by a line break as the controls; four rows of a carriage return before
+    with, drawn by both renderers; for a reference's label, a full, a collapsed and a shortcut reference whose label
+    holds a backtick, the definition first, a label over two lines and one that a text or a message's text leaves
+    open, and, for a definition before a fence line, a label alone, with a space, in a list item, before a longer, an
+    indented and a tilde fence, `"`, `'` and `(` titles left open, a title opened on the next line, a label left open,
+    titles and a label over a blank line, and one that a text or a message's text ends with, with a label after a line
+    of text, a label in a quote and two inline links' text as the controls, each drawn by both renderers; "where the
+    tracker is unsure, code takes joiners" with a tilde fence, a closer with spaces after it and an address's start cut
+    by a line break as the controls, and the joiners after an open `[` and in a fence a definition may still take,
+    with a closed, an escaped and a parted `[`, whole definitions, a `'` title a blank line ends and lines that are no
+    definition as the controls; four rows of a carriage return before
     a held backtick, cut at every point; and `packages/cli/test/acp/image-fuzz.test.ts`, which runs
     `image-fuzz.ts` in a child process with a deadline, seed 20261124, over 20,000 fuzzed cases for each renderer:
     fences of both marks at any indentation, behind list and quote marks and with info strings, spans, links, tables,
-    task items, HTML blocks, line ends of `\n`, `\r\n` and `\r`, and images and raw tags anywhere, cut into random
+    task items, HTML blocks, line ends of `\n`, `\r\n` and `\r`, labels with a backtick in them and their definition,
+    definitions left open over the next line, and images and raw tags anywhere, cut into random
     chunks over texts, messages and kinds, through `ACPTranslate.step` and `replayMessage`, and drawn as each text
     alone, per message ID and appended, with no image or tag drawn and the same grammar with neither coming back as
     written but for joiners and a text's first backtick escaped after one that ended the text before). A client whose

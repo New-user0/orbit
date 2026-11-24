@@ -2907,9 +2907,11 @@ link whose address has a space or a title, after a tilde or the start of a bare 
 line, and in any span or fence on a later line of such a text; in any fence after one written on a list item's own line
 or more than three spaces in, or after a fence's closing run four or more spaces or a tab in, or with anything but
 spaces after it; in a fence directly below a table (with no blank line between) or after a list item that holds only a
-task box such as `- [ ]`; and in a text that follows, with no tool call between, a text that ended inside a block, a
-span or a line (a reply cut off at its output limit and its retry, for example), or that ended with a table or such a
-task item, since a client may draw the two as one block. A backtick that starts a text right after a backtick that
+task box such as `- [ ]`; in a span after a `[` that no `]` has closed in its paragraph, such as a span in a link's
+text (`` [`code`](url) ``); in any fence that starts while a link reference definition such as `[r]:` may still go on
+(its label, its address or its title left open on the line before); and in a text that follows, with no tool call between, a text that ended inside a block, a
+span or a line (a reply cut off at its output limit and its retry, for example), or that ended with a table, such a
+task item, an open `[` or a definition that may go on, since a client may draw the two as one block. A backtick that starts a text right after a backtick that
 ended the text before is sent as `` \` ``, which a client draws as a backtick. Command, model and
 mode names and descriptions, a session's title in `session/list` and a failed turn's error message are one line, with
 control characters written out.
