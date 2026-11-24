@@ -73,8 +73,9 @@ export type Prose = {
   readonly fence?: Fence
   /**
    * Whether a fenced block may be open that the tracker cannot follow: one behind a list's or a quote's mark or more
-   * than three spaces in, or one that a line left by starting to the left of its opening line. Its closing line may
-   * open a block for one renderer and close one for another, so from then on no block is thought open.
+   * than three spaces in, one that a line left by starting to the left of its opening line, one whose closing run
+   * stands more than three spaces or a tab in, or one in a text that a client may join to another's (`follow`). Its
+   * closing line may open a block for one renderer and close one for another, so from then on no block is thought open.
    */
   readonly lost: boolean
   /** A backtick run that may open a code span, with the text after it on its line, held back until the span closes. */
@@ -125,9 +126,11 @@ const FENCE_LINE = /^(?:[ \t>]|[-+*][ \t]|\d{1,9}[.)][ \t])*(?:`{3}|~{3})/
  * client draws as `<`. Text is left as written only where Markdown is sure to read it as code:
  *
  * - A fenced block, opened by a line of three or more backticks or tildes after at most three spaces, and ended by a
- *   line of a run as long at any indentation, or by a line that starts to the left of the opening one, which may end
- *   the list item that holds the block. After such a line, or a fence behind a list's or a quote's mark or more than
- *   three spaces in, renderers differ on which block is open, so no later block in the text is taken as code.
+ *   line of a run of the same mark at least as long after at most three spaces. A line of such a run further in, or
+ *   after a tab, is code to Markdown, and so is a line that starts to the left of the opening one, which may yet end
+ *   the list item that holds the block. After either, or a fence behind a list's or a quote's mark or more than three
+ *   spaces in, renderers differ on which block is open, so the tracker gives up: the block is no longer thought open
+ *   and no later block in the text is taken as code.
  * - A code span, whose text is held back from its opening run until a run of the same length closes it on the same
  *   line. A run that a backslash escapes, or that is inside a link's address after its `](` or an autolink, opens
  *   nothing. An address or autolink that is not a plain run up to its `)` or `>` may hold a title or a backtick of its
@@ -136,7 +139,8 @@ const FENCE_LINE = /^(?:[ \t>]|[-+*][ \t]|\d{1,9}[.)][ \t])*(?:`{3}|~{3})/
  *   rest of that paragraph then open nothing too.
  *
  * Text arrives in pieces, so `state` carries what one piece leaves open to the next, and `end` writes what is still
- * held when the text ends. A `<` that ends a piece is written `&lt;`, since the tag it may open is not known yet.
+ * held when the text ends; the state it then returns is what the text leaves for one sent after it (`follow`). A `<`
+ * that ends a piece is written `&lt;`, since the tag it may open is not known yet.
  */
 export function withoutImages(state: Prose, text: string, end = false): [Prose, string] {
   const out: string[] = []
@@ -145,8 +149,28 @@ export function withoutImages(state: Prose, text: string, end = false): [Prose, 
     .split("")
     .reduce<Prose>((current, char, index) => step(current, char, () => text.slice(index + 1), out), state)
   if (!end) return [next, out.join("")]
-  settle(next, out)
-  return [prose, out.join("")]
+  // `settle` writes what is held before the pieces are joined.
+  return [settle(next, out), out.join("")]
+}
+
+/**
+ * Where a text picks up after a client was sent a piece of another: a client may draw it in a block of its own, or
+ * append it to the block that holds the text sent before it, as some do with every chunk until a tool call (`before`
+ * is the state that text left). The two read it alike only where both texts stand at the start of a line with no
+ * block, span or mixed paragraph open. Anywhere else what is held is written as prose, and nothing more of the text
+ * is taken as code, so either reading at most shows a mark escaped (classes 6 and 9).
+ */
+export function follow(state: Prose, before: Prose): [Prose, string] {
+  if (clear(state) && clear(before)) return [state, ""]
+  const out: string[] = []
+  const released = state.held === "" ? state : release(state, out)
+  // A `!` that ended the text before may make an image of a `[` that starts this one.
+  const last = before.last === "!" ? before.last : released.last
+  return [{ ...released, fence: undefined, lost: true, mixed: true, last }, out.join("")]
+}
+
+function clear(state: Prose) {
+  return state.fence === undefined && !state.lost && !state.mixed && state.line === ""
 }
 
 function step(state: Prose, char: string, rest: () => string, out: string[]): Prose {
@@ -220,17 +244,24 @@ function release(state: Prose, out: string[]) {
   const held = state.held
   return held
     .split("")
-    .reduce<Prose>(
-      (current, char, index) => write(current, char, () => held.slice(index + 1), out),
-      { ...state, held: "", open: 0, run: 0, mixed: true },
-    )
+    .reduce<Prose>((current, char, index) => write(current, char, () => held.slice(index + 1), out), {
+      ...state,
+      held: "",
+      open: 0,
+      run: 0,
+      mixed: true,
+    })
 }
 
 function newline(state: Prose, char: string, out: string[]): Prose {
   out.push(char)
   // An address or autolink that a line break cuts is not plain.
   const next = { ...state, line: "", last: char, escape: false, until: "", mixed: state.mixed || state.until !== "" }
-  if (state.fence) return { ...next, fence: closes(state.fence, state.line) ? undefined : state.fence }
+  if (state.fence) {
+    const closing = closes(state.fence, state.line)
+    if (closing === "open") return next
+    return { ...next, fence: undefined, lost: state.lost || closing === "unsure" }
+  }
   const fence = state.lost ? undefined : opens(state.line)
   return {
     ...next,
@@ -251,10 +282,14 @@ function opens(line: string): Fence | undefined {
   return { mark: run.charAt(0), length: run.length, indent: indent.length }
 }
 
-// Any indentation is taken, more than Markdown takes, so a block is never thought open after Markdown has ended it.
+// A run of the block's mark, at least as long as its opening run, closes it after at most three spaces. Further in, or
+// after a tab, Markdown reads the line as code, but a renderer that took it as the closing line would read the real
+// one as a new opening line, so that is where the tracker gives up.
 function closes(fence: Fence, line: string) {
-  const run = /^[ \t]*(`+|~+)[ \t]*$/.exec(line)?.[1]
-  return run !== undefined && run.charAt(0) === fence.mark && run.length >= fence.length
+  const found = /^([ \t]*)(`+|~+)[ \t]*$/.exec(line)
+  const run = found?.[2] ?? ""
+  if (run.charAt(0) !== fence.mark || run.length < fence.length) return "open"
+  return /^ {0,3}$/.test(found?.[1] ?? "") ? "closed" : "unsure"
 }
 
 export * as ACPMarkdown from "./markdown"

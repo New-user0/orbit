@@ -396,7 +396,10 @@ describe("acp: other text a model, a tool or a server chose", () => {
           ],
         },
         { childSessionUpdates: false, formElicitation: true },
-      )?.properties as Record<string, { title?: string; description?: string; oneOf?: { title: string; description?: string }[] }>
+      )?.properties as Record<
+        string,
+        { title?: string; description?: string; oneOf?: { title: string; description?: string }[] }
+      >
     for (const raw of [...HOSTILE, BROKEN.value]) {
       const schema = fields(raw)
       const words = [
@@ -451,7 +454,12 @@ describe("acp: other text a model, a tool or a server chose", () => {
       ["```\ncode\n```\n", `![x](${address})`],
     ]) {
       for (const markdown of await streamed(deltas)) {
-        const seen = Bun.markdown.html(markdown, { autolinks: true, strikethrough: true, tables: true, tasklists: true })
+        const seen = Bun.markdown.html(markdown, {
+          autolinks: true,
+          strikethrough: true,
+          tables: true,
+          tasklists: true,
+        })
         expect([deltas, seen]).not.toEqual([deltas, expect.stringMatching(/<(img|picture|source)\b/i)])
         // A reference definition is never drawn, so only an inline address is read in the text.
         if (!deltas.join("").includes("[ref]:")) expect(read(markdown).text).toContain(address)
@@ -499,19 +507,36 @@ describe("acp: other text a model, a tool or a server chose", () => {
     "<!--\n```\n-->\nIMAGE",
     // A shorter run inside a longer fence closes nothing, so the run that does close it opens no block after it.
     "````\n```\n````\nIMAGE",
+    // Fix loop 4: a closing run four spaces or a tab in is code to Markdown, and a renderer that took it as the
+    // closing line would read the real one as an opening line, so neither block after it is taken as code.
+    "```\n    ```\n```\nIMAGE",
+    "```\n\t```\n```\nIMAGE",
+    "~~~\n    ~~~\n~~~\nIMAGE",
+    "Code:\n\n```md\n    ```\n```\n\nIMAGE\n",
   ]
 
-  test.each(OPENS_NO_CODE)("the model's Markdown %p: what follows a backtick that opens no code is prose", async (row) => {
-    for (const image of [`![x](${ADDRESS})`, `<img src=${ADDRESS}>`]) {
-      const whole = row.replace("IMAGE", image)
-      for (const deltas of [[whole], whole.split("")]) {
-        for (const markdown of await streamed(deltas)) {
-          const seen = Bun.markdown.html(markdown, RENDERER)
-          expect([whole, seen]).not.toEqual([whole, expect.stringMatching(/<img\b/i)])
-          expect(read(markdown).text).toContain(ADDRESS)
+  test.each(OPENS_NO_CODE)(
+    "the model's Markdown %p: what follows a backtick that opens no code is prose",
+    async (row) => {
+      for (const image of [`![x](${ADDRESS})`, `<img src=${ADDRESS}>`]) {
+        const whole = row.replace("IMAGE", image)
+        for (const deltas of [[whole], whole.split("")]) {
+          for (const markdown of await streamed(deltas)) {
+            const seen = Bun.markdown.html(markdown, RENDERER)
+            expect([whole, seen]).not.toEqual([whole, expect.stringMatching(/<img\b/i)])
+            expect(read(markdown).text).toContain(ADDRESS)
+          }
         }
       }
-    }
+    },
+  )
+
+  // Markdown reads the second line as code, so its block holds the image; a renderer that takes that line as the
+  // closing one reads the block from the third line to the fifth, and the image as prose. So the tracker gives up there.
+  test("the model's Markdown: after a closing run further in, no later block is taken as code", () => {
+    expect(withoutImages(prose, "```\n    ```\n```\nx\n```\n![x](u)", true)[1]).toBe(
+      "```\n    ```\n```\nx\n```\n!\\[x](u)",
+    )
   })
 
   test("the model's Markdown: a code span held back until it closes is written as it is, and so is a fenced block", async () => {
@@ -526,32 +551,245 @@ describe("acp: other text a model, a tool or a server chose", () => {
       "see [a](b c)\n\nuse `<img>` here",
       "a [link](https://example.com/) and `<img>`",
       "end with `<img>`",
+      // A closing run three spaces in closes the block, so the block after it is code too.
+      "```\n<img src=x>\n   ```\n```\n<img src=y>\n```",
+      // A run of the other mark, or a shorter one, closes nothing at any indentation.
+      "```\n    ~~~\n\t``\n<img src=x>\n```",
     ])
       expect(await streamed(markdown.split(""))).toEqual([markdown, markdown])
     // A span that the text ends before it closes is written as prose at the end.
     expect(await streamed(["see `", "![x](u)"])).toEqual(Array(2).fill("see `!\\[x](u)"))
   })
 
-  test("the model's Markdown: each text of a message starts afresh, since a client may draw it as a block of its own", async () => {
+  // Fix loop 4 (classes 6 and 9): ACP gives a chunk no text boundary. A client may draw the chunks of each message ID
+  // as one block, append every chunk of a kind to the last block until a tool call, or start a block at each chunk of
+  // the other kind, so what one text leaves open reaches the next text, of the same message or of a retry under a new
+  // ID, in a reasoning part as in a message, live and on a session/load replay. What a client draws in any of the three
+  // has no image or tag.
+  type Chunk = { sessionUpdate: string; messageId?: string; content?: { type: string; text?: string } }
+  const blocks = (updates: Chunk[]) => {
+    const byMessage = new Map<string, string>()
+    // Every chunk of a kind until a tool call, and each run of chunks of one kind.
+    const appended: Array<Map<string, string>> = [new Map()]
+    const runs = [{ kind: "", text: "" }]
+    for (const update of updates) {
+      if (update.sessionUpdate === "tool_call") {
+        appended.push(new Map())
+        runs.push({ kind: "", text: "" })
+      }
+      if (update.sessionUpdate !== "agent_message_chunk" && update.sessionUpdate !== "agent_thought_chunk") continue
+      const text = update.content?.text ?? ""
+      const id = update.messageId ?? ""
+      byMessage.set(id, (byMessage.get(id) ?? "") + text)
+      const joined = appended.at(-1)!
+      joined.set(update.sessionUpdate, (joined.get(update.sessionUpdate) ?? "") + text)
+      const run = runs.at(-1)!
+      if (run.kind === update.sessionUpdate) run.text += text
+      else runs.push({ kind: update.sessionUpdate, text })
+    }
+    const joined = appended.flatMap((map) => [...map.values()])
+    return { all: [...joined, ...runs.map((run) => run.text), ...byMessage.values()], appended: joined }
+  }
+  const noImage = (label: string, updates: Chunk[], shown = true) => {
+    const seen = blocks(updates)
+    for (const block of seen.all)
+      expect([label, Bun.markdown.html(block, RENDERER)]).not.toEqual([label, expect.stringMatching(/<img\b/i)])
+    if (shown) expect(seen.appended.map((block) => read(block).text).join("\n")).toContain(ADDRESS)
+  }
+  const text = (sessionID: string, id: string, value: string, ordinal = 0) => [
+    textDelta(sessionID, id, value, ordinal),
+    textEnded(sessionID, id, value, ordinal),
+  ]
+  // Two texts, the second either the next text of the same message or a retry's under a new message ID.
+  const PAIRS: Array<[string, string, string]> = [
+    ["a fence that text 0 leaves open", "```\n", "```\nIMAGE\n```"],
+    ["a cut-off attempt's code block", "Here:\n```html\n<div>", "Here:\n```\nIMAGE\n```"],
+    ["a span that text 0 leaves open", "see `a", "b` IMAGE `c`"],
+    ["a line that text 0 leaves open", "a", "```\nIMAGE\n```"],
+    ["a paragraph that text 0 leaves mixed", "a ` b\n", "c ` IMAGE `"],
+    ["a fence that text 0 has lost", "1. ~~~\n", "~~~\nIMAGE"],
+  ]
+  const JOINS: Array<[string, (sessionID: string, image: string) => OrbitEvent[]]> = [
+    ...PAIRS.flatMap(([label, first, then]): typeof JOINS =>
+      (["msg_a", "msg_b"] as const).map((id) => [
+        `${label}, then ${id === "msg_a" ? "text 1 of the same message" : "a text of a new message"}`,
+        (s, image) => [
+          ...text(s, "msg_a", first),
+          ...text(s, id, then.replace("IMAGE", image), id === "msg_a" ? 1 : 0),
+        ],
+      ]),
+    ),
+    [
+      "two reasoning parts",
+      (s, image) => [
+        reasoningDelta(s, "msg_a", "```\n", 0),
+        reasoningEnded(s, "msg_a", "```\n", 0),
+        reasoningDelta(s, "msg_a", `\`\`\`\n${image}\n\`\`\``, 1),
+        reasoningEnded(s, "msg_a", `\`\`\`\n${image}\n\`\`\``, 1),
+      ],
+    ],
+    [
+      "a subagent's text on the session's own updates",
+      (s, image) => [
+        ...text(s, "msg_a", "```\n"),
+        childCreated("ses_child", s, "Explore"),
+        ...text("ses_child", "msg_child", `\`\`\`\n${image}\n\`\`\``),
+      ],
+    ],
+    // A tool call starts a new block in a client that appends, so a text it cuts reads afresh there.
+    [
+      "a fence that a tool call cuts",
+      (s, image) => [
+        textDelta(s, "msg_a", "```\n"),
+        toolStarted(s, "call_cut", "read"),
+        textDelta(s, "msg_a", `${image}\n\`\`\``),
+        textEnded(s, "msg_a", `\`\`\`\n${image}\n\`\`\``),
+      ],
+    ],
+    [
+      "a span that a tool call cuts",
+      (s, image) => [
+        textDelta(s, "msg_a", "`a"),
+        toolStarted(s, "call_cut", "read"),
+        textDelta(s, "msg_a", ` ${image} \``),
+        textEnded(s, "msg_a", `\`a ${image} \``),
+      ],
+    ],
+    // A span held back while a subagent's text is sent comes after that text in a client that appends.
+    [
+      "a span held while a subagent's text is sent",
+      (s, image) => [
+        textDelta(s, "msg_a", "`a"),
+        childCreated("ses_child", s, "Explore"),
+        ...text("ses_child", "msg_child", "see `"),
+        textDelta(s, "msg_a", ` ${image} \``),
+        textEnded(s, "msg_a", `\`a ${image} \``),
+      ],
+    ],
+  ]
+
+  // The chunks a client was sent of a turn of `events`, and the child updates.
+  async function chunked(events: (sessionID: string) => OrbitEvent[], childSessionUpdates = false) {
     await using acp = await startSession({
-      onPrompt: ({ sessionID, id }) =>
-        turn(
-          sessionID,
-          id,
-          textDelta(sessionID, "msg_parts", "```\n", 0),
-          textEnded(sessionID, "msg_parts", "```\n", 0),
-          textDelta(sessionID, "msg_parts", "`", 1),
-          textDelta(sessionID, "msg_parts", "a` ", 1),
-          textDelta(sessionID, "msg_parts", `![x](${ADDRESS})`, 1),
-          textEnded(sessionID, "msg_parts", `\`a\` ![x](${ADDRESS})`, 1),
-        ),
+      onPrompt: ({ sessionID, id }) => turn(sessionID, id, ...events(sessionID)),
+      capabilities: { childSessionUpdates },
     })
     await acp.prompt(acp.sessionId, "hello")
-    const texts = acp.updates
-      .map((item) => item.update as { sessionUpdate: string; content?: { type: string; text?: string } })
-      .flatMap((update) => (update.sessionUpdate === "agent_message_chunk" ? [update.content?.text] : []))
-    // A piece that is all held back, and an end with nothing held, send nothing.
-    expect(texts).toEqual(["```\n", "`a` ", `!\\[x](${ADDRESS})`])
+    return {
+      updates: acp.updates.map((item) => item.update as Chunk),
+      children: acp.childUpdates.flatMap((item) => (item.type === "update" ? [item.update as Chunk] : [])),
+    }
+  }
+
+  test.each(JOINS)(
+    "the model's Markdown: %s draws no image or tag in a client that joins texts or not",
+    async (_, row) => {
+      for (const image of [`![x](${ADDRESS})`, `<img src=${ADDRESS}>`])
+        noImage(image, (await chunked((s) => row(s, image))).updates)
+    },
+  )
+
+  test("the model's Markdown: a `!` that ends a text makes no image of a `[` that starts the next", async () => {
+    const seen = await chunked((s) => [...text(s, "msg_a", "see !"), ...text(s, "msg_b", `[x](${ADDRESS})`)])
+    noImage("!", seen.updates)
+  })
+
+  test("the model's Markdown: what follows a clean text, a tool call or another channel is as written", async () => {
+    const code = "```\nlet v = vec![1]; // <img src=x>\n```"
+    const sent = (updates: Chunk[], id: string) =>
+      updates
+        .flatMap((update) => (update.messageId === id && update.content?.text ? [update.content.text] : []))
+        .join("")
+    // A text that ends at the start of a line with nothing open leaves the next as it is.
+    const clean = await chunked((s) => [...text(s, "msg_a", "Here is the code:\n"), ...text(s, "msg_a", code, 1)])
+    expect(sent(clean.updates, "msg_a")).toBe(`Here is the code:\n${code}`)
+    // After a tool call, a client draws the next text in a block of its own.
+    const cut = await chunked((s) => [
+      ...text(s, "msg_a", "```\n"),
+      toolStarted(s, "call_a", "read"),
+      ...text(s, "msg_b", code),
+    ])
+    expect(sent(cut.updates, "msg_b")).toBe(code)
+    // A client that takes a subagent's updates apart draws its text apart from the session's.
+    const child = await chunked(
+      (s) => [
+        ...text(s, "msg_a", "```\n"),
+        childCreated("ses_child", s, "Explore"),
+        ...text("ses_child", "msg_child", code),
+      ],
+      true,
+    )
+    expect(sent(child.children, "msg_child")).toBe(code)
+  })
+
+  // A session/load replay sends each text part whole, and carries what one leaves open to the next across messages.
+  async function replayed(messages: unknown[]) {
+    await using acp = await startWire()
+    acp.server.sessions.set("ses_joined", makeSession("ses_joined"))
+    acp.server.messages.set("ses_joined", messages as SessionMessageInfo[])
+    await acp.initialize()
+    await acp.request("session/load", { cwd: "/workspace", sessionId: "ses_joined", mcpServers: [] })
+    return acp.updates.map((item) => item.update as Chunk)
+  }
+  const assistant = (id: string, ...content: unknown[]) => ({
+    id,
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "test", id: "test-model" },
+    content,
+    time: { created: 1 },
+  })
+  const part = (value: string) => ({ type: "text", text: value })
+  const call = {
+    type: "tool",
+    id: "call_a",
+    name: "read",
+    time: { created: 1 },
+    state: { status: "running", input: {} },
+  }
+
+  test("a loaded session's replay: what one text part or message leaves open reaches the next", async () => {
+    for (const image of [`![x](${ADDRESS})`, `<img src=${ADDRESS}>`]) {
+      const after = `\`\`\`\n${image}\n\`\`\``
+      noImage("two parts", await replayed([assistant("msg_a", part("```\n"), part(after))]))
+      noImage("two messages", await replayed([assistant("msg_a", part("```\n")), assistant("msg_b", part(after))]))
+      noImage(
+        "a compaction between",
+        await replayed([
+          assistant("msg_a", part("```\n")),
+          { id: "msg_c", type: "compaction", status: "completed", reason: "auto", time: { created: 1 } },
+          assistant("msg_b", part(after)),
+        ]),
+      )
+      // A running compaction sends nothing.
+      noImage(
+        "a running compaction between",
+        await replayed([
+          assistant("msg_a", part("```\n")),
+          { id: "msg_c", type: "compaction", status: "running", reason: "auto", time: { created: 1 } },
+          assistant("msg_b", part(after)),
+        ]),
+      )
+      // A message that fails to translate part way leaves what it sent unknown, so the next text is written as if open.
+      noImage(
+        "a message that fails part way",
+        await replayed([
+          assistant("msg_a", part("```\n"), { type: "tool", id: "call_bad", name: "read", time: { created: 1 } }),
+          assistant("msg_b", part(after)),
+        ]),
+      )
+    }
+    // The controls: after a tool call or a prompt, a client draws the next message's text in a block of its own. (One
+    // that draws a message's chunks as one block joins the text after a call to the text before it in that message.)
+    const code = "```\nlet v = vec![1]; // <img src=x>\n```"
+    const last = (updates: Chunk[]) => updates.findLast((update) => update.sessionUpdate === "agent_message_chunk")
+    expect(
+      last(await replayed([assistant("msg_a", part("```\n"), call), assistant("msg_b", part(code))]))?.content?.text,
+    ).toBe(code)
+    const prompt = { id: "msg_u", type: "user", text: "next", time: { created: 1 } }
+    expect(
+      last(await replayed([assistant("msg_a", part("```\n")), prompt, assistant("msg_b", part(code))]))?.content?.text,
+    ).toBe(code)
   })
 
   test("the model's Markdown: no text a renderer draws with an image or a tag, over random text in random pieces", () => {
@@ -623,7 +861,9 @@ describe("acp: other text a model, a tool or a server chose", () => {
   const clean = (text: string | undefined) => expect(String(text)).not.toMatch(/[\u0000-\u001f\u007f‮]/)
 
   test("a command's, a model's and a mode's name and words, and an error's message, are one line with no control character", () => {
-    const [command] = availableCommands({ commands: [{ ...reviewCommand, name: CONTROL, description: CONTROL }] } as never)
+    const [command] = availableCommands({
+      commands: [{ ...reviewCommand, name: CONTROL, description: CONTROL }],
+    } as never)
     clean(command?.name)
     clean(command?.description)
     const model = buildModelSelectOption({
@@ -635,7 +875,10 @@ describe("acp: other text a model, a tool or a server chose", () => {
     const models = model.type === "select" ? model.options.flatMap(named) : []
     expect(models).toHaveLength(2)
     models.forEach(clean)
-    const mode = buildModeSelectOption({ modes: [{ id: "m", name: CONTROL, description: CONTROL }], currentModeId: "m" })
+    const mode = buildModeSelectOption({
+      modes: [{ id: "m", name: CONTROL, description: CONTROL }],
+      currentModeId: "m",
+    })
     const modes = mode.type === "select" ? mode.options.flatMap(named) : []
     expect(modes).toHaveLength(2)
     modes.forEach(clean)
