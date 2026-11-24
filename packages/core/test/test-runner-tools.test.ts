@@ -3,7 +3,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { testArgs } from "../../../tools/test/args"
-import { mergeTimings } from "../../../tools/test/timings"
+import { mergeTimings, refresh } from "../../../tools/test/timings"
 import { runTests } from "../../../tools/test/watchdog"
 import { runProgram } from "./fixture/run-program"
 import { tmpdir } from "./fixture/tmpdir"
@@ -235,6 +235,45 @@ describe("testArgs", () => {
     expect(withWorkers("2", () => testArgs([], dir.path, "win32"))).toContain(
       `--timings=${path.join(dir.path, "test", "timings.json")}`,
     )
+  })
+})
+
+describe("tools/test/timings.ts", () => {
+  test("refuses a run that is not a number, and a host without gh", async () => {
+    expect(await refresh(["--run", "45466682864; rm -rf ."])).toBe(2)
+    expect(await refresh([])).toBe(2)
+    expect(await refresh(["--run", "1"], "unused", [])).toBe(2)
+  })
+
+  test("downloads the run's timings artifacts with gh and merges them, and fails when gh does", async () => {
+    await using root = await tmpdir()
+    await fs.mkdir(path.join(root.path, "packages", "vscode", "test"), { recursive: true })
+    await Bun.write(path.join(root.path, "packages", "vscode", "test", "a.test.ts"), "")
+    // A stand-in for gh that records its arguments and leaves one artifact where --dir says.
+    const gh = path.join(root.path, "gh.ts")
+    await Bun.write(
+      gh,
+      [
+        `import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"`,
+        `const args = process.argv.slice(2)`,
+        `appendFileSync(${JSON.stringify(path.join(root.path, "gh-args.txt"))}, JSON.stringify(args) + "\\n")`,
+        `if (args[2] === "9") process.exit(1)`,
+        `const dir = args[args.indexOf("--dir") + 1] + "/timings-linux-vscode"`,
+        `mkdirSync(dir)`,
+        `writeFileSync(dir + "/timings.json", JSON.stringify({ version: 1, files: { "test/a.test.ts": 12 } }))`,
+      ].join("\n"),
+    )
+    expect(await refresh(["--run", "42"], root.path, [process.execPath, gh])).toBe(0)
+    expect(await Bun.file(path.join(root.path, "packages", "vscode", "test", "timings.json")).json()).toEqual({
+      version: 1,
+      files: { "test/a.test.ts": 12 },
+    })
+    expect(await refresh(["--run", "9"], root.path, [process.execPath, gh])).toBe(1)
+    const calls = (await Bun.file(path.join(root.path, "gh-args.txt")).text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(calls.map((args: string[]) => args.slice(0, 5))).toEqual([
+      ["run", "download", "42", "--pattern", "timings-*"],
+      ["run", "download", "9", "--pattern", "timings-*"],
+    ])
   })
 })
 

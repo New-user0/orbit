@@ -11,28 +11,38 @@ import { parseArgs } from "node:util"
 
 const repo = path.resolve(import.meta.dir, "../..")
 
-if (import.meta.main) {
-  const run = parseArgs({ options: { run: { type: "string" } } }).values.run
+if (import.meta.main) process.exitCode = await refresh(process.argv.slice(2))
+
+/**
+ * The command: downloads the run's timings artifacts with `gh` into a fresh folder and merges them into the packages
+ * under `root`. Returns the exit code: 2 for a usage error or no `gh`, 1 when the download fails.
+ */
+export async function refresh(
+  argv: string[],
+  root = repo,
+  // Found on PATH, so Windows never starts a gh.exe from the working folder (class 10).
+  gh = [Bun.which("gh")].filter((found) => found !== null),
+) {
+  const run = parseArgs({ args: argv, options: { run: { type: "string" } } }).values.run
   if (!run || !/^\d+$/.test(run)) {
     console.error("Usage: bun tools/test/timings.ts --run <CI run id>")
-    process.exit(2)
+    return 2
   }
-  // Found on PATH, so Windows never starts a gh.exe from the working folder (class 10).
-  const gh = Bun.which("gh")
-  if (!gh) {
+  if (gh.length === 0) {
     console.error("gh is not on PATH")
-    process.exit(2)
+    return 2
   }
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-timings-"))
-  const download = Bun.spawn([gh, "run", "download", run, "--pattern", "timings-*", "--dir", folder], {
-    cwd: repo,
+  const download = Bun.spawn([...gh, "run", "download", run, "--pattern", "timings-*", "--dir", folder], {
+    cwd: root,
     stdin: "ignore",
     stdout: "inherit",
     stderr: "inherit",
   })
-  if ((await download.exited) !== 0) process.exit(1)
-  for (const line of await mergeTimings(folder)) console.log(line)
+  const code = await download.exited
+  if (code === 0) for (const line of await mergeTimings(folder, root)) console.log(line)
   await fs.rm(folder, { recursive: true, force: true })
+  return code === 0 ? 0 : 1
 }
 
 /**
