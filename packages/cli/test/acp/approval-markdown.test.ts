@@ -829,6 +829,11 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["see www.example.com\n\n`<img>`", `see www.example.com\n\n\`<${JOINER}img>\``],
     ["see http://e\n\n```\n<img>\n```", `see http://e\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ["ftp://e `<img>`", `ftp://e \`<${JOINER}img>\``],
+    // GFM links an address's start in any case, and a line with one leaves every later paragraph unsure too.
+    ["HTTP://e `<img>`", `HTTP://e \`<${JOINER}img>\``],
+    ["WWW.example.com `<img>`", `WWW.example.com \`<${JOINER}img>\``],
+    ["see ftp://e\n\n`<img>`", `see ftp://e\n\n\`<${JOINER}img>\``],
+    ["see FTP://e\n\n`<img>`", `see FTP://e\n\n\`<${JOINER}img>\``],
     ["1. ~~~\n~~~\n`<img>`", `1. ~~~\n~~~\n\`<${JOINER}img>\``],
     ["```\n```js\n```\n`<img>`", `\`\`\`\n\`\`\`js\n\`\`\`\n\`<${JOINER}img>\``],
     // The controls: a tilde fence, a closing run that only spaces follow, and an address's start cut by a line break
@@ -837,6 +842,23 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["```\n<img>\n```  \n`<img>`", "```\n<img>\n```  \n`<img>`"],
     ["www\n.`<img>`", "www\n.`<img>`"],
   ])("the model's Markdown %p: where the tracker is unsure, code takes joiners", (value, written) => {
+    expect(withoutImages(prose, value, true)[1]).toBe(written)
+  })
+
+  // In prose a joiner follows a `<` that opens a tag, a closing tag, a comment or a processing instruction, in any
+  // case, and a `!` before a `[`; a `!` or a `<` before anything else is as written.
+  test.each([
+    ["<IMG SRC=x>", `<${JOINER}IMG SRC=x>`],
+    ["<Picture>", `<${JOINER}Picture>`],
+    ["</p><img src=x>", `<${JOINER}/p><${JOINER}img src=x>`],
+    ["<!-- c -->", `<${JOINER}!-- c -->`],
+    ["<?php x ?>", `<${JOINER}?php x ?>`],
+    ["Hi! ![x](u)", `Hi! !${JOINER}[x](u)`],
+    // The controls.
+    ["Hi! there.", "Hi! there."],
+    ["a!b and !(c)", "a!b and !(c)"],
+    ["a < b <3 <-", "a < b <3 <-"],
+  ])("the model's Markdown %p: a `<` or a `!` takes a joiner only before a tag or an image", (value, written) => {
     expect(withoutImages(prose, value, true)[1]).toBe(written)
   })
 
