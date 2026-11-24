@@ -521,6 +521,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
     "| a |\n|---|\n```\n| IMAGE |\n```",
     "-|-\n-|-\r~~~\nIMAGE",
     "a | b\n|---|---|\n# h\n```\nIMAGE\n```",
+    "| a | b |\n|:-|-:|\n| 1 | 2 |\n```\nIMAGE\n```",
     // And it reads the next line that is not blank after a list item that holds only a task box as that item's text,
     // a fence line too.
     "- [ ]\n```\nIMAGE\n```",
@@ -531,6 +532,9 @@ describe("acp: other text a model, a tool or a server chose", () => {
     "1. [ ]\n\n\n```\nIMAGE\n```",
     "- [ ] \n```\nIMAGE\n```",
     "> - [ ]\n```\nIMAGE\n```",
+    "- [X]\n```\nIMAGE\n```",
+    "- - [ ]\n```\nIMAGE\n```",
+    "- [ ]\n\t\n```\nIMAGE\n```",
   ]
 
   test.each(OPENS_NO_CODE)(
@@ -554,6 +558,15 @@ describe("acp: other text a model, a tool or a server chose", () => {
   test("the model's Markdown: after a closing run further in, no later block is taken as code", () => {
     expect(withoutImages(prose, "```\n    ```\n```\nx\n```\n![x](u)", true)[1]).toBe(
       "```\n    ```\n```\nx\n```\n!\\[x](u)",
+    )
+  })
+
+  // The tracker does not follow where a quote ends, so a delimiter row behind quote marks starts a table as one without
+  // them does, and a fence line after it opens no block: md4c reads that block as code, so at most a mark in it shows
+  // escaped.
+  test("the model's Markdown: a fence line after a quoted table is not taken as code", () => {
+    expect(withoutImages(prose, "> a | b\n> --|--\n```\n![x](u)\n```", true)[1]).toBe(
+      "> a | b\n> --|--\n```\n!\\[x](u)\n```",
     )
   })
 
@@ -581,6 +594,10 @@ describe("acp: other text a model, a tool or a server chose", () => {
       // fence ends.
       "-|-\n```\n<img src=x>\n```",
       "```\na\n```\n-|-\n```\n<img src=x>\n```",
+      "Code:\n```\na\n```\n-|-\n```\n<img src=x>\n```",
+      // A delimiter row needs a pipe and a dash, so neither a heading's underline nor a row of pipes makes a table.
+      "Title\n---\n```\n<img src=x>\n```",
+      "a\n| |\n```\n<img src=x>\n```",
     ])
       expect(await streamed(markdown.split(""))).toEqual([markdown, markdown])
     // A span that the text ends before it closes is written as prose at the end.
@@ -663,6 +680,21 @@ describe("acp: other text a model, a tool or a server chose", () => {
       (s, image) => [
         ...text(s, "msg_a", first.replace("IMAGE", image)),
         ...text(s, "msg_b", "x\n"),
+        ...text(s, "msg_a", then.replace("IMAGE", image), 1),
+      ],
+    ]),
+    // Text 1 is read after the lines of text 0 by a client that joins a message ID's chunks, and after those of the
+    // other message's text by one that appends, so the one whose lines a fence line after them is less sure of counts.
+    ...(
+      [
+        ["an empty task item that text 0 ends with", "- [ ]\n", "\n```\nIMAGE\n```"],
+        ["a line that text 0 ends with", "a\n", "```\nIMAGE\n```"],
+      ] as const
+    ).map(([label, first, then]): (typeof JOINS)[number] => [
+      `${label}, then a table that another message's text ends with, then text 1`,
+      (s, image) => [
+        ...text(s, "msg_a", first),
+        ...text(s, "msg_b", "| a | b |\n|---|---|\n"),
         ...text(s, "msg_a", then.replace("IMAGE", image), 1),
       ],
     ]),
