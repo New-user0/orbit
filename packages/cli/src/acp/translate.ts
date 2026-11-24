@@ -250,20 +250,32 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
       }
     }
     case "session.text.delta":
-    case "session.reasoning.delta": {
-      // The model's Markdown goes as it wrote it, except that no image or raw tag in it is fetched by a client.
-      const messageId =
-        event.type === "session.text.delta"
-          ? event.data.assistantMessageID
-          : `${event.data.assistantMessageID}:reasoning:${event.data.ordinal}`
-      const [written, text] = withoutImages(state.prose?.get(messageId) ?? prose, event.data.delta)
+    case "session.reasoning.delta":
+    case "session.text.ended":
+    case "session.reasoning.ended": {
+      // The model's Markdown goes as it wrote it, except that no image or raw tag in it is fetched by a client. A code
+      // span is held back until it closes, so the end of the text writes what is still held, and the next text starts
+      // afresh, as a client may draw it as a block of its own.
+      const message = event.type === "session.text.delta" || event.type === "session.text.ended"
+      const messageId = message
+        ? event.data.assistantMessageID
+        : `${event.data.assistantMessageID}:reasoning:${event.data.ordinal}`
+      const ended = event.type === "session.text.ended" || event.type === "session.reasoning.ended"
+      const [written, text] = withoutImages(
+        state.prose?.get(messageId) ?? prose,
+        ended ? "" : event.data.delta,
+        ended,
+      )
       return {
         state: { ...state, prose: new Map(state.prose).set(messageId, written) },
-        outputs: send({
-          sessionUpdate: event.type === "session.text.delta" ? "agent_message_chunk" : "agent_thought_chunk",
-          messageId,
-          content: { type: "text", text },
-        }),
+        // A piece that is all held back sends nothing.
+        outputs: text
+          ? send({
+              sessionUpdate: message ? "agent_message_chunk" : "agent_thought_chunk",
+              messageId,
+              content: { type: "text", text },
+            })
+          : [],
       }
     }
     case "session.tool.input.started":
@@ -495,7 +507,7 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
       yield {
         sessionUpdate: "agent_message_chunk",
         messageId: message.id,
-        content: { type: "text", text: withoutImages(prose, part.text)[1] },
+        content: { type: "text", text: withoutImages(prose, part.text, true)[1] },
       }
       continue
     }
@@ -503,7 +515,7 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
       yield {
         sessionUpdate: "agent_thought_chunk",
         messageId: `${message.id}:reasoning:${reasoningOrdinal++}`,
-        content: { type: "text", text: withoutImages(prose, part.text)[1] },
+        content: { type: "text", text: withoutImages(prose, part.text, true)[1] },
       }
       continue
     }

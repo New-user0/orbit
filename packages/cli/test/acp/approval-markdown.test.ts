@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test"
 import type { EventSubscribeOutput, OrbitEvent, SessionMessageInfo } from "@orbit/client/promise"
 import { availableCommands, buildModelSelectOption, buildModeSelectOption } from "../../src/acp/config-option"
 import { ACPElicitation } from "../../src/acp/elicitation"
+import { prose, withoutImages } from "../../src/acp/markdown"
 import { ACPTranslate } from "../../src/acp/translate"
 import {
   childCreated,
@@ -18,11 +19,13 @@ import {
   makeSession,
   permissionAsked,
   reasoningDelta,
+  reasoningEnded,
   reviewCommand,
   startSession,
   startWire,
   succeeded,
   textDelta,
+  textEnded,
   toolCalled,
   toolFailed,
   toolStarted,
@@ -421,7 +424,9 @@ describe("acp: other text a model, a tool or a server chose", () => {
           sessionID,
           id,
           ...deltas.map((delta) => textDelta(sessionID, "msg_markdown", delta)),
+          textEnded(sessionID, "msg_markdown", deltas.join("")),
           ...deltas.map((delta) => reasoningDelta(sessionID, "msg_markdown", delta)),
+          reasoningEnded(sessionID, "msg_markdown", deltas.join("")),
         ),
     })
     await acp.prompt(acp.sessionId, "hello")
@@ -463,6 +468,112 @@ describe("acp: other text a model, a tool or a server chose", () => {
       expect(await streamed([markdown])).toEqual([markdown, markdown])
     // Code split across pieces is still code.
     expect(await streamed(["``", "`\n![x](y)\n``", "`"])).toEqual(Array(2).fill("```\n![x](y)\n```"))
+  })
+
+  // m5-quality fix loop 3 (classes 6 and 9): a backtick is code only where Markdown is sure to read it so. A lone, an
+  // escaped or a broken one, one inside a link's address, an autolink or a table cell, and a fence that a list or a
+  // line ending other than `\n` hides, each leaves what follows it as prose, so an image or a tag after it is never drawn.
+  const ADDRESS = "https://evil.example/p.png"
+  const OPENS_NO_CODE = [
+    "Press the ` key. IMAGE",
+    "Press the \\` key. IMAGE",
+    "Press the \\` key. IMAGE `",
+    "a ` b\n\nIMAGE",
+    "a ` b\n\nIMAGE `",
+    "`a\nb ` IMAGE `",
+    "`a\r\nb ` IMAGE `",
+    "[a](b`c) IMAGE `",
+    '[a](b "t)`x") IMAGE `',
+    "[a](\nb`c) IMAGE `",
+    "<https://a.example/`b> IMAGE `",
+    "```a`b\nIMAGE",
+    "a\n    ```\nIMAGE",
+    "a\n    ```\n    IMAGE",
+    "| a | b |\n|---|---|\n| `x IMAGE | y` |",
+    "1. ~~~\n~~~\nIMAGE",
+    "   ```\nx\n```\nIMAGE",
+    "- a\n  ```\n  b\nc IMAGE",
+    "```\rcode\r```\rIMAGE",
+    "```\r\ncode\r\n```\r\nIMAGE",
+    "<!--\n```\n-->\nIMAGE",
+  ]
+
+  test.each(OPENS_NO_CODE)("the model's Markdown %p: what follows a backtick that opens no code is prose", async (row) => {
+    for (const image of [`![x](${ADDRESS})`, `<img src=${ADDRESS}>`]) {
+      const whole = row.replace("IMAGE", image)
+      for (const deltas of [[whole], whole.split("")]) {
+        for (const markdown of await streamed(deltas)) {
+          const seen = Bun.markdown.html(markdown, { autolinks: true, strikethrough: true, tables: true, tasklists: true })
+          expect([whole, seen]).not.toEqual([whole, expect.stringMatching(/<img\b/i)])
+          expect(read(markdown).text).toContain(ADDRESS)
+        }
+      }
+    }
+  })
+
+  test("the model's Markdown: a code span held back until it closes is written as it is, and so is a fenced block", async () => {
+    for (const markdown of [
+      "use `vec![1]` and `<img>` here",
+      "1. Run:\n   ```rust\n   let v = vec![1]; // <img src=x>\n   ```\n2. Then",
+      "~~~\n```\n<img src=x>\n~~~",
+      "`a` and ``b ` c`` end",
+      "``a ``` <img> `` end",
+      "`<img>`\nnext line",
+      "see [a](b c)\n\nuse `<img>` here",
+      "a [link](https://example.com/) and `<img>`",
+      "end with `<img>`",
+    ])
+      expect(await streamed(markdown.split(""))).toEqual([markdown, markdown])
+    // A span that the text ends before it closes is written as prose at the end.
+    expect(await streamed(["see `", "![x](u)"])).toEqual(Array(2).fill("see `!\\[x](u)"))
+  })
+
+  test("the model's Markdown: each text of a message starts afresh, since a client may draw it as a block of its own", async () => {
+    await using acp = await startSession({
+      onPrompt: ({ sessionID, id }) =>
+        turn(
+          sessionID,
+          id,
+          textDelta(sessionID, "msg_parts", "```\n", 0),
+          textEnded(sessionID, "msg_parts", "```\n", 0),
+          textDelta(sessionID, "msg_parts", "`", 1),
+          textDelta(sessionID, "msg_parts", "a` ", 1),
+          textDelta(sessionID, "msg_parts", `![x](${ADDRESS})`, 1),
+          textEnded(sessionID, "msg_parts", `\`a\` ![x](${ADDRESS})`, 1),
+        ),
+    })
+    await acp.prompt(acp.sessionId, "hello")
+    const texts = acp.updates
+      .map((item) => item.update as { sessionUpdate: string; content?: { type: string; text?: string } })
+      .flatMap((update) => (update.sessionUpdate === "agent_message_chunk" ? [update.content?.text] : []))
+    // A piece that is all held back, and an end with nothing held, send nothing.
+    expect(texts).toEqual(["```\n", "`a` ", `!\\[x](${ADDRESS})`])
+  })
+
+  test("the model's Markdown: no text a renderer draws with an image or a tag, over random text in random pieces", () => {
+    const pieces = ["`", "``", "```", "~~~", "\n", "\n\n", "\r", "   ", " ", "\t", "- ", "1. ", "> ", "\\", "](", "[", "]"]
+    const more = ["(", ")", "!", "|", '"', "a", "<", ">", "<!--", "<https://a.example/", "[r]: ", "    "]
+    const marks = [...pieces, ...more, `![x](${ADDRESS})`, `<img src=${ADDRESS}>`]
+    // A seeded generator, so a failure names a text that fails again.
+    const random = (() => {
+      let seed = 20261124
+      return (limit: number) => {
+        seed = (seed + 0x6d2b79f5) | 0
+        const mixed = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+        const value = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed
+        return ((value ^ (value >>> 14)) >>> 0) % limit
+      }
+    })()
+    const drawn = Array.from({ length: 20000 }, () =>
+      Array.from({ length: 4 + random(16) }, () => marks[random(marks.length)]).join(""),
+    ).flatMap((text) => {
+      const cut = random(text.length + 1)
+      const [state, first] = withoutImages(prose, text.slice(0, cut))
+      const [, second] = withoutImages(state, text.slice(cut), true)
+      const html = Bun.markdown.html(first + second, { autolinks: true, strikethrough: true, tables: true, tasklists: true })
+      return /<(img|picture|source)\b/i.test(html) ? [text] : []
+    })
+    expect(drawn).toEqual([])
   })
 
   test("a loaded session's replay: the model's Markdown as it streams, and a slash command's prompt as its command", () => {

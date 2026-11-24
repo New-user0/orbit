@@ -65,60 +65,195 @@ export function subagentName(title: string | undefined) {
   return WARNING_WORDS.test(whole) ? codeSpan(text) : literal(text)
 }
 
+type Fence = { readonly mark: string; readonly length: number; readonly indent: number }
+
 /** What one piece of a model's streamed text leaves open for the next: see `withoutImages`. */
 export type Prose = {
-  /** The length of the backtick run that opened the code the text is in, or 0 outside code. */
-  readonly code: number
-  /** The backticks at the end of the text so far, whose run may go on in the next piece. */
+  /** The fenced code block the text is in. */
+  readonly fence?: Fence
+  /**
+   * Whether a fenced block may be open that the tracker cannot follow: one behind a list's or a quote's mark or more than
+   * three spaces in, or one that a line left by starting to the left of its opening line. Its closing line may open a
+   * block for one renderer and close one for another, so from then on no block is thought open.
+   */
+  readonly lost: boolean
+  /** A backtick run that may open a code span, with the text after it on its line, held back until the span closes. */
+  readonly held: string
+  /** The length of the run that opened `held`, or 0 while that run may still grow. */
+  readonly open: number
+  /** The backticks at the end of `held` after its opening run. */
   readonly run: number
-  /** The last character of the text so far. */
+  /** The current line so far. */
+  readonly line: string
+  /** The last character written. */
   readonly last: string
+  /** Whether that character is a backslash that escapes the next one. */
+  readonly escape: boolean
+  /** The mark that ends the link address or autolink the text is in: `)` or `>`, or "" outside one. */
+  readonly until: string
+  /** Whether a backtick in the rest of the paragraph may belong to something other than a code span. */
+  readonly mixed: boolean
 }
 
-export const prose: Prose = { code: 0, run: 0, last: "" }
+export const prose: Prose = {
+  lost: false,
+  held: "",
+  open: 0,
+  run: 0,
+  line: "",
+  last: "",
+  escape: false,
+  until: "",
+  mixed: false,
+}
 
-// A raw HTML tag opens with `<` and a letter; an autolink (`<https://...>`) names a scheme and a colon first.
-const TAG = /^[a-z]/i
+// `<` and a letter, `/`, `!` or `?` opens a raw HTML tag, comment or declaration; an autolink (`<https://...>`) names a
+// scheme and a colon first.
+const TAG = /^[a-z/!?]/i
 const AUTOLINK = /^[a-z][a-z0-9+.-]{1,31}:/i
+// A mark that can make a link's address or an autolink other than a plain run up to its end: a space or a line break,
+// a quote or a parenthesis of a title, an angle bracket, a backslash or a backtick.
+const UNPLAIN = /[\s"'()<>\\`]/
+// A fence's run behind any indentation and any list or quote marks.
+const FENCE_LINE = /^(?:[ \t>]|[-+*][ \t]|\d{1,9}[.)][ \t])*(?:`{3}|~{3})/
 
 /**
  * A model's own Markdown, for a client that renders it: prose and code stay as written, but nothing in it is an image or
  * a raw HTML tag, which a client would fetch from an address that a model, or a repository that steers it, chose
- * (classes 6 and 9). Outside code, the `[` of an image's `![` is written `\[`, so the image reads as its text and its
+ * (classes 6 and 9). In prose, the `[` of an image's `![` is written `\[`, so the image reads as its text and its
  * address, as the reference's own renderer shows it; and the `<` that opens a tag is written `&lt;`, which a Markdown
- * client draws as `<`. Code spans and fenced blocks are left alone. Text arrives in pieces, so `state` carries what one
- * piece leaves open to the next; a `<` that ends a piece is written `&lt;`, since the tag it may open is not known yet.
+ * client draws as `<`. Text is left as written only where Markdown is sure to read it as code:
+ *
+ * - A fenced block, opened by a line of three or more backticks or tildes after at most three spaces, and ended by a
+ *   line of a run as long at any indentation, or by a line that starts to the left of the opening one, which may end
+ *   the list item that holds the block. After such a line, or a fence behind a list's or a quote's mark or more than
+ *   three spaces in, renderers differ on which block is open, so no later block in the text is taken as code.
+ * - A code span, whose text is held back from its opening run until a run of the same length closes it on the same
+ *   line. A run that a backslash escapes, or that is inside a link's address after its `](` or an autolink, opens
+ *   nothing. An address or autolink that is not a plain run up to its `)` or `>` may hold a title or a backtick of its
+ *   own, so the backticks in the rest of that paragraph open nothing. A span that its line or the text ends before it
+ *   closes is written as prose, and so is one with a `|`, which a table splits into two cells; the backticks in the rest
+ *   of that paragraph then open nothing too.
+ *
+ * Text arrives in pieces, so `state` carries what one piece leaves open to the next, and `end` writes what is still
+ * held when the text ends. A `<` that ends a piece is written `&lt;`, since the tag it may open is not known yet.
  */
-export function withoutImages(state: Prose, text: string): [Prose, string] {
+export function withoutImages(state: Prose, text: string, end = false): [Prose, string] {
   const out: string[] = []
   // By UTF-16 unit, so an index is a position in `text`; every mark looked at is one unit.
-  const next = text.split("").reduce<Prose>((current, char, index) => {
-    if (char === "`") {
-      out.push(char)
-      return { ...current, run: current.run + 1, last: char }
-    }
-    // A run of backticks has ended: it opens code, or closes the code a run of its length (or a fence, a longer one) opened.
-    const code =
-      current.run === 0
-        ? current.code
-        : current.code === 0
-          ? current.run
-          : current.run === current.code || (current.code >= 3 && current.run >= current.code)
-            ? 0
-            : current.code
-    const rest = text.slice(index + 1)
-    out.push(
-      code !== 0
-        ? char
-        : char === "[" && current.last === "!"
-          ? "\\["
-          : char === "<" && (rest === "" || (TAG.test(rest) && !AUTOLINK.test(rest)))
-            ? "&lt;"
-            : char,
+  const next = text
+    .split("")
+    .reduce<Prose>((current, char, index) => step(current, char, () => text.slice(index + 1), out), state)
+  if (!end) return [next, out.join("")]
+  settle(next, out)
+  return [prose, out.join("")]
+}
+
+function step(state: Prose, char: string, rest: () => string, out: string[]): Prose {
+  // A carriage return ends a line as a line feed does, and the two together end one line.
+  if (char === "\n" && state.last === "\r") {
+    out.push(char)
+    return { ...state, last: char }
+  }
+  if (char === "\n" || char === "\r") return newline(settle(state, out), char, out)
+  if (state.fence) {
+    if (state.line.length < state.fence.indent && char !== " " && /^ *$/.test(state.line))
+      return step({ ...state, fence: undefined, lost: true }, char, rest, out)
+    out.push(char)
+    return { ...state, line: state.line + char, last: char }
+  }
+  const current = { ...state, line: state.line + char }
+  if (current.held === "") return write(current, char, rest, out)
+  if (char === "`") return { ...current, held: current.held + char, run: current.open === 0 ? 0 : current.run + 1 }
+  if (current.open === 0) return { ...current, held: current.held + char, open: current.held.length }
+  if (current.run === current.open) return write(close(current, out), char, rest, out)
+  return { ...current, held: current.held + char, run: 0 }
+}
+
+// Prose: a backtick run that may open a span starts to be held back, and anything else is written, with an image's `[`
+// and a tag's `<` escaped.
+function write(state: Prose, char: string, rest: () => string, out: string[]): Prose {
+  if (char === "`" && !state.escape && !state.mixed && state.until === "") return { ...state, held: char, open: 0, run: 0 }
+  const after = char === "<" ? rest() : ""
+  const autolink = char === "<" && AUTOLINK.test(after)
+  out.push(
+    char === "[" && state.last === "!"
+      ? "\\["
+      : char === "<" && (after === "" || (TAG.test(after) && !autolink))
+        ? "&lt;"
+        : char,
+  )
+  const ends = state.until !== "" && char === state.until
+  const unplain = state.until !== "" && !ends && UNPLAIN.test(char)
+  return {
+    ...state,
+    last: char,
+    escape: char === "\\" && !state.escape,
+    until:
+      ends || unplain
+        ? ""
+        : state.until !== ""
+          ? state.until
+          : autolink
+            ? ">"
+            : char === "(" && state.last === "]"
+              ? ")"
+              : "",
+    mixed: state.mixed || unplain,
+  }
+}
+
+// What is held when a line or the text ends: a span that its closing run has just closed, or else prose.
+function settle(state: Prose, out: string[]) {
+  if (state.held === "") return state
+  return state.open !== 0 && state.run === state.open ? close(state, out) : release(state, out)
+}
+
+function close(state: Prose, out: string[]) {
+  if (state.held.includes("|")) return release(state, out)
+  out.push(state.held)
+  return { ...state, held: "", open: 0, run: 0, last: "`", escape: false }
+}
+
+function release(state: Prose, out: string[]) {
+  const held = state.held
+  return held
+    .split("")
+    .reduce<Prose>(
+      (current, char, index) => write(current, char, () => held.slice(index + 1), out),
+      { ...state, held: "", open: 0, run: 0, mixed: true },
     )
-    return { code, run: 0, last: char }
-  }, state)
-  return [next, out.join("")]
+}
+
+function newline(state: Prose, char: string, out: string[]): Prose {
+  out.push(char)
+  // An address or autolink that a line break cuts is not plain.
+  const next = { ...state, line: "", last: char, escape: false, until: "", mixed: state.mixed || state.until !== "" }
+  if (state.fence) return { ...next, fence: closes(state.fence, state.line) ? undefined : state.fence }
+  const fence = state.lost ? undefined : opens(state.line)
+  return {
+    ...next,
+    fence,
+    lost: state.lost || (fence === undefined && FENCE_LINE.test(state.line)),
+    // A blank line ends the paragraph, and so does a fence.
+    mixed: fence === undefined && !/^[ \t]*$/.test(state.line) && next.mixed,
+  }
+}
+
+function opens(line: string): Fence | undefined {
+  const found = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line)
+  if (!found) return undefined
+  const indent = found[1] ?? ""
+  const run = found[2] ?? ""
+  // A backtick fence's info string has no backtick, or the line is a paragraph.
+  if (run.startsWith("`") && found[3]?.includes("`")) return undefined
+  return { mark: run.charAt(0), length: run.length, indent: indent.length }
+}
+
+// Any indentation is taken, more than Markdown takes, so a block is never thought open after Markdown has ended it.
+function closes(fence: Fence, line: string) {
+  const run = /^[ \t]*(`+|~+)[ \t]*$/.exec(line)?.[1]
+  return run !== undefined && run.charAt(0) === fence.mark && run.length >= fence.length
 }
 
 export * as ACPMarkdown from "./markdown"
