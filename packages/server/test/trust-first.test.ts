@@ -10,6 +10,7 @@ import { ServerFetch } from "../src/fetch"
 import { Session } from "@orbit/schema/session"
 import { Global } from "@orbit/util/global"
 import { startServer } from "./fixture/server"
+import { runProgram } from "../../core/test/fixture/run-program"
 
 // trust-first: nothing from a project folder loads or runs until the person trusts the folder, and no session starts or
 // takes more work in a folder that is not trusted. These servers never trust a folder on their own, as the background
@@ -471,7 +472,7 @@ it.live(
             "init",
           ],
         ])
-          expect(Bun.spawnSync(["git", ...args], { cwd: folders.repo }).exitCode).toBe(0)
+          expect((await runProgram(["git", ...args], { cwd: folders.repo })).exitCode).toBe(0)
       })
       const server = yield* startServer(folders.config, untrusted)
       yield* Effect.promise(async () => {

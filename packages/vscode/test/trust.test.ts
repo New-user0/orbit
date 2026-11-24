@@ -7,6 +7,7 @@ import { Controller, limits, type TrustAnswer, type Update } from "../src/contro
 import type { TrustView } from "../src/protocol"
 import { prompt } from "../src/trust"
 import { serve, until } from "./fixture/serve"
+import { runProgram } from "../../core/test/fixture/run-program"
 
 // The chat against a real `orb serve` that trusts a folder only when a grant says so, which is how the shared background
 // service behaves, with a scripted model. Whether a folder is trusted is the server's to say: these tests check that the
@@ -75,7 +76,7 @@ let count = 0
 async function folder(options: { config?: boolean; git?: boolean; in?: string } = {}) {
   const directory = path.join(options.in ?? path.join(root, "work"), `folder-${++count}`)
   await fs.mkdir(directory, { recursive: true })
-  if (options.git) expect(Bun.spawnSync(["git", "init", "--quiet", directory]).exitCode).toBe(0)
+  if (options.git) expect((await runProgram(["git", "init", "--quiet", directory])).exitCode).toBe(0)
   if (options.config) await Bun.write(path.join(directory, "orbit.json"), JSON.stringify(guard))
   return fs.realpath(directory)
 }

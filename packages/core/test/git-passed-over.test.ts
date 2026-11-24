@@ -24,6 +24,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { AppProcess } from "@orbit/util/process"
 import { git } from "./fixture/git"
+import { runProgram } from "./fixture/run-program"
 import { inner, opened, outer, pointers, shapes } from "./fixture/git-passed-over"
 import { traced } from "./fixture/git-trace"
 import { location } from "./fixture/location"
@@ -239,8 +240,8 @@ const surfaces: readonly Surface[] = [
 
 // What a plain git in `folder` takes for the work tree of its repository.
 const toplevel = (folder: string) =>
-  Effect.sync(() => {
-    const child = Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], { cwd: folder, stdout: "pipe", stderr: "ignore" })
+  Effect.promise(async () => {
+    const child = await runProgram(["git", "rev-parse", "--show-toplevel"], { cwd: folder })
     return path.resolve(child.stdout.toString().trim())
   })
 
@@ -342,11 +343,9 @@ describe("git that Orbit starts for a trusted folder stays out of the untrusted 
 describe("git that Orbit starts for a trusted folder does not follow its .git into an untrusted repository", () => {
   // The common directory that a plain git in `folder` uses, as a real path.
   const common = (folder: string) =>
-    Effect.sync(() => {
-      const child = Bun.spawnSync(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], {
+    Effect.promise(async () => {
+      const child = await runProgram(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], {
         cwd: folder,
-        stdout: "pipe",
-        stderr: "ignore",
       })
       return realpathSync.native(child.stdout.toString().trim())
     })

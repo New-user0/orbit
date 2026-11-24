@@ -5,7 +5,7 @@ import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { spawnSync } from "node:child_process"
+import { runProgram } from "../../../core/test/fixture/run-program"
 import { isolatedEnv } from "../fixture/environment"
 import { startSlot } from "../fixture/start-gate"
 
@@ -391,9 +391,9 @@ for (const row of defaultRows)
 // `orb acp`, a stream is refused and every other spelling meets the rule; the plain names are the controls (class 4,
 // class 8). Elsewhere these spellings name other files, so the rows run on Windows only.
 const secret = "API_KEY=ADS-SECRET-MARKER"
-const shortName = (directory: string, name: string) => {
+const shortName = async (directory: string, name: string) => {
   const cmd = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe")
-  const listing = Bun.spawnSync([cmd, "/d", "/c", "dir", "/x", "/a", directory]).stdout.toString()
+  const listing = (await runProgram([cmd, "/d", "/c", "dir", "/x", "/a", directory])).stdout.toString()
   const row = listing.split(/\r?\n/).find((line) => line.endsWith(` ${name}`))
   const short = row?.slice(0, -name.length).trim().split(/\s+/).at(-1)
   if (short === undefined || !/~\d/.test(short)) throw new Error(`no 8.3 name for ${name} in ${directory}`)
@@ -431,7 +431,7 @@ const spellingRows = [
     name: "Read of the 8.3 name of .env under a Read deny of *.env is denied",
     tool: "Read",
     permissions: readDeny,
-    args: (root: string) => ({ file_path: shortName(path.join(root, "workspace"), ".env") }),
+    args: async (root: string) => ({ file_path: await shortName(path.join(root, "workspace"), ".env") }),
     check: async (run: Run) => {
       expect(run.permissions).toHaveLength(0)
       expect(secretSent(run.bodies)).toBe(false)
@@ -453,7 +453,7 @@ const spellingRows = [
     tool: "Read",
     permissions: [{ action: "Read", resource: "*.env", effect: "ask" }] as const,
     reply: "once" as const,
-    args: (root: string) => ({ file_path: shortName(path.join(root, "workspace"), ".env") }),
+    args: async (root: string) => ({ file_path: await shortName(path.join(root, "workspace"), ".env") }),
     check: async (run: Run) => {
       expect(run.permissions).toHaveLength(1)
       // The file the rule is written for, by its own name.
@@ -617,12 +617,13 @@ const present = await Promise.all(
 // Each spelling of the workspace folder, from the folder the run is made in (`root`, below the temporary folder).
 // The 8.3 short name of the workspace folder, as the volume makes it. A volume that makes none fails the row visibly,
 // as a short name that equals the long one would decide nothing.
-const shortWorkspace = (root: string) => {
+const shortWorkspace = async (root: string) => {
   const folder = path.join(root, "workspace")
-  const short = spawnSync("cmd", ["/d", "/c", `for %I in ("${folder}") do @echo %~sI`], {
-    encoding: "utf8",
-    windowsVerbatimArguments: true,
-  }).stdout.trim()
+  const short = (
+    await runProgram(["cmd", "/d", "/c", `for %I in ("${folder}") do @echo %~sI`], { windowsVerbatimArguments: true })
+  ).stdout
+    .toString()
+    .trim()
   if (short === "" || short.toLowerCase() === folder.toLowerCase())
     throw new Error("this volume makes no 8.3 short names")
   return short
@@ -637,7 +638,7 @@ const realSpellings = [
     ? [
         {
           name: "the 8.3 short name of the workspace folder",
-          spelled: (root: string) => path.join(root, path.basename(shortWorkspace(root))),
+          spelled: async (root: string) => path.join(root, path.basename(await shortWorkspace(root))),
         },
         { name: "the 8.3 short name of the workspace folder and the ones above it", spelled: shortWorkspace },
       ]
@@ -669,12 +670,12 @@ const spellingLinks = async (root: string) => {
 }
 const denyMarkerSent = (run: Run) => run.bodies.some((body) => body.includes("DENY-MARKER"))
 for (const spelling of realSpellings) {
-  const through = (root: string) => path.join(spelling.spelled(root), "cfg", "orbit.json")
+  const through = async (root: string) => path.join(await spelling.spelled(root), "cfg", "orbit.json")
   test.concurrent(
     `an untrusted Read through ${spelling.name} and the repository's link into the config folder is asked about as the plain spelling is`,
     () =>
       approval(
-        { tool: "Read", reply: "reject", args: (root) => ({ file_path: through(root) }), setup: spellingLinks },
+        { tool: "Read", reply: "reject", args: async (root) => ({ file_path: await through(root) }), setup: spellingLinks },
         async (run) => {
           expect(String(run.permissions[0]?.toolCall.title)).toContain("external directory")
           expect(shownAt(run.permissions[0]?.toolCall.locations)).toContain(path.join(run.root, "config"))
@@ -688,7 +689,7 @@ for (const spelling of realSpellings) {
     `an untrusted Read through ${spelling.name} and the repository's link, after the folder is allowed, names the folder it reads`,
     () =>
       approval(
-        { tool: "Read", reply: "once", args: (root) => ({ file_path: through(root) }), setup: spellingLinks },
+        { tool: "Read", reply: "once", args: async (root) => ({ file_path: await through(root) }), setup: spellingLinks },
         async (run) => {
           expect(run.permissions).toHaveLength(2)
           expect(shownAt(run.permissions[1]?.toolCall.locations)).toEqual([path.join(run.root, "config", "orbit.json")])
@@ -707,7 +708,7 @@ for (const spelling of realSpellings) {
             { action: "Read", resource: "secret/*", effect: "deny" },
           ],
           reply: "once",
-          args: (root) => ({ file_path: path.join(spelling.spelled(root), "secret", "key.txt") }),
+          args: async (root) => ({ file_path: path.join(await spelling.spelled(root), "secret", "key.txt") }),
           setup: spellingLinks,
         },
         async (run) => {
@@ -726,7 +727,7 @@ for (const spelling of realSpellings) {
           tool: "Read",
           permissions: [{ action: "Read", resource: "secret/*", effect: "ask" }],
           reply: "reject",
-          args: (root) => ({ file_path: path.join(spelling.spelled(root), "secret", "key.txt") }),
+          args: async (root) => ({ file_path: path.join(await spelling.spelled(root), "secret", "key.txt") }),
           setup: spellingLinks,
         },
         async (run) => {
@@ -747,7 +748,7 @@ for (const spelling of realSpellings) {
           tool: "Read",
           trusted: true,
           reply: "once",
-          args: (root) => ({ file_path: through(root) }),
+          args: async (root) => ({ file_path: await through(root) }),
           setup: spellingLinks,
         },
         async (run) => {
@@ -770,7 +771,7 @@ for (const spelling of refusedSpellings)
             tool: "Read",
             trusted,
             reply: "once",
-            args: (root) => ({ file_path: path.join(spelling.spelled(root), "cfg", "orbit.json") }),
+            args: async (root) => ({ file_path: path.join(await spelling.spelled(root), "cfg", "orbit.json") }),
             setup: spellingLinks,
           },
           async (run) => {
@@ -815,7 +816,7 @@ for (const row of linkRows)
               shell: "shell" in row ? row.shell : undefined,
               trusted: mode.trusted,
               reply: mode.reply,
-              args: (root) => spellArgs(row.args, spelling.spelled(root)),
+              args: async (root) => spellArgs(row.args, await spelling.spelled(root)),
               setup: spellingLinks,
             },
             linkCheck(row, mode),
@@ -839,7 +840,7 @@ for (const row of linkRows)
               },
             ],
             reply: "once",
-            args: (root) => spellArgs(row.args, spelling.spelled(root)),
+            args: async (root) => spellArgs(row.args, await spelling.spelled(root)),
             setup: spellingLinks,
           },
           async (run) => {
@@ -865,7 +866,7 @@ for (const row of refusedRows)
               shell: "shell" in row ? row.shell : undefined,
               trusted,
               reply: "once",
-              args: (root) => spellArgs(row.args, spelling.spelled(root)),
+              args: async (root) => spellArgs(row.args, await spelling.spelled(root)),
               setup: spellingLinks,
             },
             async (run) => {
@@ -1063,7 +1064,7 @@ for (const trusted of [false, true])
 async function approval(
   input: {
     tool: string
-    args: (root: string) => Record<string, unknown>
+    args: (root: string) => Record<string, unknown> | Promise<Record<string, unknown>>
     rule?: string
     // The person's own rules, in place of one `ask` rule for `rule`.
     permissions?:
@@ -1074,7 +1075,7 @@ async function approval(
     reply?: "once" | "reject"
     setup?: (root: string) => Promise<unknown>
     // A second tool call, made once the first one has been answered: a file is read before it is edited.
-    then?: { tool: string; args: (root: string) => Record<string, unknown> }
+    then?: { tool: string; args: (root: string) => Record<string, unknown> | Promise<Record<string, unknown>> }
   },
   check: (run: Run) => unknown,
 ) {
@@ -1106,7 +1107,7 @@ async function approval(
                 type: "function",
                 function: {
                   name: next ? next.tool : input.tool,
-                  arguments: JSON.stringify((next ? next.args : input.args)(root)),
+                  arguments: JSON.stringify(await (next ? next.args : input.args)(root)),
                 },
               },
             ],

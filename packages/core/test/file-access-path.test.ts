@@ -313,8 +313,8 @@ describe.skipIf(process.platform !== "win32")("FileAccess.resolve of Windows spe
     withTempDir(({ path: directory }) =>
       Effect.gen(function* () {
         yield* layout(directory)
-        const env = shortName(directory, ".env")
-        const folder = shortName(directory, "config folder long")
+        const env = yield* Effect.promise(() => shortName(directory, ".env"))
+        const folder = yield* Effect.promise(() => shortName(directory, "config folder long"))
         // The volume of the test folder makes 8.3 names, as the system volume does by default.
         expect([env, folder]).toEqual([expect.stringContaining("~"), expect.stringContaining("~")])
         const access = yield* FileAccess.Service
@@ -363,7 +363,7 @@ describe.skipIf(process.platform !== "win32")("FileAccess.resolve of Windows spe
       Effect.gen(function* () {
         const outside = yield* tmpdirScoped()
         yield* layout(outside.path)
-        const env = shortName(outside.path, ".env")
+        const env = yield* Effect.promise(() => shortName(outside.path, ".env"))
         expect(env).toEqual(expect.stringContaining("~"))
         const access = yield* FileAccess.Service
         const target = yield* access.resolve({ path: path.join(outside.path, env!) })
@@ -379,7 +379,7 @@ describe.skipIf(process.platform !== "win32")("FileAccess.resolve of Windows spe
       Effect.gen(function* () {
         yield* layout(directory)
         yield* Effect.promise(() => fs.link(path.join(directory, ".env"), path.join(directory, "second-name.txt")))
-        const env = shortName(directory, ".env")
+        const env = yield* Effect.promise(() => shortName(directory, ".env"))
         expect(env).toEqual(expect.stringContaining("~"))
         const access = yield* FileAccess.Service
         const failure = yield* access.resolve({ path: env! }).pipe(Effect.flip)
@@ -395,7 +395,7 @@ describe.skipIf(process.platform !== "win32")("FileAccess.resolve of Windows spe
     withTempDir(({ path: directory }) =>
       Effect.gen(function* () {
         yield* layout(directory)
-        const env = shortName(directory, ".env")
+        const env = yield* Effect.promise(() => shortName(directory, ".env"))
         const access = yield* FileAccess.Service
         for (const spelling of [
           ".env::$DATA",

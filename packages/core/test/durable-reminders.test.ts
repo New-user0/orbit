@@ -51,6 +51,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { tempGlobalLayer } from "./fixture/global"
 import { tempLocationLayer } from "./fixture/location"
+import { runProgram } from "./fixture/run-program"
 import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
@@ -2043,7 +2044,8 @@ describe("the rebuild after a restart", () => {
           : undefined
       // A pipe inside the project is a place the read tool's resolution refuses too, and is never seeded.
       const fifo = h.inside("pipe")
-      if (process.platform !== "win32") expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0)
+      if (process.platform !== "win32")
+        expect((yield* Effect.promise(() => runProgram(["mkfifo", fifo]))).exitCode).toBe(0)
       const devices =
         process.platform === "win32"
           ? [pipe, "NUL", "CON", "\\\\.\\NUL", h.inside("NUL"), h.inside("aux.txt")]

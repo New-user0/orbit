@@ -4,6 +4,7 @@ import path from "node:path"
 import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
+import { runProgram } from "../../core/test/fixture/run-program"
 
 // The status line command runs in the folder the terminal UI was started in, whose contents a clone chooses (a
 // bunfig.toml preload, a git config). Nothing runs, and no line is drawn, until that folder is trusted.
@@ -144,10 +145,10 @@ const handed = [
   {
     name: "core.fsmonitor in the repository config of the folder it is handed",
     prepare: async (clone: string, marker: string) => {
-      Bun.spawnSync(["git", "init", "-q", clone])
-      Bun.spawnSync(["git", "-C", clone, "config", "core.fsmonitor", `echo ran > "${marker}"; false`])
+      await runProgram(["git", "init", "-q", clone])
+      await runProgram(["git", "-C", clone, "config", "core.fsmonitor", `echo ran > "${marker}"; false`])
     },
-    run: `Bun.spawnSync(["git", "-C", input.cwd, "status", "--short"])`,
+    run: `await Bun.spawn(["git", "-C", input.cwd, "status", "--short"], { stdout: "ignore", stderr: "ignore" }).exited`,
   },
   {
     name: "a bunfig.toml preload in the folder it is handed",
@@ -155,7 +156,7 @@ const handed = [
       await Bun.write(path.join(clone, "bunfig.toml"), 'preload = ["./evil.ts"]\n')
       await Bun.write(path.join(clone, "evil.ts"), `await Bun.write(${JSON.stringify(marker)}, "x")\n`)
     },
-    run: `Bun.spawnSync([process.execPath, "-e", "0"], { cwd: input.cwd })`,
+    run: `await Bun.spawn([process.execPath, "-e", "0"], { cwd: input.cwd, stdout: "ignore", stderr: "ignore" }).exited`,
   },
 ]
 
