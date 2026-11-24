@@ -793,7 +793,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
   // a closing line (I and K), and runs a bare address on over a backtick (J). So an escape, a block or a span that the
   // tracker was sure of did not hold there. Each text goes through the wire as one or two texts of one message, and no
   // block a client draws of them has an image or a tag, with md4c or with `marked`.
-  const MARKED_ROWS: Array<[string, string[]]> = [
+  const MARKED_ROWS: Array<[string, string[], "apart"?]> = [
     ["H: an image in a link's text after a `[`", ["[[IMAGE]()"]],
     ["H across two texts of one message", ["[", "[IMAGE]()"]],
     ["I: a backtick fence closed by a run with a tilde after it", ["```\n```~\nIMAGE"]],
@@ -803,21 +803,70 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["J: a span after `http`", ["http://e`IMAGE`"]],
     ["J: a span after an address that one text ends with", ["http://e", "```IMAGE```"]],
     ["K: a tilde fence closed by a run with a backtick after it", ["~~~\n~~~`\nIMAGE"]],
+    // Fix loop 7, L: a reference's label takes a backtick in it from a code span, in md4c for a full reference and in
+    // `marked` for a collapsed or a shortcut one too, so the span the tracker held from that backtick was prose there.
+    ["L: a full reference whose label holds a backtick", ["[foo][b`] IMAGE `\n\n[b`]: /u"]],
+    ["L: a collapsed reference whose label holds a backtick", ["[b`][] IMAGE `\n\n[b`]: /u"]],
+    ["L: a shortcut reference whose label holds a backtick", ["[b`] IMAGE `\n\n[b`]: /u"]],
+    ["L with the definition first", ["[b`]: /u\n\n[b`] IMAGE `"]],
+    ["L: a label over two lines", ["[x][b\n`] IMAGE `\n\n[b\n`]: /u"]],
+    ["L: a label that one text leaves open", ["[x][b\n", "`] IMAGE `\n\n[b\n`]: /u"]],
+    ["L: a label that one message's text leaves open", ["[x][b\n", "`] IMAGE `\n\n[b\n`]: /u"], "apart"],
+    // M: `marked` reads a link reference definition before any block, and its destination may stand on the next line
+    // and its label and title may run over several, so a fence line there is part of the definition to it while md4c
+    // opens a block. The block's lines are then prose to `marked`.
+    ["M: a label alone before a fence line", ["[r]:\n```\nIMAGE\n```"]],
+    ["M: a label and a space before a tilde fence", ["[r]: \n~~~\nIMAGE\n~~~"]],
+    ["M: a label with a space in it", ["[a b]:\n```\nIMAGE\n```"]],
+    ["M: a longer fence", ["[r]:\n````\nIMAGE\n````"]],
+    ["M: an indented fence", ["[r]:\n   ```\n   IMAGE\n   ```"]],
+    ["M: in a list item", ["- [r]:\n  ```\n  IMAGE\n  ```"]],
+    ['M: a `"` title left open', ['[r]: /u "\n```\n"\nIMAGE\n```']],
+    ["M: a `(` title left open", ["[r]: /u (\n```\n)\nIMAGE\n```"]],
+    ["M: a `'` title left open", ["[r]: /u '\n```\n'\nIMAGE\n```"]],
+    ["M: a title opened on the next line", ['[r]: /u\n"\n```\n"\nIMAGE\n```']],
+    ["M: a label left open", ["[\n```\n]: /u\nIMAGE\n```"]],
+    ['M: a `"` title over a blank line', ['[r]: /u "\n\n```\n"\nIMAGE\n```']],
+    ["M: a `(` title over a blank line", ["[r]: /u (\n\n```\n)\nIMAGE\n```"]],
+    ["M: a label over a blank line", ["[\n\n```\n]: /u\nIMAGE\n```"]],
+    ["M: a label that one text ends with", ["[r]:\n", "```\nIMAGE\n```"]],
+    ["M: a definition that one text ends with, and a title in the next", ["[r]: /u\n", '"\n```\n"\nIMAGE\n```']],
+    ["M: a label that one message's text ends with", ["[r]:\n", "```\nIMAGE\n```"], "apart"],
+    [
+      "M: a definition that one message's text ends with, and a title in the next",
+      ["[r]: /u\n", '"\n```\n"\nIMAGE\n```'],
+      "apart",
+    ],
+    // The controls: a definition does not start inside a paragraph or past a quote's marks for `marked`.
+    ["M's control: a label after a line of text", ["a\n[r]:\n```\nIMAGE\n```"]],
+    ["M's control: a label in a quote", ["> [r]:\n> ```\n> IMAGE\n> ```"]],
+    // And an inline link's text gives a span the priority in both.
+    ["L's control: a backtick in an inline link's text", ["[a `x](/u) IMAGE `"]],
+    ["L's control: a link's text that is one backtick", ["[`](/u) IMAGE `"]],
   ]
 
-  test.each(MARKED_ROWS)("the model's Markdown, %s: no image or tag with either renderer", async (_, texts) => {
-    for (const image of [`![x](${ADDRESS})`, `<img src=${ADDRESS}>`]) {
-      const seen = await chunked((s) =>
-        texts.flatMap((value, ordinal) => text(s, "msg_a", value.replaceAll("IMAGE", image), ordinal)),
-      )
-      for (const block of blocks(seen.updates).all)
-        for (const html of [
-          Bun.markdown.html(block, RENDERER),
-          marked.parse(block, { gfm: true, async: false }) as string,
-        ])
-          expect([texts, html]).not.toEqual([texts, expect.stringMatching(/<img\b/i)])
-    }
-  })
+  // A row marked "apart" sends each text as a message of its own. The default keeps the callback's arity at two, which
+  // bun's `test.each` would otherwise read as a done callback for rows without the mark.
+  test.each(MARKED_ROWS)(
+    "the model's Markdown, %s: no image or tag with either renderer",
+    async (_, texts, apart = undefined) => {
+      for (const image of [`![x](${ADDRESS})`, `<img src=${ADDRESS}>`]) {
+        const seen = await chunked((s) =>
+          texts.flatMap((value, ordinal) =>
+            apart
+              ? text(s, `msg_${ordinal}`, value.replaceAll("IMAGE", image))
+              : text(s, "msg_a", value.replaceAll("IMAGE", image), ordinal),
+          ),
+        )
+        for (const block of blocks(seen.updates).all)
+          for (const html of [
+            Bun.markdown.html(block, RENDERER),
+            marked.parse(block, { gfm: true, async: false }) as string,
+          ])
+            expect([texts, html]).not.toEqual([texts, expect.stringMatching(/<img\b/i)])
+      }
+    },
+  )
 
   // Where the tracker is unsure, a span or a block takes joiners as prose does: after a tilde, after the start of an
   // address that GFM links by itself, on that line and on every line after it, and after a closing run that anything
@@ -841,6 +890,42 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["~~~\n<img>\n~~~\n`<img>`", "~~~\n<img>\n~~~\n`<img>`"],
     ["```\n<img>\n```  \n`<img>`", "```\n<img>\n```  \n`<img>`"],
     ["www\n.`<img>`", "www\n.`<img>`"],
+    // Fix loop 7: after a `[` that no `]` has closed, a backtick opens no span for the rest of the paragraph, so code
+    // in a link's text takes joiners too.
+    ["[b`] `<img>`", `[b\`] \`<${JOINER}img>\``],
+    ["[`<img>`](u)", `[\`<${JOINER}img>\`](u)`],
+    ["[x\ny `<img>`", `[x\ny \`<${JOINER}img>\``],
+    ["[b\\] `<img>`", `[b\\] \`<${JOINER}img>\``],
+    // The controls: a closed, an escaped or a parted `[` leaves a span after it as code.
+    ["[a](u) `<img>`", "[a](u) `<img>`"],
+    ["\\[b `<img>`", "\\[b `<img>`"],
+    ["[b\n\n`<img>`", "[b\n\n`<img>`"],
+    ["a [b\n```\nx\n```\n`<img>`", "a [b\n```\nx\n```\n`<img>`"],
+    // A fence line that a link reference definition may still take opens no block, and leaves the tracker unsure.
+    ["[r]:\n```\n<img>\n```", `[r]:\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u "\n```\n<img>\n```', `[r]: /u "\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u (a\n```\n<img>\n```", `[r]: /u (a\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u\n"a\n```\n<img>\n```', `[r]: /u\n"a\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u "\n\n```\n<img>\n```', `[r]: /u "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[a\nb\n```\n<img>\n```", `[a\nb\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]:\n/u '\n```\n<img>\n```", `[r]:\n/u '\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[a\\\n```\n<img>\n```", `[a\\\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[a]: /u\n[r]:\n```\n<img>\n```", `[a]: /u\n[r]:\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u "\na\n```\n<img>\n```', `[r]: /u "\na\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: <u v> "\n```\n<img>\n```', `[r]: <${JOINER}u v> "\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    // The controls: a definition that is whole, or that is no definition, leaves the block after it as code, and so
+    // does a `'` title that a blank line ends.
+    ["[r]: /u\n```\n<img>\n```", "[r]: /u\n```\n<img>\n```"],
+    ['[r]: /u "t"\n```\n<img>\n```', '[r]: /u "t"\n```\n<img>\n```'],
+    ["[r]: /u (t)\n```\n<img>\n```", "[r]: /u (t)\n```\n<img>\n```"],
+    ['[r]: /u\n"t"\n```\n<img>\n```', '[r]: /u\n"t"\n```\n<img>\n```'],
+    ["[r]: /u '\n\n```\n<img>\n```", "[r]: /u '\n\n```\n<img>\n```"],
+    ["[r]:\n\n```\n<img>\n```", "[r]:\n\n```\n<img>\n```"],
+    ["[r]\n```\n<img>\n```", "[r]\n```\n<img>\n```"],
+    ["[r]: <u\n```\n<img>\n```", `[r]: <${JOINER}u\n\`\`\`\n<img>\n\`\`\``],
+    ["[r]: /u x\n```\n<img>\n```", "[r]: /u x\n```\n<img>\n```"],
+    ['[r]: /u"t\n```\n<img>\n```', '[r]: /u"t\n```\n<img>\n```'],
+    ["[a[b]:\n```\n<img>\n```", "[a[b]:\n```\n<img>\n```"],
   ])("the model's Markdown %p: where the tracker is unsure, code takes joiners", (value, written) => {
     expect(withoutImages(prose, value, true)[1]).toBe(written)
   })

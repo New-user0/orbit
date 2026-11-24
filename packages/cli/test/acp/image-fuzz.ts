@@ -28,8 +28,28 @@ const HOSTILE = [
   "<details data-x>",
   `<a data-x href=${ADDRESS}>`,
   `<!-- c --><img src=${ADDRESS} data-x>`,
+  // A tag with a backtick after it, which a backtick before it on the line may pair with.
+  `<img src=${ADDRESS} data-x> \``,
 ]
-const DEFINITIONS = [`[r]: ${ADDRESS}`, `[r]: <${ADDRESS}> "t"`, `   [r]:\n${ADDRESS}`]
+// Fix loop 7: a label with a backtick in it, and definitions that `marked` reads on over the next line, a fence line
+// too: a label alone, a label left open, and a title whose quote or parenthesis is left open on its line or opened on
+// the next one.
+const DEFINITIONS = [
+  `[r]: ${ADDRESS}`,
+  `[r]: <${ADDRESS}> "t"`,
+  `   [r]:\n${ADDRESS}`,
+  `[b\`]: ${ADDRESS}`,
+  "[r]:",
+  "[r]: ",
+  "- [r]:",
+  "[",
+  "[a b",
+  `[r]: ${ADDRESS} "`,
+  `[r]: ${ADDRESS} '`,
+  `[r]: ${ADDRESS} (`,
+  `[r]: ${ADDRESS}\n"`,
+  `[r]: ${ADDRESS}\n(`,
+]
 
 const INLINE = [
   "word",
@@ -64,6 +84,10 @@ const INLINE = [
   "[t](a`b)",
   "[r]",
   "[r][]",
+  "[b`]",
+  "[x][b`]",
+  "[b`][]",
+  "[a `x](u)",
   "<https://a.example/>",
   "<https://a.example/`b>",
   "https://bare.example/x",
@@ -208,6 +232,8 @@ function text(random: Random, hostile: boolean) {
       lines[at] = lines[at]!.slice(0, cut) + value + lines[at]!.slice(cut)
     })
     if (random.chance(0.4)) lines.splice(random.int(lines.length + 1), 0, random.pick(DEFINITIONS))
+    // A label with a backtick in it is a reference only where it is defined, in a paragraph of its own.
+    if (random.chance(0.2)) lines.splice(random.int(lines.length + 1), 0, `\n[b\`]: ${ADDRESS}\n`)
   }
   const ending = random.int(10)
   if (ending === 0) return lines.join("\r\n")

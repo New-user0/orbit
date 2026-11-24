@@ -99,6 +99,19 @@ export type Prose = {
   /** Whether a backtick in the rest of the paragraph may belong to something other than a code span. */
   readonly mixed: boolean
   /**
+   * Whether the paragraph has a `[` that no `]` has closed yet. A full, collapsed or shortcut reference's label may
+   * take a backtick in it from a code span (md4c and `marked`), so a backtick after it opens no span.
+   */
+  readonly bracket: boolean
+  /**
+   * How far the lines so far go into a link reference definition that `marked` may still read over the next line: its
+   * label (`label`), its `]:` with no destination yet (`destination`), a destination that a title may still follow on
+   * the next line (`after`), or a title left open by its quote or parenthesis (`"`, `'` or `)`); "" for none. `marked`
+   * reads a definition before it looks for any block, so a fence line there is part of the definition to it, where
+   * md4c opens a block.
+   */
+  readonly definition: Definition
+  /**
    * What the lines since the last blank line or fence make, as far as a fence line after them goes: "" for nothing,
    * "text" for a paragraph, "table" for a table, whose rows run to a blank line and take a fence line as one more row,
    * or "task" for a list item that holds only a task box, which takes the next line that is not blank as its text,
@@ -113,6 +126,8 @@ export type Prose = {
 }
 
 type Paragraph = "" | "text" | "table" | "task"
+type Title = '"' | "'" | ")"
+type Definition = "" | "label" | "destination" | "after" | Title
 // From the least to the most a fence line after it is unsure.
 const PARAGRAPHS: Paragraph[] = ["", "text", "table", "task"]
 
@@ -127,6 +142,8 @@ export const prose: Prose = {
   escape: false,
   until: "",
   mixed: false,
+  bracket: false,
+  definition: "",
   paragraph: "",
   joined: false,
 }
@@ -151,6 +168,16 @@ const EMPTY_TASK = /^(?:[ \t>]*(?:[-+*]|\d{1,9}[.)])[ \t]+)+\[[ xX]\][ \t]*$/
 // `marked` takes a backtick as text: after either no backtick is sure to open a span.
 const LINK_START = /^(?:www\.|http|ftp:)$/i
 const UNSURE = /~|www\.|http|ftp:/i
+// A line's indentation and any list or quote marks in front of what it holds.
+const CONTAINER = /^(?:[ \t>]|[-+*][ \t]|\d{1,9}[.)][ \t])*/
+// The parts of a link reference definition, as `marked` reads them: a label has no unescaped bracket, a destination is
+// `<...>` on one line or a run with no space, and a title is quoted or in parentheses and may run over several lines.
+const LABEL = /^(?:\\.|[^[\]\\])*/
+const DESTINATION = /^[ \t]*(?:<[^<>]*>|[^<\s]\S*)/
+const TITLE = { '"': /^(?:\\.|[^"\\])*/, "'": /^(?:\\.|[^'\\])*/, ")": /^[^()]*/ }
+const TITLE_OPENER: Record<string, Title | undefined> = { '"': '"', "'": "'", "(": ")" }
+// A label, a `"` title and a `(` title run on over a blank line to `marked`.
+const OVER_BLANK: Definition[] = ["label", '"', ")"]
 
 /**
  * A model's own Markdown, for a client that renders it: prose and code stay as written, but nothing in it is an image or
@@ -225,7 +252,14 @@ export function follow(state: Prose, before: Prose): [Prose, string] {
 }
 
 function clear(state: Prose) {
-  return state.fence === undefined && !state.lost && !state.mixed && state.line === ""
+  return (
+    state.fence === undefined &&
+    !state.lost &&
+    !state.mixed &&
+    !state.bracket &&
+    state.definition === "" &&
+    state.line === ""
+  )
 }
 
 function step(state: Prose, char: string, rest: () => string, out: string[]): Prose {
@@ -259,7 +293,15 @@ function step(state: Prose, char: string, rest: () => string, out: string[]): Pr
 // Prose: a backtick run that may open a span starts to be held back, unless the tracker is unsure, and anything else is
 // written, with a word joiner after a `!` or a `<` that the piece's end or what opens an image or a tag follows.
 function write(state: Prose, char: string, rest: () => string, out: string[]): Prose {
-  if (char === "`" && !state.escape && !state.mixed && !state.joined && !state.lost && state.until === "")
+  if (
+    char === "`" &&
+    !state.escape &&
+    !state.mixed &&
+    !state.joined &&
+    !state.lost &&
+    !state.bracket &&
+    state.until === ""
+  )
     return { ...state, held: char, open: 0, run: 0 }
   const after = char === "<" || char === "!" ? rest() : ""
   const autolink = char === "<" && AUTOLINK.test(after)
@@ -287,7 +329,8 @@ function write(state: Prose, char: string, rest: () => string, out: string[]): P
             : char === "(" && state.last === "]"
               ? ")"
               : "",
-    mixed: state.mixed || unplain,
+    mixed: state.mixed || unplain || (char === "`" && state.bracket),
+    bracket: state.escape || (char !== "[" && char !== "]") ? state.bracket : char === "[",
   }
 }
 
@@ -335,8 +378,15 @@ function newline(state: Prose, char: string, out: string[]): Prose {
     return { ...next, fence: undefined, lost: state.lost || closing === "unsure" }
   }
   // md4c reads a fence line in a table's rows, or after a list item that holds only a task box, as text, where other
-  // renderers open a block, so a fence line after either opens none.
-  const fence = state.lost || state.paragraph === "table" || state.paragraph === "task" ? undefined : opens(state.line)
+  // renderers open a block, and `marked` reads one inside a link reference definition as part of it, so a fence line in
+  // any of them opens none.
+  const fence =
+    state.lost ||
+    state.paragraph === "table" ||
+    state.paragraph === "task" ||
+    (state.definition !== "" && state.definition !== "after")
+      ? undefined
+      : opens(state.line)
   const blank = /^[ \t]*$/.test(state.line)
   return {
     ...next,
@@ -346,6 +396,8 @@ function newline(state: Prose, char: string, out: string[]): Prose {
     lost: state.lost || (fence === undefined && (FENCE_LINE.test(state.line) || UNSURE.test(state.line))),
     // A blank line ends the paragraph, and so does a fence.
     mixed: fence === undefined && !blank && next.mixed,
+    bracket: fence === undefined && !blank && state.bracket,
+    definition: definition(state.definition, state.line, blank),
     paragraph: fence ? "" : blank ? (state.paragraph === "task" ? "task" : "") : paragraph(state.paragraph, state.line),
   }
 }
@@ -355,6 +407,41 @@ function paragraph(before: Paragraph, line: string): Paragraph {
   if (EMPTY_TASK.test(line)) return "task"
   if (before === "table" || (before === "text" && DELIMITER_ROW.test(line))) return "table"
   return "text"
+}
+
+// Where a line leaves a link reference definition that `marked` may read over the next line. Any line that starts with
+// a `[` may start one, as far as the tracker knows.
+function definition(before: Definition, line: string, blank: boolean): Definition {
+  if (blank) return OVER_BLANK.includes(before) ? before : ""
+  const text = line.replace(CONTAINER, "")
+  const opener = TITLE_OPENER[text.charAt(0)]
+  if (before === "after" && opener) return title(opener, text.slice(1))
+  if (before === "" || before === "after") return text.startsWith("[") ? label(text.slice(1)) : ""
+  if (before === "label") return label(text)
+  if (before === "destination") return destination(text)
+  return title(before, text)
+}
+
+function label(text: string): Definition {
+  const rest = text.slice(LABEL.exec(text)?.[0].length)
+  if (rest === "" || rest === "\\") return "label"
+  return rest.startsWith("]:") ? destination(rest.slice(2)) : ""
+}
+
+function destination(text: string): Definition {
+  if (/^[ \t]*$/.test(text)) return "destination"
+  const found = DESTINATION.exec(text)
+  if (!found) return ""
+  const rest = text.slice(found[0].length)
+  if (/^[ \t]*$/.test(rest)) return "after"
+  const opener = /^[ \t]+(.)/.exec(rest)
+  const closer = TITLE_OPENER[opener?.[1] ?? ""]
+  return opener && closer ? title(closer, rest.slice(opener[0].length)) : ""
+}
+
+// A title the line opens or carries on stays open while its closing mark is not on the line.
+function title(closer: Title, text: string): Definition {
+  return text.slice(TITLE[closer].exec(text)?.[0].length) === "" ? closer : ""
 }
 
 function opens(line: string): Fence | undefined {
