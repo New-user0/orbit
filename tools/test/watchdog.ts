@@ -70,7 +70,7 @@ export async function runTests(
     clearInterval(watch)
     report(found, relative(found.file), deadline(found.file), env, output.log)
     stuck.stopping = stop(child)
-  }, Math.min(5_000, base / 4))
+  }, pollInterval(base))
   const code = await child.exited
   clearInterval(watch)
   // A stopped run ends with the signal's code; it fails with 1 once every worker is gone.
@@ -81,6 +81,12 @@ export async function runTests(
   fs.rmSync(starts, { recursive: true, force: true })
   fs.rmSync(transpiled, { recursive: true, force: true })
   return stuck.stopping ? 1 : code
+}
+
+// How often the folder is read: every quarter of the deadline, and at least every 5 s, so a stuck file is stopped soon
+// after it passes its deadline, whatever the deadline is.
+export function pollInterval(deadline: number) {
+  return Math.min(5_000, deadline / 4)
 }
 
 function timings(args: string[]): Record<string, number> {

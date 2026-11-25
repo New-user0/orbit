@@ -4,7 +4,7 @@ import os from "os"
 import path from "path"
 import { testArgs } from "../../../tools/test/args"
 import { mergeTimings, refresh } from "../../../tools/test/timings"
-import { linuxState, runTests } from "../../../tools/test/watchdog"
+import { linuxState, pollInterval, runTests } from "../../../tools/test/watchdog"
 import { plant } from "./fixture/decoy"
 import { runProgram } from "./fixture/run-program"
 import { tmpdir } from "./fixture/tmpdir"
@@ -91,6 +91,42 @@ describe("runTests", () => {
       // Gone, not only killed: on Linux the run waits until the killed worker has been reaped.
       expect(() => process.kill(started.pid, 0)).toThrow()
       expect(await heartbeats()).toBe(before)
+    },
+    60_000,
+  )
+
+  test(
+    "looks at the folder every quarter of the deadline, so a file found stuck between two looks is stopped at the next",
+    async () => {
+      await using dir = await tmpdir()
+      // A 4 s deadline is looked at every second from the start of the run. 1.2 s in, the stand-in worker writes a start
+      // line that is already past the deadline, so the look at 2 s finds it. A look every 4 s (the deadline itself, or
+      // the 5 s floor) would find it at 4 s at the earliest.
+      const begun = Date.now()
+      const found: number[] = []
+      const code = await runTests(
+        [
+          "-e",
+          [
+            `const log = require("node:path").join(process.env.ORBIT_TEST_HEARTBEAT, String(process.pid))`,
+            `const line = () => (Date.now() - 60_000) + " start " + ${JSON.stringify(path.join(dir.path, "test", "a.test.ts"))} + "\\n"`,
+            `setTimeout(() => require("node:fs").appendFileSync(log, line()), ${begun + 1_200} - Date.now())`,
+            `setTimeout(() => {}, 20_000)`,
+          ].join("\n"),
+        ],
+        quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "4000" }),
+        dir.path,
+        {
+          log: (line) => {
+            if (line.startsWith("Test file stuck:")) found.push(Date.now() - begun)
+          },
+          stdio: "ignore",
+        },
+      )
+      expect(code).toBe(1)
+      expect(found).toHaveLength(1)
+      expect(found[0]).toBeGreaterThanOrEqual(1_200)
+      expect(found[0]).toBeLessThan(3_500)
     },
     60_000,
   )
@@ -371,6 +407,17 @@ describe("linuxState", () => {
     expect(lines[0]).toMatch(new RegExp(`^worker ${process.pid}: State:\\s+[RS]`))
     expect(lines[1]).toContain(`${process.pid} `)
     expect(lines[2]).toContain(`${child.pid} bun`)
+  })
+})
+
+// The runTests rows show the quarter of a short deadline. The poll a ten-minute deadline gets, and the step from a
+// quarter to the 5 s floor, would take minutes to show in a run, so they are pinned here.
+describe("pollInterval", () => {
+  test("reads the folder every quarter of the deadline, and at least every 5 s", () => {
+    expect(pollInterval(1_000)).toBe(250)
+    expect(pollInterval(16_000)).toBe(4_000)
+    expect(pollInterval(20_000)).toBe(5_000)
+    expect(pollInterval(600_000)).toBe(5_000)
   })
 })
 
