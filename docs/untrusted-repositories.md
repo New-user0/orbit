@@ -2579,27 +2579,28 @@ runs" is a permission.
     span is never taken as code and `` `Vec<T>` `` goes with a joiner after its `<`. The only text sent unchanged is a
     fenced block that every renderer reads as code: its opening line is three or more backticks or tildes at most three
     spaces in, with no list or quote mark in front and no `|` after the run, at the text's start or right after a blank
-    line, so outside any paragraph and table, outside a list item that holds only a task box (md4c reads the next line
-    that is not blank as that item's text), at no indentation once a list item has started in the text (a fence a few
-    spaces in may be in its content), and while no link reference definition that `marked` may read over the next line
-    is open (one whose label is left open, whose `]:` has no destination yet, or whose title's quote or parenthesis is
-    left open on its line or opened on the next, a `"` or `(` title and a label over a blank line too, and a `'` title
-    over a line of only spaces or tabs, which `marked` ends only at an empty line; any line that
-    starts with a `[` behind indentation and list or quote marks may start one); it closes at a line of a run of the
-    same mark at least as long, at most three spaces in, with only spaces after it. Any other fence line opens no block
+    line, so outside any paragraph and table, at no indentation once a list item has started in the text (a fence a
+    few spaces in may be in its content), and before any line of the text that starts with a `[` behind indentation and
+    list or quote marks; it closes at a line of a run of the same mark at least as long, at most three spaces in, with
+    only spaces after it. Any other fence line opens no block
     the tracker is sure of, so it gives up (`lost`) and no later fence in the text counts as code, and it gives up as
     well after a closing run more than three spaces or a tab in or with anything but spaces after it (`marked` closes
     on a run with more backticks or tildes after it and not on one with a tab after it), after a line that starts to
     the left of an indented opening line, after a line with a tilde or the start of a bare address (`www.`, `http`,
-    `ftp:`), and after a definition whose `<...>` destination holds a second `>` (`marked` ends it at the first `>` that
-    a title or the line's end follows and tries the next when that title fails later; a `"` title with a backslash at
-    its line's end or before a quote stays open, as `marked` takes the backslash with the quote). A carriage return
+    `ftp:`), and after a line that starts with a `[` (decision 1c of m5-quality). Such a line may open a link reference
+    definition, which `marked` reads before any block and whose label and title it runs on over blank lines and fence
+    lines; a second `[` line starts one of its own once the first has become a paragraph or indented code. Fix loops 7
+    to 11 followed definitions as `marked` reads them and each review found another shape (an unfinished `]:`, a `"`
+    title's backslash, a `<...>` destination with a second `>`, a `'` title over a line of spaces, a restarted label),
+    so the tracker no longer reads them: a code block after a task item, a link at a line's start or any definition
+    carries joiners, and a list item that holds only a task box, which md4c reads the next line of as its text, is
+    covered by the same rule. A carriage return
     and a line feed end one line only when nothing comes between them. ACP gives a chunk no text boundary: a client
     may draw the chunks of a message ID as one block, or append every chunk of a kind to the
     last block until a tool call or a chunk of the other kind, across texts and messages (a cut-off reply and its retry
     under a new ID, the parts of a replayed session). So a text that picks up after a piece of another was sent starts
-    as it would alone only where both stand at the start of a line with no block or unfinished definition open and the
-    tracker is sure of both, and then a fence line at its start counts as code only where it would after the lines
+    as it would alone only where both stand at the start of a line with no block open and the tracker is sure of
+    both, and then a fence line at its start counts as code only where it would after the lines
     that ended either text, a list item that either holds included; anywhere else nothing more of it counts as code.
     A client that draws them apart or joins them then at most shows joiners in code, as far as md4c and `marked`, the
     renderers the tests draw with, read them. A tool call, a prompt and a subagent's updates that the client takes
@@ -2612,7 +2613,8 @@ runs" is a permission.
     in a table and after an empty task item, each with an image and an `img` tag, whole and one character a piece;
     "after a closing run further in" and "a fence line after a quoted table"; "a fenced block at the text's start or
     after a blank line is written as it is" for the controls, with a closer three spaces in, a run of the other mark
-    four in, and a table, a task item with words and a list that a blank line ends; "only a fenced block every renderer
+    four in, a table and a list that a blank line ends, a line of spaces or a tab after a paragraph, and a `[` inside
+    such a block, behind a backslash or after a word; "only a fenced block every renderer
     reads as code is left as written": code spans, `` `Vec<T>` ``, a fence right below a paragraph's line (with `\n`
     and `\r\n`), in a list item a few spaces in, in a quote, right after another block's closing line, with a `|` in
     its info string, after a list fence, after a closing run with words after it and after a line to the left of an
@@ -2636,22 +2638,25 @@ runs" is a permission.
     destination's line or the next, after a `]:` alone, in a list item, in a quote and at the end of a text or a
     message before the fence, with a `'` title that an empty line ends and a `"` or `(` title over a line of spaces as
     the controls, drawn by both renderers; "where the tracker is unsure, code takes joiners": a tilde, a bare
-    address's start in any case, a list fence and a closer with words after it before a fence after a blank line, a
-    definition still open over a blank line, a `'` title over a line of spaces, a tab or both (on the destination's
-    line, on the next one, after a `]:` alone, in a list item and with `\r\n`) before a fence, with a `'` title that an
-    empty line ends after its line of spaces as a control, and a `"` title with a backslash at its end or
-    before its quote and a `<` destination with a `<` or a second `>` in it, with a tilde fence, a closer with spaces
-    after it, an address's start cut by a line break and whole definitions or lines that are no definition as the
-    controls, a `"` title with a backslash before a letter and a `<` destination with a `<` in it among them; "a `<` or
+    address's start in any case, a list fence and a closer with words after it before a fence after a blank line, with
+    a tilde fence, a closer with spaces after it and an address's start cut by a line break as the controls; "from a
+    line that starts with a `[`, no later fence is taken as code": one row for each definition shape of reviews 7 to
+    11, review 12's second `[` line (after a blank line, after a tab or four spaces in, after a first `[a`, in a list
+    item and in a quote, and seed 9's `'` title after it), the former controls (whole definitions, titles a blank line
+    ends, a reference, lines that are no definition, a task item and a link) and a definition in a list item, a quote
+    and four spaces in, each with joiners in the later fence, drawn by both renderers and cut after each line break
+    into two texts through `follow`; "a `<` or
     a `!` takes a joiner only before a tag or an image"; four rows of a carriage return before a
     backtick, cut at every point; and `packages/cli/test/acp/image-fuzz.test.ts`, which runs `image-fuzz.ts` in a
     child process with a deadline, seed 20261124, over 20,000 fuzzed cases for each renderer: fences of both marks at
     any indentation, behind list and quote marks and with info strings, spans, links, tables, task items, HTML blocks,
     line ends of `\n`, `\r\n` and `\r`, blank lines that are empty or hold only spaces and tabs, labels with a
     backtick in them and their definition, definitions left open over the next line (a `'` title over a line of only
-    spaces or a tab among them), and images and raw tags anywhere, cut into random chunks over texts, messages and
-    kinds, through `ACPTranslate.step` and `replayMessage`, and drawn as each text alone, per message ID and appended, with no image or
-    tag drawn and the same grammar with neither coming back as written but for joiners). A client whose
+    spaces or a tab among them), a second `[` line after a first (after a blank line, a tab or four spaces in, in a list
+    item and a quote) before a fence line whose info string closes its label, and images and raw tags anywhere, cut into random chunks over texts, messages and
+    kinds, through `ACPTranslate.step` and `replayMessage`, and drawn as each text alone, per message ID and appended,
+    with no image or tag drawn and the same grammar with neither coming back as written but for joiners, and again at
+    seeds 6, 7 and 9, where review 12 found the restarted label). A client whose
     renderer reads Markdown in a way neither md4c nor `marked` does is not
     covered by a test. Names and words that a client draws as plain text are one line with no
     control or format character (`plain`): the available commands' names and descriptions, the model and mode names and

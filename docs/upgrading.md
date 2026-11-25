@@ -2903,18 +2903,19 @@ Inline code takes them too, since renderers read a backtick in different ways: `
 sent with a joiner after the `<` and the `!`, which a person does not see but a copy of the code carries. The only text
 sent without joiners is a fenced code block that opens at the start of the text or right after a blank line, at most
 three spaces in (and at no indentation once a list item has started in the text), with no list or quote mark in front
-of its fence and no `|` after it, while no link reference definition such as `[r]: /u "` may still go on, and that
-closes with a run of the same mark at least as long, at most three spaces in, with only spaces after it. A fence right
-below a line of text, in a list item or a quote, or after a list item that holds only a task box such as `- [ ]` takes
-joiners, and so does every later fence in the text after a fence line that opens no such block, after a closing run
-four or more spaces or a tab in or with anything but spaces after it, after a line that starts to the left of an
-indented opening fence, after a line with a tilde or the start of a bare address (`www.`, `http`, `ftp:`), and after
-a link reference definition whose `<...>` destination holds a second `>`. A definition's `"` title with a backslash at
-its line's end or before a quote counts as still open, as `marked` reads it, and so does a `'` title over a line that
-holds only spaces or tabs: only an empty line ends that title, so a fence after such a line takes joiners. A text
-that follows, with no tool call between, a text that ended inside a block, a line or a definition that may go on (a
-reply cut off at its output limit and its retry, for example) takes joiners in every fence, since a client may draw the
-two as one block; a fence that starts it is sent unchanged only where it would be after the lines that ended the text
+of its fence and no `|` after it, before any line of the text that starts with a `[` behind indentation and list or
+quote marks, and that closes with a run of the same mark at least as long, at most three spaces in, with only spaces
+after it. A fence right below a line of text, in a list item or a quote takes joiners, and so does every later fence in
+the text after a fence line that opens no such block, after a closing run four or more spaces or a tab in or with
+anything but spaces after it, after a line that starts to the left of an indented opening fence, after a line with a
+tilde or the start of a bare address (`www.`, `http`, `ftp:`), and after a line that starts with a `[`. Such a line may
+open a link reference definition such as `[r]: /u "`, whose label and title `marked` reads on over blank lines and fence
+lines, so Orbit no longer tries to tell where a definition ends. The cost, beside the joiner in inline code: a code
+block anywhere after a task item such as `- [ ] Do it`, a line that starts with a link such as `[docs](/docs)`, or a
+definition carries joiners in its `<` and `![`, which a person does not see but a copy of the code carries. A text
+that follows, with no tool call between, a text that ended inside a block or a line that may go on, or one after which
+no fence is taken as code (a `[` line, for one), takes joiners in every fence, since a client may draw the two as one
+block (a reply cut off at its output limit and its retry, for example); a fence that starts it is sent unchanged only where it would be after the lines that ended the text
 before. Command, model and
 mode names and descriptions, a session's title in `session/list` and a failed turn's error message are one line, with
 control characters written out.
