@@ -79,6 +79,12 @@ async function alive(pidFile: string) {
   }
 }
 
+// The watchdog's line about the stuck file. A run that failed for another reason (a preload that threw before the file
+// ran) also exits non-zero and names the file, so the rows read this line rather than the file name anywhere.
+function stuckReport(output: string) {
+  return output.split(/\r?\n/).find((line) => line.startsWith("Test file stuck: ")) ?? ""
+}
+
 async function suite(root: string, files: Record<string, string>) {
   await fs.mkdir(path.join(root, "test"), { recursive: true })
   await Promise.all(Object.entries(files).map(([name, text]) => fs.writeFile(path.join(root, "test", name), text)))
@@ -103,7 +109,7 @@ describe("tools/test/run.ts stops a test file that runs past its deadline", () =
         })
         expect(result.elapsed).toBeLessThan(ENDS_WITHIN_MS)
         expect(result.code).not.toBe(0)
-        expect(result.output).toContain("stuck.test.ts")
+        expect(stuckReport(result.output)).toContain("stuck.test.ts")
         expect(await alive(pidFile)).toBe(false)
       },
       STUCK_MS + 30_000,
@@ -130,6 +136,7 @@ describe("tools/test/run.ts stops a test file that runs past its deadline", () =
       })
       expect(result.elapsed).toBeLessThan(ENDS_WITHIN_MS)
       expect(result.code).not.toBe(0)
+      expect(stuckReport(result.output)).toContain("stuck.test.ts")
       expect(await ran()).toEqual([])
       expect(await Bun.file(batch).exists()).toBe(false)
       expect(await alive(pidFile)).toBe(false)
@@ -171,7 +178,7 @@ describe("core's script/test.ts applies the same deadline", () => {
       })
       expect(result.elapsed).toBeLessThan(ENDS_WITHIN_MS)
       expect(result.code).not.toBe(0)
-      expect(result.output).toContain("stuck-core.test.ts")
+      expect(stuckReport(result.output)).toContain("stuck-core.test.ts")
       expect(await alive(pidFile)).toBe(false)
     },
     STUCK_MS + 30_000,
