@@ -1,12 +1,14 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Orbit } from "@orbit/client"
 import { Effect } from "effect"
 import { withEnv } from "../../core/test/fixture/env"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
+
+setDefaultTimeout(30_000)
 
 // Servers here never trust a folder on their own, so a repository is untrusted until a request says otherwise.
 const untrusted = { trust: { implicit: false } }

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Effect } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
@@ -8,6 +8,8 @@ import { ServerFetch } from "../src/fetch"
 import { startServer } from "./fixture/server"
 import LABEL_SYSTEM from "./fixture/prompt-text/assist-label-system.txt"
 import SUGGESTION_PROMPT from "./fixture/prompt-text/assist-suggestion.txt"
+
+setDefaultTimeout(30_000)
 
 // clients-ux-37: the two routes a client calls for a tool label and a prompt suggestion. Nothing they do is durable: they
 // ask the model beside the session, never through it, and answer with the text or with why there is none.

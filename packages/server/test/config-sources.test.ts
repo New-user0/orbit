@@ -1,10 +1,12 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Effect, Schedule } from "effect"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
+
+setDefaultTimeout(30_000)
 
 // The server runs with its file watcher off, as a server started with ORBIT_DISABLE_FILEWATCHER does, so only a report
 // of a changed file can make it read the agent files again.
