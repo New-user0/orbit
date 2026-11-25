@@ -38,17 +38,18 @@ test("Promise event streams support cancellation", async () => {
   await using directory = await tmpdir("orbit-promise-stream-")
   const config = join(directory.path, "config")
   await mkdir(config)
-  {
-    await using orbit = await Orbit.create({ config: { directory: config, project: false, content: "{}" } , trust: { implicit: true } })
-    const controller = new AbortController()
-    const events = orbit.events.subscribe({ signal: controller.signal })[Symbol.asyncIterator]()
-    expect(await events.next()).toMatchObject({ value: { type: "server.connected" }, done: false })
-    const pending = events.next()
-    controller.abort()
-    const error = await pending.catch((error: unknown) => error)
-    expect(error).toMatchObject({ name: "ClientError", reason: "Transport" })
-    await events.return?.()
-  }
+  const orbit = await Orbit.create({ config: { directory: config, project: false, content: "{}" } , trust: { implicit: true } })
+  const controller = new AbortController()
+  const events = orbit.events.subscribe({ signal: controller.signal })[Symbol.asyncIterator]()
+  expect(await events.next()).toMatchObject({ value: { type: "server.connected" }, done: false })
+  const pending = events.next()
+  controller.abort()
+  // Aborting ends only this subscriber, as the client's shared event stream does for every subscriber: its pending
+  // read and every later one finish, and the shared connection is left to the others.
+  expect(await pending).toEqual({ done: true, value: undefined })
+  expect(await events.next()).toEqual({ done: true, value: undefined })
+  // The aborted subscriber let go of the stream, so closing the host has nothing of it left to wait for.
+  await orbit.close()
 })
 
 test("closing cancels active Promise event streams", async () => {
