@@ -1,7 +1,7 @@
 export * as FileChangeReminder from "./file-change-reminder.js"
 
 import { structuredPatch } from "diff"
-import { DateTime, Duration, Effect, Cause, Option, Result } from "effect"
+import { Context, DateTime, Duration, Effect, Cause, Option, Result } from "effect"
 import type { Agent } from "@orbit/schema/agent"
 import type { Session } from "@orbit/schema/session"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -55,6 +55,15 @@ const CONTEXT_LINES = 8
 const MAX_SNIPPET = 8_192
 /** How long new checks and reads of the files may start, and those of the rebuild; a file not started by then waits. */
 const FILE_BUDGET_MS = 750
+/**
+ * The budget of a producer built with none, read when it runs: `FILE_BUDGET_MS` unless a caller sets another. The budget
+ * is wall-clock time, so how many files fit in it depends on the machine's speed. A test whose claim is about what is
+ * reported, not about how the budget is spent, sets one that load cannot use up, so its answer does not depend on how
+ * busy the machine is.
+ */
+export const Budget = Context.Reference<number>("@orbit/FileChangeReminder/Budget", {
+  defaultValue: () => FILE_BUDGET_MS,
+})
 /** How many files are checked at once. */
 const CONCURRENCY = 8
 /** How long the comparisons of one step may take together: the reference's limit for one comparison. */
@@ -94,7 +103,7 @@ export const durable = (services: Services): Durable => ({
       if (input.session.parentID === undefined && (yield* services.ledger.claim(input.session.id)))
         yield* rebuild(services, input)
       if (postedInRun(input.messages, KIND)) return []
-      const budget = services.budget ?? FILE_BUDGET_MS
+      const budget = services.budget ?? (yield* Budget)
       // The rows keep the ledger's order, the least recently used first, whatever order the files are checked in.
       const rank = new Map((yield* services.ledger.watched(input.session.id)).map((file, index) => [file.path, index]))
       const deadline = Date.now() + budget
@@ -337,7 +346,7 @@ const shown = (text: string) =>
  * that runs past the producer's deadline is not tried again in this process.
  */
 const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {
-  const budget = services.budget ?? FILE_BUDGET_MS
+  const budget = services.budget ?? (yield* Budget)
   const start = Date.now()
   // The newest call for each spelling; then the newest for each file, whatever spelling named it.
   const bySpelling = new Map(fromHistory(input.messages).map((found) => [found.path, found] as const))

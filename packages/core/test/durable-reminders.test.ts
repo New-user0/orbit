@@ -196,6 +196,13 @@ const graph = AppNodeBuilder.build(
 )
 // `config` is one layer, built once, so `Config.Test` sets the entries the production node reads.
 const it = testEffect(Layer.merge(graph, config))
+// The rows whose claim is what a step reports, not how its budget is spent, run with a budget that load cannot use up.
+// The budget is wall-clock time: with the default 750 ms a loaded machine left a file's check for a later step, and six
+// such rows found no reminder where they expected one (fix loop 8 of PR #186). The rows about the budget (the rebuild cut
+// short, a given budget, the producer's deadline, and "a budget smaller than one pass over the files") keep theirs.
+const calm = testEffect(
+  Layer.mergeAll(graph, config, Layer.succeed(FileChangeReminder.Budget, 60_000)),
+)
 
 const build = Agent.ID.make("build")
 const slash = (value: string) => value.replaceAll("\\", "/")
@@ -383,7 +390,7 @@ const contentOf = (rows: ReadonlyArray<Row>, files: ReadonlyArray<string>) =>
   files.map((file) => rows.find((row) => row.label?.includes(file))?.content)
 
 describe("the file-change reminder", () => {
-  it.live("reports a file the session wrote and someone else changed, with the changed lines numbered", () =>
+  calm.live("reports a file the session wrote and someone else changed, with the changed lines numbered", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("notes.txt")
@@ -404,7 +411,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("freshness kept: the reported change counts as seen, so an edit needs no new read and nothing repeats", () =>
+  calm.live("freshness kept: the reported change counts as seen, so an edit needs no new read and nothing repeats", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("notes.txt")
@@ -418,7 +425,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("a touch with the same bytes reports nothing and still refreshes freshness", () =>
+  calm.live("a touch with the same bytes reports nothing and still refreshes freshness", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("notes.txt")
@@ -432,7 +439,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("a change of line endings or of the final line break alone is no change, and lines carry no CR", () =>
+  calm.live("a change of line endings or of the final line break alone is no change, and lines carry no CR", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const crlf = h.inside("crlf.txt")
@@ -452,7 +459,7 @@ describe("the file-change reminder", () => {
   )
 
   // Builder's row: a byte order mark is not part of the first line, whether the session's write or history holds it.
-  it.live("a byte order mark is no change", () =>
+  calm.live("a byte order mark is no change", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("marked.txt")
@@ -475,7 +482,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("watches only what the session wrote: a file it only read is not reported, and a read after a write ends it", () =>
+  calm.live("watches only what the session wrote: a file it only read is not reported, and a read after a write ends it", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const read = h.inside("read.txt")
@@ -494,7 +501,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("forgets a deleted file: recreated, it is not reported and needs a read before an edit", () =>
+  calm.live("forgets a deleted file: recreated, it is not reported and needs a read before an edit", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("gone.txt")
@@ -538,7 +545,7 @@ describe("the file-change reminder", () => {
       }),
     )
 
-  it.live("a changed notebook the session edited is not reported, and its freshness is refreshed (reference)", () =>
+  calm.live("a changed notebook the session edited is not reported, and its freshness is refreshed (reference)", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("nb.ipynb")
@@ -553,7 +560,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("an envelope tag in the file stays payload, escaped inside the data block", () =>
+  calm.live("an envelope tag in the file stays payload, escaped inside the data block", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("tag.txt")
@@ -567,7 +574,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("reports to the session that wrote the file only, a child session included", () =>
+  calm.live("reports to the session that wrote the file only, a child session included", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const other = yield* h.create()
@@ -587,7 +594,7 @@ describe("the file-change reminder", () => {
 
   // Review row: the reference releases a subagent's read-file cache when it returns. The end of a child's run drops what
   // the ledger holds for it; the parent, whose run ends too, keeps its records. A child is never rebuilt (next row).
-  it.live("a subagent's records go when its run ends, and a parent's stay", () =>
+  calm.live("a subagent's records go when its run ends, and a parent's stay", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const bus = yield* Bus.Service
@@ -614,7 +621,7 @@ describe("the file-change reminder", () => {
   // main conversation. A child that read a file and then patched it, whose run ended, is continued: its history names
   // both calls, yet nothing is rebuilt, so its own patch is not reported and an edit needs a new read. The main session
   // given the same history is rebuilt and the file counts as fresh there (control).
-  it.live("a continued subagent starts with nothing watched: its own read and patch are not rebuilt", () =>
+  calm.live("a continued subagent starts with nothing watched: its own read and patch are not rebuilt", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const bus = yield* Bus.Service
@@ -651,7 +658,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("a restarted drain does not post twice into the same run", () =>
+  calm.live("a restarted drain does not post twice into the same run", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("notes.txt")
@@ -664,7 +671,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("a completed compaction ends the watch, and a committed revert does not hide a restored file", () =>
+  calm.live("a completed compaction ends the watch, and a committed revert does not hide a restored file", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const bus = yield* Bus.Service
@@ -698,7 +705,7 @@ describe("the file-change reminder", () => {
 })
 
 describe("the snippet of a change", () => {
-  it.live("numbers each hunk from its start in the old file, drops removed lines, and joins hunks with a separator", () =>
+  calm.live("numbers each hunk from its start in the old file, drops removed lines, and joins hunks with a separator", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("hunks.txt")
@@ -722,7 +729,7 @@ describe("the snippet of a change", () => {
     }),
   )
 
-  it.live("is cut at a line boundary within 8,192 characters, with a count of the lines left out", () =>
+  calm.live("is cut at a line boundary within 8,192 characters, with a count of the lines left out", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("long.txt")
@@ -743,7 +750,7 @@ describe("the snippet of a change", () => {
   )
 
   // Builder's row: a snippet a little over the cap, not only one several times its size, is cut at the cap.
-  it.live("cuts a snippet that is only a little over 8,192 characters", () =>
+  calm.live("cuts a snippet that is only a little over 8,192 characters", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("medium.txt")
@@ -766,7 +773,7 @@ describe("the snippet of a change", () => {
 })
 
 describe("the re-read gate (class 4, 7)", () => {
-  it.live("a read deny rule on the file skips it silently and keeps it", () =>
+  calm.live("a read deny rule on the file skips it silently and keeps it", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const secret = h.inside("notes-secret.txt")
@@ -811,7 +818,7 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
-  it.live("an outside file the session wrote with permission is reported; an external_directory deny skips it", () =>
+  calm.live("an outside file the session wrote with permission is reported; an external_directory deny skips it", () =>
     Effect.gen(function* () {
       const outside = (yield* tmpdirScoped()).path
       const h = yield* setup()
@@ -830,7 +837,7 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
-  it.live("once the project's trust is revoked, an outside file is skipped and a project file is still reported", () =>
+  calm.live("once the project's trust is revoked, an outside file is skipped and a project file is still reported", () =>
     Effect.gen(function* () {
       const outside = (yield* tmpdirScoped()).path
       const h = yield* setup()
@@ -958,7 +965,7 @@ describe("the re-read gate (class 4, 7)", () => {
   // into it or above it. Inside the allowed outside folder, a link swapped in can make the name lead to a file below the
   // recorded place (that place has become a folder) or to a folder above it. Neither is read; both swaps use folder links
   // (a junction on Windows, which needs no privilege). The gate's answer before each swap is the control.
-  it.live("an outside file whose name now leads below or above the place its write recorded is skipped", () =>
+  calm.live("an outside file whose name now leads below or above the place its write recorded is skipped", () =>
     Effect.gen(function* () {
       const allowed = (yield* tmpdirScoped()).path
       const h = yield* setup([
@@ -1098,7 +1105,7 @@ describe("the re-read gate (class 4, 7)", () => {
   // The place each writing tool records is what lets an outside file be read again, so a file outside the project that
   // the session last changed with Edit or Patch is still reported, and one changed with NotebookEdit still has its
   // freshness refreshed. Write's row is "an outside file the session wrote with permission is reported" above.
-  it.live("an outside file the session last changed with Edit or Patch is reported", () =>
+  calm.live("an outside file the session last changed with Edit or Patch is reported", () =>
     Effect.gen(function* () {
       const outside = (yield* tmpdirScoped()).path
       const h = yield* setup()
@@ -1117,7 +1124,7 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
-  it.live("an outside notebook the session edited has its freshness refreshed", () =>
+  calm.live("an outside notebook the session edited has its freshness refreshed", () =>
     Effect.gen(function* () {
       const outside = (yield* tmpdirScoped()).path
       const h = yield* setup()
@@ -1155,7 +1162,7 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
-  it.live("one entry that fails costs only itself", () =>
+  calm.live("one entry that fails costs only itself", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const broken = h.inside("broken.txt")
@@ -1170,7 +1177,7 @@ describe("the re-read gate (class 4, 7)", () => {
   )
 
   // Builder's row: a defect while one file is checked (the reader dies for it) is logged and costs only that file.
-  it.live("a defect while one file is checked costs only that file", () =>
+  calm.live("a defect while one file is checked costs only that file", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const broken = h.inside("broken.txt")
@@ -1209,7 +1216,7 @@ describe("the re-read gate (class 4, 7)", () => {
   // Gate's row (class 7): a file whose time cannot be read for a reason other than its absence is not newer, so it is
   // neither read nor forgotten, and it is checked again at the next step; another file changed at the same step is the
   // control.
-  it.live("a file whose time cannot be read is not read, and is kept for the next step", () =>
+  calm.live("a file whose time cannot be read is not read, and is kept for the next step", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const locked = h.inside("locked.txt")
@@ -1264,7 +1271,7 @@ describe("the re-read gate (class 4, 7)", () => {
 
   // Gate's row (class 7): a rule check that fails is a refusal. Here the rules cannot be read because the session they
   // belong to is gone; the same file for the live session is the control.
-  it.live("a deny check that fails refuses the file, with the live session's check as the control", () =>
+  calm.live("a deny check that fails refuses the file, with the live session's check as the control", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("checked.txt")
@@ -1278,7 +1285,7 @@ describe("the re-read gate (class 4, 7)", () => {
 
   // Gate's row (class 3, 4): outside the project only the place a write recorded is read again. With no recorded place
   // (as for a file from history) nothing outside is read; the place the write tool resolved is the control.
-  it.live("an outside file is read again only at the place its write recorded", () =>
+  calm.live("an outside file is read again only at the place its write recorded", () =>
     Effect.gen(function* () {
       const outside = (yield* tmpdirScoped()).path
       const h = yield* setup()
@@ -1354,7 +1361,7 @@ const readResult = (name: string, lines: ReadonlyArray<string>) =>
   [`Read file ${name}, lines 1-${lines.length}`, ...numbered(1, lines)].join("\n")
 
 describe("the rebuild after a restart", () => {
-  it.live("watches a whole read and a write from their time in history, and reports what changed since", () =>
+  calm.live("watches a whole read and a write from their time in history, and reports what changed since", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const read = h.inside("read.txt")
@@ -1381,7 +1388,7 @@ describe("the rebuild after a restart", () => {
 
   // A read result holds lines as the read tool shows them: a line past 2,000 characters is cut. The disk side is compared
   // in the same form, so the cut line is no change.
-  it.live("compares a read from history line by line as the read tool shows them", () =>
+  calm.live("compares a read from history line by line as the read tool shows them", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("long.txt")
@@ -1407,7 +1414,7 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  it.live("re-reads an edited file from disk at the rebuild, so it reports nothing and counts as fresh", () =>
+  calm.live("re-reads an edited file from disk at the rebuild, so it reports nothing and counts as fresh", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const edited = h.inside("edited.txt")
@@ -1422,7 +1429,7 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  it.live("seeds a write whose call failed, as the reference does, and later entries win", () =>
+  calm.live("seeds a write whose call failed, as the reference does, and later entries win", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const failed = h.inside("failed.txt")
@@ -1442,7 +1449,7 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  it.live("skips ranged, repeated, truncated and failed reads, and the tools the reference does not rebuild", () =>
+  calm.live("skips ranged, repeated, truncated and failed reads, and the tools the reference does not rebuild", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const names = ["ranged.txt", "stub.txt", "truncated.txt", "failed.txt", "notebook.txt"]
@@ -1504,7 +1511,7 @@ describe("the rebuild after a restart", () => {
   // earlier call held for a file it deletes or moves away; a NotebookEdit ends what an earlier call held for its file.
   // So a whole read followed by the session's own patch reports nothing and counts as fresh, and a later outside change
   // of that file is reported (control).
-  it.live("a patch or notebook edit in history replaces what an earlier call seeded for the file", () =>
+  calm.live("a patch or notebook edit in history replaces what an earlier call seeded for the file", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const patched = h.inside("patched.txt")
@@ -1567,7 +1574,7 @@ describe("the rebuild after a restart", () => {
   )
 
   // Builder's rows: the parts of the rebuild the rows above leave open.
-  it.live("skips a read from history with only an offset or only a limit, or one that showed no file text", () =>
+  calm.live("skips a read from history with only an offset or only a limit, or one that showed no file text", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       for (const name of ["offset.txt", "limit.txt", "image.txt", "control.txt"])
@@ -1586,7 +1593,7 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  it.live("an edit in history of a file that is no longer whole text is not rebuilt", () =>
+  calm.live("an edit in history of a file that is no longer whole text is not rebuilt", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const image = h.inside("edited.txt")
@@ -1603,7 +1610,7 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  it.live("the newest call wins whatever spelling it used, and a reminder block in a read result is not file text", () =>
+  calm.live("the newest call wins whatever spelling it used, and a reminder block in a read result is not file text", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const spelled = h.inside("spelled.txt")
@@ -1635,7 +1642,7 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  it.live("a record the session already holds wins over history, and a time equal to the one in history is no change", () =>
+  calm.live("a record the session already holds wins over history, and a time equal to the one in history is no change", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const held = h.inside("held.txt")
@@ -1660,7 +1667,7 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  it.live("rebuilds once per session: after a completed compaction it is not repeated", () =>
+  calm.live("rebuilds once per session: after a completed compaction it is not repeated", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const bus = yield* Bus.Service
@@ -1688,7 +1695,7 @@ describe("the rebuild after a restart", () => {
 
   // History can come from `orb session import`, so a path in it is a name from a store the person did not write (class
   // 5): only a file inside the project is seeded. Every row has a project control that is reported.
-  it.live("seeds no path outside the project, whatever its spelling, with a project file as the control", () =>
+  calm.live("seeds no path outside the project, whatever its spelling, with a project file as the control", () =>
     Effect.gen(function* () {
       const outside = (yield* tmpdirScoped()).path
       const h = yield* setup()
@@ -1733,7 +1740,7 @@ describe("the rebuild after a restart", () => {
   // imported), so a project file that the read tool would ask about first is neither seeded nor read: the built-in `.env`
   // asks, a rule the person wrote, and a link onto such a file, each named by a failed write, a write, a read and an edit
   // at time 0. Each history runs in its own session, with a project file the same history wrote as the reported control.
-  it.live("seeds no file that the read tool would ask about, whatever call named it", () =>
+  calm.live("seeds no file that the read tool would ask about, whatever call named it", () =>
     Effect.gen(function* () {
       const h = yield* setup([
         allowAll,
@@ -1822,7 +1829,7 @@ describe("the rebuild after a restart", () => {
   // Gate's row (class 4): the rebuild asks `reachable` on the target it resolved before it seeds it. The resolution
   // already places every link that leads out of an untrusted project outside it, so this row gives the producer a
   // `reachable` that refuses, and reads what was seeded; the real one is the control.
-  it.live("seeds only a file that reachable accepts", () =>
+  calm.live("seeds only a file that reachable accepts", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("history.txt")
@@ -1857,7 +1864,7 @@ describe("the rebuild after a restart", () => {
   // Gate's row (class 5, 7): whether the read tool would read a file from history without a question is asked of
   // `Permission.allowed`, and a check that fails seeds nothing. Here `allowed` alone fails, with the real error for a
   // session it does not know, while the deny checks pass; the real `allowed` is the control.
-  it.live("seeds nothing when the check that the read tool would read without a question fails", () =>
+  calm.live("seeds nothing when the check that the read tool would read without a question fails", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("history.txt")
@@ -1888,7 +1895,7 @@ describe("the rebuild after a restart", () => {
   )
 
   // Review row: a file rebuilt from a read in history is one the model only read, so the harness text claims no write.
-  it.live("the harness text claims no write, so it is true of a file the model only read", () =>
+  calm.live("the harness text claims no write, so it is true of a file the model only read", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const read = h.inside("read.txt")
@@ -2033,6 +2040,45 @@ describe("the rebuild after a restart", () => {
     40_000,
   )
 
+  // A producer built with no budget reads `FileChangeReminder.Budget` when it runs, for the rebuild and for the watched
+  // files alike; the rows that run unhurried rely on it. Each read here takes a second, longer than a file's share of the
+  // default budget and shorter than the producer's deadline: with the default the edited file is left out of the rebuild
+  // and the written file is not reported, and with a budget set around the run both are done.
+  it.live("a budget set around the run covers the rebuild and the watched files of a producer built with none", () =>
+    Effect.gen(function* () {
+      const real = yield* ReadToolFileSystem.Service
+      const slow: ReadToolFileSystem.Interface["read"] = (file, resource, page) =>
+        Effect.sleep("1 second").pipe(Effect.andThen(real.read(file, resource, page)))
+      const results = yield* Effect.forEach(
+        [undefined, 10_000],
+        (budget) =>
+          Effect.gen(function* () {
+            const h = yield* setup()
+            const edited = h.inside(`edited-set-${budget ?? "default"}.txt`)
+            const written = h.inside(`written-set-${budget ?? "default"}.txt`)
+            yield* Effect.promise(() => fs.writeFile(edited, text(["a"])))
+            yield* h.write(written, text(["a"]))
+            yield* h.change(written, text(["b"]))
+            const run = yield* producer(h, slow)
+            const found = yield* budget === undefined
+              ? run(edits([edited]))
+              : run(edits([edited])).pipe(Effect.provideService(FileChangeReminder.Budget, budget))
+            const seeded = Exit.isSuccess(yield* h.ledger.assertRead(h.session.id, edited, "edited").pipe(Effect.exit))
+            return {
+              done: Option.isSome(found),
+              reported: Option.getOrElse(found, () => []).map((entry) => entry.data?.label),
+              seeded,
+            }
+          }),
+      )
+      expect(results).toEqual([
+        { done: true, reported: [], seeded: false },
+        { done: true, reported: [expect.stringContaining("written-set-10000.txt")], seeded: true },
+      ])
+    }),
+    40_000,
+  )
+
   // Review fix loop 8: the rebuild's reads and the watched files' checks each start while their budget lasts and keep
   // their whole share past it. Each read here takes most of a share, so with eight at a time a third round of reads
   // starts just before each budget ends: the rebuild's reads of the edited files take about 1.35 budgets, and the
@@ -2075,7 +2121,7 @@ describe("the rebuild after a restart", () => {
     60_000,
   )
 
-  it.live("refuses a device or pipe spelling in history before it opens anything", () =>
+  calm.live("refuses a device or pipe spelling in history before it opens anything", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const pipe = `\\\\.\\pipe\\orbit-pc7-${process.pid}-${Date.now()}`
