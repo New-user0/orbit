@@ -73,6 +73,13 @@ export namespace Flock {
     return value
   }
 
+  // Windows answers EPERM to a mkdir while a folder of that name is still being deleted, as the folder of a lock that
+  // its holder just released is until every handle to it closes. The lock is then as good as held: wait and try again.
+  // A denial that lasts ends at the timeout, with the error that names the key.
+  function releasing(err: unknown) {
+    return process.platform === "win32" && code(err) === "EPERM"
+  }
+
   function sleep(ms: number, signal?: AbortSignal) {
     return new Promise<void>((resolve, reject) => {
       if (signal?.aborted) {
@@ -153,6 +160,7 @@ export namespace Flock {
     try {
       await mkdir(lockDir, { mode: 0o700 })
     } catch (err) {
+      if (releasing(err)) return { acquired: false }
       if (code(err) !== "EEXIST") {
         throw err
       }
@@ -174,7 +182,7 @@ export namespace Flock {
           return { acquired: false }
         }
 
-        if (errCode === "ENOENT" || errCode === "ENOTDIR") {
+        if (errCode === "ENOENT" || errCode === "ENOTDIR" || releasing(claimErr)) {
           return { acquired: false }
         }
 

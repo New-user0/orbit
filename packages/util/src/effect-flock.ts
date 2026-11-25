@@ -101,6 +101,17 @@ export namespace EffectFlock {
 
   const isPathGone = (e: PlatformError) => e.reason._tag === "NotFound" || e.reason._tag === "Unknown"
 
+  // Windows answers EPERM to a mkdir while a folder of that name is still being deleted, as the folder of a lock that
+  // its holder just released is until every handle to it closes. The lock is then as good as held: wait and try again.
+  // A denial that lasts ends at the timeout, with the error that names the key.
+  // The file system names no reason for EPERM, so the code is read from the cause.
+  const releasing = (e: PlatformError) =>
+    process.platform === "win32" &&
+    typeof e.reason.cause === "object" &&
+    e.reason.cause !== null &&
+    "code" in e.reason.cause &&
+    e.reason.cause.code === "EPERM"
+
   const layer: Layer.Layer<Service, never, Global.Service | FSUtil.Service> = Layer.effect(
     Service,
     Effect.gen(function* () {
@@ -120,7 +131,10 @@ export namespace EffectFlock {
 
       const forceRemove = (target: string) => fs.remove(target, { recursive: true }).pipe(Effect.ignore)
 
-      /** Atomic mkdir — returns true if created, false if already exists, dies on other errors. */
+      /**
+       * Atomic mkdir — returns true if created, false if already exists, NotAcquired while a folder of that name is
+       * still being deleted on Windows, dies on other errors.
+       */
       const atomicMkdir = (dir: string) =>
         fs.makeDirectory(dir, { mode: 0o700 }).pipe(
           Effect.as(true),
@@ -128,7 +142,7 @@ export namespace EffectFlock {
             (e) => e.reason._tag === "AlreadyExists",
             () => Effect.succeed(false),
           ),
-          Effect.orDie,
+          Effect.catch((e) => (releasing(e) ? Effect.fail(new NotAcquired()) : Effect.die(e))),
         )
 
       /** Write with exclusive create — compromised error if file already exists. */

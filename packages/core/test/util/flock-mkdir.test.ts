@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { Effect } from "effect"
+import { LayerNode } from "@orbit/util/effect/layer-node"
+import { EffectFlock } from "@orbit/util/effect-flock"
 import { Flock } from "@orbit/util/flock"
+import { Global } from "@orbit/util/global"
+import { Hash } from "@orbit/util/hash"
 
 // A contender creates the lock's folder with mkdir. On Windows that mkdir answers EPERM while the folder of the lock that
 // the last holder just released is still being deleted (another handle to it is open), and withLock then failed instead
@@ -25,6 +30,22 @@ async function icaclsRun(...args: string[]) {
 
 const deny = (dir: string) => icaclsRun(dir, "/deny", "*S-1-1-0:(AD)")
 const restore = (dir: string) => icaclsRun(dir, "/remove:d", "*S-1-1-0")
+
+const effectLayer = LayerNode.compile(EffectFlock.node, {
+  replacements: [
+    Global.node.replace(
+      Global.layerWith({
+        home: os.homedir(),
+        data: os.tmpdir(),
+        cache: os.tmpdir(),
+        config: os.tmpdir(),
+        state: os.tmpdir(),
+        bin: os.tmpdir(),
+        log: os.tmpdir(),
+      }),
+    ),
+  ],
+})
 
 const deniable =
   process.platform === "win32" &&
@@ -60,6 +81,71 @@ describe("Flock.withLock on Windows", () => {
     },
     30_000,
   )
+
+  // Each lock and each folder it makes while the denial lasts: the lock's own folder, and the breaker a contender makes
+  // to take over a stale lock's folder (which exists, so its mkdir answers EEXIST and the breaker's mkdir answers EPERM).
+  const locks = {
+    Flock: (dir: string, timeoutMs: number) =>
+      Flock.withLock("key", async () => "ran", { dir, timeoutMs, staleMs: 1_000, baseDelayMs: 20 }),
+    EffectFlock: (dir: string, timeoutMs: number) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const flock = yield* EffectFlock.Service
+          yield* flock.acquire("key", dir, { timeoutMs, staleMs: 1_000 })
+          return "ran"
+        }).pipe(Effect.scoped, Effect.provide(effectLayer)),
+      ),
+  }
+  const failed = (error: NodeJS.ErrnoException) => `failed: ${error.code ?? error.message}`
+  const stale = async (dir: string) => {
+    const folder = path.join(dir, Hash.fast("key") + ".lock")
+    await fs.mkdir(folder)
+    const old = new Date(Date.now() - 60 * 60_000)
+    await fs.utimes(folder, old, old)
+  }
+
+  test.skipIf(!deniable).each([
+    ["Flock", "the lock's folder", false],
+    ["Flock", "the breaker of a stale lock", true],
+    ["EffectFlock", "the lock's folder", false],
+    ["EffectFlock", "the breaker of a stale lock", true],
+  ] as const)(
+    "%s waits while the mkdir of %s answers EPERM",
+    async (lock, _, breaker) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flock-mkdir-"))
+      try {
+        if (breaker) await stale(dir)
+        await deny(dir)
+        const lifted = Bun.sleep(500).then(() => restore(dir))
+        const ran = await locks[lock](dir, 10_000).catch(failed)
+        await lifted
+        expect(ran).toBe("ran")
+      } finally {
+        await restore(dir).catch(() => {})
+        await fs.rm(dir, { recursive: true, force: true })
+      }
+    },
+    30_000,
+  )
+
+  test.skipIf(!deniable).each([
+    ["Flock", "Timed out waiting for lock: key"],
+    ["EffectFlock", "LockTimeoutError"],
+  ] as const)("%s gives up on a denial that lasts with the lock's timeout error", async (lock, expected) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flock-mkdir-"))
+    try {
+      await deny(dir)
+      // EffectFlock's error carries the key as a field rather than in its message.
+      const answer = await locks[lock](dir, 300).catch(
+        (error: Error) => `${error.name}: ${error.message} ${"key" in error ? `key=${error.key}` : ""}`,
+      )
+      expect(answer).toContain(expected)
+      expect(answer).toMatch(/[ =]key\b/)
+    } finally {
+      await restore(dir).catch(() => {})
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
 
   test.skipIf(process.platform !== "win32")("the lock is taken when mkdir works: the control for the row above", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flock-mkdir-"))
