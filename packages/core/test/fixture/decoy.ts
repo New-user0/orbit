@@ -37,6 +37,22 @@ export async function plant(directory: string, first: string, ...others: Readonl
       return fs.link(original, target).catch(() => fs.copyFile(original, target))
     }),
   )
+  return ranIn(directory)
+}
+
+/**
+ * `plant` for a test that needs many folders with the same program: compiling one costs a copy of the Bun runtime, which
+ * a loaded runner takes seconds over. `original` is a program that `plant` built, and the result is a link to it (or a
+ * copy where the volume cannot link) named `<name>.exe` in `directory`, with its own `ran.txt`: the program writes
+ * beside the path it was started by, so each folder keeps its own record.
+ */
+export async function plantFrom(original: string, directory: string, name: string) {
+  const target = path.join(directory, `${name}.exe`)
+  await fs.link(original, target).catch(() => fs.copyFile(original, target))
+  return ranIn(directory)
+}
+
+function ranIn(directory: string) {
   const marker = path.join(directory, "ran.txt")
   return async () =>
     (await Bun.file(marker).exists()) ? (await Bun.file(marker).text()).split(/\r?\n/).filter(Boolean) : []
