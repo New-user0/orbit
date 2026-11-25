@@ -46,6 +46,8 @@
     "test/trust-first-drain.test.ts": 9195,
     "test/trust-first-spellings.test.ts": 21732,
     "test/trust-first.test.ts": 36426,
+    "test/trust-grant-install.test.ts": 6000,
+    "test/trust-grant-models.test.ts": 18000,
     "test/trust-reference.test.ts": 5873,
     "test/trust.test.ts": 4599,
     "test/vcs-trust.test.ts": 17647,
