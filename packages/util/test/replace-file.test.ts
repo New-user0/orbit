@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { Effect, FileSystem } from "effect"
 import { NodeFileSystem } from "@effect/platform-node"
-import { DEADLINE_MS, replaceFile, replaceFileEffect } from "./replace-file.js"
+import { DEADLINE_MS, replaceFile, replaceFileEffect } from "../src/replace-file.js"
 
 // On Windows a rename over a file that another handle has open fails until that handle closes, and every reader holds
 // one for a moment. tui/test/util/persistence.test.ts pins the session-tabs writer; these rows pin the helper itself and
