@@ -12,13 +12,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        order: [pr, base]
+        order: [basecode, prexact]
         n: [1, 2, 3, 4, 5]
-        include:
-          - { order: serial, n: 1 }
-          - { order: serial, n: 2 }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ matrix.order == 'basecode' && 'm5-integration' || '' }}
       - uses: ./.github/actions/setup-bun
       - name: Configure git
         run: git config --global core.autocrlf false
@@ -42,9 +41,8 @@ jobs:
         shell: bash
         run: |
           nproc || true
-          if [ "${{ matrix.order }}" = base ]; then cp ../../.github/diag/server-base-timings.json test/timings.windows.json; fi
-          if [ "${{ matrix.order }}" = serial ]; then export ORBIT_TEST_WORKERS=1; fi
-          bun run test --coverage --coverage-reporter=lcov --coverage-dir=coverage --reporter=junit "--reporter-outfile=$RUNNER_TEMP/junit.xml" 2>&1 | tee "$RUNNER_TEMP/test.log" | grep -E '^\(fail\)|Ran |PARALLEL' || true
+          git log --oneline -1
+          bun run test --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage --reporter=junit "--reporter-outfile=$RUNNER_TEMP/junit.xml" 2>&1 | tee "$RUNNER_TEMP/test.log" | grep -E '^\(fail\)|Ran |PARALLEL' || true
       - name: Upload
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
