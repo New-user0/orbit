@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { InputRenderable } from "@opentui/core"
 import path from "node:path"
 import { directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
@@ -189,18 +190,20 @@ console.log("n=" + n + " " + JSON.stringify({
 
   // So does the model; its context numbers are all of the selected model, whose limit differs from the answer's model.
   const beforeModel = await count()
-  // A dialog that opens while the machine is busy can miss the typed filter, so a pick that changed nothing is repeated.
-  const pick = async () => {
-    setup.mockInput.pressKey("F8")
-    await setup.waitForFrame((frame) => frame.includes("Select model"))
-    await setup.mockInput.typeText("second")
-    // The filter has been applied once the list shows the model, so Enter picks it.
-    await setup.waitForFrame((frame) => frame.includes("second model"))
-    setup.mockInput.pressEnter()
-    await setup.waitForFrame((frame) => !frame.includes("Select model"))
+  // A dialog focuses its filter on a timer after it is first drawn, and keys sent before that reach no input, so the
+  // picker is typed into only once its filter holds focus, and Enter is pressed only once the filter holds the text
+  // (as command-selection.test.tsx does). A repeated pick once hid that race (FU-M4-370).
+  const filter = () => {
+    const focused = setup.renderer.currentFocusedRenderable
+    return focused instanceof InputRenderable && !focused.isDestroyed ? focused : undefined
   }
-  await pick()
-  if (!setup.captureCharFrame().includes('"model":"second"')) await pick()
+  setup.mockInput.pressKey("F8")
+  await setup.waitForFrame((frame) => frame.includes("Select model") && filter() !== undefined)
+  await setup.mockInput.typeText("second")
+  await setup.waitFor(() => filter()?.value === "second")
+  await setup.waitForFrame((frame) => frame.includes("second model"))
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => !frame.includes("Select model"))
   const selected = await line((row) => row.includes('"model":"second"'))
   expect(runs(selected)).toBeGreaterThan(beforeModel)
   expect(selected).toContain('"used":400,"limit":2000,"percent":20')
