@@ -65,7 +65,9 @@ it.live("the models listed right after a grant are those of the folder that was 
       // Untrusted, nothing of the folder is read: its provider is not listed.
       expect(lists((await api.model.list({ location })).data)).toBe(false)
       await api.location.trust.update({ location, trust: true })
-      // Asked once, at once, as a client that trusts the grant's answer does.
+      // Asked once, at once, as a client that trusts the grant's answer does. The plugin list first: it does not wait,
+      // so the folder's plugin is running by the answer itself, not by a later wait of the model list.
+      expect(runs((await api.plugin.list({ location })).data)).toBe(true)
       expect(lists((await api.model.list({ location })).data)).toBe(true)
     })
   }),
@@ -119,9 +121,9 @@ it.live("the models listed right after a revoke no longer include the folder's p
       expect(lists((await api.model.list({ location })).data)).toBe(true)
       expect(greets((await api.command.list({ location })).data)).toBe(true)
       await api.location.trust.update({ location, trust: false })
-      expect(lists((await api.model.list({ location })).data)).toBe(false)
-      // The folder's own plugin has stopped by the answer too.
+      // The folder's own plugin has stopped by the answer itself: the plugin list, which does not wait, is asked first.
       expect(runs((await api.plugin.list({ location })).data)).toBe(false)
+      expect(lists((await api.model.list({ location })).data)).toBe(false)
       expect(greets((await api.command.list({ location })).data)).toBe(false)
     })
   }),
@@ -140,8 +142,9 @@ it.live("the models listed right after a revoke by name no longer include the fo
       expect(lists((await api.model.list({ location })).data)).toBe(true)
       expect(greets((await api.command.list({ location })).data)).toBe(true)
       expect(await api.location.trust.revoke({ directory: folders.repo })).toEqual([folders.repo])
-      expect(lists((await api.model.list({ location })).data)).toBe(false)
+      // As above, the plugin list first, since it does not wait.
       expect(runs((await api.plugin.list({ location })).data)).toBe(false)
+      expect(lists((await api.model.list({ location })).data)).toBe(false)
       expect(greets((await api.command.list({ location })).data)).toBe(false)
     })
   }),
