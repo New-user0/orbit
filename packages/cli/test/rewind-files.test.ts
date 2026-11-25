@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // clients-ux-5: `orb run --rewind-files <prompt id>` and `orb -p --rewind-files <prompt id>` put back the files that the
 // session's own file tools changed since that prompt's work began, through the server's code-only rewind, and exit. It
@@ -84,7 +85,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("rewinds the file a prompt's Write created, through orb run and orb -p, and refuses misuse", async () => {

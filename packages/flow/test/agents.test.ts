@@ -7,6 +7,7 @@ import { evaluate } from "../src/eval"
 import { Git } from "../src/git"
 import { loadWorkflow, suiteAgents, workflowAgents } from "../src/load"
 import { run } from "../src/runner"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Before anything runs, a caller asks which agents a workflow or suite names (`workflowAgents`, `suiteAgents`), and the
 // runner sends an agent to the server for each session it opens. These run the real runner against a client that only
@@ -17,7 +18,7 @@ import { run } from "../src/runner"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-agents-"))
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 // A client that opens sessions and answers each prompt by what it asks: a reviewer approves, a team's lead hands work to
 // `coder` and finishes once nobody has anything pending, and everyone else says ok. `sent` is the agent of every session

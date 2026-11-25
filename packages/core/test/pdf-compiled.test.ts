@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { autoload } from "../../cli/script/autoload"
 import { makePdf } from "./lib/pdf"
+import { removeTree } from "./fixture/remove-tree"
 
 // The PDF library loads with a dynamic import, which a compiled binary must bundle: a name the bundle leaves open is
 // looked up in the folder the binary starts in, and that folder can be a repository that is not trusted yet. These tests
@@ -32,7 +33,7 @@ beforeAll(async () => {
   binary = built.outputs[0].path
 })
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 test("cuts pages through the compiled binary and never loads the library from the folder it started in", async () => {
   const child = Bun.spawn([binary, "document.pdf", "2", "4"], {

@@ -4,9 +4,10 @@ import os from "node:os"
 import path from "node:path"
 import { sandboxCheck, sandboxState, type SandboxProbe, type SandboxState } from "../src/util/doctor-sandbox"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-doctor-"))
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 const wsl1 = "Shell sandboxing is enabled but WSL1 cannot sandbox commands. Upgrade the distribution to WSL2 or turn it off"
 const probes: Record<string, SandboxProbe> = {

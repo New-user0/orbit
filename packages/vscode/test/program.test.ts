@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { currentDirectoryOnPath, plant } from "../../core/test/fixture/decoy"
 import { configured, find, launch, missing } from "../src/program"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // The program the extension starts is `orb`, found on PATH and started by its full path. The workspace is the folder that
 // a repository chooses, and a program that is started by a bare name is looked for there first on Windows, by Node's
@@ -16,7 +17,7 @@ const windows = process.platform === "win32"
 const file = windows ? "orb.exe" : "orb"
 const node = Bun.which("node")
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 let count = 0
 // A fresh workspace and a folder on PATH, each holding a program named `orb`, and a reader of what each one has run.

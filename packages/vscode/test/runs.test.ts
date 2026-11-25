@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { decide, decisionText, decodeNodes, decodeRuns, nodeItem, nodes, orb, runItem, runs } from "../src/runs"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // `orb` from source behind a wrapper script. orb reads the working directory from PWD, which the wrapper's own `cd`
 // would change, so it hands on the directory it was called from. `orb flow run` runs a workflow's code only in a trusted
@@ -26,7 +27,7 @@ const repository = path.join(root, "repo")
 afterAll(async () => {
   // The readers below ask the background service whether the folder is trusted, which starts one under this HOME.
   await orb(executable, root, ["service", "stop"]).catch(() => undefined)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("lists runs and their nodes, and approves a waiting gate", async () => {

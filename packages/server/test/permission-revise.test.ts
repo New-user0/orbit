@@ -10,6 +10,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { startServer } from "./fixture/server"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // The scripted model: a prompt `CALL {"name":…,"arguments":…}` makes it call that tool once, and a tool result ends the
 // step with a line of text.
@@ -95,7 +96,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await Effect.runPromise(Scope.close(scope, Exit.void))
   await llm.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("a once reply with revised content writes it where the request resolved, whatever keys the client adds", async () => {

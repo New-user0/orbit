@@ -6,6 +6,7 @@ import { isolatedEnv } from "./fixture/environment"
 import { ServiceConfig } from "../src/services/service-config"
 import { ORBIT_VERSION } from "../src/version"
 import { scriptedModel } from "./fixture/scripted-model"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // `orb -p` with --mcp-config and --agents against a real private server and a scripted model. Every run is a child
 // process of src/index.ts, so the flags, the overlay file and the server's read of it are the ones a user reaches.
@@ -38,7 +39,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await model.stop()
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 async function orb(

@@ -4,12 +4,13 @@ import os from "node:os"
 import path from "node:path"
 import { loadWorkflow, suiteModels, workflowModels } from "../src/load"
 import type { Context } from "../src/workflow"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-models-"))
 // The top-level code of a module leaves this behind when the module is imported, as the code of any module can.
 const marker = path.join(root, "imported.marker")
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 // Every field that picks a model or how much a node spends, one node apiece, with what the listing says about it.
 const workflowRows = [

@@ -7,6 +7,7 @@ import os from "node:os"
 import path from "node:path"
 import { run } from "../src/runner"
 import type { Workflow } from "../src/workflow"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Classes 1, 5 and 12: a run store is a file that a clone ships, and a resume reuses the results it records. Each row
 // makes a run, then rewrites one value of its store the way a clone could ship it, then resumes the run with a client
@@ -21,7 +22,7 @@ import type { Workflow } from "../src/workflow"
 // wherever there is a store (`source ? undefined : previous ? stored : repository ? head : undefined` in place of the
 // guard on `repository`) fails the untrusted review diff row. The trusted rows pass under each.
 const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flow-resume-")))
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 // A client that opens sessions and answers each prompt by what it asks: a reviewer approves, a team's lead hands work to
 // `coder` and finishes once nobody has anything pending, and everyone else says ok. A prompt that `fail` picks gets a

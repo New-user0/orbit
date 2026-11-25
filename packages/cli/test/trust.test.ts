@@ -6,6 +6,7 @@ import type { TrustStatus } from "@orbit/client/promise"
 import { SessionID } from "@orbit/schema/session-id"
 import { holderRefusal, quoted, refusal, unanswered } from "../src/util/trust"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // `orb run` and its siblings against a real private server and a scripted model, in repositories that hold something
 // back. Every `orb` here runs without ORBIT_TRUST_PROJECT, which is how the shared background service behaves, so a
@@ -160,7 +161,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 // The settings of a project that guards its files: a hook blocks every write.
@@ -1957,7 +1958,7 @@ test("orb run --format json reports a trust request that fails as the JSON error
 test("orb trust --revoke ends the grant of a folder that was deleted, by its name, and says plainly when there is none", async () => {
   const repository = await hooked("gone")
   succeeded(await orb(repository, ["trust", "--standalone"]))
-  await fs.rm(repository, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(repository)
   const listed = await orb(root, ["trust", "--standalone", "--list"])
   succeeded(listed)
   expect(listed.stdout).toContain(repository)

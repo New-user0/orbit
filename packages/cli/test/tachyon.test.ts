@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Headless runs against a local Tachyon stand-in, configured only through the TACHYON_* variables the Python SDK
 // reads. The first agent step answers 401, which must trigger one fresh token exchange and a retry.
@@ -36,7 +37,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await Promise.all(servers.map((server) => server.stop(true)))
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("a headless run reaches Tachyon with the gateway headers and recovers from a 401", async () => {

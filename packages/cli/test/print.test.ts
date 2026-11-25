@@ -6,6 +6,7 @@ import { SessionID } from "@orbit/schema/session-id"
 import { isolatedEnv } from "./fixture/environment"
 import { scriptedModel, type ScriptedReply } from "./fixture/scripted-model"
 import { PrintParamFlags } from "../src/commands/commands"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // `orb -p` against a real private server and a scripted model. Every run is a child process of src/index.ts, so the
 // argv classification, the Print spec and the handler are the ones a user reaches.
@@ -96,7 +97,7 @@ test("-p --resume continues the session that --session made", async () => {
 
 afterAll(async () => {
   await model.stop()
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 async function orb(args: string[], input?: string, home = root, extraEnv: Record<string, string> = {}) {
@@ -268,7 +269,7 @@ async function scripted<T>(
     return await run(own, home)
   } finally {
     await own.stop()
-    await fs.rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    await removeTree(home)
   }
 }
 

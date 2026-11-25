@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { currentDirectoryOnPath, plant } from "../../../core/test/fixture/decoy"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 import {
   MACOS_SCRIPT,
   findProgram,
@@ -142,7 +143,7 @@ describe("live programs", () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-notify-"))
   })
   afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true })
+    await removeTree(dir)
   })
 
   test.skipIf(process.platform !== "win32")("windows builds the toast from text nodes, so the message stays text", async () => {
@@ -233,7 +234,7 @@ describe("decoys in the working folder", () => {
   afterEach(async () => {
     process.chdir(before)
     process.env.PATH = path0
-    await fs.rm(dir, { recursive: true, force: true })
+    await removeTree(dir)
   })
 
   const names = process.platform === "win32" ? ["powershell"] : ["notify-send", "osascript"]

@@ -6,6 +6,7 @@ import path from "node:path"
 import { isolatedEnv } from "../../cli/test/fixture/environment"
 import { Controller } from "../src/controller"
 import type { Item } from "../src/protocol"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // A real `orb serve` with a scripted OpenAI-compatible model: the first agent step writes a file, the second replies.
 const steps: unknown[] = []
@@ -98,7 +99,7 @@ afterAll(async () => {
   server.process?.kill()
   await server.process?.exited
   await llm.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("a chat shows the reply, surfaces the edit with its patch, and applies it once approved", async () => {

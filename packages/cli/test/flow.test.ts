@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // `orb flow` end to end: a real standalone server, a scripted local model and a real git repository. Each agent node
 // asks to write <node>.txt, so the merged checkout shows exactly which nodes ran and merged.
@@ -142,7 +143,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("parallel agents run in separate worktrees and merge into the checkout", async () => {

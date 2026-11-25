@@ -9,6 +9,7 @@ import print from "../../src/commands/handlers/print"
 import { headlessInput } from "../../src/commands/handlers/run"
 import { Config } from "../../src/config"
 import { ORBIT_VERSION } from "../../src/version"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 // clients-ux-37, in this process: `--tool-labels` and `--prompt-suggestions` are refused before any server is asked when
 // the run could not print their lines, and otherwise the run starts. `stream-assist.test.ts` runs the same doors as
@@ -136,7 +137,7 @@ const server = Bun.serve({
 
 afterAll(async () => {
   server.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 // That the flags' values reach the stream driver is pinned from both doors in `stream-assist.test.ts`, whose runs are

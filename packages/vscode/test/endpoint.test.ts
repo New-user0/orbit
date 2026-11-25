@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { headers, start, version } from "../src/endpoint"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // `orb` from source behind a wrapper script, isolated in a temporary home so it starts its own background service.
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-endpoint-"))
@@ -21,7 +22,7 @@ await fs.chmod(orb, 0o755)
 
 afterAll(async () => {
   await Bun.spawn([orb, "service", "stop"], { stdout: "ignore", stderr: "ignore" }).exited
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("starts the background service through orb and returns an endpoint that authenticates", async () => {

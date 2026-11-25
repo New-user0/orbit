@@ -16,12 +16,13 @@ import {
   workflowModels,
 } from "../src/load"
 import type { Context } from "../src/workflow"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-load-"))
 // The top-level code of a module leaves this behind when the module is imported, as the code of any module can.
 const marker = path.join(root, "imported.marker")
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 const traced = (body: string) =>
   `import { writeFileSync } from "node:fs"\nwriteFileSync(${JSON.stringify(marker)}, "imported")\n${body}\n`

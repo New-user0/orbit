@@ -6,6 +6,7 @@ import { Global } from "@orbit/util/global"
 import { Effect } from "effect"
 import { ConfigOverlay } from "../src/config-overlay"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // --settings takes a config file or the JSON itself. The value's shape decides which, never the disk (a folder can ship
 // a file named after the text a person types). A file travels by path so that the references inside it resolve beside
@@ -22,7 +23,7 @@ beforeAll(async () => {
   await fs.mkdir(opened, { recursive: true })
 })
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 const build = (settings: string[], extra: Partial<Parameters<typeof ConfigOverlay.build>[0]> = {}) =>
   ConfigOverlay.build({ settings, cwd: typed, ...extra })

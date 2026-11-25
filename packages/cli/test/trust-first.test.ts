@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // trust-first: every door that starts work stops in a folder that is not trusted, whatever the folder holds, before it
 // reads anything the folder supplies or asks a model anything. The reference's headless door that skips its dialog
@@ -71,7 +72,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 // A fresh clone that holds no config at all: nothing a per-field check would hold back, only instructions that steer the

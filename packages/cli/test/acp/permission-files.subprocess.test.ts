@@ -8,6 +8,7 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { isolatedEnv } from "../fixture/environment"
 import { startSlot } from "../fixture/start-gate"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 // Every row has its own folder, its own scripted model on port 0 and its own `orb acp` child, so the rows run at the
 // same time, as many as `--max-concurrency` allows (packages/cli/package.json). The file is one unit to `--parallel`,
@@ -1242,6 +1243,6 @@ async function approval(
     await reader.catch(() => {})
     void (await stderr)
     llm.stop(true)
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => {})
+    await removeTree(root).catch(() => {})
   }
 }

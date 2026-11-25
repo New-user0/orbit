@@ -6,6 +6,7 @@ import os from "node:os"
 import path from "node:path"
 import { Git } from "../src/git"
 import { run } from "../src/runner"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Classes 1 and 3 (M4 verification round 9): `orb flow run` in a folder `sub` that a person trusted, which is a repository
 // of its own inside a repository `clone` that nobody trusted. The index of `sub` holds a gitlink `inner` that names the
@@ -29,7 +30,7 @@ import { run } from "../src/runner"
 // fails the `ignore = none` row of the merge, and so does giving them with `-c`, since the name of that submodule holds a
 // `=`.
 const root = realpathSync.native(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flow-gitlink-")))
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 const unix = (file: string) => file.replaceAll("\\", "/")
 
 const plain = (cwd: string, ...args: string[]) =>

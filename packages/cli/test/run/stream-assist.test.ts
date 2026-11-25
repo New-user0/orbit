@@ -5,6 +5,7 @@ import path from "node:path"
 import { isolatedEnv } from "../fixture/environment"
 import { scriptedModel, type ScriptedReply, type ScriptedRequest } from "../fixture/scripted-model"
 import { controller, results, type Line } from "../fixture/stream-controller"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 // clients-ux-37: tool labels and prompt suggestions in `orb -p` and `orb run` with stream-json. Both are opt-in: a run
 // asks the server for a label after each finished batch of tool calls only with --tool-labels, and for a suggestion
@@ -26,7 +27,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 // A suggestion is a side query that sends the session's history, so it carries the session's tools with
@@ -54,7 +55,7 @@ async function scripted<T>(
     return await run(own, home)
   } finally {
     await own.stop()
-    await fs.rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    await removeTree(home)
   }
 }
 

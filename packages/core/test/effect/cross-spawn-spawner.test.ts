@@ -7,6 +7,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@orbit/util/cross-spawn-spawner"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { plant, withCurrentDirectoryOnPath } from "../fixture/decoy"
+import { removeTree } from "../fixture/remove-tree"
 import { testEffect } from "../lib/effect"
 
 const live = LayerNode.compile(CrossSpawnSpawner.node)
@@ -34,7 +35,7 @@ async function tmpdir() {
   return {
     path: dir,
     async [Symbol.asyncDispose]() {
-      await fs.rm(dir, { recursive: true, force: true })
+      await removeTree(dir)
     },
   }
 }

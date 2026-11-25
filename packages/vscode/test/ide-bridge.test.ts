@@ -9,6 +9,7 @@ import WebSocket from "ws"
 import { permissionItem } from "../src/controller"
 import { startBridge, type Bridge, type DiffService, type EditorSelection } from "../src/ide-bridge"
 import { contained, disk, Review, tooLargeNotice, type Disk, type Host, type Tab } from "../src/review"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const cleanup: Array<() => Promise<unknown> | unknown> = []
 afterEach(async () => {
@@ -17,7 +18,7 @@ afterEach(async () => {
 
 async function folder() {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-ide-bridge-"))
-  cleanup.push(() => fs.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
+  cleanup.push(() => removeTree(directory))
   return directory
 }
 
@@ -450,7 +451,7 @@ const world = await (async () => {
     marker: path.join(outside, "marker.txt"),
   }
 })()
-afterAll(() => fs.rm(world.root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(world.root))
 
 // The real disk, with every access written down.
 function recorded() {

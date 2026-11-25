@@ -3,10 +3,11 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { ConfigOverlay } from "../src/config-overlay"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-overlay-replace-")))
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 const server = (extra: object = {}) => ({ type: "local", command: ["fx"], ...extra })
 

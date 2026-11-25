@@ -7,6 +7,7 @@ import { Controller, limits, type TrustAnswer, type Update } from "../src/contro
 import type { TrustView } from "../src/protocol"
 import { prompt } from "../src/trust"
 import { serve, until } from "./fixture/serve"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // The chat against a real `orb serve` that trusts a folder only when a grant says so, which is how the shared background
 // service behaves, with a scripted model. Whether a folder is trusted is the server's to say: these tests check that the
@@ -67,7 +68,7 @@ afterEach(() => {
 afterAll(async () => {
   await main?.stop()
   await llm.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 let count = 0
@@ -311,7 +312,7 @@ test("trust persists across a restart of the server, for the folder that was tru
     }
   } finally {
     // A killed server can hold its files for a moment on Windows, and a folder left in the temp directory harms nothing.
-    await fs.rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 }).catch(() => undefined)
+    await removeTree(home).catch(() => undefined)
   }
 }, 180_000)
 

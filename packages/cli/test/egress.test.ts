@@ -6,6 +6,7 @@ import net from "node:net"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Orbit must only talk to the model provider it is configured with. Every proxy variable points at a trap that
 // records each connection attempt; only loopback (the configured mock model and the local server) is exempt.
@@ -50,7 +51,7 @@ beforeEach(() => {
 afterAll(async () => {
   trap.close()
   await llm.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("a headless run reaches only the configured model", async () => {

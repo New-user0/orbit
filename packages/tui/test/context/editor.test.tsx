@@ -10,6 +10,7 @@ import { EditorContextProvider, useEditorContext, type EditorIntegration } from 
 import { IdeLock } from "@orbit/util/ide-lock"
 import { tmpdir } from "../fixture/fixture"
 import { TestTuiContexts } from "../fixture/tui-environment"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 // The variables the editor context and the Zed reader read, so each test starts from none of them and leaves none behind.
 const variables = ["ORBIT_EDITOR_SSE_PORT", "ORBIT_ZED_DB", "ZED_TERM", "TERM_PROGRAM"]
@@ -182,7 +183,7 @@ test("reads the selection from Zed's database through the compat reader", async 
       setup.destroy()
     }
   } finally {
-    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    await removeTree(directory)
   }
 })
 

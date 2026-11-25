@@ -5,6 +5,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // clients-ux-23 part 2: `orb run "/cost"` prints the whole session's cost block and sends nothing to the model. The
 // route reads database rows only (class 12), and each failure is one line and exit 1 (classes 7 and 13). A real private
@@ -62,7 +63,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 

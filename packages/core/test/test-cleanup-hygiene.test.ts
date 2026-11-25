@@ -21,7 +21,8 @@ test("no test, fixture or script asks fs.rm for retries that Bun ignores", async
       if (file.includes("node_modules")) continue
       const text = await Bun.file(path.join(root, file)).text()
       text.split("\n").forEach((line, index) => {
-        if (/\bmaxRetries\s*:/.test(line)) offenders.push(`${file.replaceAll("\\", "/")}:${index + 1}`)
+        // A removal's options, not another option of the same name (an MCP transport's reconnection has one).
+        if (/\brm(Sync)?\(.*\bmaxRetries\s*:/.test(line)) offenders.push(`${file.replaceAll("\\", "/")}:${index + 1}`)
       })
     }
   }

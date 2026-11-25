@@ -8,6 +8,7 @@ import path from "node:path"
 import doctor from "../src/commands/handlers/doctor"
 import importSession from "../src/commands/handlers/session/import"
 import { ORBIT_VERSION } from "../src/version"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // `orb doctor --probe` and `orb session import` start work in a folder, so each asks the server whether that folder is
 // trusted before it starts anything there (trust-first, class 12), and the folder it asks about is the one the work then
@@ -86,7 +87,7 @@ afterAll(async () => {
   if (before === undefined) delete process.env.PWD
   else process.env.PWD = before
   await server.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 const connection = { server: Option.some(server.url.origin), standalone: false, trust: false }

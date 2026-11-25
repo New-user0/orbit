@@ -2,6 +2,7 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { Effect } from "effect"
+import { removeTree } from "../../../core/test/fixture/remove-tree.js"
 
 /** A temporary directory in its canonical spelling, removed when the scope closes. */
 export const tmpdirScoped = () =>
@@ -9,7 +10,7 @@ export const tmpdirScoped = () =>
     Effect.promise(async () => fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-compat-test-")))),
     // Windows holds directories open a moment longer than other platforms do.
     (directory) =>
-      Effect.promise(() => fs.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })),
+      Effect.promise(() => removeTree(directory)),
   )
 
 /** Creates every directory, and every file given as a [path, text] pair, with its parents. */

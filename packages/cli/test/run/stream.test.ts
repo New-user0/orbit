@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { controller as start, modelAsked, results, scripted, type Line } from "../fixture/stream-controller"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 // `orb -p --input-format stream-json` against a real private server and a scripted model. Every run is a child process
 // of src/index.ts and has a deadline, so a hang fails the test instead of blocking the runner.
@@ -16,7 +17,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 const controller = (home: string, own: Parameters<typeof start>[1], args: string[] = []) =>

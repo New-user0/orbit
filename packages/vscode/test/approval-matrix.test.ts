@@ -10,6 +10,7 @@ import { afterAll, expect, test } from "bun:test"
 import { permissionItem } from "../src/controller"
 import { approvalCard, type Card } from "../src/webview/approval"
 import { excerpt } from "../src/webview/present"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 type Row = {
   id: string
@@ -169,7 +170,7 @@ await fs.symlink(
   path.join(reviewWorld.project, "alias"),
   process.platform === "win32" ? "junction" : "dir",
 )
-afterAll(() => fs.rm(reviewRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(reviewRoot))
 const reviewRows = rows.map(
   (row): Row =>
     JSON.parse(

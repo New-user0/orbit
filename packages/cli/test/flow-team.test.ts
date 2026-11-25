@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // A team against a scripted model. Each member's session starts with an introduction naming it, so the model knows
 // who is speaking from the first user message, and which turn it is from how many user messages the session holds.
@@ -110,7 +111,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("a team's lead assigns work, members message each other, and the lead finishes", async () => {

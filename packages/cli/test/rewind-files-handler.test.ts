@@ -7,6 +7,7 @@ import os from "node:os"
 import path from "node:path"
 import { headlessInput } from "../src/commands/handlers/run"
 import { ORBIT_VERSION } from "../src/version"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // clients-ux-5: `--rewind-files` in `orb run` and `orb -p`. `rewind-files.test.ts` runs the whole path against a real
 // server in a separate process; these run the same handler in this process against a server that answers as told, so
@@ -65,7 +66,7 @@ afterAll(async () => {
   if (before === undefined) delete process.env.PWD
   else process.env.PWD = before
   await server.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 afterEach(() => {
