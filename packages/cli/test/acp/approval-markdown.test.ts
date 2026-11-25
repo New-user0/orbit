@@ -582,8 +582,8 @@ describe("acp: other text a model, a tool or a server chose", () => {
   })
 
   // Fix loop 8 (classes 6 and 9, decision 1b): text is left as written only in a fenced block that every renderer reads
-  // as code, one that opens at the text's start or after a blank line, outside any paragraph, list item, quote, table or
-  // definition. Whole and in pieces of one character.
+  // as code, one that opens at the text's start or after a blank line, outside any paragraph, list item, quote or table,
+  // and (decision 1c) before any line that starts with a `[`. Whole and in pieces of one character.
   test("the model's Markdown: a fenced block at the text's start or after a blank line is written as it is", async () => {
     for (const markdown of [
       "~~~\n```\n<img src=x>\n~~~",
@@ -594,12 +594,16 @@ describe("acp: other text a model, a tool or a server chose", () => {
       "```\n<img src=x>\n   ```\n\n```\n<img src=y>\n```",
       // A run of the other mark, or a shorter one, closes nothing at any indentation.
       "```\n    ~~~\n\t``\n<img src=x>\n```",
-      // A blank line ends a table, a paragraph and a task item with words, and a line at no indentation after it ends
-      // a list.
+      // A blank line ends a table and a paragraph, and a line at no indentation after it ends a list.
       "| a | b |\n|---|---|\n| 1 | 2 |\n\n```\n<img src=x>\n```",
-      "- [ ] Do it\n\n```\n<img src=x>\n```",
-      "- [ ]\nDo it\n\n```\n<img src=x>\n```",
       "- a\n\n```\n<img src=x>\n```",
+      // A line of only spaces or tabs is blank too.
+      "para\n   \n```\n<img src=x>\n```",
+      "para\n\t\n```\n<img src=x>\n```",
+      // A `[` inside a block every renderer reads as code, or behind a backslash or a word, opens no definition.
+      "```\n[r]: /u '\n```\n\n```\n<img src=x>\n```",
+      "\\[r\n\n```\n<img src=x>\n```",
+      "a [r\n\n```\n<img src=x>\n```",
     ])
       expect(await streamed(markdown.split(""))).toEqual([markdown, markdown])
     // A span that the text ends before it closes is prose like any other.
@@ -647,12 +651,15 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["```\n<img src=x>\n```", "```\n<img src=x>\n```"],
     ["para\n\n```\n<img src=x>\n```", "para\n\n```\n<img src=x>\n```"],
     ["- item\n\n```\n<img src=x>\n```", "- item\n\n```\n<img src=x>\n```"],
-  ])("the model's Markdown %p: only a fenced block every renderer reads as code is left as written", (value, written) => {
-    const [, out] = withoutImages(prose, value)
-    expect(out).toBe(written)
-    for (const html of [Bun.markdown.html(out, RENDERER), marked.parse(out, { gfm: true, async: false }) as string])
-      expect([value, html]).not.toEqual([value, expect.stringMatching(/<img\b/i)])
-  })
+  ])(
+    "the model's Markdown %p: only a fenced block every renderer reads as code is left as written",
+    (value, written) => {
+      const [, out] = withoutImages(prose, value)
+      expect(out).toBe(written)
+      for (const html of [Bun.markdown.html(out, RENDERER), marked.parse(out, { gfm: true, async: false }) as string])
+        expect([value, html]).not.toEqual([value, expect.stringMatching(/<img\b/i)])
+    },
+  )
 
   // A client that joins two texts reads a fence line a few spaces in at the second's start as part of a list item that
   // the first ends with, so it takes joiners; at no indentation it is code in either reading.
@@ -980,8 +987,17 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["[a](u) `<img>`", `[a](u) \`<${JOINER}img>\``],
     ["\\[b `<img>`", `\\[b \`<${JOINER}img>\``],
     ["a [b\n```\nx\n```\n`<img>`", `a [b\n\`\`\`\nx\n\`\`\`\n\`<${JOINER}img>\``],
-    // A fence line that a link reference definition may still take opens no block, and leaves the tracker unsure: one
-    // right after it, and one after a blank line that `marked` reads a label or a `"` or `(` title on over.
+  ])("the model's Markdown %p: where the tracker is unsure, code takes joiners", (value, written) => {
+    expect(withoutImages(prose, value)[1]).toBe(written)
+  })
+
+  // Fix loop 12, decision 1c (classes 6 and 9): a line that starts with a `[`, behind any indentation and list or quote
+  // marks, may open a link reference definition, which `marked` reads before any block and whose label and title it may
+  // run on over blank lines and fence lines. The tracker does not follow definitions, so from such a line on no fence
+  // opens a block it is sure of, and the code after it takes joiners. Each row is checked whole, and cut after each of
+  // its line breaks into two texts that a client may draw apart or join (`follow`), with md4c and with `marked`.
+  test.each([
+    // Review 7: a label alone, a label left open, and a title left open, before the fence line or a blank line.
     ["[r]:\n```\n<img>\n```", `[r]:\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ['[r]: /u "\n\n```\n<img>\n```', `[r]: /u "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ["[r]: /u (a\n\n```\n<img>\n```", `[r]: /u (a\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
@@ -989,24 +1005,23 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["[a\nb\n\n```\n<img>\n```", `[a\nb\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ["[a\\\n\n```\n<img>\n```", `[a\\\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ['[r]: /u "\na\n\n```\n<img>\n```', `[r]: /u "\na\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ['[r]: <u v> "\n\n```\n<img>\n```', `[r]: <${JOINER}u v> "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    // A `]:` with nothing after it waits for its destination on the next line, and a `"` or `(` title that line opens
-    // runs on over the blank line as well.
+    ['   [r]: /u "\n\n```\n<img>\n```', `   [r]: /u "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    // Review 8: a `]:` with nothing after it, whose destination and title stand on the next line.
     ['[r]:\n/u "\n\n```\n"\n<img>\n```', `[r]:\n/u "\n\n\`\`\`\n"\n<${JOINER}img>\n\`\`\``],
     ["[r]:\n/u (\n\n```\n)\n<img>\n```", `[r]:\n/u (\n\n\`\`\`\n)\n<${JOINER}img>\n\`\`\``],
-    // A definition up to three spaces in is one too: `marked` reads its `"` title on over the blank line and the block.
-    ['   [r]: /u "\n\n```\n<img>\n```', `   [r]: /u "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ['  [r]:\n/u "\n\n```\n<img>\n```', `  [r]:\n/u "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    // The controls: a definition that is whole, or that is no definition, ends at a blank line, so the block after it
-    // is code, and so is one after a `'` title that a blank line ends.
-    ["[r]: /u\n\n```\n<img>\n```", "[r]: /u\n\n```\n<img>\n```"],
-    ['[r]: /u "t"\n\n```\n<img>\n```', '[r]: /u "t"\n\n```\n<img>\n```'],
-    ["[r]: /u (t)\n\n```\n<img>\n```", "[r]: /u (t)\n\n```\n<img>\n```"],
-    ['[r]: /u\n"t"\n\n```\n<img>\n```', '[r]: /u\n"t"\n\n```\n<img>\n```'],
-    ["[r]: /u '\n\n```\n<img>\n```", "[r]: /u '\n\n```\n<img>\n```"],
-    ["[r]:\n/u '\n\n```\n<img>\n```", "[r]:\n/u '\n\n```\n<img>\n```"],
-    // A line of only spaces or a tab does not end a `'` title to `marked`, which runs it on to the fence line, so that
-    // block takes joiners; an empty line after that line still ends it, and the block after the empty line is code.
+    // Reviews 9 and 10: a backslash in a `"` title, and a `<` destination with a `<`, a space or a second `>` in it.
+    ['[r]: /u "x\\\n\n```\n<img>\n```', `[r]: /u "x\\\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u "x\\\\"\n\n```\n<img>\n```', `[r]: /u "x\\\\"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u "x\\"\n\n```\n<img>\n```', `[r]: /u "x\\"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: <u v> "\n\n```\n<img>\n```', `[r]: <${JOINER}u v> "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: <a<b>\n"\n\n```\n<img>\n```', `[r]: <${JOINER}a<${JOINER}b>\n"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: <a>b>\n\n```\n<img>\n```", `[r]: <${JOINER}a>b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: <a>b> "\n\n```\n<img>\n```', `[r]: <${JOINER}a>b> "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: <a> b>\n\n```\n<img>\n```", `[r]: <${JOINER}a> b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]:  <a>b>\n\n```\n<img>\n```", `[r]:  <${JOINER}a>b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]:\t<a>b>\n\n```\n<img>\n```", `[r]:\t<${JOINER}a>b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    // Review 11: a `'` title over a line of only spaces or a tab, which `marked` runs on to the fence line.
     ["[r]: /u 'a\n   \n```\n'\n<img>\n```", `[r]: /u 'a\n   \n\`\`\`\n'\n<${JOINER}img>\n\`\`\``],
     ["[r]: /u 'a\n\t\n```\n'\n<img>\n```", `[r]: /u 'a\n\t\n\`\`\`\n'\n<${JOINER}img>\n\`\`\``],
     ["[r]: /u 'a\n \t\n```\n'\n<img>\n```", `[r]: /u 'a\n \t\n\`\`\`\n'\n<${JOINER}img>\n\`\`\``],
@@ -1015,38 +1030,85 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ["[r]:\n/u 'a\n   \n```\n'\n<img>\n```", `[r]:\n/u 'a\n   \n\`\`\`\n'\n<${JOINER}img>\n\`\`\``],
     ["- [r]: /u 'a\n  \n```\n'\n<img>\n```", `- [r]: /u 'a\n  \n\`\`\`\n'\n<${JOINER}img>\n\`\`\``],
     ["[r]: /u 'a\r\n   \r\n```\r\n<img>\r\n```", `[r]: /u 'a\r\n   \r\n\`\`\`\r\n<${JOINER}img>\r\n\`\`\``],
-    ["[r]: /u 'a\n   \n\n```\n<img>\n```", "[r]: /u 'a\n   \n\n```\n<img>\n```"],
     ['[r]: /u "a\n   \n```\n<img>\n```', `[r]: /u "a\n   \n\`\`\`\n<${JOINER}img>\n\`\`\``],
     ["[r]: /u (a\n   \n```\n<img>\n```", `[r]: /u (a\n   \n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    // A line under a `'` title still open is that title's, not a label of its own, so the blank line ends it.
-    ["[r]: /u '\n[s\n\n```\n<img>\n```", "[r]: /u '\n[s\n\n```\n<img>\n```"],
-    ["[r]: /u '\n[s]:\n/v \"\n\n```\n<img>\n```", "[r]: /u '\n[s]:\n/v \"\n\n```\n<img>\n```"],
-    ["[r]:\n\n```\n<img>\n```", "[r]:\n\n```\n<img>\n```"],
-    ["[a]: /u\n[r]:\n\n```\n<img>\n```", "[a]: /u\n[r]:\n\n```\n<img>\n```"],
-    ["[r]\n\n```\n<img>\n```", "[r]\n\n```\n<img>\n```"],
-    ["[r]: <u\n\n```\n<img>\n```", `[r]: <${JOINER}u\n\n\`\`\`\n<img>\n\`\`\``],
-    ["[r]: /u x\n\n```\n<img>\n```", "[r]: /u x\n\n```\n<img>\n```"],
-    // A backslash at a `"` title's line end or before its quote keeps it open to `marked`, and so the block after the
-    // blank line takes joiners; one before a letter does not. A `<` destination with a `<` in it is one, whose title
-    // may stand on the next line, and one with two `>` leaves the tracker unsure where it ends.
-    ['[r]: /u "x\\\n\n```\n<img>\n```', `[r]: /u "x\\\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ['[r]: /u "x\\\\"\n\n```\n<img>\n```', `[r]: /u "x\\\\"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ['[r]: /u "x\\"\n\n```\n<img>\n```', `[r]: /u "x\\"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ['[r]: <a<b>\n"\n\n```\n<img>\n```', `[r]: <${JOINER}a<${JOINER}b>\n"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ["[r]: <a>b>\n\n```\n<img>\n```", `[r]: <${JOINER}a>b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ['[r]: <a>b> "\n\n```\n<img>\n```', `[r]: <${JOINER}a>b> "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    // The second `>` may stand after a space, and the destination after more than one space or a tab.
-    ["[r]: <a> b>\n\n```\n<img>\n```", `[r]: <${JOINER}a> b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ["[r]:  <a>b>\n\n```\n<img>\n```", `[r]:  <${JOINER}a>b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ["[r]:\t<a>b>\n\n```\n<img>\n```", `[r]:\t<${JOINER}a>b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
-    ['[r]: /u "x\\y"\n\n```\n<img>\n```', '[r]: /u "x\\y"\n\n```\n<img>\n```'],
-    ['[r]: <a<b> "t"\n\n```\n<img>\n```', `[r]: <${JOINER}a<${JOINER}b> "t"\n\n\`\`\`\n<img>\n\`\`\``],
-    ["[r]: <a<b>\n\n```\n<img>\n```", `[r]: <${JOINER}a<${JOINER}b>\n\n\`\`\`\n<img>\n\`\`\``],
-    ['[r]: /u"t\n\n```\n<img>\n```', '[r]: /u"t\n\n```\n<img>\n```'],
-    ["[a[b]:\n\n```\n<img>\n```", "[a[b]:\n\n```\n<img>\n```"],
-  ])("the model's Markdown %p: where the tracker is unsure, code takes joiners", (value, written) => {
-    expect(withoutImages(prose, value)[1]).toBe(written)
-  })
+    // Review 12: a second `[` line, which `marked` reads as a definition of its own once the first has become a
+    // paragraph or indented code, and whose label it runs on over the blank line to the fence line's `]:`; and a `'`
+    // title after such a label.
+    [
+      "[\n\n[\n\n```]: /u\n<img src=https://evil.example/p.png data-x>",
+      `[\n\n[\n\n\`\`\`]: /u\n<${JOINER}img src=https://evil.example/p.png data-x>`,
+    ],
+    [
+      "\t[\n[\n\n```]:;\n<img src=https://evil.example/p.png data-x>",
+      `\t[\n[\n\n\`\`\`]:;\n<${JOINER}img src=https://evil.example/p.png data-x>`,
+    ],
+    [
+      "    [\n[\n\n```]:;\n<img src=https://evil.example/p.png data-x>",
+      `    [\n[\n\n\`\`\`]:;\n<${JOINER}img src=https://evil.example/p.png data-x>`,
+    ],
+    [
+      "[a\n[b\n\n```]: /u\n<img src=https://evil.example/p.png data-x>",
+      `[a\n[b\n\n\`\`\`]: /u\n<${JOINER}img src=https://evil.example/p.png data-x>`,
+    ],
+    ["[\n\n[r]:u '\n \n```'\r<script\r", `[\n\n[r]:u '\n \n\`\`\`'\r<${JOINER}script\r`],
+    [
+      "- [\n\n  [\n\n  ```]: /u\n  <img src=https://evil.example/p.png data-x>",
+      `- [\n\n  [\n\n  \`\`\`]: /u\n  <${JOINER}img src=https://evil.example/p.png data-x>`,
+    ],
+    [
+      "> [\n>\n> [\n>\n> ```]: /u\n> <img src=https://evil.example/p.png data-x>",
+      `> [\n>\n> [\n>\n> \`\`\`]: /u\n> <${JOINER}img src=https://evil.example/p.png data-x>`,
+    ],
+    // The controls of earlier loops, which the tracker no longer tells apart from a definition it cannot follow: whole
+    // definitions, a title that a blank line ends, a reference, lines that are no definition, a task box and a link.
+    // This is the cost of decision 1c: a code block after any of them carries joiners.
+    ["[r]: /u\n\n```\n<img>\n```", `[r]: /u\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u "t"\n\n```\n<img>\n```', `[r]: /u "t"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u (t)\n\n```\n<img>\n```", `[r]: /u (t)\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u\n"t"\n\n```\n<img>\n```', `[r]: /u\n"t"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u '\n\n```\n<img>\n```", `[r]: /u '\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]:\n/u '\n\n```\n<img>\n```", `[r]:\n/u '\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u 'a\n   \n\n```\n<img>\n```", `[r]: /u 'a\n   \n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u '\n[s\n\n```\n<img>\n```", `[r]: /u '\n[s\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u '\n[s]:\n/v \"\n\n```\n<img>\n```", `[r]: /u '\n[s]:\n/v "\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]:\n\n```\n<img>\n```", `[r]:\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[a]: /u\n[r]:\n\n```\n<img>\n```", `[a]: /u\n[r]:\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]\n\n```\n<img>\n```", `[r]\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: <u\n\n```\n<img>\n```", `[r]: <${JOINER}u\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u x\n\n```\n<img>\n```", `[r]: /u x\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u "x\\y"\n\n```\n<img>\n```', `[r]: /u "x\\y"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: <a<b> "t"\n\n```\n<img>\n```', `[r]: <${JOINER}a<${JOINER}b> "t"\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: <a<b>\n\n```\n<img>\n```", `[r]: <${JOINER}a<${JOINER}b>\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ['[r]: /u"t\n\n```\n<img>\n```', `[r]: /u"t\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[a[b]:\n\n```\n<img>\n```", `[a[b]:\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["- [ ] Do it\n\n```\n<img src=x>\n```", `- [ ] Do it\n\n\`\`\`\n<${JOINER}img src=x>\n\`\`\``],
+    ["- [ ]\nDo it\n\n```\n<img src=x>\n```", `- [ ]\nDo it\n\n\`\`\`\n<${JOINER}img src=x>\n\`\`\``],
+    ["[a link](/docs) and more\n\n```\n<img>\n```", `[a link](/docs) and more\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    // In a list item and a quote, and further in than a definition may stand.
+    ["- [r]: /u\n\n```\n<img>\n```", `- [r]: /u\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["1. [r]: /u\n\n```\n<img>\n```", `1. [r]: /u\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["> [r]: /u\n\n```\n<img>\n```", `> [r]: /u\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["    [r]: /u\n\n```\n<img>\n```", `    [r]: /u\n\n\`\`\`\n<${JOINER}img>\n\`\`\``],
+  ])(
+    "the model's Markdown %p: from a line that starts with a `[`, no later fence is taken as code",
+    (value, written) => {
+      const drawn = (markdown: string) => [
+        Bun.markdown.html(markdown, RENDERER),
+        marked.parse(markdown, { gfm: true, async: false }) as string,
+      ]
+      expect(withoutImages(prose, value)[1]).toBe(written)
+      for (const html of drawn(written))
+        expect([value, html]).not.toEqual([value, expect.stringMatching(/<(img|script)\b/i)])
+      for (const cut of [...value.matchAll(/[\r\n]/g)].map((found) => found.index + 1)) {
+        const [before, first] = withoutImages(prose, value.slice(0, cut))
+        const second = withoutImages(follow(prose, before), value.slice(cut))[1]
+        expect([cut, first + second]).toEqual([cut, written])
+        for (const html of drawn(second))
+          expect([cut, html]).not.toEqual([cut, expect.stringMatching(/<(img|script)\b/i)])
+      }
+    },
+  )
 
   // In prose a joiner follows a `<` that opens a tag, a closing tag, a comment or a processing instruction, in any
   // case, and a `!` before a `[`; a `!` or a `<` before anything else is as written.

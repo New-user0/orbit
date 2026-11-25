@@ -67,6 +67,21 @@ const DEFINITIONS = [
   "[r]:\n/u '\n ",
   "[r]: /u 'a\n   \n```\n'",
   "[r]: /u\n'\n\t\n~~~\n'",
+  // Fix loop 12: a second `[` line after a first one, which `marked` reads as a definition of its own once the first
+  // has become a paragraph or indented code, and whose label it runs on over a blank line to a fence line's `]:`.
+  "[\n\n[",
+  "[a\n[b",
+  "\t[\n[",
+  "    [\n[",
+  "- [\n\n  [",
+  "> [\n>\n> [",
+  "[\n\n[r]:u '\n ",
+  "[\n\n[\n\n```]: /u",
+  "\t[\n[\n\n```]:;",
+  "    [\n[\n\n~~~]: /u",
+  "- [\n\n  [\n\n  ```]: /u",
+  "> [\n>\n> [\n>\n> ```]: /u",
+  "[\n\n[r]:u '\n \n```'",
 ]
 // A blank line: empty, or of only spaces or tabs, which `marked` reads differently in a `'` title.
 const BLANK = ["", "", "", " ", "   ", "\t", " \t"]
@@ -156,7 +171,8 @@ const PREFIX = [
 ]
 const FENCE_INDENT = ["", "", "", " ", "  ", "   ", "    ", "     ", "      ", "\t", " \t", "  \t", "\t "]
 const FENCE_CONTAINER = ["", "", "", "", "- ", "1. ", "> ", "- > ", "> - ", "  ", "-\t", "10. "]
-const FENCE_INFO = ["", "", "", "js", " js", "a`b", "~", " x ```", "`", " ~~~", "rust title"]
+// `]: /u` and `]:;` close a label that a `[` line before the fence line left open.
+const FENCE_INFO = ["", "", "", "js", " js", "a`b", "~", " x ```", "`", " ~~~", "rust title", "]: /u", "]:;"]
 const SPECIAL = [
   "===",
   "---",
