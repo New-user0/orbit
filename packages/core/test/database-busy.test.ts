@@ -23,9 +23,10 @@ async function heldFor(file: string, ms: number) {
         `const db = new Database(${JSON.stringify(file)})`,
         `db.run("PRAGMA locking_mode = EXCLUSIVE")`,
         `db.run("BEGIN EXCLUSIVE")`,
-        `db.run("insert into seed values (1)")`,
+        // A write takes the lock; rolled back, so the database the layer then opens is still empty.
+        `db.run("create table seed (x)")`,
         `console.log("held")`,
-        `setTimeout(() => { db.run("COMMIT"); db.close() }, ${ms})`,
+        `setTimeout(() => { db.run("ROLLBACK"); db.close() }, ${ms})`,
       ].join("\n"),
     ],
     { stdout: "pipe", stderr: "inherit" },
@@ -42,7 +43,6 @@ test("opening a database that another process is still closing waits for its loc
   const file = path.join(tmp.path, "orbit.db")
   const seed = new Sqlite(file)
   seed.run("PRAGMA journal_mode = WAL")
-  seed.run("create table seed (x)")
   seed.close()
 
   const holder = await heldFor(file, 1_000)

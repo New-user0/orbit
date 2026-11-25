@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test"
+import { Effect } from "effect"
+import { Standalone } from "../src/services/standalone"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -37,6 +39,22 @@ test("standalone server exits when its owner is killed", async () => {
     await fs.rm(root, { recursive: true, force: true })
   }
 })
+
+// A server that exits before it is ready, for example because orbit.db is still locked, says why on stderr: the error
+// carries its exit code and the end of that output, escaped, so the cause reaches the person (class 13), not only
+// "exited before reporting readiness".
+test.each([
+  ["says why", `console.error("Error: database is locked"); process.exit(3)`, "with code 3", "database is locked"],
+  ["writes an escape sequence", `console.error("\\x1b[2Jcleared"); process.exit(4)`, "with code 4", "\\x1b[2Jcleared"],
+  ["says nothing", `process.exit(5)`, "with code 5", "readiness"],
+])("the error of a standalone server that exits before it is ready and %s names its exit and output", async (_, script, exit, output) => {
+  const error = await Effect.runPromise(
+    Standalone.start({ command: [process.execPath, "-e", script] }).pipe(Effect.scoped, Effect.flip),
+  )
+  expect(error.message).toStartWith(`Standalone server exited ${exit} before reporting readiness`)
+  expect(error.message).toEndWith(output)
+  expect(error.message).not.toContain("\x1b")
+}, 30_000)
 
 async function readLine(stream: ReadableStream<Uint8Array>, prefix: string) {
   const reader = stream.getReader()
