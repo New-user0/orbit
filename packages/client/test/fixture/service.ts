@@ -28,12 +28,19 @@ if (
   mode === "coordinated-failed-loser"
 ) {
   await appendFile(registration + ".starts", process.pid + "\n")
+  // Each contender's start and a loser's exit, in order, so a test can tell how many were alive at once.
+  await appendFile(registration + ".events", `start ${process.pid}\n`)
   const owner = await writeFile(registration + ".owner", String(process.pid), { flag: "wx" })
     .then(() => true)
     .catch(() => false)
-  if (!owner) process.exit(mode === "coordinated-failed-loser" ? 1 : 0)
+  if (!owner) {
+    await appendFile(registration + ".events", `exit ${process.pid}\n`)
+    process.exit(mode === "coordinated-failed-loser" ? 1 : 0)
+  }
   if (mode === "coordinated" || mode === "coordinated-failed-loser") {
     while ((await Bun.file(registration + ".starts").text()).trim().split("\n").length < 2) await Bun.sleep(10)
+    // A winner that is slower still, past the spawn delay: `coordinated` takes it as an optional delay.
+    if (mode === "coordinated" && delay !== undefined) await Bun.sleep(Number(delay))
     if (mode === "coordinated-failed-loser") await Bun.sleep(Number(delay ?? 1_500))
   } else if (mode !== "environment") await Bun.sleep(Number(delay))
   if (mode === "delayed-failed") process.exit(1)
