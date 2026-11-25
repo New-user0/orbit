@@ -80,6 +80,20 @@ describe("runTests", () => {
   )
 
   test(
+    "with no deadline set and no measured time, stops no file that waits a few seconds",
+    async () => {
+      await using dir = await tmpdir()
+      await suite(dir.path, {
+        "slow.test.ts": `import { test } from "bun:test"\nawait Bun.sleep(3000)\ntest("slow", () => {})\n`,
+        "a.test.ts": quick,
+      })
+      const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "ORBIT_TEST_FILE_DEADLINE_MS"))
+      expect(await runTests(args(dir.path), env, dir.path)).toBe(0)
+    },
+    60_000,
+  )
+
+  test(
     "counts a worker as in a file only while its last line starts one",
     async () => {
       await using dir = await tmpdir()
