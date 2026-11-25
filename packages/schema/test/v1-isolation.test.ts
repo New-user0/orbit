@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import path from "node:path"
 import { LegacyEventV1 } from "../src/legacy-event.js"
 import { PermissionV1 } from "../src/permission-v1.js"
 import { QuestionV1 } from "../src/question-v1.js"
@@ -23,12 +24,14 @@ test("current source does not import the V1 subtree directly", async () => {
     "question-v1.ts",
     "session-v1.ts",
   ])
-  const files = [...new Bun.Glob("*.ts").scanSync(new URL("../src", import.meta.url).pathname)].filter(
+  const files = [...new Bun.Glob("*.ts").scanSync(path.join(import.meta.dir, "../src"))].filter(
     (file) => !allowed.has(file),
   )
   const directImports = await Promise.all(
     files.map(async (file) => ({ file, source: await Bun.file(new URL(`../src/${file}`, import.meta.url)).text() })),
   ).then((values) => values.filter((value) => value.source.includes('from "./v1/')))
 
+  // A scan of the wrong folder finds nothing and would pass, so the row first checks that it read the source.
+  expect(files).toContain("session.ts")
   expect(directImports).toEqual([])
 })

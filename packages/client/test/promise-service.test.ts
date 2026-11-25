@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { Service, type EnsureReason } from "../src/promise/service"
-import { serviceFixture } from "./fixture/service-fixture"
+import { recordedSignal, serviceFixture, stoppedByClient } from "./fixture/service-fixture"
 import { accelerate } from "./fixture/service-timing"
 
 const ensure = accelerate(Service.ensure)
@@ -142,7 +142,7 @@ test("evicts an unresponsive registered service before starting its replacement"
   fixture.track(replacement.pid)
 
   expect((await Bun.file(registration + ".requests").text()).trim().split("\n")).toHaveLength(3)
-  expect(await existing.exited).toBe(0)
+  expect(await existing.exited).toBe(stoppedByClient.exitCode)
   expect(replacement.pid).not.toBe(original.pid)
   expect(endpoint.url).toBe(replacement.url)
 })
@@ -155,6 +155,6 @@ test("signals the registered service process", async () => {
 
   await Service.stop({ file: registration })
 
-  expect(await Bun.file(registration + ".signal").text()).toBe("SIGTERM")
+  expect(await recordedSignal(registration)).toBe(stoppedByClient.signal)
   expect(await Bun.file(registration).exists()).toBe(false)
 })

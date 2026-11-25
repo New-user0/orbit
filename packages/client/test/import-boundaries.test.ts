@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { realpathSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
-import { join, resolve, sep } from "node:path"
+import { dirname, join, resolve, sep } from "node:path"
 
 const directory = resolve(import.meta.dir, "..")
-const effect = realpathSync(resolve(import.meta.dir, "../node_modules/effect"))
+// Found the way the bundler finds it: an isolated install links effect into the package's own node_modules, while a
+// hoisted one leaves it only in the workspace root's.
+const effect = realpathSync(dirname(Bun.resolveSync("effect/package.json", directory)))
 const schema = resolve(import.meta.dir, "../../schema")
 const protocol = resolve(import.meta.dir, "../../protocol")
 const core = resolve(import.meta.dir, "../../core")

@@ -88,10 +88,54 @@ describe("shell", () => {
     })
 
     test("normalizes Git Bash shell paths from env", async () => {
-      const shell = "/cygdrive/c/Program Files/Git/bin/bash.exe"
+      // The Cygwin spelling of this machine's own Git Bash, wherever Git is installed: the resolver keeps a shell only
+      // when its file exists, so a fixed drive and folder would test the fallback instead.
+      const bash = ShellSelect.gitbash()
+      if (!bash) throw new Error(`Git Bash is required for the Windows shell tests; git on PATH is ${which("git")}`)
+      const shell = `/cygdrive/${bash[0].toLowerCase()}${bash.slice(2).replaceAll("\\", "/")}`
       await withShell(shell, async () => {
         expect(ShellSelect.resolve({ priority: "config" })).toBe(FSUtil.windowsPath(shell))
       })
+    })
+
+    test("finds Git Bash from each folder Git for Windows keeps git.exe in", async () => {
+      await using directory = await tmpdir()
+      const root = path.join(directory.path, "Git")
+      const bash = path.join(root, "bin", "bash.exe")
+      await fs.mkdir(path.dirname(bash), { recursive: true })
+      await fs.writeFile(bash, "bash")
+      // A git.exe in some other bin folder is not Git for Windows' toolchain copy, so nothing one folder up is taken.
+      const unrelated = path.join(directory.path, "tools", "bin")
+      const rows = [
+        { folder: path.join(root, "cmd"), expected: bash },
+        { folder: path.join(root, "bin"), expected: bash },
+        { folder: path.join(root, "mingw64", "bin"), expected: bash },
+        { folder: path.join(root, "mingw32", "bin"), expected: bash },
+        { folder: path.join(root, "ucrt64", "bin"), expected: bash },
+        { folder: path.join(root, "clang64", "bin"), expected: bash },
+        { folder: path.join(root, "clangarm64", "bin"), expected: bash },
+        // Windows names a folder in any case, and PATH keeps the case it was written in.
+        { folder: path.join(root, "MinGW64", "bin"), expected: bash },
+        { folder: unrelated, expected: undefined },
+        // Only a folder named exactly as a toolchain is one: a name that merely contains one is some other bin folder.
+        { folder: path.join(root, "my-mingw64", "bin"), expected: undefined },
+        { folder: path.join(root, "mingw64-tools", "bin"), expected: undefined },
+      ]
+      await fs.mkdir(path.join(directory.path, "bin"))
+      await fs.writeFile(path.join(directory.path, "bin", "bash.exe"), "decoy")
+      const previous = process.env.PATH
+      try {
+        const found = []
+        for (const row of rows) {
+          await fs.mkdir(row.folder, { recursive: true })
+          await fs.writeFile(path.join(row.folder, "git.exe"), "git")
+          process.env.PATH = row.folder
+          found.push({ folder: row.folder, expected: ShellSelect.gitbash() })
+        }
+        expect(found).toEqual(rows)
+      } finally {
+        process.env.PATH = previous
+      }
     })
 
     test("resolves /usr/bin/bash from env to Git Bash", async () => {
