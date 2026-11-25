@@ -30,7 +30,12 @@ describe("legacy-accepted shell syntax regressions", () => {
     "preserves deeply indented function definitions: %s",
     async (source) => {
       const command = `( ${" ".repeat(32_000)}${source} )`
-      const legacy = await Effect.runPromise(ShellParse.scan(command, "zsh", "/workspace"))
+      // The legacy scan reads no input over ShellParse.MAX_LENGTH, since a long one can abort its WebAssembly parser
+      // (shell-parse-state.test.ts), so the portable scanner is held to what it reads of the same command unindented.
+      expect(command.length).toBeGreaterThan(ShellParse.MAX_LENGTH)
+      expect((await Effect.runPromise(Effect.exit(ShellParse.scan(command, "zsh", "/workspace"))))._tag).toBe("Failure")
+      const legacy = await Effect.runPromise(ShellParse.scan(`( ${source} )`, "zsh", "/workspace"))
+      expect(legacy.commands.some((item) => item.resource === "scan_probe")).toBe(true)
       expect(await Effect.runPromise(ShellParse.scanPortable(command, "zsh", "/workspace"))).toEqual(legacy)
     },
   )
