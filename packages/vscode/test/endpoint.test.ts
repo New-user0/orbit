@@ -3,24 +3,18 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { headers, start, version } from "../src/endpoint"
+import { launch } from "../src/program"
+import { failing, standIn } from "./fixture/orb"
 
-// `orb` from source behind a wrapper script, isolated in a temporary home so it starts its own background service.
+// `orb` from source behind a stand-in, isolated in a temporary home so it starts its own background service.
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-endpoint-"))
-const cli = path.join(import.meta.dir, "..", "..", "cli")
 const orb = path.join(root, "orb")
-await Bun.write(
-  orb,
-  [
-    "#!/bin/sh",
-    `export HOME="${root}" XDG_STATE_HOME="${root}/state" XDG_DATA_HOME="${root}/data"`,
-    `export XDG_CONFIG_HOME="${root}/config" XDG_CACHE_HOME="${root}/cache" ORBIT_DISABLE_FILEWATCHER=true`,
-    `cd "${cli}" && exec "${process.execPath}" run src/index.ts "$@"`,
-  ].join("\n"),
-)
-await fs.chmod(orb, 0o755)
+await standIn(orb, root)
 
 afterAll(async () => {
-  await Bun.spawn([orb, "service", "stop"], { stdout: "ignore", stderr: "ignore" }).exited
+  // Stopped through the extension's own lookup, which finds the stand-in on every platform, and waited for, so the
+  // service no longer holds files in the folder when it is removed.
+  await launch(orb, ["service", "stop"], { timeout: 60_000 })
   await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
@@ -36,8 +30,7 @@ test("starts the background service through orb and returns an endpoint that aut
 
 test("reports why orb could not start", async () => {
   const broken = path.join(root, "broken")
-  await Bun.write(broken, "#!/bin/sh\necho 'orb: something is wrong' >&2\nexit 3\n")
-  await fs.chmod(broken, 0o755)
+  await failing(broken, "orb: something is wrong", 3)
 
   await expect(start(broken)).rejects.toThrow("orb: something is wrong")
   await expect(start(path.join(root, "missing"))).rejects.toThrow()
@@ -46,5 +39,7 @@ test("reports why orb could not start", async () => {
 test("reads the version orb prints", async () => {
   // A source checkout reports "vlocal"; a release reports its number.
   expect(await version(orb)).toMatch(/^v\S+$/)
+  // Windows also takes the full path with its extension, which is the file the lookup completes the path above to.
+  if (process.platform === "win32") expect(await version(`${orb}.exe`)).toMatch(/^v\S+$/)
   await expect(version(path.join(root, "missing"))).rejects.toThrow()
 }, 60_000)
