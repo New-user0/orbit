@@ -33,7 +33,7 @@ describe("appending to a cassette that a reader has open", () => {
     const answer = await append(directory.path, "second").then(() => "appended", (error) => `failed: ${error}`)
     await released
     expect(answer).toBe("appended")
-    expect(readCassette(file).interactions.map((item) => item.response.body)).toEqual(["second"])
+    expect(readCassette(file).interactions.map((item) => (item.transport === "http" ? item.response.body : ""))).toEqual(["second"])
     expect(await fs.readdir(directory.path)).toEqual(["held.json"])
   }, 30_000)
 
