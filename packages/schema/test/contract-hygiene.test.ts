@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "node:path"
 import { DateTime, Schema } from "effect"
 import { Agent } from "../src/agent.js"
 import { ConfigAgent } from "../src/config/agent.js"
@@ -231,7 +232,7 @@ describe("contract hygiene", () => {
   })
 
   test("current source limits Any to reviewed boundaries and avoids mutable contract wrappers", async () => {
-    const files = [...new Bun.Glob("*.ts").scanSync(new URL("../src", import.meta.url).pathname)].filter(
+    const files = [...new Bun.Glob("*.ts").scanSync(path.join(import.meta.dir, "../src"))].filter(
       (file) => !file.endsWith("-v1.ts"),
     )
     const sources = await Promise.all(
@@ -239,6 +240,9 @@ describe("contract hygiene", () => {
     )
     const source = sources.map((item) => item.source).join("\n")
 
+    // A scan of the wrong folder finds nothing and would pass the checks below, so the row first checks that it read
+    // the source.
+    expect(files).toContain("session.ts")
     expect(
       sources
         .filter((item) => item.file !== "provider.ts" && item.file !== "model.ts" && item.file !== "integration.ts")

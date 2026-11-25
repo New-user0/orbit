@@ -19,7 +19,10 @@ describe("global", () => {
         XDG_CACHE_HOME: directories[1],
         XDG_CONFIG_HOME: directories[2],
         XDG_STATE_HOME: directories[3],
+        // As below: Windows reads TEMP and TMP, so the check of the tmp folder holds there too.
         TMPDIR: directories[4],
+        TEMP: directories[4],
+        TMP: directories[4],
       },
       stderr: "pipe",
     })
@@ -70,7 +73,10 @@ describe("global", () => {
         XDG_CACHE_HOME: directories[1],
         XDG_CONFIG_HOME: directories[2],
         XDG_STATE_HOME: directories[3],
+        // os.tmpdir() reads TMPDIR on POSIX, and TEMP, then TMP, on Windows.
         TMPDIR: directories[4],
+        TEMP: directories[4],
+        TMP: directories[4],
       },
       stdout: "pipe",
       stderr: "pipe",
