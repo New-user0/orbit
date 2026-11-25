@@ -27,6 +27,18 @@ const spellings = [
   },
 ]
 
+// The line comes from a program the status line starts, which a loaded runner can take seconds to start. waitForFrame
+// gives up after a count of render passes, or as soon as the renderer is idle while that program is still starting, so
+// it reported a slow start as a missing line (the bunfig row in the Windows tui run of PR #152). This waits for the line
+// itself, drawing again as it waits; the row's time limit bounds it.
+async function lineWhere(setup: { renderOnce: () => Promise<void>; captureCharFrame: () => string }, predicate: (frame: string) => boolean) {
+  while (!predicate(setup.captureCharFrame())) {
+    await Bun.sleep(50)
+    await setup.renderOnce()
+  }
+  return setup.captureCharFrame()
+}
+
 test.each(spellings)("no status line runs in an untrusted start folder: $name", async (spelling) => {
   await using clone = await tmpdir()
   await using state = await tmpdir()
@@ -73,7 +85,7 @@ test.each(spellings)("no status line runs in an untrusted start folder: $name", 
     // The control: the same setup, once trusted, runs the command and draws its line.
     trusted = true
     setup.events.emit({ id: "evt_trust", created: 2, type: "trust.updated", data: {} } as never)
-    await setup.waitForFrame((frame) => frame.includes("LINE-DRAWN"))
+    await lineWhere(setup, (frame) => frame.includes("LINE-DRAWN"))
     expect(await Bun.file(marker).exists()).toBe(true)
   } finally {
     process.chdir(before)
@@ -128,9 +140,9 @@ console.log("MODE-" + input.vim_mode)
     // The control: once trusted, the same mode change runs the command and the line shows the new mode.
     trusted = true
     setup.events.emit({ id: "evt_trust", created: 2, type: "trust.updated", data: {} } as never)
-    await setup.waitForFrame((frame) => !frame.includes("Trust this folder?") && frame.includes("MODE-insert"))
+    await lineWhere(setup, (frame) => !frame.includes("Trust this folder?") && frame.includes("MODE-insert"))
     setup.mockInput.pressEscape()
-    await setup.waitForFrame((frame) => frame.includes("MODE-normal"))
+    await lineWhere(setup, (frame) => frame.includes("MODE-normal"))
   } finally {
     process.chdir(before)
   }
@@ -222,12 +234,7 @@ test.each(handed)("no status line runs for a session in an untrusted folder: $na
   // The control: the same folder, once trusted, gets the command, so the marker above is not absent for another reason.
   trusted = true
   setup.events.emit({ id: "evt_trust", created: 2, type: "trust.updated", data: {} } as never)
-  const started = Date.now()
-  while (!setup.captureCharFrame().includes("LINE-DRAWN") && Date.now() - started < 15_000) {
-    await Bun.sleep(250)
-    await setup.renderOnce()
-  }
-  expect(setup.captureCharFrame()).toContain("LINE-DRAWN")
+  expect(await lineWhere(setup, (frame) => frame.includes("LINE-DRAWN"))).toContain("LINE-DRAWN")
   expect(await Bun.file(path.join(scripts.path, "cwd.txt")).text()).toBe(cloneDir)
   expect(await Bun.file(marker).exists()).toBe(true)
 }, 60_000)
