@@ -2,7 +2,7 @@ import fs from "fs/promises"
 import { realpathSync, watch } from "node:fs"
 import os from "os"
 import path from "path"
-import { describe, expect } from "bun:test"
+import { beforeAll, describe, expect } from "bun:test"
 import { TestClock } from "effect/testing"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Scope, Stream } from "effect"
 import { Money } from "@orbit/schema/money"
@@ -58,6 +58,7 @@ import { which } from "@orbit/util/which"
 import type { ConfigManaged } from "@orbit/schema/config/managed"
 import { offlineModels } from "./fixture/models"
 import { runProgram } from "./fixture/run-program"
+import { pwshStarted } from "./fixture/pwsh-started"
 import { installPolicy } from "./fixture/policy"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -1061,6 +1062,11 @@ describe("ShellTool ordinary shell syntax", () => {
 
   const pwsh = process.env.SHELL_SCAN_PWSH ?? Bun.which("pwsh") ?? Bun.which("powershell")
   const test = pwsh ? permissionIt.live : permissionIt.live.skip
+  // The rows below read the real parser, which gets five seconds from the spawn of its host: the first start of
+  // PowerShell on a runner is waited for here, not counted against the parser (test/fixture/pwsh-started.ts).
+  beforeAll(async () => {
+    if (pwsh) await pwshStarted(pwsh)
+  }, 150_000)
   for (const portable of [false, true]) {
     // A statement that is not a pipeline of commands (an assignment, a conditional, a loop, a definition) is asked about by
     // its own text, which no saved grant for the commands inside it covers.
@@ -4316,6 +4322,9 @@ describe("ShellTool guard", () => {
 describe("ShellTool guard (PowerShell)", () => {
   const pwsh = process.env.SHELL_SCAN_PWSH ?? Bun.which("pwsh") ?? Bun.which("powershell")
   const test = pwsh ? permissionIt.live : permissionIt.live.skip
+  beforeAll(async () => {
+    if (pwsh) await pwshStarted(pwsh)
+  }, 150_000)
   // Rule matching is case-insensitive only on Windows (Orbit's wildcard), so the rows that write a rule in one case for a
   // command written in another run there.
   const windows = pwsh && isWindows ? permissionIt.live : permissionIt.live.skip
