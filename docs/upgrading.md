@@ -3105,18 +3105,24 @@ this.
 
 **What to do:** Nothing, unless a hook relied on the model's `old_string` after a revision: it is the whole file now.
 
-### The web search and model routes answer once a Location's plugins are active
+### Routes that read what plugins add answer once a Location's plugins are active
 
-A Location starts its plugins on the first request that names it. The web search routes (`websearch.providers`,
-`websearch.query`) and the model routes (`model.list`, `model.default`) used to answer that request before the plugins
-were active, so a plugin's web search provider was missing ("Web search provider not found") and the models of a
-configured provider were not listed until a later request. They now wait for the plugins, as the agent, command and
-skill routes already did, so the first answer is complete.
+A Location starts its plugins on the first request that names it, and the plugins add providers (the configured ones
+too), agents, integrations, MCP servers, references, version controls and web search providers. These routes used to
+answer that request before the plugins were active, so the first answer missed what they add: `websearch.providers`,
+`websearch.query`, `model.list`, `model.default`, `provider.list`, `provider.get`, `agent.get`, `integration.get`,
+`integration.connect.key`, `integration.oauth.connect`, `integration.oauth.status`, `integration.oauth.complete`,
+`integration.command.connect`, `integration.command.status`, `mcp.list`, `mcp.connect`, `mcp.disconnect`, `mcp.remove`,
+`reference.list`, `vcs.get`, `vcs.base`, `vcs.status`, `vcs.branch.list` and `vcs.diff`. A list came back without the
+plugin's entries, and a lookup failed with "not found" (for example "Provider not found" or "Web search provider not
+found"). They now wait for the plugins, as `agent.list`, `command.list`, `skill.list` and `integration.list` already did,
+so the first answer is complete. `mcp.resource.catalog` does not wait: it lists the resources of the servers connected
+at that moment, and a server's first connection is made in the background in any case.
 
-**Affects:** SDK and HTTP clients that ask a fresh Location for its web search providers or models, and code that retried
-those requests until the answer filled in.
+**Affects:** SDK and HTTP clients that ask a fresh Location for any of these, and code that retried those requests until
+the answer filled in.
 
-**What to do:** Nothing. A retry loop that waited for a model or provider to appear can go.
+**What to do:** Nothing. A retry loop that waited for a model, provider or other plugin entry to appear can go.
 
 ## Agent loop
 

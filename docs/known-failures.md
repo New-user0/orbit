@@ -26,14 +26,14 @@ A gate is a test that pins a promise in `docs/untrusted-repositories.md`. A gate
 
 ## Fail every run
 
-One row is left, a limit of the GitHub Windows runner that none of the three set-ups tried there got around. The other
+One row is left, a read that succeeds on the GitHub Windows runner through every set-up tried there. The other
 22 rows of CI's packages that stood here until the ci-green task (PR #192) were fixed at their cause, in the product or
 in the test; "ci-green" at the end of this file names the cause, the commit and the test for each. The merman row moved
 to the paragraph below the table.
 
 | Package | Test (file) | Cause | On main |
 | --- | --- | --- | --- |
-| core | `ManagedSettings.read unreadable input > reports a file this account cannot open instead of treating it as missing` (`packages/core/test/managed-settings.test.ts`) | GitHub Windows runner only: its account reads a file that no set-up there can close to it. The row's precondition shows it: icacls exits 0 with nothing on stderr, and a plain `fs.readFile` of the file still succeeds with read denied to Everyone (run 45592646280), with read also denied to the runner's own account by its security identifier (run 45595567966), and with, besides, a live PowerShell child holding the file open with no sharing (runs 45599757271 and 45603954009; the row checks the child still runs at the read). On the development machine the same read fails with `EPERM`, or with `EBUSY` when only the hold applies, and the row passes. The product is not involved: the row fails at its precondition, before `ManagedSettings` reads. | CI only |
+| core | `ManagedSettings.read unreadable input > reports a file this account cannot open instead of treating it as missing` (`packages/core/test/managed-settings.test.ts`) | GitHub Windows runner only, cause not established. The row's precondition fails there: icacls exits 0 with nothing on stderr, and a plain `fs.readFile` of the file still succeeds with read denied to Everyone (run 45592646280), with read also denied to the runner's own account by its security identifier (run 45595567966), and with a PowerShell child that was still running and had said it held the file with no sharing (runs 45599757271, 45603954009, 45611805288 and 45619134933). An access list can be read past with the backup privilege, but a hold with no sharing binds every account, and on the development machine the hold alone makes the read fail with `EBUSY` (`EPERM` with the deny as well), so the runner's read is not explained. Those runs did not show that the child really held the file: a failed open ends only its own PowerShell statement, so it said "held" either way. Since ci-green's fix loop 1 the child stops at a failed open, names the file it holds, and when the read still succeeds the row prints a second PowerShell's open of the file and the account's enabled privileges, so the next runner log shows whether the two processes met the same file. The product is not involved: the row fails at its precondition, before `ManagedSettings` reads. | CI only |
 
 merman is not run by CI: `.github/workflows/check.yml` has no merman job. Run by hand, its `audits deterministic
 flowchart and state layout families` (`packages/merman/src/layout-audit.test.ts`) fails on Windows and on Linux: the
@@ -167,19 +167,26 @@ or a local Windows run; Linux CI):
   runner, `mingw64\bin` before) first on `PATH`. The lookup now looks one folder higher from a toolchain's copy
   (`accab30c`, `86f1374e`), and the row builds its path from the machine's own Git Bash. "finds Git Bash from each folder
   Git for Windows keeps git.exe in" pins every layout (`7f5447e4`).
-- core `ManagedSettings.read unreadable input`, the access-list row: kept, as the one runner limit (decision 5 of the
-  task). Its set-up became the one that decision names: icacls by its System32 path must succeed, a PowerShell
-  child by its System32 path holds the file with no sharing before read is denied to Everyone, and a plain read must
-  fail with `EPERM` or `EBUSY` while the child still runs, before the product reads. It is named "reports a file this
-  account cannot open instead of treating it as missing" (`f402602f`, `0666075d`, `86755515`). On the development
-  machine it passes; on the GitHub runner the plain read succeeds through every step of that set-up (the row above
-  gives the runs), so the precondition fails there and the product is never asked.
+- core `ManagedSettings.read unreadable input`, the access-list row: kept, with its cause not established (decisions 5
+  and 9 of the task). Its set-up became the one decision 5 names: icacls by its System32 path must succeed, a
+  PowerShell child by its System32 path holds the file with no sharing before read is denied to Everyone, and a plain
+  read must fail with `EPERM` or `EBUSY` while the child still runs, before the product reads. It is named "reports a
+  file this account cannot open instead of treating it as missing" (`f402602f`, `0666075d`, `86755515`). On the
+  development machine it passes. On the GitHub runner the plain read succeeded through that set-up (the row above gives
+  the runs), which a hold that binds should make impossible; the child's "held" did not prove the hold, since a failed
+  open did not stop it. Fix loop 1 makes the child stop at a failed open and name the file it holds, and prints, when
+  the read still succeeds, a second PowerShell's open of the file and the account's enabled privileges.
 - schema `contract-hygiene` and `v1-isolation`: `URL.pathname` is `/D:/...` on Windows. They scan
   `path.join(import.meta.dir, "../src")` and first check that the scan found the source (`33250350`).
 - sdk `embedded client exposes plugin-backed web search`: the web search routes answered the request that boots a
   Location before its plugins were active. They, and `model.list` and `model.default`, now wait for activation
   (`a7c07d1d`), pinned by the four "the first request to a fresh Location" rows (`2c169526`, `8dc2bed9`); the row reads
-  its config from the fixture's folder.
+  its config from the fixture's folder. Fix loop 1 closes the rest of that class: every route that reads what a plugin
+  adds waits too (`provider.list` and `.get`, `agent.get`, `integration.get`, `.connect.key`, `.oauth.connect`,
+  `.oauth.status`, `.oauth.complete`, `.command.connect` and `.command.status`, `mcp.list`, `.connect`, `.disconnect`
+  and `.remove`, `reference.list`, and `vcs.get`, `.base`, `.status`, `.branch.list` and `.diff`), each with its own
+  "the first request to a fresh Location" row and control. Routes that read nothing a plugin adds, or already wait, are
+  listed in the PR.
 - sdk `Promise event streams support cancellation`: the row expected a Transport error, but an aborted subscriber of the
   shared event stream ends with `done`, as the client's tests pin. The row expects that now (`c89e1f09`).
 - util `global > building a layer with default tmp ...`: `os.tmpdir()` reads `TEMP` and `TMP` on Windows, not `TMPDIR`.
