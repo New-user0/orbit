@@ -9,7 +9,7 @@ import os from "node:os"
 import path from "node:path"
 import { ServiceConfig } from "../src/services/service-config"
 import { ServiceRegistration } from "../src/services/service-registration"
-import { isolatedEnv } from "./fixture/environment"
+import { isolatedEnv, sharedTranspilerCache } from "./fixture/environment"
 
 test("managed service ports are stable per installation channel", () => {
   expect(ServiceConfig.defaultPort("latest")).toBe(0xc0de)
@@ -19,6 +19,21 @@ test("managed service ports are stable per installation channel", () => {
   expect(ServiceConfig.defaultPort("local")).toBe(0xc0df)
   expect(ServiceConfig.defaultPort("preview-a")).toBe(ServiceConfig.defaultPort("preview-a"))
   expect(ServiceConfig.defaultPort("preview-a")).not.toBe(ServiceConfig.defaultPort("preview-b"))
+})
+
+// Each `orb serve --service` these rows start transpiles the CLI from source, about 2.3 s of CPU with a cache folder of its
+// own and 1.3 s with the run's shared one; ten starting at once on a loaded Windows runner ran past the 20 s wait for a
+// registration. Mutation: dropping the shared cache from `serviceEnv` fails this row.
+test("a service started from source shares the transpiler cache of the test run", () => {
+  const before = process.env.ORBIT_TEST_TRANSPILER_CACHE
+  process.env.ORBIT_TEST_TRANSPILER_CACHE = path.join(os.tmpdir(), "orbit-service-shared-cache")
+  try {
+    expect(serviceEnv("root").BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe(process.env.ORBIT_TEST_TRANSPILER_CACHE)
+    expect(isolatedEnv("root").BUN_RUNTIME_TRANSPILER_CACHE_PATH).toBe(process.env.ORBIT_TEST_TRANSPILER_CACHE)
+  } finally {
+    if (before === undefined) delete process.env.ORBIT_TEST_TRANSPILER_CACHE
+    else process.env.ORBIT_TEST_TRANSPILER_CACHE = before
+  }
 })
 
 test("service disabled accepts only booleans without changing configuration on invalid input", async () => {
@@ -233,16 +248,7 @@ test("clean managed service shutdown removes its registration", async () => {
 test("concurrent service processes elect one server", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-service-election-"))
   const database = path.join(root, "orbit.db")
-  const env = {
-    ...process.env,
-    HOME: root,
-    ORBIT_DB: database,
-    ORBIT_TEST_HOME: root,
-    XDG_CACHE_HOME: path.join(root, "cache"),
-    XDG_CONFIG_HOME: path.join(root, "config"),
-    XDG_DATA_HOME: path.join(root, "data"),
-    XDG_STATE_HOME: path.join(root, "state"),
-  }
+  const env = { ...serviceEnv(root), ORBIT_DB: database }
   const command = [process.execPath, path.join(import.meta.dir, "../src/index.ts"), "serve", "--service"]
   const registration = path.join(root, "state", "orbit", "service-local.json")
   const port = await availablePort()
@@ -252,7 +258,9 @@ test("concurrent service processes elect one server", async () => {
   const processes = Array.from({ length: 10 }, () => Bun.spawn(command, { env, stderr: "pipe", stdout: "pipe" }))
 
   try {
-    const info = await waitForInfo(registration)
+    // Ten cold starts at once is the point of the row, and the winner registers only after the CPU has been shared among
+    // all of them: a loaded Windows runner needs more than the usual 20 s for that.
+    const info = await waitForInfo(registration, undefined, processes, 90_000)
     const winner = processes.find((process) => process.pid === info.pid)
     const losers = processes.filter((process) => process.pid !== info.pid)
     const exited = await Promise.all(
@@ -321,7 +329,7 @@ test("configured managed service port overrides the channel default", async () =
     stdout: "ignore",
   })
   try {
-    const info = await waitForInfo(registration)
+    const info = await waitForInfo(registration, undefined, [owner])
     expect(new URL(info.url).port).toBe(String(port))
     expect(info.password).not.toBe("")
     expect((await Bun.file(config).json()).password).toBe(info.password)
@@ -354,7 +362,7 @@ test.each([
       { env: isolatedEnv(root), stderr: "pipe", stdout: "ignore" },
     )
     try {
-      const info = await waitForInfo(registration)
+      const info = await waitForInfo(registration, undefined, [owner])
       await Promise.all(
         [...new Set([...cors, ...origins, "https://unlisted.example.com"])].map(async (origin) => {
           const response = await fetch(new URL("/api/info", info.url), {
@@ -547,22 +555,13 @@ test("a failed service stays registered and owns the selected port until stopped
   await fs.mkdir(database)
   await fs.mkdir(path.join(root, "config", "orbit"), { recursive: true })
   await fs.writeFile(path.join(root, "config", "orbit", "service-local.json"), JSON.stringify({ port }))
-  const env = {
-    ...process.env,
-    HOME: root,
-    ORBIT_DB: database,
-    ORBIT_TEST_HOME: root,
-    XDG_CACHE_HOME: path.join(root, "cache"),
-    XDG_CONFIG_HOME: path.join(root, "config"),
-    XDG_DATA_HOME: path.join(root, "data"),
-    XDG_STATE_HOME: path.join(root, "state"),
-  }
+  const env = { ...serviceEnv(root), ORBIT_DB: database }
   const command = [process.execPath, path.join(import.meta.dir, "../src/index.ts"), "serve", "--service"]
   const registration = path.join(root, "state", "orbit", "service-local.json")
   const owner = Bun.spawn(command, { env, stderr: "pipe", stdout: "ignore" })
 
   try {
-    const info = await waitForInfo(registration)
+    const info = await waitForInfo(registration, undefined, [owner])
     await waitForFailed(info)
     expect(owner.exitCode).toBe(null)
 
@@ -582,14 +581,29 @@ test("a failed service stays registered and owns the selected port until stopped
   }
 }, 30_000)
 
-async function waitForInfo(file: string, accept: (info: Info) => boolean = () => true) {
-  for (let attempt = 0; attempt < 400; attempt++) {
+// `children` are the processes that were started to register: when every one of them has exited without a registration,
+// none will come, so the wait ends with their exit codes and what they wrote to stderr instead of running out its time.
+// One start of the CLI from source takes about 1.3 s of CPU with a warm transpiler cache; `timeout` is for a row that
+// starts many at once, where the winner waits for all of them to share the CPU.
+async function waitForInfo(
+  file: string,
+  accept: (info: Info) => boolean = () => true,
+  children: ReadonlyArray<Bun.Subprocess<"ignore" | "pipe", "ignore" | "pipe", "pipe">> = [],
+  timeout = 20_000,
+) {
+  for (const deadline = Date.now() + timeout; Date.now() < deadline; ) {
     const value = await Bun.file(file)
       .json()
       .catch(() => undefined)
     if (value !== undefined) {
       const info = await Schema.decodeUnknownPromise(Service.Info)(value)
       if (accept(info)) return info
+    }
+    if (children.length > 0 && children.every((child) => child.exitCode !== null)) {
+      const stderr = await Promise.all(children.map((child) => new Response(child.stderr).text()))
+      throw new Error(
+        `The service exited before it registered (exit ${children.map((child) => child.exitCode).join(", ")}): ${stderr.join("\n").trim()}`,
+      )
     }
     await Bun.sleep(50)
   }
@@ -624,6 +638,7 @@ function serviceEnv(root: string) {
     ORBIT_DB: path.join(root, "orbit.db"),
     ORBIT_TEST_HOME: root,
     XDG_CACHE_HOME: path.join(root, "cache"),
+    ...sharedTranspilerCache(),
     XDG_CONFIG_HOME: path.join(root, "config"),
     XDG_DATA_HOME: path.join(root, "data"),
     XDG_STATE_HOME: path.join(root, "state"),
@@ -642,7 +657,7 @@ async function startManagedService(prefix: string, failBoot = false) {
     stderr: "pipe",
     stdout: "ignore",
   })
-  const info = await waitForInfo(registration).catch(async (cause) => {
+  const info = await waitForInfo(registration, undefined, [owner]).catch(async (cause) => {
     owner.kill("SIGTERM")
     await owner.exited
     await fs.rm(root, { recursive: true, force: true })
