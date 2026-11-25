@@ -28,25 +28,49 @@ describe("Flock.gone", () => {
   })
 })
 
+// The stale check stats the held lock's heartbeat. A heartbeat that another holder is deleting answers EPERM on
+// Windows; a heartbeat that the contender may not read answers EPERM too, and stands in for it below. An access list
+// that denies the folder's listing and the file's attributes gives that answer on an ordinary account. An account that
+// holds the backup privilege reads past the list (GitHub's elevated Windows runners do), so there the row cannot build
+// its condition and is skipped rather than passing on a stat that answered.
+// By its full path, so no icacls.exe in the working folder is started instead (class 10).
+const icacls = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe")
+
+async function denyHeartbeat(lock: string) {
+  const heartbeat = path.join(lock, "heartbeat")
+  await runProgram([icacls, lock, "/deny", "*S-1-1-0:(RD)"])
+  await runProgram([icacls, heartbeat, "/deny", "*S-1-1-0:(RA)"])
+  const answer = await fs.stat(heartbeat).then(
+    () => "read",
+    (error: NodeJS.ErrnoException) => String(error.code),
+  )
+  return {
+    answer,
+    async restore() {
+      await runProgram([icacls, heartbeat, "/remove:d", "*S-1-1-0"])
+      await runProgram([icacls, lock, "/remove:d", "*S-1-1-0"])
+    },
+  }
+}
+
+const deniable =
+  process.platform === "win32" &&
+  (await (async () => {
+    const probe = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flock-probe-"))
+    await fs.writeFile(path.join(probe, "heartbeat"), "")
+    const denied = await denyHeartbeat(probe)
+    await denied.restore()
+    await fs.rm(probe, { recursive: true, force: true })
+    return denied.answer === "EPERM"
+  })())
+
 describe("Flock.acquire", () => {
-  // The stale check stats the held lock's heartbeat. A heartbeat that another holder is deleting answers EPERM on
-  // Windows; a heartbeat that the contender may not read answers EPERM too, and stands in for it here. The contender
-  // then waits for the lock, as it does for a missing heartbeat, instead of failing with the error.
-  test.skipIf(process.platform !== "win32")(
+  test.skipIf(!deniable)(
     "on Windows a contender whose stat of the held lock's heartbeat answers EPERM waits for the lock instead of failing",
     async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flock-"))
       const held = await Flock.acquire("key", { dir })
-      const lock = path.join(dir, (await fs.readdir(dir)).find((name) => name.endsWith(".lock"))!)
-      const heartbeat = path.join(lock, "heartbeat")
-      // By its full path, so no icacls.exe in the working folder is started instead (class 10).
-      const icacls = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe")
-      await runProgram([icacls, lock, "/deny", "*S-1-1-0:(RD)"])
-      await runProgram([icacls, heartbeat, "/deny", "*S-1-1-0:(RA)"])
-      const denied = await fs.stat(heartbeat).then(
-        () => undefined,
-        (error: NodeJS.ErrnoException) => error.code,
-      )
+      const denied = await denyHeartbeat(path.join(dir, (await fs.readdir(dir)).find((name) => name.endsWith(".lock"))!))
       const waits: number[] = []
       const error = await Flock.acquire("key", {
         dir,
@@ -57,11 +81,10 @@ describe("Flock.acquire", () => {
         (lease) => lease.release().then(() => undefined),
         (error: Error) => error,
       )
-      await runProgram([icacls, heartbeat, "/remove:d", "*S-1-1-0"])
-      await runProgram([icacls, lock, "/remove:d", "*S-1-1-0"])
+      await denied.restore()
       await held.release()
       await fs.rm(dir, { recursive: true, force: true })
-      expect(denied).toBe("EPERM")
+      expect(denied.answer).toBe("EPERM")
       expect(error?.message).toBe("Timed out waiting for lock: key")
       expect(waits.length).toBeGreaterThan(0)
     },
