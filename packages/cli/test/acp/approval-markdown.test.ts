@@ -922,7 +922,7 @@ describe("acp: other text a model, a tool or a server chose", () => {
     // O's controls: a `'` title that an empty line ends, and a `"` or `(` title over a line of spaces.
     ["O's control: a `'` title over an empty line", ["[r]: /u 'a\n\n```\n'\nIMAGE\n```\n"]],
     ["O's control: a `'` title over a line of spaces and an empty line", ["[r]: /u 'a\n   \n\n```\n'\nIMAGE\n```\n"]],
-    ['O\'s control: a `"` title over a line of spaces', ['[r]: /u "a\n   \n```\n"\nIMAGE\n```\n']],
+    ["O's control: a `\"` title over a line of spaces", ['[r]: /u "a\n   \n```\n"\nIMAGE\n```\n']],
     ["O's control: a `(` title over a line of spaces", ["[r]: /u (a\n   \n```\n)\nIMAGE\n```\n"]],
     // The controls: a definition does not start inside a paragraph or past a quote's marks for `marked`.
     ["M's control: a label after a line of text", ["a\n[r]:\n```\nIMAGE\n```"]],
