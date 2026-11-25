@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { Effect, FileSystem } from "effect"
 import { NodeFileSystem } from "@effect/platform-node"
-import { DEADLINE_MS, replaceFile, replaceFileEffect } from "../src/replace-file.js"
+import { DEADLINE_MS, replaceFile, replaceFileEffect, replaceFileSync } from "../src/replace-file.js"
 
 // On Windows a rename over a file that another handle has open fails until that handle closes, and every reader holds
 // one for a moment. tui/test/util/persistence.test.ts pins the session-tabs writer; these rows pin the helper itself and
@@ -18,6 +18,27 @@ const replacers = {
         yield* replaceFileEffect(fs, from, to)
       }).pipe(Effect.provide(NodeFileSystem.layer)),
     ),
+  // The synchronous form blocks this thread while it waits, so a reader that is to let go meanwhile is another process.
+  replaceFileSync: async (from: string, to: string) => replaceFileSync(from, to),
+}
+
+// Another process that opens `file` for reading, says so, and closes it after `ms`.
+async function holdElsewhere(file: string, ms: number) {
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      "-e",
+      `const fs = require("node:fs")
+const fd = fs.openSync(${JSON.stringify(file)}, "r")
+console.log("held")
+setTimeout(() => fs.closeSync(fd), ${ms})`,
+    ],
+    { stdin: "ignore", stdout: "pipe", stderr: "inherit" },
+  )
+  const reader = child.stdout.getReader()
+  await reader.read()
+  reader.releaseLock()
+  return child
 }
 
 async function scratch() {
@@ -36,10 +57,9 @@ describe("replacing a file by rename", () => {
     "%s waits for a reader that still has the target open and lands",
     async (name) => {
       await using files = await scratch()
-      const reader = await fs.open(files.target, "r")
-      const released = Bun.sleep(300).then(() => reader.close())
+      const reader = await holdElsewhere(files.target, 300)
       const answer = await replacers[name](files.temporary, files.target).then(() => "replaced", failed)
-      await released
+      await reader.exited
       expect(answer).toBe("replaced")
       expect(await fs.readFile(files.target, "utf8")).toBe("new")
       expect(await fs.readdir(files.dir)).toEqual(["target.json"])
@@ -121,10 +141,11 @@ const writers = [
   ["cli/src/config/migrate.ts", "replaceFileEffect("],
   ["cli/src/services/service-config.ts", "replaceFileEffect("],
   ["cli/src/services/service-registration.ts", "replaceFileEffect("],
+  ["vscode/src/ide-bridge.ts", "replaceFileSync("],
 ] as const
 
 test.each(writers)("%s replaces its file through the helper", async (file, call) => {
   const source = await fs.readFile(path.join(import.meta.dir, "../..", file), "utf8")
   expect(source).toContain(call)
-  expect(source).not.toMatch(/(?<![\w.])rename\(|fs\.rename\(/)
+  expect(source).not.toMatch(/(?<![\w.])rename(Sync)?\(|fs\.rename(Sync)?\(/)
 })

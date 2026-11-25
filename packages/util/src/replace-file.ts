@@ -1,25 +1,19 @@
 import { rename } from "node:fs/promises"
-import { setTimeout as sleep } from "node:timers/promises"
 import { Effect, Schedule } from "effect"
 import type { FileSystem } from "effect"
 import type { PlatformError } from "effect/PlatformError"
+import { code, DEADLINE_MS, FIRST_DELAY_MS, held, MAX_DELAY_MS } from "./replace-file-sync.js"
 
-// A file is written whole by writing a temporary file next to it and renaming that over it. On Windows the rename
-// answers EPERM, EACCES or EBUSY while any other handle has the target open, and readers do hold it for a moment:
-// another process loading the file, a reload, a client reading a registration. The rename is tried again with a short
-// backoff until the deadline, and then the last error is thrown, so a handle that is never let go still fails the write.
-
-/** How long a replace waits for readers to let go of the target before it gives up. */
-export const DEADLINE_MS = 5_000
-const FIRST_DELAY_MS = 10
-const MAX_DELAY_MS = 200
+// Replacing a file by rename, waiting for readers that hold it on Windows: see replace-file-sync.ts for why, the bound
+// and the synchronous form.
+export { DEADLINE_MS, replaceFileSync } from "./replace-file-sync.js"
 
 export async function replaceFile(from: string, to: string) {
   const stop = performance.now() + DEADLINE_MS
   const attempt = async (delay: number): Promise<void> =>
     rename(from, to).catch(async (error: unknown) => {
       if (!held(code(error)) || performance.now() + delay > stop) throw error
-      await sleep(delay)
+      await new Promise((resolve) => setTimeout(resolve, delay))
       return attempt(Math.min(delay * 2, MAX_DELAY_MS))
     })
   return attempt(FIRST_DELAY_MS)
@@ -35,13 +29,4 @@ export function replaceFileEffect(fs: FileSystem.FileSystem, from: string, to: s
       ),
     }),
   )
-}
-
-function held(code: string | undefined) {
-  return process.platform === "win32" && (code === "EPERM" || code === "EACCES" || code === "EBUSY")
-}
-
-function code(error: unknown) {
-  if (typeof error !== "object" || error === null || !("code" in error) || typeof error.code !== "string") return
-  return error.code
 }

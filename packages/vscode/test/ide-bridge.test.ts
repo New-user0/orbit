@@ -332,10 +332,43 @@ setTimeout(() => { fs.closeSync(fd); process.exit(0) }, 120)`,
   expect((await fs.readdir(directory)).filter((name) => name.endsWith(".tmp"))).toEqual([])
 })
 
+// The bridge gave up after eight tries, about 360 ms in all, where every other writer that replaces a file waits for
+// readers up to the shared deadline (@orbit/util/replace-file-sync); a terminal UI that read the lock for longer on a
+// loaded machine made the rewrite fail. Windows only: elsewhere a rename does not wait for readers.
+test.skipIf(process.platform !== "win32")(
+  "rewrites the lock while a reader holds it open for longer than a moment",
+  async () => {
+    const directory = await folder()
+    const { bridge, logs } = await start(directory)
+    const reader = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `const fs = require("node:fs")
+const fd = fs.openSync(${JSON.stringify(bridge.lockFile)}, "r")
+console.log("held")
+setTimeout(() => { fs.closeSync(fd); process.exit(0) }, 1500)`,
+      ],
+      { stdout: "pipe" },
+    )
+    cleanup.push(() => reader.kill())
+    const stream = reader.stdout.getReader()
+    await stream.read()
+
+    bridge.folders(["/work/project", "/work/slow"])
+    await reader.exited
+
+    expect(logs.filter((line) => line.includes("could not update"))).toEqual([])
+    expect((await lock(bridge)).workspaceFolders).toEqual(["/work/project", "/work/slow"])
+  },
+  30_000,
+)
+
 test("logs one line and leaves no temporary file when the lock cannot be rewritten", async () => {
   const directory = await folder()
   const { bridge, logs } = await start(directory)
-  // A folder where the lock should be: the rename fails for every attempt and with a code that is not retried.
+  // A folder where the lock should be: the rename fails for every attempt. Windows answers EPERM, the code a reader
+  // causes, so there the rewrite waits out the shared deadline (5 s) before it gives up; elsewhere it fails at once.
   await fs.rm(bridge.lockFile)
   await fs.mkdir(bridge.lockFile)
   cleanup.push(() => fs.rm(bridge.lockFile, { recursive: true, force: true }))
@@ -345,7 +378,7 @@ test("logs one line and leaves no temporary file when the lock cannot be rewritt
 
   expect(logs.filter((line) => line.includes("could not update the lock"))).toHaveLength(1)
   expect((await fs.readdir(directory)).filter((name) => name.endsWith(".tmp"))).toEqual([])
-})
+}, 20_000)
 
 test("closes its listener when the lock folder cannot be used", async () => {
   const directory = await folder()
@@ -1197,6 +1230,9 @@ describe("a review closed while its file is still being read opens nothing", () 
       client.socket.send(JSON.stringify(row.close({ type: "diff.closeAll" })))
       await Bun.sleep(50)
       disk.release()
+      // The dismissal is sent once the read ends; a loaded runner can take longer than a fixed wait for it, so the row
+      // waits for it, bounded by the test's limit. A row that expects no answer can only wait a while and look.
+      if (row.dismissed) await until(() => answers(client).length > 0, "the dismissal")
       await Bun.sleep(100)
       expect(editor.shown).toEqual([])
       expect(answers(client)).toEqual(row.dismissed ? [{ type: "diff.answer", id: "per_a1", answer: "dismissed" }] : [])

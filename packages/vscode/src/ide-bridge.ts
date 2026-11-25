@@ -6,6 +6,7 @@
 // import, so the tests load it as it is: the editor's lifecycle, logging and environment come in as arguments. It starts
 // no program and makes no outbound connection.
 import { IdeLock } from "@orbit/util/ide-lock"
+import { replaceFileSync } from "@orbit/util/replace-file-sync"
 import crypto from "node:crypto"
 import fs from "node:fs"
 import http from "node:http"
@@ -351,19 +352,13 @@ function writeLock(
   }
   const temporary = path.join(directory, `.${port}.${crypto.randomBytes(6).toString("hex")}.tmp`)
   fs.writeFileSync(temporary, JSON.stringify(lock), { mode: 0o600 })
-  // On Windows the rename fails while a reader holds the lock open, so it is tried again a few times.
-  for (let attempt = 1; ; attempt++) {
-    try {
-      fs.renameSync(temporary, lockFile)
-      return
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (attempt >= 8 || (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES")) {
-        fs.rmSync(temporary, { force: true })
-        throw error
-      }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * attempt)
-    }
+  // On Windows the rename fails while a reader (a terminal UI looking for the bridge) holds the lock open, so it waits
+  // for the reader up to the shared deadline.
+  try {
+    replaceFileSync(temporary, lockFile)
+  } catch (error) {
+    fs.rmSync(temporary, { force: true })
+    throw error
   }
 }
 
