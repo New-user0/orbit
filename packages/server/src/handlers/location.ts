@@ -95,14 +95,14 @@ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (han
         Effect.fn(function* (ctx) {
           const trust = yield* ProjectTrust.Service
           if (!ctx.payload.trust) return yield* trust.revoke()
-          const fresh = !(yield* trust.trusted())
           // The API does not know which client asked, so a grant says only that it came through here.
           const state = yield* trust.grant({ persist: ctx.payload.persist ?? true, via: "api" })
           // The folder's providers, agents and commands come from plugins that activate again after the config reload
           // that the grant made, so the answer waits for them: a client that lists or acts right after the grant then
-          // sees the folder it trusted (class 3).
+          // sees the folder it trusted (class 3). A grant of a folder that was already trusted changes no plugin, so its
+          // activation applies the same ones.
           const plugins = yield* Plugin.Service
-          if (fresh) yield* plugins.refresh()
+          yield* plugins.refresh()
           return state
         }),
       )
