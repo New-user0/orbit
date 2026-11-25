@@ -3105,6 +3105,19 @@ this.
 
 **What to do:** Nothing, unless a hook relied on the model's `old_string` after a revision: it is the whole file now.
 
+### The web search and model routes answer once a Location's plugins are active
+
+A Location starts its plugins on the first request that names it. The web search routes (`websearch.providers`,
+`websearch.query`) and the model routes (`model.list`, `model.default`) used to answer that request before the plugins
+were active, so a plugin's web search provider was missing ("Web search provider not found") and the models of a
+configured provider were not listed until a later request. They now wait for the plugins, as the agent, command and
+skill routes already did, so the first answer is complete.
+
+**Affects:** SDK and HTTP clients that ask a fresh Location for its web search providers or models, and code that retried
+those requests until the answer filled in.
+
+**What to do:** Nothing. A retry loop that waited for a model or provider to appear can go.
+
 ## Agent loop
 
 Changes to how a turn runs: what a response may call, and how its failures are told apart.
@@ -4478,6 +4491,19 @@ line for the rest. An interrupt just after the hidden folder of the copy is made
 **Affects:** projects that ship agent memory snapshots with more than 200 files or with files over 250,000 bytes.
 
 **What to do:** Keep a snapshot within the bounds, or split a large file.
+
+### Orbit started from Git Bash finds Git Bash as its shell
+
+On Windows Orbit finds Git Bash next to the `git` it finds on `PATH`. Git Bash puts its own `git`, in Git's
+`ucrt64\bin` folder (`mingw64\bin` in older releases, `clangarm64\bin` on ARM), first on the `PATH` it hands to the
+programs it starts, and Orbit looked
+for Git Bash only next to the copies in Git's `cmd` and `bin` folders. So an Orbit started from Git Bash found no Git
+Bash, and `SHELL=/usr/bin/bash`, which Git Bash sets, or a bare `bash` resolved to another shell. Orbit now also finds Git
+Bash from that copy, so both resolve to Git Bash's `bin\bash.exe`.
+
+**Affects:** Windows users who start Orbit from Git Bash.
+
+**What to do:** Nothing. Set `shell` in your config to choose another shell.
 
 ## Files and web tools
 

@@ -26,32 +26,13 @@ A gate is a test that pins a promise in `docs/untrusted-repositories.md`. A gate
 
 ## Fail every run
 
-| Package | Test (file) | Cause | On main |
-| --- | --- | --- | --- |
-| cli | `acp config option subprocess > model option is listed with category "model"` (`packages/cli/test/acp/config-options.subprocess.test.ts`) | Not root-caused: the fixture's `test` provider is missing from the listed options, and the current model reported is `ollama/gemma3:4b`, the host's own Ollama model. Also fails at the import commit `7845c97`. Passes in Linux Docker (round 7), so it depends on this Windows host; not verified with Ollama stopped. | yes |
-| cli | `acp config option subprocess > model switch updates currentValue` (`packages/cli/test/acp/config-options.subprocess.test.ts`) | Same as above: not root-caused. | yes |
-| cli | `acp config option subprocess > effort option is listed with category "thought_level" when selected model supports variants` (`packages/cli/test/acp/config-options.subprocess.test.ts`) | Same as above: not root-caused. | yes |
-| cli | `acp config option subprocess > effort survives model synchronization and can be reset to default` (`packages/cli/test/acp/config-options.subprocess.test.ts`) | Same as above: not root-caused. | yes |
-| client | `packages/client/test/import-boundaries.test.ts` (file fails to load) | Calls `realpathSync` on a package path that does not exist under the hoisted install (`--linker hoisted`). | yes |
-| client | `evicts an unresponsive registered service before starting its replacement` (`packages/client/test/service.test.ts`) | Asserts on process signals and service replacement. Not root-caused. | yes |
-| client | `evicts an unresponsive registered service before starting its replacement` (`packages/client/test/promise-service.test.ts`) | Same: not root-caused. | yes |
-| client | `replaces an incompatible registered service` (`packages/client/test/service.test.ts`) | Same: not root-caused. | yes |
-| client | `signals an incompatible service before starting its replacement` (`packages/client/test/service.test.ts`) | Same: not root-caused. | yes |
-| client | `signals an unresponsive registered service process` (`packages/client/test/service.test.ts`) | Same: not root-caused. | yes |
-| client | `signals the registered service process` (`packages/client/test/promise-service.test.ts`) | Same: not root-caused. | yes |
-| core | `shell > normalizes Git Bash shell paths from env` (`packages/core/test/shell.test.ts`) | The test hard-codes `/cygdrive/c/Program Files/Git/bin/bash.exe`; Git is at `D:\Git` here, so the resolver falls back to another shell. | yes |
-| core | `ManagedSettings.read unreadable input > reports a file that an access list denies instead of treating it as missing` (`packages/core/test/managed-settings.test.ts`) | Fails only on the GitHub Windows runner, whose account is an elevated administrator: the file is read although `icacls` denies Everyone read access, so no diagnostic is reported. Not root-caused beyond that; passes on the unelevated development machine when the file is re-run alone (2026-10-23). | CI only |
-| merman | `audits deterministic flowchart and state layout families` (`packages/merman/src/layout-audit.test.ts`) | The layout metric `bends.max` is 31 against a limit of 30. Fails on Linux too (round 7), so it is not Windows-specific. merman is not part of CI. | yes |
-| schema | `contract hygiene > current source limits Any to reviewed boundaries and avoids mutable contract wrappers` (`packages/schema/test/contract-hygiene.test.ts`) | The source scan turns `URL.pathname` into a path with a leading slash before the drive letter, which Windows cannot read. | yes |
-| schema | `current source does not import the V1 subtree directly` (`packages/schema/test/v1-isolation.test.ts`) | Same `URL.pathname` cause. | yes |
-| sdk | `embedded client exposes plugin-backed web search` (`packages/sdk/test/embedded.test.ts`) | Fails with `Web search provider not found: embedded-websearch`. Not root-caused; not shown to be Windows-specific. | yes |
-| sdk | `Promise event streams support cancellation` (`packages/sdk/test/promise.test.ts`, line 48) | After the stream is aborted, `next()` resolves `{ done: true }` instead of rejecting with `ClientError` (`reason: "Transport"`). Not root-caused; not shown to be Windows-specific. | yes |
-| util | `global > building a layer with default tmp creates and canonicalizes it` (`packages/util/test/global.test.ts`) | The test sets `TMPDIR`, which `os.tmpdir()` ignores on Windows, so the canonicalized path does not exist (`ENOENT` on `lstat`). | yes |
-| vscode | `starts the background service through orb and returns an endpoint that authenticates` (`packages/vscode/test/endpoint.test.ts`) | The test plants a fake `orb` executable without an extension; Windows cannot run it, and the program lookup fails with `Could not find "...\orb". Set orbit.executable...`. | yes |
-| vscode | `reports why orb could not start` (`packages/vscode/test/endpoint.test.ts`) | Same fake `orb` cause. | yes |
-| vscode | `reads the version orb prints` (`packages/vscode/test/endpoint.test.ts`) | Same fake `orb` cause. | yes |
-| vscode | `lists runs and their nodes, and approves a waiting gate` (`packages/vscode/test/runs.test.ts`) | Same fake `orb` cause. | yes |
-| vscode | `afterAll` hook (`packages/vscode/test/endpoint.test.ts:22`, reported as `(unnamed)`) | Stopping the service with the fake `orb` throws, so the hook ends before it removes its temporary folder. Same fake `orb` cause. | yes |
+No test fails every run. The 23 rows of CI's packages that stood here until the ci-green task (PR #192) were fixed at
+their cause, in the product or in the test; "ci-green" at the end of this file names the cause, the commit and the test
+for each. The merman row moved to the paragraph below.
+
+merman is not run by CI: `.github/workflows/check.yml` has no merman job. Run by hand, its `audits deterministic
+flowchart and state layout families` (`packages/merman/src/layout-audit.test.ts`) fails on Windows and on Linux: the
+layout metric `bends.max` is 31 against a limit of 30 (round 7). A change to merman runs that package by hand.
 
 ## Flaky, depend on load
 
@@ -121,6 +102,7 @@ Each passes when re-run alone, unless its row says otherwise.
 | tui | `light pane resize handle renders themed hover and keeps parent-owned dragging and reset` (`packages/tui/test/ui/pane-resize-handle.test.tsx`, line 163) | Linux CI only, an assertion and not a timeout: after the double click the pane was still 40 wide (`Expected: 16`, `Received: 40`). `createPaneResize` (`packages/tui/src/ui/pane-resize.ts`) takes a second press as a double click only when it comes less than 300 ms of wall-clock time after the first release, so on a loaded runner the second press of `mockMouse.doubleClick` started a new drag instead of the reset. Seen in the GitHub Linux tui job 128044282180 of PR #187's run 42262021606 at `c416e68b`, which changes no tui code. The file passes alone in Linux Docker at `c416e68b` (2 pass) and alone on Windows (3 runs, 2 pass each). | CI only, intermittent |
 | tui | `shimmer fades in from idle and fades out on unchanged completion` (`packages/tui/test/component/title-shimmer.test.ts`, line 40) | Windows CI only, an assertion and not a timeout: 240 ms of the test clock after the rename completed, the root still had one live renderable (`Expected: 0`, `Received: 1`). Cause not established. Seen in the GitHub Windows tui job 128081347679 of PR #187's run 42272777847 at `7321671c` and again in that job's re-run 128102454073; the PR changes no tui code, and the same job passed at `87016da2` on the same runner image (`windows-2025-vs2026` 20261103.298.1). The file passes alone on Windows at `7321671c` (16 runs, under load and with `--coverage` included) and at the base `d7936f05`. | CI only, intermittent |
 | tui | `a delay that ends during a turn waits for the turn's end, and asks then only if still blurred` (`packages/tui/test/feature-plugins/recap.test.tsx`, line 291) | Linux CI only, an assertion and not a timeout: one of the test's `toHaveLength(0)` checks, which it makes after a fixed `Bun.sleep(400)`, found one recap request (`Expected length: 0`, `Received length: 1`); which check the trace does not say (it points at line 420). The test reads wall-clock sleeps, so a loaded runner can move an event across them. Seen in the GitHub Linux tui job 137360775282 of PR #189's run 45071988373 at `bc4ead7a`, which changes no recap code. The file passes alone in Linux Docker at `bc4ead7a` (14 pass), alone on Windows at `bc4ead7a` and at its base `0b605881` (3 runs, 14 pass each). | CI only, intermittent |
+| tui | `another session's turn ending does not send the request this session deferred` (`packages/tui/test/feature-plugins/recap.test.tsx`, line 316) | Windows CI only, an assertion and not a timeout, after 1.0 s: the same fixed-`Bun.sleep(400)` cause as the row above, in the sibling test (`Expected length: 0`, `Received length: 1`; the trace points at line 454). Seen in the GitHub Windows tui job 139130548470 of PR #192's run 45592646280 at `8c4da141`, which changes no tui code. The file passes alone on Windows at `8c4da141` (3 runs, 14 pass each). The m5-flakes task (R37) replaces those sleeps. | CI only, intermittent |
 | cli | `$/cancel_request cancels the in-flight prompt and the session stays usable` (`packages/cli/test/acp/cancel.subprocess.test.ts`) | Timeout only, when other test runs share the machine: the subprocess starts slowly. Passes when its file is re-run alone (compaction-instructions run, 2026-11-01). | intermittent |
 | cli | `auth negotiation is explicit and safe` (`packages/cli/test/acp/initialize-auth.subprocess.test.ts`) | Same subprocess start-up timeout; passes when its file is re-run alone (compaction-instructions run, 2026-11-01). Not seen failing in the Windows cli jobs of the m5-integration push runs 42066544917, 42088393502 and 42126708684. The same file's `initialize without terminal-auth metadata keeps auth command implicit`, which timed out after 25 to 27 s in the Windows cli job (1/3) of runs 40706853976, 40741577819, 41281437344 and 41317375448, had a cause of its own and has no row: it sent its first request with the 20 s default instead of the start gate and the 60 s readiness deadline of `initialize` (`packages/cli/test/acp/subprocess.ts`), fixed by m5-final-fixes. | intermittent |
 | core | the rows of `packages/core/test/snapshot-restore-links.test.ts` that restore through a link | Timeout only: repository and link set-up exceed the 5 second limit under load; passes when its file is re-run alone (compaction-instructions run, 2026-11-01). | intermittent |
@@ -148,11 +130,53 @@ Checked in M3 convergence round 6, on Windows (the Linux run of the same files i
 
 Every row's file was re-run alone at `4e29991`, on Windows (`bun test --timeout 60000 <file>`, core through `bun run test <file>`) and on Linux in Docker (`tools/linux-test/linux-test.sh`, `TEST_FILES` set), on 2026-10-14. A passing row is still listed: each is a load flake, which fails only in a busy parallel run, and "passes alone" is what its row already says.
 
-- Still fail on Windows alone, rows kept as they are: the four `acp config option subprocess` tests; `client` `import-boundaries`, and the five `service`/`promise-service` tests; core `normalizes Git Bash shell paths from env`; merman `layout-audit` (`bends.max` over its limit); schema `contract-hygiene` and `v1-isolation`; sdk `transport` (two), `embedded` and `promise`; util `global`; the four vscode `endpoint` rows and the `runs` row.
-- Pass on Linux, so they depend on the Windows host: cli `config-options.subprocess`, client `import-boundaries`, `service` and `promise-service`, core `shell`, schema `contract-hygiene` and `v1-isolation`, util `global`, vscode `endpoint` and `runs`.
+- Still fail on Windows alone, rows kept as they are: the four `acp config option subprocess` tests; `client` `import-boundaries`, and the six `service`/`promise-service` tests; core `normalizes Git Bash shell paths from env`; merman `layout-audit` (`bends.max` over its limit); schema `contract-hygiene` and `v1-isolation`; sdk `transport` (two), `embedded` and `promise`; util `global`; the four vscode `endpoint` rows and the `runs` row.
+- Pass on Linux: cli `config-options.subprocess`, client `import-boundaries`, `service` and `promise-service`, core `shell`, schema `contract-hygiene` and `v1-isolation`, util `global`, vscode `endpoint` and `runs`. All but one depend on the Windows host; client `import-boundaries` depends on the install instead: it fails under the hoisted install (`--linker hoisted`) that the Windows machines use, and the Linux runs use an isolated one.
 - Fail on Linux too, so they are not Windows-specific: the four sdk rows (`transport` two, `embedded`, `promise`).
 - Pass alone on both systems (and in the parallel runs below), confirming the load-flake rows: cli `egress` (both gates), `flow`, `standalone`, `acp/lifecycle.subprocess`, `service`, `acp/prompt-content.subprocess` and `trust`; core `npm`, `vcs`, `supervisor-reload`, `formatter`, `git`, `location-layer` and `lifecycle-hooks`; server `worktree`; tui `session-home`; util `observability-otlp`. The `supervisor-reload` row (it failed alone in 2 of 3 runs before) passed on its single run here, so its "does not always pass alone" note stands unchanged.
 - merman `layout-audit` also fails on Linux (`linux-test.sh <ref> merman`: 503 pass, 1 fail), so that row is not Windows-specific.
 - Parallel run, 2026-10-14 (`bun run test`; the whole package for client, schema, sdk, util, vscode and merman; the row files together for core, cli, server and tui, because a whole run of those takes too long here). Windows gave the same failures as the alone runs for every package with a failing row: client 7, schema 2, sdk 4, util 1, vscode 5 (including the `afterAll`), merman 1, core `shell` 1, cli the four `config-options` tests; server `worktree` and tui `session-home` passed. Linux gave 0 failures for client, schema, util, vscode, server, tui, and the core and cli row files; sdk failed the same 4 and merman the same 1. One timeout was new in the core parallel run, `Npm.add > installs a Git package from an npm ::path: subdirectory at a commit` (5 s limit); `npm.test.ts` passed alone (16 of 16), so it is the same load flake as the other `Npm.add` rows.
 - The cli `state-home.test.ts` added in this round passes on both.
 - 2026-10-19 (M4 verification round 2): the two sdk `transport` rows are removed. The embedded `sessions.get` now gives the protocol's `SessionNotFoundError`, as the HTTP client does (FU-M1-041, f86239e0), and both rows pass on Windows. The sdk `embedded` (web search) and `promise` (stream cancellation) rows are separate and stay; so the older lines above that count four sdk failures describe the state before this change.
+
+## ci-green
+
+The ci-green task (PR #192, 2026-11-25) removed every row of "Fail every run". Each row's cause, the commit that fixed it
+and the test that shows it, on the platform where it failed (Windows CI or a local Windows run; Linux CI):
+
+- cli, the four `acp config option subprocess` rows: before trust-first, config discovery walked from the session's
+  folder up to the drive root, and the fixture's temporary folder sits under the developer's real home, so sources in
+  that home (other products' dot folders) were read as project sources and the session came up on the host's model.
+  Fixed by `b555a280` (trust-first part 2, owner decision D7: nothing above the project is read). The rows pass on
+  Windows CI and locally, and `packages/core/test/config/above-project.test.ts` "config above the project" pins the
+  walk.
+- client `import-boundaries.test.ts`: it read `packages/client/node_modules/effect`, which the hoisted install does not
+  create. It resolves `effect` from the package now (`faed67b3`).
+- client, the six `service`/`promise-service` replacement and signal rows: on Windows a kill from another process is
+  TerminateProcess, so the fixture's SIGTERM handler never runs and the process ends with status 1. The fixture names
+  what each platform gives when the client stops a service (`faed67b3`); every row still checks that the client stopped
+  it.
+- core `shell > normalizes Git Bash shell paths from env`: the row hard-coded a Git under `C:\Program Files`, and the
+  product found no Git Bash at all when started from Git Bash, which puts its toolchain's `git` (`ucrt64\bin` on the
+  runner, `mingw64\bin` before) first on `PATH`. The lookup now looks one folder higher from a toolchain's copy
+  (`accab30c`, `86f1374e`), and the row builds its path from the machine's own Git Bash. "finds Git Bash from each folder
+  Git for Windows keeps git.exe in" pins every layout (`7f5447e4`).
+- core `ManagedSettings.read unreadable input`, the access-list row: on the GitHub Windows runner icacls applied the
+  deny and a plain read still succeeded, with a deny for Everyone (run 45592646280) and with one for the runner's own
+  account too (run 45595567966), so the account reads past any access list. The row now has a PowerShell child hold the
+  file with no sharing before the deny, requires a plain read to fail with `EPERM` or `EBUSY`, and is named "reports a
+  file this account cannot open instead of treating it as missing" (`f402602f`, `0666075d`).
+- schema `contract-hygiene` and `v1-isolation`: `URL.pathname` is `/D:/...` on Windows. They scan
+  `path.join(import.meta.dir, "../src")` and first check that the scan found the source (`33250350`).
+- sdk `embedded client exposes plugin-backed web search`: the web search routes answered the request that boots a
+  Location before its plugins were active. They, and `model.list` and `model.default`, now wait for activation
+  (`a7c07d1d`), pinned by the four "the first request to a fresh Location" rows (`2c169526`, `8dc2bed9`); the row reads
+  its config from the fixture's folder.
+- sdk `Promise event streams support cancellation`: the row expected a Transport error, but an aborted subscriber of the
+  shared event stream ends with `done`, as the client's tests pin. The row expects that now (`c89e1f09`).
+- util `global > building a layer with default tmp ...`: `os.tmpdir()` reads `TEMP` and `TMP` on Windows, not `TMPDIR`.
+  The child gets all three (`33250350`).
+- vscode, the `endpoint` and `runs` rows and the `afterAll` hook: on Windows the extension starts only a `.exe` or `.com`
+  (class 10), and the stand-in `orb` was a shell script. A shared fixture compiles it into `orb.exe` there, and the hook
+  stops the service through the extension's lookup before it removes the folder (`8c4da141`, `295b6165`).
+- merman `layout-audit`: not run by CI; see "Fail every run".
