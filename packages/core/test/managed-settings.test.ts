@@ -441,34 +441,65 @@ const icacls = (...args: string[]) =>
     stdout: "pipe",
     stderr: "pipe",
   })
-// Opens `file` in a PowerShell child, by its full path (class 10), and holds it with no sharing until the scope ends.
-// An administrator whose backup privilege is on reads past any access list (the GitHub Windows runner does, even with
-// a deny for its own account), but no account opens a file another process holds this way.
+// Windows PowerShell by its full path (class 10), running `command` with `file` in its environment.
+const powershell = (command: string, file: string) =>
+  Bun.spawn(
+    [
+      path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      // A failed .NET call ends only its own statement unless errors stop the script, so without this the helper would
+      // go on to say it holds a file it never opened.
+      `$ErrorActionPreference = 'Stop'; ${command}`,
+    ],
+    { env: { ...process.env, ORBIT_HELD_FILE: file }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+  )
+// Opens `file` in a PowerShell child and holds it with no sharing until the scope ends. Locally the hold alone makes a
+// read fail with EBUSY; on the GitHub Windows runner a read got through it (see docs/known-failures.md), so the row
+// prints what `unopened` finds when that happens.
 const hold = (file: string) =>
   Effect.acquireRelease(
     Effect.promise(async () => {
-      const child = Bun.spawn(
-        [
-          path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          // It waits on a timer, not on its input, so nothing but the release below ends it, and the handle with it.
-          "$held = [System.IO.File]::Open($env:ORBIT_HELD_FILE, 'Open', 'Read', 'None'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); Start-Sleep -Seconds 300",
-        ],
-        { env: { ...process.env, ORBIT_HELD_FILE: file }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+      // It waits on a timer, not on its input, so nothing but the release below ends it, and the handle with it.
+      const child = powershell(
+        "$held = [System.IO.File]::Open($env:ORBIT_HELD_FILE, 'Open', 'Read', 'None'); [Console]::Out.WriteLine('held ' + $held.Name); [Console]::Out.Flush(); Start-Sleep -Seconds 300",
+        file,
       )
       const first = await child.stdout.getReader().read()
       const said = new TextDecoder().decode(first.value)
-      if (!said.includes("held")) throw new Error(`Could not hold ${file}: ${said}${await new Response(child.stderr).text()}`)
-      return child
+      if (!said.startsWith("held "))
+        throw new Error(`Could not hold ${file}: ${said}${await new Response(child.stderr).text()}`)
+      return { child, name: said.slice("held ".length).trim() }
     }),
-    (child) =>
+    (held) =>
       Effect.promise(async () => {
-        child.kill()
-        await child.exited
+        held.child.kill()
+        await held.child.exited
       }),
   )
+// What a runner that reads a held file shows: the path the helper opened, whether a second PowerShell can open the
+// file the same way the read did (sharing read and write), and the privileges this account has enabled.
+const unopened = async (file: string, name: string) => {
+  const second = powershell(
+    "try { $file = [System.IO.File]::Open($env:ORBIT_HELD_FILE, 'Open', 'Read', 'ReadWrite'); $file.Close(); 'opened' } catch { 'refused: ' + $_.Exception.Message }",
+    file,
+  )
+  const privileges = Bun.spawnSync([path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe"), "/priv"], {
+    stdout: "pipe",
+  })
+  return [
+    `file: ${file}`,
+    `held by the helper as: ${name}`,
+    `second PowerShell open: ${(await new Response(second.stdout).text()).trim()}${await new Response(second.stderr).text()}`,
+    `enabled privileges: ${privileges.stdout
+      .toString()
+      .split(/\r?\n/)
+      .filter((line) => /\bEnabled\s*$/.test(line))
+      .map((line) => line.trim().split(/\s+/)[0])
+      .join(", ")}`,
+  ].join("\n")
+}
 const base = { managed: { mcp: { deny: ["x"] } } }
 
 describe("ManagedSettings.read unreadable input", () => {
@@ -526,15 +557,21 @@ describe("ManagedSettings.read unreadable input", () => {
                 (error: NodeJS.ErrnoException) => error.code,
               ),
             ).pipe(
-              Effect.map((outcome) => {
-                expect({ icacls: held.result.exitCode, stderr: held.result.stderr.toString() }).toEqual({
-                  icacls: 0,
-                  stderr: "",
-                })
-                // Still running, so the handle was still held when the read was tried.
-                expect(held.holder.exitCode).toBeNull()
-                expect(outcome).toBeOneOf(["EPERM", "EBUSY"])
-              }),
+              Effect.flatMap((outcome) =>
+                Effect.promise(async () => {
+                  expect({ icacls: held.result.exitCode, stderr: held.result.stderr.toString() }).toEqual({
+                    icacls: 0,
+                    stderr: "",
+                  })
+                  // Still running, so the handle was still held when the read was tried.
+                  expect(held.holder.child.exitCode).toBeNull()
+                  if (outcome === "read")
+                    console.error(
+                      `read a held file:\n${await unopened(path.join(directory, "managed-settings.json"), held.holder.name)}`,
+                    )
+                  expect(outcome).toBeOneOf(["EPERM", "EBUSY"])
+                }),
+              ),
             ),
           ),
         ),
