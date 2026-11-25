@@ -1,12 +1,15 @@
 import fs from "node:fs/promises"
 import net from "node:net"
 import path from "node:path"
-import { afterAll, expect } from "bun:test"
+import { afterAll, expect, setDefaultTimeout } from "bun:test"
 import { Orbit } from "@orbit/client"
 import { Effect } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
+
+// Each row builds a server, which a loaded Windows runner takes up to 5 s to start (row-limits.test.ts).
+setDefaultTimeout(30_000)
 
 // A grant answers once the folder's plugins that are available locally are active (trust-grant-models.test.ts). A
 // folder can also name a plugin package that has to be installed first, and an install takes as long as the registry

@@ -1,11 +1,14 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Orbit } from "@orbit/client"
 import { Effect } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
+
+// Each row builds a server, which a loaded Windows runner takes up to 5 s to start (row-limits.test.ts).
+setDefaultTimeout(30_000)
 
 // `ProjectTrust.grant` says that what the project holds applies by the time its answer arrives. The config was read
 // again before the answer, but the providers that config names come from plugins that reactivate after it, so a client
@@ -105,7 +108,6 @@ it.live("a folder trusted from the start lists its provider: the control for the
       expect(lists((await api.model.list({ location })).data)).toBe(true)
     })
   }),
-  15_000,
 )
 
 // The same route ends trust, and a revoke has to take effect as promptly as a grant: a client that revokes and then
