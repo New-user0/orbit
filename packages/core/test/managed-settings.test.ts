@@ -453,9 +453,10 @@ const hold = (file: string) =>
           "-NoProfile",
           "-NonInteractive",
           "-Command",
-          "$held = [System.IO.File]::Open($env:ORBIT_HELD_FILE, 'Open', 'Read', 'None'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); [void][Console]::In.ReadLine(); $held.Dispose()",
+          // It waits on a timer, not on its input, so nothing but the release below ends it, and the handle with it.
+          "$held = [System.IO.File]::Open($env:ORBIT_HELD_FILE, 'Open', 'Read', 'None'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); Start-Sleep -Seconds 300",
         ],
-        { env: { ...process.env, ORBIT_HELD_FILE: file }, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+        { env: { ...process.env, ORBIT_HELD_FILE: file }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
       )
       const first = await child.stdout.getReader().read()
       const said = new TextDecoder().decode(first.value)
@@ -464,7 +465,7 @@ const hold = (file: string) =>
     }),
     (child) =>
       Effect.promise(async () => {
-        child.stdin.end()
+        child.kill()
         await child.exited
       }),
   )
@@ -509,16 +510,16 @@ describe("ManagedSettings.read unreadable input", () => {
         write(directory, { "managed-settings.json": base }).pipe(
           // Held first: the deny below would keep the helper out too.
           Effect.andThen(hold(path.join(directory, "managed-settings.json"))),
-          Effect.andThen(
+          Effect.flatMap((holder) =>
             Effect.acquireRelease(
               Effect.sync(() => icacls(path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)")),
               () => Effect.sync(() => icacls(path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0")),
-            ),
+            ).pipe(Effect.map((result) => ({ holder, result }))),
           ),
           // The row is about a file this account cannot open. If the deny did not apply and the hold did not take, the
           // row would test a readable file, so a plain read must fail first: with EPERM where the access list decides,
           // and with EBUSY where the account reads past it and meets the hold.
-          Effect.andThen((result) =>
+          Effect.andThen((held) =>
             Effect.promise(() =>
               fs.readFile(path.join(directory, "managed-settings.json")).then(
                 () => "read",
@@ -526,7 +527,12 @@ describe("ManagedSettings.read unreadable input", () => {
               ),
             ).pipe(
               Effect.map((outcome) => {
-                expect({ icacls: result.exitCode, stderr: result.stderr.toString() }).toEqual({ icacls: 0, stderr: "" })
+                expect({ icacls: held.result.exitCode, stderr: held.result.stderr.toString() }).toEqual({
+                  icacls: 0,
+                  stderr: "",
+                })
+                // Still running, so the handle was still held when the read was tried.
+                expect(held.holder.exitCode).toBeNull()
                 expect(outcome).toBeOneOf(["EPERM", "EBUSY"])
               }),
             ),
