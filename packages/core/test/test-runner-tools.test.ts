@@ -150,27 +150,29 @@ describe("runTests", () => {
   )
 
   test(
-    "gives each run a fresh folder of start slots, in place of one it inherits, and removes it at the end",
+    "gives each run fresh folders for its start slots and its transpiler cache, in place of inherited ones, and removes them at the end",
     async () => {
       await using dir = await tmpdir()
       const seen = path.join(dir.path, "seen.json")
+      const names = { ORBIT_TEST_START_SLOTS: "orbit-starts-", ORBIT_TEST_TRANSPILER_CACHE: "orbit-transpiled-" }
       await suite(dir.path, {
-        "slots.test.ts": [
+        "folders.test.ts": [
           `import { test } from "bun:test"`,
           `import { existsSync, writeFileSync } from "node:fs"`,
-          `const folder = process.env.ORBIT_TEST_START_SLOTS ?? ""`,
-          `writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ folder, exists: existsSync(folder) }))`,
+          `const folders = ${JSON.stringify(Object.keys(names))}.map((name) => process.env[name] ?? "")`,
+          `writeFileSync(${JSON.stringify(seen)}, JSON.stringify(folders.map((folder) => ({ folder, exists: existsSync(folder) }))))`,
           `test("records", () => {})`,
         ].join("\n"),
       })
-      const outer = path.join(dir.path, "outer-starts")
-      const code = await runTests(args(dir.path), { ...process.env, ORBIT_TEST_START_SLOTS: outer }, dir.path)
+      const outer = Object.fromEntries(Object.keys(names).map((name) => [name, path.join(dir.path, `outer-${name}`)]))
+      const code = await runTests(args(dir.path), { ...process.env, ...outer }, dir.path)
       expect(code).toBe(0)
-      const run = (await Bun.file(seen).json()) as { folder: string; exists: boolean }
-      expect(run.exists).toBe(true)
-      expect(run.folder).not.toBe(outer)
-      expect(path.basename(run.folder)).toStartWith("orbit-starts-")
-      expect(await fs.stat(run.folder).catch(() => undefined)).toBeUndefined()
+      const run = (await Bun.file(seen).json()) as { folder: string; exists: boolean }[]
+      expect(run.map((entry) => entry.exists)).toEqual([true, true])
+      expect(run.map((entry) => entry.folder)).not.toContain(outer.ORBIT_TEST_START_SLOTS)
+      expect(run.map((entry) => entry.folder)).not.toContain(outer.ORBIT_TEST_TRANSPILER_CACHE)
+      expect(run.map((entry) => path.basename(entry.folder).replace(/-[^-]+$/, "-"))).toEqual(Object.values(names))
+      for (const entry of run) expect(await fs.stat(entry.folder).catch(() => undefined)).toBeUndefined()
     },
     60_000,
   )

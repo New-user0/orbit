@@ -3,13 +3,15 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { approval } from "./acp/approval-harness"
+import { isolatedEnv } from "./fixture/environment"
 import { held, startSlot, takeStartSlot } from "./fixture/start-gate"
 
-// The start gate (fixture/start-gate.ts) limits how many `orb` children start at once. A CI job runs its files in two
-// workers, and two files of the ACP approval matrix in one job used to start twice the gate's limit at once, which a
-// 4-core runner could not start within the first answer's deadline. These rows pin that the runner's workers share one
-// set of slots, that a slot left by a worker that exited is taken again, and that an approval row starts its child only
-// once it holds a slot.
+// How the cli tests start `orb` children from source. The start gate (fixture/start-gate.ts) limits how many start at
+// once. A CI job runs its files in two workers, and two files of the ACP approval matrix in one job used to start twice
+// the gate's limit at once, which a 4-core runner could not start within the first answer's deadline. These rows pin
+// that the runner's workers share one set of slots, that a slot left by a worker that exited is taken again, that an
+// approval row starts its child only once it holds a slot, and that every child shares the run's transpiler cache
+// instead of transpiling the source tree again.
 
 const gate = path.join(import.meta.dir, "fixture", "start-gate.ts")
 
@@ -157,5 +159,36 @@ describe("the start gate", () => {
       })
     },
     120_000,
+  )
+})
+
+describe("the transpiler cache of an `orb` child", () => {
+  test(
+    "is the run's shared cache, not one in the child's own cache folder",
+    async () => {
+      await using root = await slots()
+      await using shared = await slots()
+      const previous = process.env.ORBIT_TEST_TRANSPILER_CACHE
+      process.env.ORBIT_TEST_TRANSPILER_CACHE = shared.path
+      const env = isolatedEnv(root.path)
+      restore("ORBIT_TEST_TRANSPILER_CACHE", previous)
+      const child = Bun.spawn([process.execPath, "run", "src/index.ts", "--version"], {
+        cwd: path.join(import.meta.dir, ".."),
+        env,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ])
+      expect({ code, stderr }).toEqual({ code: 0, stderr: "" })
+      expect(stdout.trim()).not.toBe("")
+      expect((await fs.readdir(shared.path)).length).toBeGreaterThan(0)
+      expect(await fs.readdir(path.join(root.path, "cache", "bun")).catch(() => [])).toEqual([])
+    },
+    60_000,
   )
 })

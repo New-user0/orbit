@@ -15,13 +15,20 @@ import path from "node:path"
 // timings file the run balances by, whichever is longer.
 export async function runTests(args: string[], env: Record<string, string | undefined> = process.env, cwd = process.cwd()) {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-heartbeat-"))
-  // The start slots that every worker of this run shares (packages/cli/test/fixture/start-gate.ts).
+  // The start slots that every worker of this run shares (packages/cli/test/fixture/start-gate.ts), and one Bun
+  // transpiler cache for the `orb` processes that the cli tests start from source (packages/cli/test/fixture/environment.ts).
   const starts = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-starts-"))
+  const transpiled = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-transpiled-"))
   const child = Bun.spawn({
     cmd: [process.execPath, ...args],
     cwd,
     // A runner started by a test must not write into its parent run's folders.
-    env: { ...env, ORBIT_TEST_HEARTBEAT: folder, ORBIT_TEST_START_SLOTS: starts },
+    env: {
+      ...env,
+      ORBIT_TEST_HEARTBEAT: folder,
+      ORBIT_TEST_START_SLOTS: starts,
+      ORBIT_TEST_TRANSPILER_CACHE: transpiled,
+    },
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
@@ -61,6 +68,7 @@ export async function runTests(args: string[], env: Record<string, string | unde
   process.off("SIGTERM", terminate)
   fs.rmSync(folder, { recursive: true, force: true })
   fs.rmSync(starts, { recursive: true, force: true })
+  fs.rmSync(transpiled, { recursive: true, force: true })
   return stuck.stopping ? 1 : code
 }
 
