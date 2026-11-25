@@ -129,7 +129,13 @@ export function gitbash(options?: Options, bin?: string) {
   if (options?.gitbash) return options.gitbash
   const git = findExecutable("git", bin)
   if (!git) return
-  const file = path.join(git, "..", "..", "bin", "bash.exe")
+  // Git for Windows has git.exe in its cmd and bin folders, and Git Bash puts its toolchain's copy (mingw64\bin, or
+  // clangarm64\bin on ARM) first on the PATH it hands to the programs it starts, so that copy is one folder deeper.
+  const folder = path.dirname(git)
+  const root = /^(mingw32|mingw64|clangarm64)$/i.test(path.basename(path.dirname(folder)))
+    ? path.join(folder, "..", "..")
+    : path.dirname(folder)
+  const file = path.join(root, "bin", "bash.exe")
   if (stat(file)?.size) return file
 }
 
