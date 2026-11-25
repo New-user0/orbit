@@ -18,6 +18,9 @@ test("end sent after a message was admitted, before any event of its busy period
 
   expect(h.state.admitted).toHaveLength(1)
   expect(h.state.interrupts).toBeGreaterThanOrEqual(1)
+  // A message the server may still hold in its queue is withdrawn first: an interrupt does nothing for a drain that has
+  // not started.
+  expect(h.state.calls.slice(0, 2)).toEqual([`cancel:${h.state.admitted[0]}`, "interrupt"])
 
   // The server answers the interrupt as it does: the busy period ends interrupted.
   h.emit(delivered(h.state.admitted[0]))

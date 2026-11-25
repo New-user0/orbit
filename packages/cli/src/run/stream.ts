@@ -792,7 +792,9 @@ export async function runStream(input: StreamInput) {
   }
 
   const eventLoop = async () => {
-    while (!finished) {
+    // A fatal stop writes the run's last lines itself, and its reconnect returns at once, so the loop leaves rather than
+    // read the finished stream again and again in microtasks, which no timer or signal could ever interrupt.
+    while (!finished && !fatalError) {
       const next = await events.iterator.next().then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
@@ -1028,7 +1030,12 @@ export async function runStream(input: StreamInput) {
     suggesting?.controller.abort()
     reading = false
     inputStopped.resolve()
-    if (period) await input.client.session.interrupt({ sessionID })
+    // What was admitted and has no result yet is stopped too, even before the first event of its busy period reaches the
+    // driver: a message still queued is withdrawn, since an interrupt does nothing for a drain that has not started, and
+    // then the drain is interrupted.
+    const queued = [...unaccounted].filter((id) => !period?.ids.has(id))
+    await Promise.all(queued.map((inboxID) => input.client.session.inbox.cancel({ sessionID, inboxID }).catch(() => {})))
+    if (period || unaccounted.size > 0) await input.client.session.interrupt({ sessionID })
   }
 
   const dispatch = async (text: string) => {
