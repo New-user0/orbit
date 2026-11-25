@@ -2423,6 +2423,11 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
       until: ReadonlyArray<string>,
       messages?: ReadonlyArray<SessionMessage.Info>,
     ) => Effect.Effect<ReadonlyMap<string, number>, unknown>
+    /**
+     * Each deny-rule lookup the producer made, in the order they started: the file's name, and how long the lookup ran
+     * before something stopped it (undefined when it finished).
+     */
+    readonly lookups: ReadonlyArray<{ readonly name: string; stopped?: number }>
   }
   interface Row {
     readonly name: string
@@ -2498,18 +2503,33 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
       // takes: f67 to f60 at the first step and f27 to f20 at the second. Were those checks cut at the end of the budget
       // and still counted as checked, every scan would cut the same files and f63 and f24 would never be reported; f68,
       // checked well within the budget, is the control.
+      //
+      // Which checks are still running when the budget ends depends on the machine's speed, so the row asks the lookups
+      // themselves rather than counting on f24 and f63 being among them: on a loaded runner fewer checks fit in a step and
+      // f68 itself was reached only at the second (Windows CI, PR #183). Every check that starts is let run its whole
+      // share, so no lookup is stopped before its share has passed, and each changed file is reported.
       name: "a check still running when the budget ends finishes, so the files then in flight are reported",
       written: 100,
       changed: [24, 63, 68],
       check: (c) =>
         Effect.gen(function* () {
           const reported = yield* c.steps(at(c, [24, 63, 68]))
-          expect(reported.get("f68.txt")).toBe(0)
           expect(Array.from(reported.keys()).toSorted()).toEqual(at(c, [24, 63, 68]).toSorted())
+          // More checks start than finish within the budget, so some were running when it ended; none was stopped
+          // then, only by its own share running out.
+          expect(c.lookups.length).toBeGreaterThan(40)
+          expect(c.lookups.filter((lookup) => lookup.stopped !== undefined && lookup.stopped < BUDGET / 2 - 50)).toEqual(
+            [],
+          )
         }),
     },
     {
       // After a restart: the history edits 100 files, more than the rebuild's budget can resolve and read.
+      //
+      // How many files the budget covers depends on the machine's speed: a loaded Windows runner ended the rebuild before
+      // even the newest was seeded (PR #189). What does not depend on it is the order: the rebuild looks the newest up
+      // first, so whatever it seeds is newer than whatever it leaves out, and the oldest, which a pass of a hundred slow
+      // lookups never reaches within the budget, is left out.
       name: "a rebuild that runs out of time keeps the newest files and leaves out the oldest",
       written: 0,
       changed: [],
@@ -2518,12 +2538,16 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
           const edited = range(0, 100).map((index) => c.h.inside(`h${index}.txt`))
           yield* Effect.promise(() => Promise.all(edited.map((file) => fs.writeFile(file, text(["a"])))))
           yield* c.steps([], edits(edited))
-          const seeded = yield* Effect.forEach([edited[99], edited[0]], (file) =>
+          const looked = c.lookups.map((lookup) => lookup.name).filter((name) => name.startsWith("h"))
+          expect(looked.slice(0, 8).toSorted()).toEqual(range(92, 100).map((index) => `h${index}.txt`).toSorted())
+          const seeded = yield* Effect.forEach(edited, (file) =>
             c.h.ledger
               .assertRead(c.h.session.id, file, path.basename(file))
               .pipe(Effect.exit, Effect.map(Exit.isSuccess)),
           )
-          expect(seeded).toEqual([true, false])
+          expect(seeded[0]).toBe(false)
+          const newestLeftOut = seeded.lastIndexOf(false)
+          expect(seeded.slice(0, newestLeftOut).every((value) => !value)).toBe(true)
         }),
     },
     {
@@ -2577,6 +2601,7 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
           for (const index of row.changed)
             yield* h.change(files[index], text(twenty.map((line) => (line === "line4" ? "PERSON-EDIT" : line))))
           const hung = new Set((row.hung ?? []).map((index) => files[index]))
+          const lookups: Array<{ readonly name: string; stopped?: number }> = []
           const reminders = yield* Effect.gen(function* () {
             return yield* SessionReminders.Service
           }).pipe(
@@ -2595,9 +2620,21 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
                         permission: {
                           ...permission,
                           denied: (request) =>
-                            Effect.sleep(row.slow === "reads" ? 0 : SLOW).pipe(
-                              Effect.andThen(permission.denied(request)),
-                            ),
+                            Effect.suspend(() => {
+                              const lookup: { readonly name: string; stopped?: number } = {
+                                name: path.basename(request.resources[0] ?? ""),
+                              }
+                              lookups.push(lookup)
+                              const started = Date.now()
+                              return Effect.sleep(row.slow === "reads" ? 0 : SLOW).pipe(
+                                Effect.andThen(permission.denied(request)),
+                                Effect.onInterrupt(() =>
+                                  Effect.sync(() => {
+                                    lookup.stopped = Date.now() - started
+                                  }),
+                                ),
+                              )
+                            }),
                         },
                         reader: {
                           ...real,
@@ -2629,7 +2666,7 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
                 }
               return reported
             })
-          yield* row.check({ h, files, steps })
+          yield* row.check({ h, files, steps, lookups })
         }),
       60_000,
     )
