@@ -117,6 +117,9 @@ describe("shell", () => {
         // Windows names a folder in any case, and PATH keeps the case it was written in.
         { folder: path.join(root, "MinGW64", "bin"), expected: bash },
         { folder: unrelated, expected: undefined },
+        // Only a folder named exactly as a toolchain is one: a name that merely contains one is some other bin folder.
+        { folder: path.join(root, "my-mingw64", "bin"), expected: undefined },
+        { folder: path.join(root, "mingw64-tools", "bin"), expected: undefined },
       ]
       await fs.mkdir(path.join(directory.path, "bin"))
       await fs.writeFile(path.join(directory.path, "bin", "bash.exe"), "decoy")
