@@ -22,6 +22,7 @@ import { Location } from "@orbit/core/location"
 import { LspDiagnostics } from "@orbit/core/lsp/collector"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { Permission } from "@orbit/core/permission"
+import { PermissionPolicy } from "@orbit/core/permission/policy"
 import { PermissionSaved } from "@orbit/core/permission/saved"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { Project } from "@orbit/core/project"
@@ -52,6 +53,7 @@ import { makeLocationNode } from "@orbit/util/effect/app-node"
 import { tempGlobalLayer } from "./fixture/global"
 import { tempLocationLayer } from "./fixture/location"
 import { runProgram } from "./fixture/run-program"
+import { installPolicy } from "./fixture/policy"
 import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
@@ -76,6 +78,7 @@ const writerDeps = [
   Formatter.node,
   Location.node,
   Permission.node,
+  PermissionPolicy.node,
 ] as const
 const readNode = makeLocationNode({
   name: "test/durable-reminders-read",
@@ -174,6 +177,7 @@ const graph = AppNodeBuilder.build(
     Agent.node,
     ManagedPolicy.node,
     Permission.node,
+    PermissionPolicy.node,
     SessionReminders.node,
     Environment.node,
   ]),
@@ -1046,6 +1050,50 @@ describe("the re-read gate (class 4, 7)", () => {
       }),
     )
   }
+
+  // m5-quality, item 12 (classes 3 and 8): a configuration policy refuses the reminder's re-read (`denied`) and the
+  // seeding of a file from history (`allowed`) as it refuses the Read tool, though neither runs a plugin hook. A plain
+  // file and a file through a folder link out, by the path as the project spells it, trusted and with the trust
+  // revoked. A policy for another file is the control.
+  for (const trust of ["trusted", "revoked"] as const)
+    for (const link of ["plain", "folder"] as const)
+      it.live(`a policy Read deny skips ${link === "plain" ? "a plain file" : "a file through a folder link out"} (${trust})`, () =>
+        Effect.gen(function* () {
+          const outside = (yield* tmpdirScoped()).path
+          const h = yield* setup([allowAll])
+          const spelled = link === "plain" ? "plain/s" : "cfg/s"
+          if (link === "folder") yield* Effect.promise(() => fs.symlink(outside, h.inside("cfg"), "junction"))
+          if (link === "plain") yield* Effect.promise(() => fs.mkdir(h.inside("plain")))
+          const file = h.inside(spelled)
+          yield* h.write(file, text(twenty))
+          if (trust === "revoked") yield* h.trust.revoke()
+          const access = yield* FileAccess.Service
+          const permission = yield* Permission.Service
+          const request = FileChangeReminder.readRequest(yield* access.locate(file, "file"), {
+            sessionID: h.session.id,
+            agent: build,
+          })
+          const decided = (named: string) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                yield* installPolicy("user", [{ action: "permission", resource: `Read:${named}`, effect: "deny" }])
+                return { denied: yield* permission.denied(request), allowed: yield* permission.allowed(request) }
+              }),
+            )
+          expect((yield* decided("other.txt")).denied).toBe(false)
+          if (trust === "trusted" || link === "plain") expect((yield* decided("other.txt")).allowed).toBe(true)
+          expect(yield* decided(spelled)).toEqual({ denied: true, allowed: false })
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* installPolicy("user", [{ action: "permission", resource: `Read:${spelled}`, effect: "deny" }])
+              yield* h.change(file, text(["SECRET-MARKER"]))
+              const rows = yield* h.changes()
+              expect(rows).toEqual([])
+              expect(JSON.stringify(rows)).not.toContain("SECRET-MARKER")
+            }),
+          )
+        }),
+      )
 
   // The place each writing tool records is what lets an outside file be read again, so a file outside the project that
   // the session last changed with Edit or Patch is still reported, and one changed with NotebookEdit still has its

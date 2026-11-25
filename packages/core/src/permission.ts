@@ -15,6 +15,7 @@ import { SessionScratchpad } from "./session/scratchpad.js"
 import { SessionStore } from "./session/store.js"
 import { Wildcard } from "./util/wildcard.js"
 import { ToolNames } from "./tool/names.js"
+import { PermissionPolicy } from "./permission/policy.js"
 import { PermissionSaved } from "./permission/saved.js"
 import { PluginHooks } from "./plugin/hooks.js"
 import { ManagedNetwork } from "./managed-network.js"
@@ -253,6 +254,7 @@ const layer = Layer.effect(
     const agents = yield* Agent.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
+    const policy = yield* PermissionPolicy.Service
     const hooks = yield* PluginHooks.Service
     const managed = yield* ManagedPolicy.Service
     const fs = yield* FSUtil.Service
@@ -552,6 +554,23 @@ const layer = Layer.effect(
       return rules.filter((rule) => actionMatches(input.action, rule.action))
     }
 
+    // What a policy is shown of a request: the hook's subject, in every spelling the rules try.
+    const policySubject = (input: Pick<AssertInput, "action" | "resources" | "aliases" | "leads">) => ({
+      action: input.action,
+      resources: input.resources,
+      aliases: byResource(input.resources, (resource) => [
+        ...(input.aliases?.[resource] ?? []),
+        ...resolved(input.action, resource),
+      ]),
+      leads: byResource(input.resources, (resource) => (input.leads?.[resource] ?? []).map(leadSpellings)),
+    })
+
+    // The configuration policies' refusal for a check that runs no plugin hook (`denied`, `allowed`): the policy plugin's
+    // own decision, installed in `PermissionPolicy`, so a policy refuses a file for the editor field, the file-change
+    // reminder and the shell guard's probes as it refuses the tool, and no other plugin code runs there (classes 3, 8).
+    const refusedByPolicy = (input: Pick<AssertInput, "action" | "resources" | "aliases" | "leads">) =>
+      policy.refuses(policySubject(input))
+
     // `hooked` false leaves the plugin hooks out, for a check that must not reach plugin code (`allowed`).
     const evaluateInput = Effect.fnUntraced(function* (input: AssertInput, hooked = true) {
       const current = managed.current()
@@ -571,17 +590,14 @@ const layer = Layer.effect(
       const explicit = decisions.some(
         (rule) => rule.effect === "ask" && !isFallthrough(rule) && !Agent.isDefaultAsk(rule),
       )
+      // With the hooks left out, the configuration policies still refuse, as their plugin's hook would (`refusedByPolicy`).
+      const refused = hooked ? undefined : refusedByPolicy(input)
+      if (refused !== undefined) return { effect: "deny" as const, message: refused, rules }
       const event = hooked
         ? yield* hooks.trigger("permission", "evaluate", {
             sessionID: input.sessionID,
             agent: input.agent,
-            action: input.action,
-            resources: input.resources,
-            aliases: byResource(input.resources, (resource) => [
-              ...(input.aliases?.[resource] ?? []),
-              ...resolved(input.action, resource),
-            ]),
-            leads: byResource(input.resources, (resource) => (input.leads?.[resource] ?? []).map(leadSpellings)),
+            ...policySubject(input),
             metadata: input.metadata,
             source: input.source,
             effect,
@@ -634,6 +650,7 @@ const layer = Layer.effect(
         : configuredRules.rules
       const folders = yield* memoryFolders(input.action)
       if (anyDenied(folders, input, decisive)) return true
+      if (refusedByPolicy(input) !== undefined) return true
       if (
         ManagedNetwork.bearsUrl(input.action) &&
         ManagedNetwork.denies(current.restrictions.network?.denied_domains ?? [], input.resources)
@@ -876,6 +893,7 @@ export const node = makeLocationNode({
     Agent.node,
     SessionStore.node,
     PermissionSaved.node,
+    PermissionPolicy.node,
     PluginHooks.node,
     ManagedPolicy.node,
     Global.node,

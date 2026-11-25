@@ -519,6 +519,38 @@ describe("Config under workspace trust", () => {
     }),
   )
 
+  // m5-quality, FU-M4-381 (classes 1, 4 and 14): a `.orbit` is placed by the folder that holds it, so a `.orbit` that is
+  // a link out of the project is the project's, as the reference reads its own folder through a link. It is read only
+  // once the project is trusted, and then as a real `.orbit` is (the direct spelling is the control).
+  for (const kind of ["link", "direct"] as const)
+    it.live(`reads a .orbit that is ${kind === "link" ? "a link out of the project" : "a real folder"} once the project is trusted`, () =>
+      Effect.gen(function* () {
+        const folders = yield* bare
+        const shared = path.join(folders.root, "shared", "orbit-config")
+        const orbit = path.join(folders.repo, ".orbit")
+        yield* Effect.promise(() =>
+          kind === "link"
+            ? write(path.join(shared, "orbit.json"), { shell: `${kind}-shell` })
+                .then(() => fs.mkdir(folders.repo, { recursive: true }))
+                .then(() => fs.symlink(shared, orbit, "junction"))
+            : write(path.join(orbit, "orbit.json"), { shell: `${kind}-shell` }),
+        )
+        const shells = (entries: readonly Entry[]) =>
+          documents(entries).flatMap((entry) => (entry.info.shell === undefined ? [] : [entry.info.shell]))
+        yield* Effect.gen(function* () {
+          const config = yield* Config.Service
+          // Not read before the project is trusted.
+          expect(shells(yield* config.entries())).not.toContain(`${kind}-shell`)
+          const granted = yield* nextUpdate
+          yield* grantFolder(folders.repo, { persist: false, via: "test" })
+          yield* Fiber.join(granted)
+          const after = documents(yield* config.entries()).filter((entry) => entry.info.shell === `${kind}-shell`)
+          expect(after.map((entry) => [entry.scope, entry.trusted])).toEqual([["project", undefined]])
+        }).pipe(Effect.provide(loader(folders)))
+      }),
+      30_000,
+    )
+
   it.live("covers a linked worktree with the decision for its main checkout", () =>
     Effect.gen(function* () {
       const folders = yield* bare

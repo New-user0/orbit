@@ -8,6 +8,7 @@ import { isFormAlreadySettledError, isFormNotFoundError, type OrbitClient } from
 import { Form } from "@orbit/schema/form"
 import { Cause, Effect, Option, Schema } from "effect"
 import type { ACPConnection } from "./connection"
+import { literal, subagentName } from "./markdown"
 import type { ACPService } from "./service"
 
 /** A form as the event stream carries it, with an unbranded ID. */
@@ -104,13 +105,16 @@ export function answer(form: AskedForm, response: CreateElicitationResponse): Fo
 }
 
 const ask = Effect.fnUntraced(function* (input: Input) {
+  const name = subagentName(input.child?.title)
   const source = input.toolCallSent ? Schema.decodeUnknownOption(ToolSource)(input.form.metadata) : Option.none()
   const toolCallID = Option.getOrUndefined(Option.map(source, (metadata) => metadata.tool.id))
   const response = yield* input.connection.createElicitation({
     mode: "form",
     sessionId: input.clientSessionID,
     ...(toolCallID ? { toolCallId: input.child ? `${input.child.id}:${toolCallID}` : toolCallID } : {}),
-    message: input.child?.title ? `${input.child.title}: ${input.form.title}` : input.form.title,
+    // The form's title, its fields' words and a subagent's title were chosen by a model, a tool or an MCP server, and a
+    // client may render them as Markdown, so each is written to read as it is (classes 6, 8 and 9).
+    message: name ? `${name}: ${shown(input.form.title, false)}` : shown(input.form.title),
     requestedSchema: input.requestedSchema,
   })
   return answer(input.form, response) ?? "cancel"
@@ -150,7 +154,10 @@ function representable(field: InputField, keys: ReadonlySet<string>) {
 }
 
 function properties(field: InputField): Array<[string, ElicitationPropertySchema]> {
-  const base = { title: field.title, description: field.description }
+  const base = {
+    title: shown(field.title),
+    description: shown(field.description),
+  }
   switch (field.type) {
     case "string": {
       if (!hasOptions(field)) return [[field.key, { type: "string", ...base, ...text(field), default: field.default }]]
@@ -192,7 +199,7 @@ function other(field: SelectField, description: string): [string, ElicitationPro
     customKey(field),
     {
       type: "string",
-      title: `${field.title ?? field.key} (other)`,
+      title: `${shown(field.title || field.key)} (other)`,
       description,
       ...(field.type === "string" ? text(field) : {}),
     },
@@ -212,8 +219,8 @@ function text(field: Form.StringField) {
 function options(field: SelectField): EnumOption[] {
   return (field.options ?? []).map((option) => ({
     const: option.value,
-    title: option.label,
-    description: option.description,
+    title: shown(option.label),
+    description: shown(option.description),
   }))
 }
 
@@ -233,6 +240,12 @@ function hasOptions(field: SelectField) {
 
 function customKey(field: SelectField) {
   return `${field.key}_custom`
+}
+
+// Words of a form that a model, a tool or an MCP server chose, as they read in a client that renders Markdown; an empty
+// or missing one stays as it is. `alone` is false where another such text shares the line (`literal`).
+function shown<T extends string | undefined>(text: T, alone = true) {
+  return text ? literal(text, alone) : text
 }
 
 export * as ACPElicitation from "./elicitation"

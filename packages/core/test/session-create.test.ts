@@ -1410,6 +1410,7 @@ describe("SessionTransfer", () => {
               id: sourceMessageID,
               type: "user",
               text: "Imported message",
+              command: { name: "review", arguments: "src/private.ts" },
               editor: { path: "/private/project/secret.ts", selection: { start: 3, end: 4, text: "private selection" } },
               skills: [
                 {
@@ -1461,6 +1462,11 @@ describe("SessionTransfer", () => {
         {
           id: sourceMessageID,
           text: `[redacted:text:${sourceMessageID}]`,
+          // The arguments are what the person typed, so they are redacted as the text is, and the name as a skill's is.
+          command: {
+            name: `[redacted:command-name:${sourceMessageID}]`,
+            arguments: `[redacted:command-arguments:${sourceMessageID}]`,
+          },
           editor: {
             path: `[redacted:editor-path:${sourceMessageID}]`,
             selection: { start: 3, end: 4, text: `[redacted:editor-selection:${sourceMessageID}]` },

@@ -508,6 +508,46 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
+  // m5-quality fix loop 2: a resumed session draws a slash command's prompt as the command that was run, as the terminal
+  // UI does; the expansion is the model's. A prompt with no command is drawn as its text (the control).
+  test("replays a slash command's prompt as its command and a plain prompt as its text", async () => {
+    const events = feed()
+    events.push(connected())
+    const ui = footer()
+    const user = (id: string, text: string, created: number) => ({
+      id,
+      type: "user" as const,
+      text,
+      time: { created },
+    })
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        streams: [events],
+        messages: {
+          // Newest first, as the server lists a page.
+          ses_1: [
+            user("msg_plain", "Add the parser", 2),
+            {
+              ...user("msg_command", "Review the callers. EXPANDED-BODY", 1),
+              command: { name: "review", arguments: "src/a.ts" },
+            },
+          ],
+        },
+      }),
+      sessionID: "ses_1",
+      thinking: false,
+      replay: true,
+      footer: ui.api,
+    })
+
+    expect(ui.commits).toMatchObject([
+      { kind: "user", text: "/review src/a.ts", messageID: "msg_command" },
+      { kind: "user", text: "Add the parser", messageID: "msg_plain" },
+    ])
+    expect(JSON.stringify(ui.commits)).not.toContain("EXPANDED-BODY")
+    await transport.close()
+  })
+
   // clients-ux-27: a recap, recorded by this client or another, is a system row led by the reference mark, from the
   // replayed history and from the live event, and its text reaches the scrollback only through the body sanitizer.
   test("renders a replayed and a live recap as sanitized reference-mark rows", async () => {

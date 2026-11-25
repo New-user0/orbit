@@ -61,6 +61,7 @@ import { ModelsDev } from "../models-dev.js"
 import { Mcp } from "../mcp/index.js"
 import { Npm } from "@orbit/util/npm"
 import { Permission } from "../permission.js"
+import { PermissionPolicy } from "../permission/policy.js"
 import { ProjectTrust } from "../project-trust.js"
 import { Reference } from "../reference.js"
 import { WebSearch } from "../websearch.js"
@@ -158,6 +159,7 @@ const services = [
   Mcp.Service,
   Npm.Service,
   Permission.Service,
+  PermissionPolicy.Service,
   ProjectTrust.Service,
   Form.Service,
   ReadToolFileSystem.Service,
@@ -219,6 +221,7 @@ export const requirements = LayerNode.group([
   Mcp.node,
   Npm.node,
   Permission.node,
+  PermissionPolicy.node,
   ProjectTrust.node,
   Form.node,
   ReadToolFileSystem.node,

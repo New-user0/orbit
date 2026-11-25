@@ -42,6 +42,8 @@ const answer: { title?: string } = {}
 const picks: unknown[][] = []
 const program: { path?: string; bridge?: boolean } = {}
 const configured: Array<(event: { affectsConfiguration(key: string): boolean }) => void> = []
+// The file editors the person switches to, which the chat reads its editor field from.
+const switched: Array<(editor: unknown) => void> = []
 // The terminals' environment the extension sets: the bridge's port.
 const environment = new Map<string, string>()
 const workspaceFolders = [
@@ -75,6 +77,10 @@ const vscode = stub({
   FileType: { File: 1, Directory: 2 },
   window: stub({
     activeTextEditor: undefined,
+    onDidChangeActiveTextEditor: (listener: (typeof switched)[number]) => {
+      switched.push(listener)
+      return stub()
+    },
     createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
     registerWebviewViewProvider: (id: string, provider: unknown) => {
       providers.set(id, provider)
@@ -136,6 +142,8 @@ const vscode = stub({
   workspace: stub({
     textDocuments: documents,
     workspaceFolders,
+    // No file belongs to a folder of its own, so the chat's folder is the first one.
+    getWorkspaceFolder: () => undefined,
     onWillSaveTextDocument: (listener: (typeof saving)[number]) => {
       saving.push(listener)
       return stub()
@@ -177,6 +185,8 @@ type Extension = typeof import("../src/extension")
 let extension: Extension
 const replies: unknown[][] = []
 const sent: string[] = []
+// Every argument the chat sends a prompt with: its text, context, the line drawn under it, and its editor field.
+const sends: unknown[][] = []
 const marked: string[] = []
 const unmarked: string[] = []
 const resets: string[] = []
@@ -224,7 +234,7 @@ beforeAll(async () => {
     sessions: async () => [{ id: "ses_old", title: "Old", time: { updated: Date.now() } }],
     open: async (id: string) => (opened.push(id), "build"),
     note: () => {},
-    send: async (text: string) => void sent.push(text),
+    send: async (text: string, ...rest: unknown[]) => void (sent.push(text), sends.push([text, ...rest])),
     answer: async (...args: unknown[]) => void answered.push(args),
     changes: async () => listed.files,
     restore: async (messageID: string, confirm: (dry: unknown) => Promise<boolean>) =>
@@ -393,6 +403,30 @@ test("a new question opens for review on its own, and a new prompt closes every 
   expect(unmarked).toContain("per_auto")
   await fire(title)
   expect(replies).toEqual([])
+})
+
+test("a prompt from the chat carries the open file's path on disk and its selection as the prompt's editor field", async () => {
+  // VS Code reports a Windows drive in lower case; the editor field names it as the rest of Orbit does, `D:\…`.
+  const fsPath = file.replace(/^[A-Z]:/, (drive) => drive.toLowerCase())
+  const document = {
+    uri: { scheme: "file", fsPath, toString: () => `file://${fsPath}` },
+    languageId: "plaintext",
+    getText: () => "one\n",
+  }
+  documents.push(document as unknown as (typeof documents)[number])
+  for (const listener of switched)
+    listener({ document, selection: { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } } })
+
+  await chat().receive({ type: "send", text: "explain this", file: true, problems: false })
+  expect(sends.at(-1)).toEqual([
+    "explain this",
+    undefined,
+    "1 line selected in glue.txt",
+    { path: file, selection: { start: 1, end: 1, text: "one\n" } },
+  ])
+  // With the file chip off the prompt goes without one.
+  await chat().receive({ type: "send", text: "just this", file: false, problems: false })
+  expect(sends.at(-1)).toEqual(["just this", undefined, undefined, undefined])
 })
 
 test("New Session and a session picked from history close every Orbit tab without answering", async () => {

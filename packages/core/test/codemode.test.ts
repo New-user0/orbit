@@ -10,6 +10,7 @@ import { Image } from "@orbit/core/image"
 import { Location } from "@orbit/core/location"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { Permission } from "@orbit/core/permission"
+import { PermissionPolicy } from "@orbit/core/permission/policy"
 import { PermissionSaved } from "@orbit/core/permission/saved"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
 import { Project } from "@orbit/core/project"
@@ -91,6 +92,7 @@ const web = testEffect(
       PluginHooks.node,
       ManagedPolicy.node,
       Permission.node,
+      PermissionPolicy.node,
       Tool.node,
     ]),
     [

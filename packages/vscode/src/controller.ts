@@ -2,6 +2,7 @@ import {
   ClientError,
   type OrbitClient,
   type OrbitEvent,
+  type PromptEditorContext,
   type SessionMessageInfo,
   type SessionRewindFiles,
   type TrustStatus,
@@ -129,8 +130,15 @@ export class Controller {
     if (session.title) this.emit({ type: "title", title: session.title })
     if (session.agent === "build" || session.agent === "plan") this.agent = session.agent
     for (const message of await this.history(sessionID)) {
+      // A slash command's prompt is shown as the command that was run, `/name arguments`, as the terminal UI shows it;
+      // its text is the command's expansion, which only the model reads.
       if (message.type === "user")
-        this.update({ type: "user", id: `user:${message.id}`, text: message.text, messageID: message.id })
+        this.update({
+          type: "user",
+          id: `user:${message.id}`,
+          text: message.command ? `/${message.command.name} ${message.command.arguments}`.trimEnd() : message.text,
+          messageID: message.id,
+        })
       if (message.type === "synthetic") {
         const notice = loopNotice(message.metadata, message.description)
         if (notice) this.update({ type: "note", id: `notice:${message.id}`, text: notice, tone: "muted" })
@@ -185,7 +193,7 @@ export class Controller {
    * Sends a prompt. Every command, starter and button that starts work in the chat ends here, so the question about
    * trusting the folder is asked here, before a session exists and before the model is asked anything.
    */
-  async send(text: string, context?: string, shown?: string) {
+  async send(text: string, context?: string, shown?: string, editor?: PromptEditorContext) {
     await this.gate()
     // A server older than workspace trust applies the folder's hooks and servers without asking, and one that has not
     // answered may be such a server, so nothing is sent to either.
@@ -224,8 +232,10 @@ export class Controller {
     const user = { type: "user" as const, id: `user:${crypto.randomUUID()}`, text, context: shown }
     this.update(user)
     this.emit({ type: "busy", busy: true })
-    // The delivered message keeps the ID of the inbox item, so the prompt's changes can be asked for by it.
-    await this.client.session.prompt({ sessionID, text, delivery: "steer" }).then(
+    // The delivered message keeps the ID of the inbox item, so the prompt's changes can be asked for by it. The open file
+    // and its selection go as the prompt's editor field, which the server leaves out when the person's read rules or
+    // policies refuse the file (classes 3 and 8).
+    await this.client.session.prompt({ sessionID, text, delivery: "steer", ...(editor && { editor }) }).then(
       (admitted) => this.update({ ...user, messageID: admitted.id }),
       (error: unknown) => {
         this.emit({ type: "busy", busy: false })

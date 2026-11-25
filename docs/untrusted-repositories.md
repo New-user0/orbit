@@ -1047,15 +1047,21 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   carve-out never covers this root (`current` leaves it out). `snapshot.json` is read at its real path inside the
   snapshot folder (`MemoryStore.locate`) and decoded with `Schema.decodeUnknownOption`; missing logs nothing, anything
   else that fails logs one line and takes no snapshot (class 7). Only a listing entry of type `file` is copied, its name
-  must pass `ConfigAgent.isName` (class 5, one line), it is read at its real path inside the snapshot folder and
+  must pass `ConfigAgent.isName` (class 5, one line), at most the first 200 such names in code-point order are copied
+  (`MemoryStore.MAX_SCAN_FILES`, the most of a memory folder the reference reads; the rest cost one line), it is read at
+  its real path inside the snapshot folder, at most 250,001 bytes, and left out with one line when it is over 250,000
+  bytes (the reference's bound on a team memory entry), so its size is decided from the bytes read at the place it is
+  read from (classes 4 and 7), and it is
   written into a new hidden folder beside the target (`makeTempDirectory`), and no target name that is a link (one
-  that leads nowhere included) is written through or moved over (class 4). The copy stays interruptible: an interrupt
+  that leads nowhere included) is written through or moved over (class 4). The hidden folder is made and its removal
+  attached in one step an interrupt waits for (`Effect.acquireUseRelease`), so an interrupt just after it is made leaves
+  none. The copy stays interruptible: an interrupt
   removes that folder, so nothing of the snapshot reaches the target, and only the move into place waits, one rename of
   the whole folder when the target is not there (a file at its name is left alone and costs the agent one line) or one
   per file and the marker when it is (class 7); the target is the one
   `{ folder, real }` of `MemoryAgent.folder` that the block, the make and the carve-out use (class 3). A failing file or
   agent costs only itself with one line (class 7); `updatedAt` reaches only the marker, as JSON, and no log message
-  (class 9). There is no size or count cap, as in the reference (a cap is a follow-up). Proof:
+  (class 9). Proof:
   `test/memory-agent-snapshot.test.ts` (the copy and marker, an escape in `updatedAt`, the Markdown decision with links,
   folders, `NOTES.MD` and a text file, the agents that qualify, memory off by config and switch, an untrusted project
   and the grant with the recorded file system, malformed, linked, folder and missing `snapshot.json`, a file in the
@@ -1063,8 +1069,10 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   in a loop, agent snapshot folders linked out or dangling, links, folders and names that are not plain in the source,
   links at target names and a user folder linked out, a share with the recorded file system, a file that cannot be
   written, a worktree's Location, once per agent list and again after a change, an interrupt after the first copied
-  file, an interrupt during a copy of 1,000 files that returns in under half the whole copy's time, and an interrupt
-  after the first file moved into a folder that is there), `test/memory-agent.test.ts` (the
+  file, an interrupt during a copy of 200 large files that returns in under half the whole copy's time, an interrupt
+  after the first file moved into a folder that is there, an interrupt just after the hidden folder is made, a file
+  over 250,000 bytes and one of exactly that size, 203 files cut to the first 200, and the cut by code point where the
+  listing orders otherwise), `test/memory-agent.test.ts` (the
   snapshot folder after trust and for plain ids only), `test/memory-agent-instructions.test.ts` (the snapshot's index
   in the first block from the one resolved folder, with the carve-out, through a linked Location),
   `test/memory-listing.test.ts` (`/memory` listing and make before any session) and
@@ -1226,7 +1234,9 @@ folder is untrusted. A change that adds a surface adds an entry here, and a line
   made; the writer's `O_NOFOLLOW`, read back from `/proc` on Linux; a vanished file), `test/tool-shell-output-cap.test.ts`
   (the linked session folder, a message ID that cannot name a file, a hostile call ID, the 64 MB cut, a copy when the
   shell file is on another volume, a replay that keeps the first copy, a copy that cannot be made on Linux, the withheld
-  keys with trusted controls, a blank head alone and before a timeout note), `test/tool-output.test.ts` (an offer used once, the bound on unsettled offers),
+  keys with trusted controls, a blank head alone and before a timeout note), `test/tool-output.test.ts` (an offer used once, the bound on unsettled offers,
+  and "an offered file that is a link > is neither cut nor saved, and a real file of the same size is": a link at the
+  offered file to a file over 64 MB, where a file link can be made, so the 64 MB cut's own open is pinned),
   `test/tool-output-lowering.test.ts` (the `parts` that do not decode, a look-alike after the wrapper).
 
 **CLI and flow** (`packages/cli`, `packages/flow`):
@@ -2542,9 +2552,118 @@ runs" is a permission.
     warning, or in the name of a file or folder that titles the request, becomes a link, an image or a tag, which a
     client could contact a host for (classes 6 and 8; the "Markdown's literal text" rows). A subagent's title, which a
     model chose and which comes before the summary, is one line of 40 characters at most and is quoted where it has a
-    warning's words anywhere (classes 8 and 9; the "subagent's title reads as no warning" row). A description or command
-    that titles an `external_directory` question, other content of the call and the updates' titles are not rewritten
-    for Markdown (FU-M5-009);
+    warning's words anywhere (classes 8 and 9; the "subagent's title reads as no warning" row). Every other value a
+    model, a file, a subagent or an MCP server chose that ACP sends in a title or in text content goes through the same
+    rule (`literal` in `packages/cli/src/acp/markdown.ts`), whole and on one line: the description or command that titles
+    an `external_directory` question, a fetch's URL and its `METHOD url`, a search's pattern, a web search's query, the
+    default title of a request whose caller is not its tool, an MCP call's `Arguments:` (the label outside the span), a
+    shell call's command and any other call's name in the updates' titles, and a subagent's title in front of its calls,
+    which keeps its 40-character cut (classes 6, 8 and 9; `packages/cli/test/acp/approval-markdown.test.ts`, one row per
+    sink, each with values Markdown would change, a line break, and plain values as the control). What a tool gave back
+    goes in the call's content by `literalBlock` in the same file: a Read's file text, any other tool's text output and
+    an error's text are sent as they are when they are one line Markdown draws letter for letter, and otherwise in a
+    fenced code block whose fence is longer than any run of backticks in them, so they keep their lines and none of them
+    becomes a link, an image or a tag (classes 6 and 9; the same file, "what a tool gave back reads as it is": a Read, a
+    shell call's output and an MCP call's error, each with the hostile values, a line break and a file of several lines
+    with fences of its own, and one plain line as the control). A form's message, its subagent's title (by the
+    subagent rule) and its own title, and the form's field titles, descriptions and option labels go through `literal`
+    too (the same file, "a form's message" and "a form's field titles": the hostile values, a line break and plain words
+    as the control). The model's own Markdown in message and thought chunks, streamed and replayed on `session/load`, goes
+    as it wrote it, except that a word joiner (U+2060) follows every `!` before a `[` and every `<` before a letter, `/`,
+    `!` or `?`, and a `!` or a `<` that ends a chunk (`withoutImages` in the same file). The joiner is drawn as nothing
+    and every renderer reads it as text, so an image becomes a link to its address that nothing fetches and a tag,
+    comment or declaration reads as text, even where a renderer such as `marked` unescapes a link's text and reads it
+    again (an escape such as `!\[` did not hold there). The cost is that text copied out of a client carries the
+    joiners, inline code included: renderers read a backtick in different ways (a reference's label, a link's address,
+    a table cell, a bare address and a tilde each took one from a span in some renderer in fix loops 3 to 7), so a code
+    span is never taken as code and `` `Vec<T>` `` goes with a joiner after its `<`. The only text sent unchanged is a
+    fenced block that every renderer reads as code: its opening line is three or more backticks or tildes at most three
+    spaces in, with no list or quote mark in front and no `|` after the run, at the text's start or right after a blank
+    line, so outside any paragraph and table, at no indentation once a list item has started in the text (a fence a
+    few spaces in may be in its content), and before any line of the text that starts with a `[` behind indentation and
+    list or quote marks; it closes at a line of a run of the same mark at least as long, at most three spaces in, with
+    only spaces after it. Any other fence line opens no block
+    the tracker is sure of, so it gives up (`lost`) and no later fence in the text counts as code, and it gives up as
+    well after a closing run more than three spaces or a tab in or with anything but spaces after it (`marked` closes
+    on a run with more backticks or tildes after it and not on one with a tab after it), after a line that starts to
+    the left of an indented opening line, after a line with a tilde or the start of a bare address (`www.`, `http`,
+    `ftp:`), and after a line that starts with a `[` (decision 1c of m5-quality). Such a line may open a link reference
+    definition, which `marked` reads before any block and whose label and title it runs on over blank lines and fence
+    lines; a second `[` line starts one of its own once the first has become a paragraph or indented code. Fix loops 7
+    to 11 followed definitions as `marked` reads them and each review found another shape (an unfinished `]:`, a `"`
+    title's backslash, a `<...>` destination with a second `>`, a `'` title over a line of spaces, a restarted label),
+    so the tracker no longer reads them: a code block after a task item, a link at a line's start or any definition
+    carries joiners, and a list item that holds only a task box, which md4c reads the next line of as its text, is
+    covered by the same rule. A carriage return
+    and a line feed end one line only when nothing comes between them. ACP gives a chunk no text boundary: a client
+    may draw the chunks of a message ID as one block, or append every chunk of a kind to the
+    last block until a tool call or a chunk of the other kind, across texts and messages (a cut-off reply and its retry
+    under a new ID, the parts of a replayed session). So a text that picks up after a piece of another was sent starts
+    as it would alone only where both stand at the start of a line with no block open and the tracker is sure of
+    both, and then a fence line at its start counts as code only where it would after the lines
+    that ended either text, a list item that either holds included; anywhere else nothing more of it counts as code.
+    A client that draws them apart or joins them then at most shows joiners in code, as far as md4c and `marked`, the
+    renderers the tests draw with, read them. A tool call, a prompt and a subagent's updates that the client takes
+    apart start a new block (`follow` in the same file and `piece` in `acp/translate.ts`; classes 6 and 9;
+    "the model's Markdown": an image, a reference image, a raw `img` and `picture`, each split across pieces, and an
+    image after a closed fence, with prose, links, a fence and an autolink as the controls and a code span that takes
+    joiners; "what follows a backtick that opens no code is prose": a lone, an escaped and a broken backtick, a
+    backtick in a link's address, a title, an autolink and a table cell, a fence line with a backtick after its run or
+    four spaces in, a hidden fence, line ends of `\r` and `\r\n`, a closing run four spaces or a tab in, fence lines
+    in a table and after an empty task item, each with an image and an `img` tag, whole and one character a piece;
+    "after a closing run further in" and "a fence line after a quoted table"; "a fenced block at the text's start or
+    after a blank line is written as it is" for the controls, with a closer three spaces in, a run of the other mark
+    four in, a table and a list that a blank line ends, a line of spaces or a tab after a paragraph, and a `[` inside
+    such a block, behind a backslash or after a word; "only a fenced block every renderer
+    reads as code is left as written": code spans, `` `Vec<T>` ``, a fence right below a paragraph's line (with `\n`
+    and `\r\n`), in a list item a few spaces in, in a quote, right after another block's closing line, with a `|` in
+    its info string, after a list fence, after a closing run with words after it and after a line to the left of an
+    indented opening one, with a fence at the start, after a blank line and at no indentation after a list as the
+    controls, each drawn by both renderers; "a fence line that starts a text after a list that the text before ends
+    with", and after a title it leaves open; "draws no image or tag in a client that joins texts or not": a fence, a
+    code block, a span, a line and a mixed paragraph that one text leaves open, a fence it has lost, a span that closes
+    at its end, a line it leaves after a run, and a table and an empty task item it ends with, each before text 1 of the
+    same message and before a new message's, the run-on rows again with another message's text between, two reasoning
+    parts, a subagent's text on the session's own updates, a fence and a span a tool call cuts and a span left open
+    while a subagent's text is sent, each drawn as each message's block, as each kind's block until a tool call and as
+    each run of one kind; "a `!` that ends a text"; "what follows a clean text, a tool call or another channel" for the
+    controls, with a fence after a line of text that the text before ends with taking joiners; "what one text part or
+    message leaves open reaches the next" for the replay, with the run-on, table and task rows in two parts and two
+    messages, a compaction, a running one and a message that fails part way between, and a tool call and a prompt as
+    the controls; 20,000 random texts in random pieces and 20,000 random pairs of texts (apart, appended and as one
+    message); "a loaded session's replay"; for `marked`, one row each for an image in a link's text after a `[`, whole
+    and across two texts, a fence closed by a run with a tilde, a backtick or a tab after it, a span after `www.`, after
+    `http` and after an address one text ends with, a reference whose label holds a backtick, a definition before a
+    fence line in each of its open states, and a `'` title over a line of spaces, a tab or both, opened on the
+    destination's line or the next, after a `]:` alone, in a list item, in a quote and at the end of a text or a
+    message before the fence, with a `'` title that an empty line ends and a `"` or `(` title over a line of spaces as
+    the controls, drawn by both renderers; "where the tracker is unsure, code takes joiners": a tilde, a bare
+    address's start in any case, a list fence and a closer with words after it before a fence after a blank line, with
+    a tilde fence, a closer with spaces after it and an address's start cut by a line break as the controls; "from a
+    line that starts with a `[`, no later fence is taken as code": one row for each definition shape of reviews 7 to
+    11, review 12's second `[` line (after a blank line, after a tab or four spaces in, after a first `[a`, in a list
+    item and in a quote, and seed 9's `'` title after it), the former controls (whole definitions, titles a blank line
+    ends, a reference, lines that are no definition, a task item and a link) and a definition in a list item, a quote
+    and four spaces in, each with joiners in the later fence, drawn by both renderers and cut after each line break
+    into two texts through `follow`; "a `<` or
+    a `!` takes a joiner only before a tag or an image"; four rows of a carriage return before a
+    backtick, cut at every point; and `packages/cli/test/acp/image-fuzz.test.ts`, which runs `image-fuzz.ts` in a
+    child process with a deadline, seed 20261124, over 20,000 fuzzed cases for each renderer: fences of both marks at
+    any indentation, behind list and quote marks and with info strings, spans, links, tables, task items, HTML blocks,
+    line ends of `\n`, `\r\n` and `\r`, blank lines that are empty or hold only spaces and tabs, labels with a
+    backtick in them and their definition, definitions left open over the next line (a `'` title over a line of only
+    spaces or a tab among them), a second `[` line after a first (after a blank line, a tab or four spaces in, in a list
+    item and a quote) before a fence line whose info string closes its label, and images and raw tags anywhere, cut into random chunks over texts, messages and
+    kinds, through `ACPTranslate.step` and `replayMessage`, and drawn as each text alone, per message ID and appended,
+    with no image or tag drawn and the same grammar with neither coming back as written but for joiners, and again at
+    seeds 6, 7 and 9, where review 12 found the restarted label). A client whose
+    renderer reads Markdown in a way neither md4c nor `marked` does is not
+    covered by a test. Names and words that a client draws as plain text are one line with no
+    control or format character (`plain`): the available commands' names and descriptions, the model and mode names and
+    descriptions of the config options, a session's title in `session/list` and the message of a failed turn's error
+    (class 9; "a command's, a model's and a mode's name", "a session's title in the session list", each with a plain
+    control). `rawInput`, `rawOutput`, `_meta` and the child-session extension's `title` are data for an extension client
+    and are sent as they are;
   - the VS Code chat's card, and the title of its review or preview tab, which can answer while the card is hidden
     (`packages/vscode/test/approval-link.test.ts`, `webview-trust.test.ts`, `diff-review.test.ts`). A tab of the terminal
     UI's bridge has no warning in its title: the compact prompt beside it has it.
@@ -2587,9 +2706,9 @@ runs" is a permission.
   it for each escaped target, so Edit, Write, NotebookEdit, every file of a Patch and the door of Read carry it. Before, a deny written for the path in the project let a write land where the link leads (classes
   3 and 8; `edit-link.test.ts`, "a rule for the spelling of a path a link leads out of decides the call through it": a
   deny and an ask, by each spelling, for a file that is a link out and a file below a folder link out, trusted as the
-  control and untrusted). Two checks that send a file's text to the model without the read tool build their Read request
-  the same way: the one that lets the editor's file and selection into a prompt, and the one the file-change reminder
-  makes before it shows a change. A Read deny for the path in the project drops the editor field in an untrusted folder
+  control and untrusted). Three checks that send a file's text to the model without the read tool build their Read
+  request the same way: the one that lets the editor's file and selection into a prompt, the one for a mentioned file
+  (below), and the one the file-change reminder makes before it shows a change. A Read deny for the path in the project drops the editor field in an untrusted folder
   too (`session-prompt-editor.test.ts`, "a Read deny for the spelling of a folder link out drops the field" and its file
   link row: the relative and the absolute path, trusted as the control and untrusted, and no deny keeps the field). The
   reminder skips such a file in an untrusted folder before any rule is asked, because its name leads out of the project,
@@ -2621,6 +2740,57 @@ runs" is a permission.
   `Read:` policies by the relative and the absolute path, from a person's document and as an organization statement,
   for every file tool and Read through a file link and a folder link out, trusted as the control and untrusted, a later
   allow of a lead's spelling that keeps the deny, and no policy as the control that runs).
+- A mentioned file or folder (`@path`, which a client sends as a `file:` attachment) reaches the model whole at
+  admission, without the read tool, so the same Read request is built for it before anything of it is opened
+  (`SessionPrompt.readCheck`, which the editor field shares). A Read deny rule or a policy that refuses it leaves it
+  out of the prompt with one log line, and the prompt and its other mentions are admitted, as the reference drops a
+  mentioned file its read rules deny. Before, `@secret/x` sent a file that the Read tool, `cat` and the editor field
+  refused (classes 3 and 8; `session-prompt-editor.test.ts`, "mentioned files at admission": a Read deny by the relative
+  and the absolute path, and a user and an organization policy, for a plain file, a file through a folder link out and
+  a file link out, trusted and untrusted, with a mention of another file kept as the control in each, and a mentioned
+  folder). A place outside the project is decided as the read tool decides it, by the Read rules and by a deny for the
+  folder it is in (`external_directory`, the folder itself for a mentioned folder), for a mention and for the editor
+  field, and a check that cannot be answered leaves them out (classes 3, 7 and 8; `session-prompt-editor.test.ts`, "a
+  deny for an outside folder leaves out a mention of what is in it" and "a deny for an outside folder drops a field of
+  a file in it": a file outside by its path and through a folder link out, a mentioned outside folder, trusted and
+  untrusted, a file in the project and a deny for another folder as the controls, and each left-out mention logged once;
+  "a check that cannot be answered leaves the editor field and the mention out"). The check returns the place it
+  decided, and that place is what admission stats and reads (`SessionPrompt.readCheck`), so the check and the read use
+  one value; the attachment keeps the mentioned name. An editor that sends an @-mention to ACP as an embedded resource
+  with a `file:` URI and the file's text (`promptCapabilities.embeddedContext`) has it sent on as a mention of that file,
+  with the lines of a `#L12-14` or `#L12:14` fragment as its range, and never its text, so the same check decides it and
+  the server reads the file; a `file:` URI that names another host is sent as its address and never read, and the text
+  of a resource with any other URI (an unsaved buffer, an MCP resource) is still sent as data. The scheme is read in any
+  case and as a URL parser reads it, so `FILE:`, `File:` and ` file:` are `file:` for an embedded resource and a
+  resource link alike, and a `file:` URI that does not parse is sent as its address (classes 3 and 8;
+  `packages/cli/test/acp/prompt-content.subprocess.test.ts`, "an embedded file that a read rule or policy refuses": a
+  Read rule and a policy leave it out and keep the file beside it, and no rule keeps both;
+  `packages/cli/test/acp/content.test.ts` for the URI forms, "a file resource spelled ..." with the lower-case spelling
+  as the control, and "a file scheme that is no URL"). The terminal UI and the VS Code chat send the editor's open
+  file and its selection as the prompt's `editor` field, so the same check decides them; before, each sent them as a
+  hidden message it wrote itself, which no Read rule or policy checked (classes 3 and 8; as the reference drops the
+  selection and the opened file of a read-denied file. `packages/tui/test/editor-bridge-app.test.tsx`, "goes with the
+  prompt as its editor field, and as nothing else": a selection, one that ends at the start of a line and an open file
+  with nothing selected; `packages/vscode/test/controller.test.ts`, "the selection of ... reaches the model only when
+  its read is allowed": a Read rule and a policy refuse it and a file nothing denies is the control, through a real
+  server; each rule, policy, link and trust case of the field is a row of `session-prompt-editor.test.ts` above). The
+  terminal UI sends the first highlighted range, as the reference attaches one selection.
+- Some files reach the model with no Read check, as they do in the reference, and stay so: a file the person chose
+  themselves (a pasted image path, `orb run -f`, stream-json `files`, Mini's initial files), which the reference reads
+  without a deny check, and the files an instruction file imports with `@path`, to which the reference applies only its
+  own exclusion setting and no Read deny (FU-M5-019). The VS Code chat's problems summary is still a hidden message the
+  extension writes: it holds diagnostics, not the file's text.
+- The checks that run no plugin hook (`Permission.denied` and `Permission.allowed`: the editor field and a mentioned
+  file at admission, the file-change reminder's re-read and its seeding from history, and the shell guard's Read and
+  Edit probes) take the
+  configuration policies' answer from `PermissionPolicy` (`packages/core/src/permission/policy.ts`), where the policy
+  plugin installs the same decision its hook applies, shown the same resources, aliases and leads. It only refuses, and
+  no other plugin code runs on those paths. Before, a policy that refused the Read tool let `cat`, a redirect or an
+  editor selection of the same file through (classes 3 and 8; `session-prompt-editor.test.ts`, "a user/organization
+  policy Read deny drops the field", a plain file and a folder and a file link out, trusted and untrusted;
+  `durable-reminders.test.ts`, "a policy Read deny skips"; `tool-shell.test.ts`, "ShellGuard: a policy for the path a
+  command names"; each with a policy for another file as the control; and `permission-policy.test.ts` for the
+  install's lifetime).
 - Through a link in an untrusted project, the place is where the link leads: the server resolves it
   (`FileAccess.Target.place`) and puts it on the request, and the folder question names it, so no approval shows a link
   as a folder of the project (class 4). A call that no rule asks about has no request, so the file tools, the shell, Glob
@@ -2758,13 +2928,16 @@ no command to paste") and the `holderRefusal` rows of `packages/cli/test/trust.t
   and reads token counts with `Number`.
 - The rewind picker (`packages/tui/src/routes/session/dialog-rewind.tsx`) draws four values a clone or the store can
   choose: a file name from a prompt's `scope=prompt` diff on its list row and one from the dry run's `filesChanged` in
-  its confirm step, each as `plain(basename)`; the stored prompt, or the stored command of a `!` shell row, through
+  its confirm step, each as `plain(basename)`; the stored prompt (a slash command's as `/name arguments` from its stored
+  `command`), the stored command of a `!` shell row, or the stored name of a skill row, through
   `bodyText` on its list row, which turns line breaks into spaces, and in the confirm step, which quotes up to its first
   four lines and 500 characters and keeps their line breaks; and the server's message in its error line, through
   `plain`. The storybook's `rewind` story draws the same component with a hostile fixture. Tests:
   `packages/tui/test/rewind-picker.test.tsx` ("a repository file name and a stored prompt are drawn with their control
-  characters written out", which also draws a hostile shell command, and "a refused rewind's message is drawn with its
-  control characters written out") and `packages/tui/test/cli/tui/rewind-story.test.tsx`, with ordinary names and an
+  characters written out", which also draws a hostile shell command, "a slash command's stored arguments and a skill's
+  name are drawn with their control characters written out", and "a refused rewind's message is drawn with its
+  control characters written out"), `packages/tui/test/rewind-command.test.tsx` ("a prompt of several lines is one line
+  on its row") and `packages/tui/test/cli/tui/rewind-story.test.tsx`, with ordinary names and an
   ordinary shell command as the control in "/rewind lists every prompt with its own file edits and a current row".
 - The runner writes session titles and commit subjects through `plain` (`packages/flow/src/runner.ts`). Text that is
   stored outlives the clone, so escape it at write time.
@@ -3648,9 +3821,11 @@ The program-wide register of every follow-up, these gaps included, with each one
   with nothing or with a line break, so `ReminderText.neutralizeParts` escapes a tag cut across parts), the notice that a background or user shell command leaves (its output and
   command), a background subagent's reply, the instruction files `InstructionDiscovery` renders and the ones
   `SessionInstructions` loads when a file is read (baseline and updates), MCP server instructions, the git snapshot
-  (branch, user, status and commit subjects), and a checkpoint's summary and recent text (a summary checkpoint without recent text is the resume message of `to-llm-message.ts`, which escapes the summary the same way; the `<analysis>` draft never reaches a stored summary, pinned by the "analysis never stored" rows of `session-compaction.test.ts`). The clients that send editor context as a hidden message escape it before
-  they send it, with the rules in `@orbit/util/reminder-text`: the VS Code chat writes the selected text, and the terminal UI the path and the selection,
-  into a fenced block after their envelope (VS Code keeps its escaped one-line file name, language and problem messages inside it), and ACP escapes the assistant-audience text it submits.
+  (branch, user, status and commit subjects), and a checkpoint's summary and recent text (a summary checkpoint without recent text is the resume message of `to-llm-message.ts`, which escapes the summary the same way; the `<analysis>` draft never reaches a stored summary, pinned by the "analysis never stored" rows of `session-compaction.test.ts`). The editor's open file and selection reach the model as the prompt's
+  `editor` field, whose note `to-llm-message.ts` writes with the path and the selected text as data. The VS Code chat's
+  problems summary is the one editor context still sent as a hidden message; it escapes it with the rules in
+  `@orbit/util/reminder-text` (its one-line file name and problem messages inside the envelope), and ACP escapes the
+  assistant-audience text it submits.
   Synthetic messages are
   recognized by `metadata.source` (`shell`, `subagent`) or `metadata.instruction`, except a reminder row, which holds
   Orbit's own envelope; an unmarked synthetic stays as stored. Pinned by the sink table in `session-reminders.test.ts`

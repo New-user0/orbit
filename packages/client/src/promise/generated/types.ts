@@ -197,6 +197,8 @@ export type PromptMention = { start: number; end: number; text: string }
 
 export type PromptEditorContext = { path: string; selection?: { start: number; end: number; text: string } }
 
+export type PromptCommand = { name: string; arguments: string }
+
 export type SessionTurnOutput = { schema: { [x: string]: JsonValue }; attempts?: number }
 
 export type SessionInboxDelivery = "steer" | "queue"
@@ -2191,6 +2193,7 @@ export type SessionMessageUser = {
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillAttachment>
   editor?: PromptEditorContext
+  command?: PromptCommand
   turn?: SessionTurnOptions
   delivery?: SessionInboxDelivery
   type: "user"
@@ -2202,6 +2205,7 @@ export type SessionInboxUserPayload = {
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillAttachment>
   editor?: PromptEditorContext
+  command?: PromptCommand
   metadata?: { [x: string]: JsonValue }
   turn?: SessionTurnOptions
 }
@@ -2212,6 +2216,7 @@ export type SessionInboxUserPayload1 = {
   agents?: Array<PromptAgentAttachment>
   skills?: Array<PromptSkillAttachment>
   editor?: PromptEditorContext
+  command?: PromptCommand
   metadata?: { [x: string]: any }
   turn?: SessionTurnOptions
 }
@@ -3870,6 +3875,7 @@ export type SessionImportInput = {
             readonly path: string
             readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
           }
+          readonly command?: { readonly name: string; readonly arguments: string }
           readonly turn?: {
             readonly maxSteps?: number
             readonly maxCost?: number
@@ -4241,6 +4247,7 @@ export type SessionImportInput = {
             readonly path: string
             readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
           }
+          readonly command?: { readonly name: string; readonly arguments: string }
           readonly turn?: {
             readonly maxSteps?: number
             readonly maxCost?: number
@@ -4612,6 +4619,7 @@ export type SessionImportInput = {
             readonly path: string
             readonly selection?: { readonly start: number; readonly end: number; readonly text: string }
           }
+          readonly command?: { readonly name: string; readonly arguments: string }
           readonly turn?: {
             readonly maxSteps?: number
             readonly maxCost?: number

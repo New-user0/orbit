@@ -82,6 +82,17 @@ export const EditorContext = Schema.Struct({
   }).pipe(optional),
 }).annotate({ identifier: "Prompt.EditorContext" })
 
+/**
+ * The slash command a prompt was given as: the command's name and its arguments as the person typed them (empty when
+ * none). The prompt's text is the command's expansion, which the model reads; a client shows `/name arguments`. The
+ * server records it from the command it ran, and no client prompt input carries it.
+ */
+export interface PromptCommand extends Schema.Schema.Type<typeof PromptCommand> {}
+export const PromptCommand = Schema.Struct({
+  name: Schema.String,
+  arguments: Schema.String,
+}).annotate({ identifier: "Prompt.Command" })
+
 export interface Prompt extends Schema.Schema.Type<typeof Prompt> {}
 export const Prompt = Schema.Struct({
   text: Schema.String,

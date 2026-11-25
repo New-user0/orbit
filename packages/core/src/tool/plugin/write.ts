@@ -97,7 +97,10 @@ export const Plugin = {
                   ...FileAccess.leadsOf([target]),
                   // `paths` and each file's `place` are where the write lands as resolved here, absolute, for a client to show,
                   // and `link` where a link on the way really leads, for a client to warn about.
-                  metadata: { paths: [target.place], files: [{ ...preview, place: target.place, ...(link && { link }) }] },
+                  metadata: {
+                    paths: [target.place],
+                    files: [{ ...preview, place: target.place, ...(link && { link }) }],
+                  },
                   // The person may approve their own version of the file instead; it is written at this same target.
                   original: { file: shown, place: target.place, text: current?.text ?? "", status },
                   sessionID: context.sessionID,
@@ -123,7 +126,9 @@ export const Plugin = {
                   const files = [
                     fileDiff(result.resource, current?.text ?? "", final.text, current ? "modified" : "added"),
                   ]
-                  return { output: result, files }
+                  // Saving the proposal unchanged is no change of the person's, so only a different text is a revision.
+                  const revised = revision && revision.content !== input.content ? revision.content : undefined
+                  return { output: result, files, revised }
                 }).pipe(
                   // From the write on, a failure still names the file, so that a code rewind puts back what it wrote.
                   Effect.mapError(
@@ -141,6 +146,8 @@ export const Plugin = {
                 output: written.output,
                 content: toModelContent(written.output),
                 metadata: { files: written.files }, // by the project's spelling, so a code rewind knows it wrote it
+                // A post-tool hook is told what was written: the person's text in place of the model's.
+                ...(written.revised === undefined ? {} : { input: { ...input, content: written.revised } }),
               })),
               Effect.mapError((error) =>
                 error instanceof ToolFailure
