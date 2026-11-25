@@ -31,11 +31,20 @@ const args = (root: string) => [
 
 const quick = `import { test } from "bun:test"\ntest("quick", () => {})\n`
 
-// The environment of a run under test. GitHub reads `::error` lines from a job's output, which a run started in this
-// process shares, so GITHUB_ACTIONS is left out for the runner and for the bun under it: a stand-in file stopped on
-// purpose must not put a "Test file stuck" annotation, or bun's own failure annotation, on a passing CI job. The
-// annotation rows set it on purpose and read their own piped output.
+// The environment of a run under test. GitHub reads `::error` lines from a job's output, so GITHUB_ACTIONS is left out
+// for the runner and for the bun under it: a stand-in file stopped on purpose must not put a "Test file stuck"
+// annotation, or bun's own failure annotation, on a passing CI job. The annotation rows set it on purpose and read their
+// own piped output.
 const quiet = (extra: Record<string, string> = {}) => ({ ...process.env, GITHUB_ACTIONS: undefined, ...extra })
+
+// Where a run started in this process reports: into a list the row reads, with bun's own output dropped, so the job log
+// of a failing core run holds no "Test file stuck" or "(fail) x" line from a stand-in ("keeps what the runs it starts in
+// this process print out of its own output").
+const captured = () => {
+  const lines: string[] = []
+  return { lines, output: { log: (line: string) => void lines.push(line), stdio: "ignore" as const } }
+}
+const stuckLines = (lines: string[]) => lines.filter((line) => line.startsWith("Test file stuck:"))
 
 // A stand-in for `bun test`: one worker that writes the given heartbeat lines for test/a.test.ts, named by its full path
 // as Bun.main gives it, then lives for three seconds.
@@ -71,9 +80,11 @@ describe("runTests", () => {
         ].join("\n"),
       })
       const before = await heartbeats()
-      const code = await runTests(args(dir.path), quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "1000" }), dir.path)
+      const out = captured()
+      const code = await runTests(args(dir.path), quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "1000" }), dir.path, out.output)
       const ended = Date.now()
       expect(code).toBe(1)
+      expect(stuckLines(out.lines)).toEqual([expect.stringMatching(/^Test file stuck: test\/stuck\.test\.ts has run for/)])
       const started = (await Bun.file(startFile).json()) as { pid: number; at: number }
       // A one-second deadline is looked at every quarter second, so the run ends soon after it, not at a 5 s poll.
       expect(ended - started.at).toBeLessThan(4_000)
@@ -94,8 +105,10 @@ describe("runTests", () => {
         { "slow.test.ts": `import { test } from "bun:test"\nawait Bun.sleep(4000)\ntest("slow", () => {})\n`, "a.test.ts": quick },
         { "test/slow.test.ts": 2000 },
       )
-      const code = await runTests(args(dir.path), quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "1500" }), dir.path)
+      const out = captured()
+      const code = await runTests(args(dir.path), quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "1500" }), dir.path, out.output)
       expect(code).toBe(0)
+      expect(out.lines).toEqual([])
     },
     60_000,
   )
@@ -108,7 +121,9 @@ describe("runTests", () => {
         "slow.test.ts": `import { test } from "bun:test"\nawait Bun.sleep(3000)\ntest("slow", () => {})\n`,
         "a.test.ts": quick,
       })
-      expect(await runTests(args(dir.path), { ...quiet(), ORBIT_TEST_FILE_DEADLINE_MS: undefined }, dir.path)).toBe(0)
+      const out = captured()
+      expect(await runTests(args(dir.path), { ...quiet(), ORBIT_TEST_FILE_DEADLINE_MS: undefined }, dir.path, out.output)).toBe(0)
+      expect(out.lines).toEqual([])
     },
     60_000,
   )
@@ -120,9 +135,13 @@ describe("runTests", () => {
       // bun ends an idle worker and starts the next file at once, so a real run seldom shows a live worker whose last
       // line ends a file. The stand-in writes such a line as a worker would, then lives past the deadline.
       const env = quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "1000" })
-      expect(await runTests(standIn(dir.path, ["start", "end"]), env, dir.path)).toBe(0)
+      const ended = captured()
+      expect(await runTests(standIn(dir.path, ["start", "end"]), env, dir.path, ended.output)).toBe(0)
+      expect(ended.lines).toEqual([])
       // Control: the same worker still in its file is stopped.
-      expect(await runTests(standIn(dir.path, ["start"]), env, dir.path)).toBe(1)
+      const inFile = captured()
+      expect(await runTests(standIn(dir.path, ["start"]), env, dir.path, inFile.output)).toBe(1)
+      expect(stuckLines(inFile.lines)).toEqual([expect.stringMatching(/^Test file stuck: test\/a\.test\.ts has run for/)])
     },
     60_000,
   )
@@ -175,7 +194,7 @@ describe("runTests", () => {
         ].join("\n"),
       })
       const outer = Object.fromEntries(Object.keys(names).map((name) => [name, path.join(dir.path, `outer-${name}`)]))
-      const code = await runTests(args(dir.path), quiet(outer), dir.path)
+      const code = await runTests(args(dir.path), quiet(outer), dir.path, captured().output)
       expect(code).toBe(0)
       const run = (await Bun.file(seen).json()) as { folder: string; exists: boolean }[]
       expect(run.map((entry) => entry.exists)).toEqual([true, true])
@@ -192,9 +211,11 @@ describe("runTests", () => {
     async () => {
       await using dir = await tmpdir()
       await suite(dir.path, { "fails.test.ts": `import { expect, test } from "bun:test"\ntest("x", () => expect(1).toBe(2))\n` })
-      expect(await runTests(args(dir.path), quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "5000" }), dir.path)).toBe(1)
+      const failed = captured()
+      expect(await runTests(args(dir.path), quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "5000" }), dir.path, failed.output)).toBe(1)
+      expect(failed.lines).toEqual([])
       await suite(dir.path, { "fails.test.ts": `import { expect, test } from "bun:test"\ntest("x", () => expect(1).toBe(1))\n` })
-      expect(await runTests(args(dir.path), quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "5000" }), dir.path)).toBe(0)
+      expect(await runTests(args(dir.path), quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "5000" }), dir.path, captured().output)).toBe(0)
     },
     60_000,
   )
@@ -228,6 +249,34 @@ describe("runTests", () => {
       expect(await drive(undefined, "true")).toContain("::error title=Test file stuck::test/a.test.ts")
     },
     60_000,
+  )
+
+  // The rows above call runTests in this process, so what they let through lands in the CI job's log, where a failing
+  // core job's Failures group would show a stand-in as a stuck file or a failing test. Two of them, the one that stops a
+  // stuck file and the one whose stand-in fails, run here as a test run of their own, and everything it prints is read.
+  test(
+    "keeps what the runs it starts in this process print out of its own output",
+    async () => {
+      const result = await runProgram(
+        [
+          process.execPath,
+          "test",
+          path.join(import.meta.dir, "test-runner-tools.test.ts"),
+          "-t",
+          "stops a file that blocks past the deadline|returns bun's own code when no file is stuck",
+        ],
+        { cwd: path.resolve(import.meta.dir, ".."), env: quiet(), deadline: 120_000 },
+      )
+      const printed = `${result.stdout}\n${result.stderr}`
+      expect(result.exitCode).toBe(0)
+      // Control: both rows ran and passed.
+      expect(printed).toMatch(/^ 2 pass$/m)
+      expect(printed).toMatch(/^ 0 fail$/m)
+      expect(
+        printed.split(/\r?\n/).filter((line) => line.startsWith("Test file stuck") || line.startsWith("(fail) x")),
+      ).toEqual([])
+    },
+    120_000,
   )
 })
 

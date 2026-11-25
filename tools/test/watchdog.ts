@@ -16,7 +16,15 @@ import path from "node:path"
 //
 // The deadline of a file is ORBIT_TEST_FILE_DEADLINE_MS (ten minutes by default) or three times its entry in the
 // timings file the run balances by, whichever is longer.
-export async function runTests(args: string[], env: Record<string, string | undefined> = process.env, cwd = process.cwd()) {
+//
+// `output` says where the run's own report and bun's output go: the job log for a real run, elsewhere for a run that a
+// test starts in its own process, so a stand-in file stopped or failed on purpose never reads as a real one in CI.
+export async function runTests(
+  args: string[],
+  env: Record<string, string | undefined> = process.env,
+  cwd = process.cwd(),
+  output: { log: (line: string) => void; stdio: "inherit" | "ignore" } = { log: console.error, stdio: "inherit" },
+) {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-heartbeat-"))
   // The start slots that every worker of this run shares (packages/cli/test/fixture/start-gate.ts), and one Bun
   // transpiler cache for the `orb` processes that the cli tests start from source (packages/cli/test/fixture/environment.ts).
@@ -33,8 +41,8 @@ export async function runTests(args: string[], env: Record<string, string | unde
       ORBIT_TEST_TRANSPILER_CACHE: transpiled,
     },
     stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
+    stdout: output.stdio,
+    stderr: output.stdio,
     // Its own process group on Linux and macOS, so one signal reaches the workers too.
     detached: process.platform !== "win32",
   })
@@ -60,7 +68,7 @@ export async function runTests(args: string[], env: Record<string, string | unde
       .find((entry) => entry !== undefined && Date.now() - entry.at > deadline(entry.file) && alive(entry.pid))
     if (!found) return
     clearInterval(watch)
-    report(found, relative(found.file), deadline(found.file), env)
+    report(found, relative(found.file), deadline(found.file), env, output.log)
     stuck.stopping = stop(child)
   }, Math.min(5_000, base / 4))
   const code = await child.exited
@@ -100,13 +108,19 @@ function alive(pid: number) {
 
 // The annotation follows the environment the run was given, not this process's own, so a runner started by a test with
 // GITHUB_ACTIONS left out puts nothing in the CI job's annotations when its stand-in file is stopped.
-function report(entry: { pid: number; at: number }, file: string, deadline: number, env: Record<string, string | undefined>) {
+function report(
+  entry: { pid: number; at: number },
+  file: string,
+  deadline: number,
+  env: Record<string, string | undefined>,
+  log: (line: string) => void,
+) {
   const seconds = Math.round((Date.now() - entry.at) / 1000)
-  console.error(
+  log(
     `Test file stuck: ${file} has run for ${seconds} s, past its deadline of ${deadline / 1000} s (worker ${entry.pid}). Stopping the run.`,
   )
-  if (env.GITHUB_ACTIONS) console.error(`::error title=Test file stuck::${file}`)
-  if (process.platform === "linux") console.error(linuxState(entry.pid))
+  if (env.GITHUB_ACTIONS) log(`::error title=Test file stuck::${file}`)
+  if (process.platform === "linux") log(linuxState(entry.pid))
 }
 
 // What the stuck worker is doing, from /proc: its state and kernel wait channel, each thread's state, and its child
