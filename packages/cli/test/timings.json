@@ -62,6 +62,7 @@
     "test/doctor.test.ts": 6612,
     "test/egress.test.ts": 164229,
     "test/env.test.ts": 76,
+    "test/fixture/remove-tree.test.ts": 4000,
     "test/fixture/state-home-probe.test.ts": 51,
     "test/flow-readers.test.ts": 326,
     "test/flow-team.test.ts": 38110,

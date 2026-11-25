@@ -6,6 +6,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "../fixture/environment"
+import { removeTree } from "../fixture/remove-tree"
 import { takeStartSlot } from "../fixture/start-gate"
 
 // A PowerShell row needs PowerShell, a Grep row ripgrep.
@@ -384,6 +385,6 @@ export async function approval(
     await reader.catch(() => {})
     void (await stderr)
     llm.stop(true)
-    await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => {})
+    await removeTree(root, { parents: [child.pid] }).catch(() => {})
   }
 }
