@@ -435,6 +435,12 @@ describe("ManagedSettings.read", () => {
 })
 
 const secured = process.platform !== "win32" && process.getuid?.() !== 0
+// icacls by its full path: a bare name is looked for in the working folder first on Windows (class 10).
+const icacls = (...args: string[]) =>
+  Bun.spawnSync([path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe"), ...args], {
+    stdout: "pipe",
+    stderr: "pipe",
+  })
 const base = { managed: { mcp: { deny: ["x"] } } }
 
 describe("ManagedSettings.read unreadable input", () => {
@@ -476,13 +482,23 @@ describe("ManagedSettings.read unreadable input", () => {
         write(directory, { "managed-settings.json": base }).pipe(
           Effect.andThen(
             Effect.acquireRelease(
-              Effect.sync(() =>
-                Bun.spawnSync(["icacls", path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)"]),
+              Effect.sync(() => icacls(path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)")),
+              () => Effect.sync(() => icacls(path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0")),
+            ),
+          ),
+          // The row is about a file this account cannot read. If the deny did not apply, or the account reads past it,
+          // the row would test a readable file, so both are checked before the product reads it.
+          Effect.andThen((result) =>
+            Effect.promise(() =>
+              fs.readFile(path.join(directory, "managed-settings.json")).then(
+                () => "read",
+                (error: NodeJS.ErrnoException) => error.code,
               ),
-              () =>
-                Effect.sync(() =>
-                  Bun.spawnSync(["icacls", path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0"]),
-                ),
+            ).pipe(
+              Effect.map((outcome) => {
+                expect({ icacls: result.exitCode, stderr: result.stderr.toString() }).toEqual({ icacls: 0, stderr: "" })
+                expect(outcome).toBe("EPERM")
+              }),
             ),
           ),
         ),
