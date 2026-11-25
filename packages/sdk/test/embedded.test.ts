@@ -314,6 +314,14 @@ const firstAnswers: ReadonlyArray<{
         .pipe(Effect.map((page) => page.data.map((model) => `${model.providerID}/${model.id}`))),
     expected: expect.arrayContaining(["custom/fictional-chat"]),
   },
+  {
+    name: "model.default names the model the config chooses",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.model
+        .default({ location: location(fixture) })
+        .pipe(Effect.map((answer) => answer.data && `${answer.data.providerID}/${answer.data.id}`)),
+    expected: "custom/fictional-chat",
+  },
 ]
 
 // An embedded host whose config supplies one model, with a plugin that adds one web search provider.
@@ -324,6 +332,7 @@ const prepareFirstAnswer = (fixture: Fixture) =>
         directory: fixture.directory,
         project: false,
         content: JSON.stringify({
+          model: "custom/fictional-chat",
           providers: {
             custom: {
               package: "aisdk:@ai-sdk/openai-compatible",
