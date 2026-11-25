@@ -22,6 +22,11 @@ async function drawCompaction(input: {
   readonly wait?: number
   /** Called with the screen settled, before it is torn down. */
   readonly settled?: () => void
+  /**
+   * What the screen settles to: read once it holds, within the row's limit. A loaded runner handles the events later
+   * than the fixed wait above, and a row that reads before then sees the state of before the event.
+   */
+  readonly until?: () => boolean
 }) {
   await using state = await tmpdir()
   const setup = await createTestRenderer({ width: input.width, height: 30, useThread: false, kittyKeyboard: true })
@@ -104,6 +109,8 @@ async function drawCompaction(input: {
       } as never)
     // The deltas have no mark of their own on screen when they change nothing, so give them time to be handled.
     await Bun.sleep(200 + (input.wait ?? 0))
+    const deadline = Date.now() + 20_000
+    while (input.until && !input.until() && Date.now() < deadline) await Bun.sleep(25)
     await setup.renderOnce()
     input.settled?.()
     return setup.captureCharFrame()
@@ -138,6 +145,9 @@ test("the row's one-second clock stops when the compaction ends", async () => {
       age: running,
       deltas: [{ characters: 4800 }],
       status: "completed",
+      // The end of the compaction stops the clock once the event is handled, which under load comes after the fixed
+      // wait (Windows CI, an interval still open at 5.4 s). A clock that never stops still fails, at the bound.
+      until: () => started.size === 0,
       settled: () => {
         open = started.size
       },
