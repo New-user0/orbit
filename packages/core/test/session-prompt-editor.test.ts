@@ -1,7 +1,8 @@
 import { describe, expect } from "bun:test"
 import fs from "fs"
 import path from "path"
-import { Effect, Layer } from "effect"
+import { pathToFileURL } from "url"
+import { Effect, Layer, Logger } from "effect"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Agent } from "@orbit/core/agent"
@@ -13,6 +14,7 @@ import { Instance } from "@orbit/core/instance/service"
 import { Location } from "@orbit/core/location"
 import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { Permission } from "@orbit/core/permission"
+import { PermissionPolicy } from "@orbit/core/permission/policy"
 import { PermissionSaved } from "@orbit/core/permission/saved"
 import { Plugin } from "@orbit/core/plugin"
 import { PluginHooks } from "@orbit/core/plugin/hooks"
@@ -27,6 +29,7 @@ import { SessionTable } from "@orbit/core/session/sql"
 import { SessionStore } from "@orbit/core/session/store"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location } from "./fixture/location"
+import { installPolicy } from "./fixture/policy"
 import { untrustedProjectNodes } from "./fixture/project-trust"
 import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -52,6 +55,8 @@ const provide = (project: string, trusted = true, worktree = project) =>
           PluginHooks.node,
           ManagedPolicy.node,
           Permission.node,
+
+          PermissionPolicy.node,
           Global.node,
           FileAccess.node,
           ProjectTrust.node,
@@ -129,6 +134,14 @@ const admit = (input: SessionPrompt.Input) =>
 
 const allow = { action: "*", resource: "*", effect: "allow" } satisfies Permission.Rule
 
+// Collects the message of every line logged while it is provided.
+const logged = (logs: string[]) =>
+  Logger.layer([
+    Logger.make(({ message }) => {
+      logs.push(String(message))
+    }),
+  ])
+
 describe("editor context at admission", () => {
   it.live("passes through onto the inbox payload", () =>
     Effect.gen(function* () {
@@ -174,6 +187,45 @@ describe("editor context at admission", () => {
       ])
     }),
   )
+
+  // A file outside the project is read by the read tool only when its folder may be reached, so a deny for that folder
+  // (`external_directory`) drops the field: the file by its own path, and through a folder link out of a trusted and an
+  // untrusted project. A file in the project is the control, and a deny for another folder keeps them all.
+  for (const trusted of [true, false])
+    it.live(`a deny for an outside folder drops a field of a file in it (${trusted ? "trusted" : "untrusted"})`, () =>
+      Effect.gen(function* () {
+        const root = (yield* tmpdirScoped()).path
+        const project = path.join(root, "project")
+        const outside = path.join(root, "outside")
+        fs.mkdirSync(project)
+        fs.mkdirSync(outside)
+        fs.mkdirSync(path.join(root, "elsewhere"))
+        fs.writeFileSync(path.join(outside, "s"), "SECRET-MARKER")
+        fs.symlinkSync(outside, path.join(project, "cfg"), "junction")
+        const files = [path.join(outside, "s"), path.join(project, "cfg", "s"), path.join(project, "a.ts")]
+        const below = (folder: string) => `${folder.replaceAll("\\", "/")}/*`
+        const results = yield* Effect.forEach(
+          [
+            ["another folder", path.join(root, "elsewhere")],
+            ["outside", outside],
+          ] as const,
+          ([name, folder]) =>
+            Effect.gen(function* () {
+              yield* prepare(project, [allow, { action: "external_directory", resource: below(folder), effect: "deny" }])
+              return [
+                name,
+                yield* Effect.forEach(files, (file) =>
+                  admit({ text: "hi", editor: { path: file } }).pipe(Effect.map((payload) => payload.editor !== undefined)),
+                ),
+              ] as const
+            }).pipe(provide(project, trusted)),
+        )
+        expect(results).toEqual([
+          ["another folder", [true, true, true]],
+          ["outside", [false, false, true]],
+        ])
+      }),
+    )
 
   // The class matrix of the editor path: every spelling of the denied file, then of the home folder. A row is kept (true)
   // only when the rule does not cover it. The last column says why a dropped row is dropped: "deny" rows are kept by an
@@ -296,6 +348,45 @@ describe("editor context at admission", () => {
     }
   }
 
+  // m5-quality, item 12 (classes 3 and 8): a configuration policy refuses the editor field as it refuses the Read tool,
+  // though the check runs no plugin hook: the policy plugin's own decision is installed for it. A plain file, a folder
+  // link out and a file link out, by the path as the project spells it, from the person's document and from their
+  // organization, in a trusted and an untrusted folder. A policy for another file is the control.
+  for (const trusted of [true, false])
+    for (const link of ["plain", "folder", "file"] as const)
+      for (const from of ["user", "organization"] as const)
+        (link === "file" && !canLinkFile ? it.live.skip : it.live)(
+          `a ${from} policy Read deny drops the field: ${link === "plain" ? "a plain file" : `a ${link} link out`} (${trusted ? "trusted" : "untrusted"})`,
+          () =>
+            Effect.gen(function* () {
+              const root = (yield* tmpdirScoped()).path
+              const project = path.join(root, "project")
+              const outside = path.join(root, "outside")
+              fs.mkdirSync(path.join(project, "plain"), { recursive: true })
+              fs.mkdirSync(outside)
+              fs.writeFileSync(path.join(outside, "s"), "SECRET-MARKER")
+              fs.writeFileSync(path.join(project, "plain", "s"), "SECRET-MARKER")
+              if (link === "folder") fs.symlinkSync(outside, path.join(project, "cfg"), "junction")
+              if (link === "file") fs.symlinkSync(path.join(outside, "s"), path.join(project, "key.txt"), "file")
+              const spelled = { plain: "plain/s", folder: "cfg/s", file: "key.txt" }[link]
+              const editor = { path: path.join(project, spelled), selection: { start: 1, end: 1, text: "SECRET-MARKER" } }
+              const kept = yield* Effect.forEach(["other.txt", spelled], (named) =>
+                Effect.scoped(
+                  Effect.gen(function* () {
+                    yield* prepare(project, [allow])
+                    yield* installPolicy(from, [{ action: "permission", resource: `Read:${named}`, effect: "deny" }])
+                    const payload = yield* admit({ text: "hi", editor })
+                    return [named, payload.editor !== undefined] as const
+                  }).pipe(provide(project, trusted)),
+                ),
+              )
+              expect(kept).toEqual([
+                ["other.txt", true],
+                [spelled, false],
+              ])
+            }),
+        )
+
   // Fix loop 11 (classes 3 and 4): from a session folder below the worktree the project spells the file `../cfg/s`. A
   // trusted folder checks that spelling; an untrusted one checks the place the link leads to, with the spelling as a
   // lead that is now tried relative to the session folder although it climbs out of it.
@@ -363,6 +454,209 @@ describe("editor context at admission", () => {
         ]
       }).pipe(provide(project))
       expect(results).toEqual([undefined, undefined])
+    }),
+  )
+})
+
+// Review of m5-quality fix loop 1 (classes 3 and 8): a mentioned file (`@path`, sent as a `file:` attachment) reaches the
+// model whole at admission, without a read. A Read deny rule, or a configuration policy of the person or their
+// organization, leaves it out with one log line, as the reference drops a mentioned file its read rules deny and as the
+// editor field is dropped; the prompt and the other mentions are admitted. A plain file, a file through a folder link out
+// and a file link out, by the path as the project spells it, in a trusted and an untrusted folder. A mention of another
+// file is the control in every row, and with no deny both are kept.
+describe("mentioned files at admission", () => {
+  const layout = (root: string, link: "plain" | "folder" | "file") => {
+    const project = path.join(root, "project")
+    const outside = path.join(root, "outside")
+    fs.mkdirSync(path.join(project, "plain"), { recursive: true })
+    fs.mkdirSync(outside)
+    fs.writeFileSync(path.join(outside, "s"), "SECRET-MARKER")
+    fs.writeFileSync(path.join(project, "plain", "s"), "SECRET-MARKER")
+    fs.writeFileSync(path.join(project, "other.txt"), "open notes")
+    if (link === "folder") fs.symlinkSync(outside, path.join(project, "cfg"), "junction")
+    if (link === "file") fs.symlinkSync(path.join(outside, "s"), path.join(project, "key.txt"), "file")
+    const spelled = { plain: "plain/s", folder: "cfg/s", file: "key.txt" }[link]
+    return { project, spelled }
+  }
+  const mentions = (project: string, spelled: string) =>
+    [spelled, "other.txt"].map((file) => ({ uri: pathToFileURL(path.join(project, file)).href, name: file }))
+  const kept = (payload: { files?: ReadonlyArray<{ name?: string; data: string }> }) =>
+    (payload.files ?? []).map((file) => [file.name, Buffer.from(file.data, "base64").toString()] as const)
+
+  for (const trusted of [true, false])
+    for (const link of ["plain", "folder", "file"] as const)
+      (link === "file" && !canLinkFile ? it.live.skip : it.live)(
+        `a Read deny leaves out ${link === "plain" ? "a plain file" : `a file through a ${link} link out`} (${trusted ? "trusted" : "untrusted"})`,
+        () =>
+          Effect.gen(function* () {
+            const { project, spelled } = layout((yield* tmpdirScoped()).path, link)
+            const file = path.join(project, spelled)
+            const rulesets: ReadonlyArray<readonly [string, Permission.Ruleset]> = [
+              ["no deny", [allow]],
+              ["relative deny", [allow, { action: "Read", resource: spelled, effect: "deny" }]],
+              ["absolute deny", [allow, { action: "Read", resource: file.replaceAll("\\", "/"), effect: "deny" }]],
+            ]
+            const results = yield* Effect.forEach(rulesets, ([name, rules]) =>
+              Effect.gen(function* () {
+                yield* prepare(project, rules)
+                const payload = yield* admit({ text: "hi", files: mentions(project, spelled) })
+                return [name, payload.text, kept(payload)] as const
+              }).pipe(provide(project, trusted)),
+            )
+            expect(results).toEqual([
+              [
+                "no deny",
+                "hi",
+                [
+                  [spelled, "SECRET-MARKER"],
+                  ["other.txt", "open notes"],
+                ],
+              ],
+              ["relative deny", "hi", [["other.txt", "open notes"]]],
+              ["absolute deny", "hi", [["other.txt", "open notes"]]],
+            ])
+          }),
+      )
+
+  for (const trusted of [true, false])
+    for (const link of ["plain", "folder", "file"] as const)
+      for (const from of ["user", "organization"] as const)
+        (link === "file" && !canLinkFile ? it.live.skip : it.live)(
+          `a ${from} policy Read deny leaves out ${link === "plain" ? "a plain file" : `a file through a ${link} link out`} (${trusted ? "trusted" : "untrusted"})`,
+          () =>
+            Effect.gen(function* () {
+              const { project, spelled } = layout((yield* tmpdirScoped()).path, link)
+              const results = yield* Effect.forEach(["unrelated.txt", spelled], (named) =>
+                Effect.scoped(
+                  Effect.gen(function* () {
+                    yield* prepare(project, [allow])
+                    yield* installPolicy(from, [{ action: "permission", resource: `Read:${named}`, effect: "deny" }])
+                    const payload = yield* admit({ text: "hi", files: mentions(project, spelled) })
+                    return [named, kept(payload).map(([name]) => name)] as const
+                  }).pipe(provide(project, trusted)),
+                ),
+              )
+              expect(results).toEqual([
+                ["unrelated.txt", [spelled, "other.txt"]],
+                [spelled, ["other.txt"]],
+              ])
+            }),
+        )
+
+  // The read tool reads an outside place only when its folder may be reached (`external_directory`), so a deny for that
+  // folder leaves a mention of what is in it out, as it refuses the tool: a file outside by its own path, the same file
+  // through a folder link out of the project, and a mentioned outside folder, whose own folder is the one decided. A
+  // mention in the project is the control, and each mention left out is logged once.
+  for (const trusted of [true, false])
+    it.live(
+      `a deny for an outside folder leaves out a mention of what is in it (${trusted ? "trusted" : "untrusted"})`,
+      () =>
+        Effect.gen(function* () {
+          const root = (yield* tmpdirScoped()).path
+          const { project } = layout(root, "folder")
+          const outside = path.join(root, "outside")
+          fs.mkdirSync(path.join(outside, "dir"))
+          fs.writeFileSync(path.join(outside, "dir", "a.txt"), "inner")
+          const files = [
+            path.join(outside, "s"),
+            path.join(project, "cfg", "s"),
+            path.join(outside, "dir"),
+            path.join(project, "other.txt"),
+          ].map((file) => ({ uri: pathToFileURL(file).href, name: path.relative(root, file).replaceAll("\\", "/") }))
+          const below = (folder: string) => `${folder.replaceAll("\\", "/")}/*`
+          const results = yield* Effect.forEach(
+            [
+              ["no deny", [allow]],
+              ["outside", [allow, { action: "external_directory", resource: below(outside), effect: "deny" }]],
+              [
+                "outside/dir",
+                [allow, { action: "external_directory", resource: below(path.join(outside, "dir")), effect: "deny" }],
+              ],
+            ] as const,
+            ([name, rules]) =>
+              Effect.gen(function* () {
+                const logs: string[] = []
+                yield* prepare(project, rules)
+                const payload = yield* admit({ text: "hi", files }).pipe(Effect.provide(logged(logs)))
+                return [
+                  name,
+                  (payload.files ?? []).map((file) => file.name),
+                  logs.filter((line) => line === "A mentioned file was dropped from the prompt").length,
+                ] as const
+              }).pipe(provide(project, trusted)),
+          )
+          expect(results).toEqual([
+            ["no deny", ["outside/s", "project/cfg/s", "outside/dir", "project/other.txt"], 0],
+            ["outside", ["project/other.txt"], 3],
+            ["outside/dir", ["outside/s", "project/cfg/s", "project/other.txt"], 1],
+          ])
+        }),
+    )
+
+  // A check that cannot be answered refuses (class 7): for a session the store no longer holds the rules cannot be read,
+  // so the editor field and the mention are left out and the prompt is still admitted. The same prompt for the session
+  // the store holds is the control.
+  it.live("a check that cannot be answered leaves the editor field and the mention out", () =>
+    Effect.gen(function* () {
+      const project = (yield* tmpdirScoped()).path
+      const file = path.join(project, "a.txt")
+      fs.writeFileSync(file, "open notes")
+      const input = { text: "hi", editor: { path: file }, files: [{ uri: pathToFileURL(file).href, name: "a.txt" }] }
+      const results = yield* Effect.gen(function* () {
+        yield* prepare(project, [allow])
+        const store = yield* SessionStore.Service
+        const session = yield* store.get(sessionID)
+        if (!session) throw new Error("no session")
+        const fsUtil = yield* FSUtil.Service
+        return yield* Effect.forEach([sessionID, Session.ID.make("ses_prompt_gone")], (id) =>
+          SessionPrompt.prepare({ session: { ...session, id }, messageID: SessionMessage.ID.create(), input }).pipe(
+            Effect.provideService(FSUtil.Service, fsUtil),
+            Effect.map((item) =>
+              item.type === "user"
+                ? [item.payload.text, item.payload.editor !== undefined, (item.payload.files ?? []).length]
+                : [],
+            ),
+          ),
+        )
+      }).pipe(provide(project))
+      expect(results).toEqual([
+        ["hi", true, 1],
+        ["hi", false, 0],
+      ])
+    }),
+  )
+
+  // A mentioned folder is sent as the list of what is in it, so its rule decides it too.
+  it.live("a Read deny leaves out a mentioned folder", () =>
+    Effect.gen(function* () {
+      const project = (yield* tmpdirScoped()).path
+      fs.mkdirSync(path.join(project, "secret"))
+      fs.mkdirSync(path.join(project, "open"))
+      fs.writeFileSync(path.join(project, "secret", "key.txt"), "SECRET-MARKER")
+      fs.writeFileSync(path.join(project, "open", "a.txt"), "open notes")
+      const folders = ["secret", "open"].map((name) => ({ uri: pathToFileURL(path.join(project, name)).href, name }))
+      const results = yield* Effect.forEach(
+        [
+          ["no deny", [allow]],
+          ["deny", [allow, { action: "Read", resource: "secret", effect: "deny" }]],
+        ] as const,
+        ([name, rules]) =>
+          Effect.gen(function* () {
+            yield* prepare(project, rules)
+            const payload = yield* admit({ text: "hi", files: folders })
+            return [name, kept(payload)] as const
+          }).pipe(provide(project)),
+      )
+      expect(results).toEqual([
+        [
+          "no deny",
+          [
+            ["secret", "key.txt"],
+            ["open", "a.txt"],
+          ],
+        ],
+        ["deny", [["open", "a.txt"]]],
+      ])
     }),
   )
 })

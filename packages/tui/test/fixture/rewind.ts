@@ -1,4 +1,5 @@
 import path from "path"
+import type { TuiInput } from "../../src/app"
 import { createAppFixture } from "./app"
 import { directory, json } from "./tui-client"
 
@@ -12,7 +13,7 @@ export const location = { directory, project: { id: "project", directory, canoni
 
 export const sessionID = "ses_rewind"
 
-const session = {
+export const session = {
   id: sessionID,
   title: "Rewind fixture",
   projectID: "project",
@@ -116,6 +117,8 @@ export async function rewindApp(input: {
   revert?: string
   /** The person's own keys, as the config's `keybinds` sets them. */
   keybinds?: Record<string, string>
+  /** The clipboard the app writes to, such as `/copy`'s transcript. */
+  clipboard?: TuiInput["clipboard"]
 }) {
   const requests: Recorded[] = []
   let running = !!input.running
@@ -131,6 +134,7 @@ export async function rewindApp(input: {
       ...(input.keybinds ? { keybinds: input.keybinds } : {}),
     },
     args: { sessionID },
+    clipboard: input.clipboard,
     fetch: async (url, request) => {
       const body =
         request.method === "GET"

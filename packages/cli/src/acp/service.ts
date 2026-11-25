@@ -161,16 +161,29 @@ export function make(input: {
           ? input.client.message.list({ sessionID: attached.id, limit: 200, cursor })
           : input.client.message.list({ sessionID: attached.id, limit: 200, order: "asc" }),
       ).pipe(Effect.map((page) => [page.data, Option.fromNullishOr(page.cursor.next)] as const)),
-    ).pipe(Stream.runForEach((message) => replayMessage(attached, message)))
+    ).pipe(
+      // Each message carries on from what the one before left open of the model's text.
+      Stream.runFoldEffect(
+        () => ACPTranslate.texts,
+        (before, message) => replayMessage(attached, message, before),
+      ),
+    )
 
-  // A message that fails to translate keeps the updates before the failure and does not stop the replay.
-  const replayMessage = Effect.fnUntraced(function* (attached: Attached, message: SessionMessageInfo) {
-    const updates = ACPTranslate.replayMessage(message, attached.cwd)
+  // A message that fails to translate keeps the updates before the failure and does not stop the replay; what it left
+  // open of the model's text is then unknown, so the next text is written as if everything were.
+  const replayMessage = Effect.fnUntraced(function* (
+    attached: Attached,
+    message: SessionMessageInfo,
+    before: ACPTranslate.Texts,
+  ) {
+    const updates = ACPTranslate.replayMessage(message, attached.cwd, before)
     while (true) {
       const next = yield* Effect.result(Effect.try(() => updates.next()))
-      if (Result.isFailure(next))
-        return yield* Effect.logWarning("ACP replay skipped the rest of a message", message.id, next.failure.cause)
-      if (next.success.done) return
+      if (Result.isFailure(next)) {
+        yield* Effect.logWarning("ACP replay skipped the rest of a message", message.id, next.failure.cause)
+        return ACPTranslate.unsure
+      }
+      if (next.success.done) return next.success.value
       yield* input.connection.sessionUpdate({ sessionId: attached.id, update: next.success.value })
     }
   })
@@ -252,7 +265,7 @@ export function make(input: {
             sessionId: session.id,
             cwd: session.location.directory,
             ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
-            title: withTimestampedFallback(session),
+            title: plain(withTimestampedFallback(session)),
             updatedAt: new Date(session.time.updated).toISOString(),
           }
         }),

@@ -1,4 +1,4 @@
-import { Orbit } from "@orbit/client"
+import { Orbit, type PromptEditorContext } from "@orbit/client"
 import { IdeLock } from "@orbit/util/ide-lock"
 import path from "node:path"
 import vscode from "vscode"
@@ -345,6 +345,7 @@ class EditorState implements vscode.Disposable {
     const selection = this.selection()
     return {
       file: this.place(editor),
+      path: upperDrive(editor.document.uri.fsPath),
       language: editor.document.languageId,
       selection: selection && { startLine: selection.startLine, endLine: selection.endLine, text: selection.text },
     }
@@ -524,12 +525,12 @@ class Chat implements vscode.WebviewViewProvider {
     )
   }
 
-  async send(text: string, context?: string, shown?: string) {
+  async send(text: string, context?: string, shown?: string, editor?: PromptEditorContext) {
     // A new prompt closes every Orbit tab; questions still pending stay on their cards.
     this.diffs.closeAll()
     await this.reveal()
     const controller = await this.connect()
-    if (controller) await controller.send(text, context, shown)
+    if (controller) await controller.send(text, context, shown, editor)
   }
 
   async reset() {
@@ -616,7 +617,7 @@ class Chat implements vscode.WebviewViewProvider {
       case "send": {
         // The editor is read now, as the message goes, and the person's words stay exactly as typed.
         const sent = outgoing(message, { file: this.editor.file(), problems: this.editor.problems() })
-        return this.send(message.text, sent.context, sent.shown)
+        return this.send(message.text, sent.context, sent.shown, sent.editor)
       }
       case "starter": {
         if (message.starter === "explain") return vscode.commands.executeCommand("orbit.explainSelection")

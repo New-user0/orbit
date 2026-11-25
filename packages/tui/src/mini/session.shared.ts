@@ -21,7 +21,9 @@ export type RunSession = {
   variant?: string
 }
 
-export function messagePrompt(message: Pick<SessionMessageUser, "text" | "files" | "agents" | "skills">): RunPrompt {
+export function messagePrompt(
+  message: Pick<SessionMessageUser, "text" | "files" | "agents" | "skills" | "command">,
+): RunPrompt {
   const input = projectedPromptInput(message)
   return {
     text: input.text,

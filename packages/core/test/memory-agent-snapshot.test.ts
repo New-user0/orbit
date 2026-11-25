@@ -817,8 +817,8 @@ describe("agent memory snapshots", () => {
     Effect.gen(function* () {
       const l = yield* layout
       const folder = path.join(l.user, "reviewer")
-      // Enough files that the copy is still running when the first one shows up.
-      const many = notes(500, "")
+      // As many files as a copy takes (200), each large enough that the copy is still running when the first one shows up.
+      const many = notes(200, "x".repeat(65_536))
       yield* snapshotAt(path.join(l.snapshots, "reviewer"), many)
       const expected = [".snapshot-synced.json", ...Object.keys(many)].toSorted()
       const out = yield* Effect.gen(function* () {
@@ -849,7 +849,7 @@ describe("agent memory snapshots", () => {
     Effect.gen(function* () {
       const l = yield* layout
       const folder = path.join(l.user, "reviewer")
-      yield* snapshotAt(path.join(l.snapshots, "reviewer"), notes(1_000, "x".repeat(16_384)))
+      yield* snapshotAt(path.join(l.snapshots, "reviewer"), notes(200, "x".repeat(200_000)))
       const out = yield* Effect.gen(function* () {
         yield* define(reviewer)
         const fiber = yield* Effect.forkChild(sync)
@@ -863,7 +863,7 @@ describe("agent memory snapshots", () => {
         return { stopped, whole: Date.now() - starting, interrupted, next: (yield* listed(folder))?.length }
       }).pipe(provide(l))
       expect(out.interrupted).toEqual({ folder: undefined, user: [] })
-      expect(out.next).toBe(1_001)
+      expect(out.next).toBe(201)
       expect(out.stopped).toBeLessThan(out.whole / 2)
     }),
     60_000,
@@ -951,5 +951,128 @@ describe("agent memory snapshots", () => {
       for (const [name, body] of Object.entries(files)) expect(yield* text(path.join(folder, name))).toBe(body)
       expect(yield* listed(l.user)).toEqual(["reviewer"])
     }),
+  )
+
+  // m5-quality, FU-M5-008 (class 7): the hidden folder is made and only then is its removal attached, so an interrupt
+  // between the two left it behind, empty. Here the real folder is made and the step that made it then pauses, as a
+  // slow disk would; the interrupt lands in that pause. The folder is gone afterwards, and the next sync copies whole.
+  it.live("leaves no hidden folder when it is interrupted just after making it", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const folder = path.join(l.user, "reviewer")
+      yield* snapshotAt(path.join(l.snapshots, "reviewer"), files)
+      const made = yield* Deferred.make<string>()
+      const lateTemp = Layer.effect(
+        FSUtil.Service,
+        Effect.gen(function* () {
+          const real = yield* FSUtil.Service
+          return FSUtil.Service.of({
+            ...real,
+            makeTempDirectory: (options) =>
+              real.makeTempDirectory(options).pipe(
+                Effect.tap((created) => Deferred.succeed(made, created)),
+                Effect.tap(() => Effect.sleep("100 millis")),
+              ),
+          })
+        }),
+      ).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
+      const hidden = yield* Effect.gen(function* () {
+        yield* define(reviewer)
+        const fiber = yield* Effect.forkChild(sync)
+        const created = yield* Deferred.await(made)
+        yield* Fiber.interrupt(fiber)
+        return created
+      }).pipe(provide(l, { files: lateTemp }))
+      // The interrupt came after the hidden folder was there.
+      expect(path.basename(hidden)).toStartWith(".reviewer.snapshot-")
+      expect(yield* exists(hidden)).toBe(false)
+      expect(yield* listed(l.user)).toEqual([])
+      yield* Effect.gen(function* () {
+        yield* define(reviewer)
+        yield* sync
+      }).pipe(provide(l))
+      expect(yield* listed(folder)).toEqual([".snapshot-synced.json", ...Object.keys(files)].toSorted())
+      expect(yield* listed(l.user)).toEqual(["reviewer"])
+    }),
+  )
+
+  // m5-quality, FU-M5-004 (class 7): a snapshot is copied with the reference's own bounds on what it puts in a person's
+  // memory folder. A file over 250,000 bytes is left out with one log line, as the reference's team memory pull leaves
+  // out an entry over that size; a file of exactly that size is copied. The rest of the snapshot is copied.
+  it.live("leaves out a snapshot file over 250,000 bytes with one log line, and copies one of exactly that size", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const folder = path.join(l.user, "reviewer")
+      yield* snapshotAt(path.join(l.snapshots, "reviewer"), {
+        ...files,
+        "big.md": "x".repeat(250_001),
+        "edge.md": "y".repeat(250_000),
+      })
+      const logs: string[] = []
+      yield* Effect.gen(function* () {
+        yield* define(reviewer)
+        yield* sync
+      }).pipe(provide(l), Effect.provide(logged(logs)))
+      expect(yield* listed(folder)).toEqual([".snapshot-synced.json", ...Object.keys(files), "edge.md"].toSorted())
+      expect((yield* text(path.join(folder, "edge.md"))).length).toBe(250_000)
+      expect(logs.filter((line) => line.includes("big.md"))).toHaveLength(1)
+      expect(logs.filter((line) => line.includes("files copied"))).toEqual([
+        "agent memory snapshot of reviewer: 4 files copied",
+      ])
+    }),
+    60_000,
+  )
+
+  // m5-quality, FU-M5-004 (class 7): at most 200 files are copied, the most of a memory folder the reference ever reads
+  // (its scan's cap, Orbit's `MemoryStore.MAX_SCAN_FILES`). They are the first 200 by name, so the cut is the same on
+  // every machine (a checkout's file times order nothing), and the rest are left out with one log line.
+  it.live("copies at most 200 files of a snapshot, the first by name, and logs the cut once", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const folder = path.join(l.user, "reviewer")
+      const many = notes(203, "")
+      yield* snapshotAt(path.join(l.snapshots, "reviewer"), many)
+      const logs: string[] = []
+      yield* Effect.gen(function* () {
+        yield* define(reviewer)
+        yield* sync
+      }).pipe(provide(l), Effect.provide(logged(logs)))
+      const kept = Object.keys(many).toSorted().slice(0, 200)
+      expect(yield* listed(folder)).toEqual([".snapshot-synced.json", ...kept].toSorted())
+      expect(logs.filter((line) => line.includes("files copied"))).toEqual([
+        "agent memory snapshot of reviewer: 200 files copied",
+      ])
+      // One line for the cut, besides the count: none per file left out.
+      expect(
+        logs.filter((line) => line.includes("agent memory snapshot of reviewer") && !line.includes("files copied")),
+      ).toHaveLength(1)
+    }),
+    60_000,
+  )
+
+  // FU-M5-004: "by name" is by code point, the same order on every machine, not the order a listing comes in. NTFS lists
+  // names without regard to case, so there `C.md` comes after every `b-…` name and would be the one cut; by code point an
+  // upper-case letter comes first, so it is kept and the last `b-…` name is cut.
+  it.live("cuts a snapshot by code point, whatever order the folder lists its names in", () =>
+    Effect.gen(function* () {
+      const l = yield* layout
+      const folder = path.join(l.user, "reviewer")
+      const many = {
+        "C.md": "CAPITAL\n",
+        ...Object.fromEntries(
+          Array.from({ length: 200 }, (_, index) => [`b-${String(index).padStart(3, "0")}.md`, `B-${index}\n`]),
+        ),
+      }
+      yield* snapshotAt(path.join(l.snapshots, "reviewer"), many)
+      yield* Effect.gen(function* () {
+        yield* define(reviewer)
+        yield* sync
+      }).pipe(provide(l))
+      const copied = (yield* listed(folder)) ?? []
+      expect(copied).toContain("C.md")
+      expect(copied).not.toContain("b-199.md")
+      expect(copied).toHaveLength(201)
+    }),
+    60_000,
   )
 })

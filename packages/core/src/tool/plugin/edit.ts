@@ -338,7 +338,8 @@ export const Plugin = {
                     replacements,
                   } satisfies Output,
                   // Saving the proposal unchanged is not a change the person made, so the model hears nothing of it.
-                  revised: revision !== undefined && revision.content !== replaced,
+                  revised: revision !== undefined && revision.content !== replaced ? revision.content : undefined,
+                  source,
                 }
               }).pipe(
                 // From the write on, a failure still names the file, so that a code rewind puts back what it wrote.
@@ -356,10 +357,18 @@ export const Plugin = {
               Effect.map((edited) => ({
                 output: edited.output,
                 // A revised edit is not the replacement the model asked for, so the model is told the person changed it.
-                content: edited.revised
-                  ? `Edited ${edited.output.files[0]?.file} with a version the person adjusted while approving it, which differs from your proposal`
-                  : `Edited ${edited.output.files[0]?.file} (${edited.output.replacements} replacement${edited.output.replacements === 1 ? "" : "s"})`,
+                content:
+                  edited.revised !== undefined
+                    ? `Edited ${edited.output.files[0]?.file} with a version the person adjusted while approving it, which differs from your proposal`
+                    : `Edited ${edited.output.files[0]?.file} (${edited.output.replacements} replacement${edited.output.replacements === 1 ? "" : "s"})`,
                 metadata: { files: edited.output.files },
+                // A post-tool hook is told what was written: one edit of the whole file, from the text the request read to
+                // the person's version, as the reference rebuilds a revised edit.
+                ...(edited.revised === undefined
+                  ? {}
+                  : {
+                      input: { ...input, old_string: edited.source, new_string: edited.revised, replace_all: false },
+                    }),
               })),
               Effect.mapError((error) =>
                 error instanceof ToolFailure

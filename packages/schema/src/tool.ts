@@ -262,6 +262,11 @@ export interface Result<Output extends ValueSchema<any> | undefined = ValueSchem
   readonly output?: OutputValue<Output>
   readonly content?: string | ReadonlyArray<Content>
   readonly metadata?: Metadata
+  /**
+   * The input that ran, when it is not the call's own: an Edit or Write a person revised while approving it. Only the
+   * `execute.after` hooks see it, as their `input`; the recorded call and what the model reads keep the call's input.
+   */
+  readonly input?: unknown
 }
 
 export type Info<

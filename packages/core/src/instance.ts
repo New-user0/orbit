@@ -23,6 +23,7 @@ import { FileAccess } from "./file-access.js"
 import { ModelResolver } from "./model-resolver.js"
 import { Mcp } from "./mcp/index.js"
 import { Permission } from "./permission.js"
+import { PermissionPolicy } from "./permission/policy.js"
 import { Plugin } from "./plugin.js"
 import { PluginHooks } from "./plugin/hooks.js"
 import { InstancePlugins } from "./plugin/instance.js"
@@ -102,6 +103,7 @@ const nodes = [
   Formatter.node,
   Mcp.node,
   Permission.node,
+  PermissionPolicy.node,
   Tool.node,
   ToolOutput.node,
   Image.node,

@@ -14,6 +14,7 @@ import { Global } from "@orbit/util/global"
 import { Bus } from "../src/bus.js"
 import { Database } from "../src/database/database.js"
 import { EventTable } from "../src/event/sql.js"
+import { FileAccess } from "../src/file-access.js"
 import { Image } from "../src/image.js"
 import { Instance } from "../src/instance/service.js"
 import { Location } from "../src/location.js"
@@ -40,6 +41,7 @@ import { Snapshot } from "../src/snapshot.js"
 import { tempGlobalLayer } from "./fixture/global"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
+import { permissionLayer } from "./lib/permission"
 
 const it = testEffect(
   LayerNode.compile(
@@ -126,6 +128,15 @@ const setup = Effect.fnUntraced(function* (options?: {
     Layer.succeed(PluginHooks.Service, hooks),
     Layer.mock(Image.Service, {}),
     options?.shell ?? Layer.mock(Shell.Service, {}),
+    // A mentioned file is resolved and checked against the read rules at admission; no rule denies one here
+    // (session-prompt-editor.test.ts holds the rules' rows).
+    Layer.mock(FileAccess.Service, {
+      resolve: (input) =>
+        Effect.succeed({ absolute: AbsolutePath.make(input.path), place: AbsolutePath.make(input.path), resource: input.path }),
+      externalRequest: () => undefined,
+      link: () => undefined,
+    }),
+    permissionLayer(),
   )
   const servicesFor = (ref: Location.Ref) => {
     locations.push(ref)

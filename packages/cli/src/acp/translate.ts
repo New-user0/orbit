@@ -11,8 +11,10 @@ import { PermissionView } from "@orbit/schema/permission-view"
 import { SessionMessage } from "@orbit/schema/session-message"
 import { ToolNames } from "@orbit/schema/tool-names"
 import { TokenUsage } from "@orbit/schema/token-usage"
+import { plain } from "@orbit/util/plain"
 import { partsToContentChunks, type ReplayPart } from "./content"
 import { ACPError } from "./error"
+import { follow, prose, subagentName, withoutImages, type Prose } from "./markdown"
 import { completedToolUpdate, errorToolUpdate, pendingToolCall, runningToolUpdate, type ToolInput } from "./tool"
 
 export const ChildSessionUpdatesCapability = "orbit/child-session-updates"
@@ -82,6 +84,8 @@ export type TurnState = {
   readonly openChildren: ReadonlySet<string>
   /** Forms asked of the client that the server has not yet answered or cancelled. */
   readonly forms: ReadonlySet<string>
+  /** What the model's streamed text leaves open for what a client is sent next (`piece`). */
+  readonly texts?: Texts
   readonly finish?: SessionMessageAssistant["finish"]
   readonly usage?: { readonly turn: TokenUsageInfo; readonly last: TokenUsageInfo }
   readonly stepError?: SessionStructuredError
@@ -125,6 +129,32 @@ type CompactionMarker = {
   readonly messageId: string
   readonly reason: "auto" | "manual"
   readonly error?: SessionStructuredError
+}
+
+/**
+ * What the model's text has left open for the next piece a client is sent of it. A client may draw each text in a block
+ * of its own, or append each chunk to the block of the one before until a tool call or a chunk of the other kind comes
+ * between them, across texts and messages, so a text that picks up after another is written for both (`follow`).
+ */
+export type Texts = {
+  /**
+   * What each text so far leaves open, by the message ID its chunks carry, which a client may draw as one block; kept
+   * once it ends, for the text after it.
+   */
+  readonly prose: ReadonlyMap<string, Prose>
+  /** By channel: the session's own updates, or one child's when the client takes them apart. */
+  readonly streams: ReadonlyMap<string, TextStream>
+}
+
+/** The text the last piece on a channel came from, and the last text of each kind, since its last tool call. */
+type TextStream = { readonly last?: string; readonly message?: string; readonly thought?: string }
+
+export const texts: Texts = { prose: new Map(), streams: new Map() }
+
+/** Where a replay that failed part way through a message leaves the next one: as if every text were left open. */
+export const unsure: Texts = {
+  prose: new Map([["", { ...prose, lost: true }]]),
+  streams: new Map([["", { last: "", message: "", thought: "" }]]),
 }
 
 export const initial: TurnState = {
@@ -246,27 +276,39 @@ export function step(state: TurnState, event: EventSubscribeOutput, ctx: Context
       }
     }
     case "session.text.delta":
-      return {
-        state,
-        outputs: send({
-          sessionUpdate: "agent_message_chunk",
-          messageId: event.data.assistantMessageID,
-          content: { type: "text", text: event.data.delta },
-        }),
-      }
     case "session.reasoning.delta":
+    case "session.text.ended":
+    case "session.reasoning.ended": {
+      // The model's Markdown goes as it wrote it, except that no image or raw tag in it is fetched by a client.
+      const message = event.type === "session.text.delta" || event.type === "session.text.ended"
+      const messageId = message
+        ? event.data.assistantMessageID
+        : `${event.data.assistantMessageID}:reasoning:${event.data.ordinal}`
+      const ended = event.type === "session.text.ended" || event.type === "session.reasoning.ended"
+      const [next, text] = piece(state.texts ?? texts, {
+        channel: channel(ctx, child),
+        kind: message ? "message" : "thought",
+        key: messageId,
+        delta: ended ? "" : event.data.delta,
+      })
       return {
-        state,
-        outputs: send({
-          sessionUpdate: "agent_thought_chunk",
-          messageId: `${event.data.assistantMessageID}:reasoning:${event.data.ordinal}`,
-          content: { type: "text", text: event.data.delta },
-        }),
+        state: { ...state, texts: next },
+        // The end of a text sends nothing.
+        outputs: text
+          ? send({
+              sessionUpdate: message ? "agent_message_chunk" : "agent_thought_chunk",
+              messageId,
+              content: { type: "text", text },
+            })
+          : [],
       }
+    }
     case "session.tool.input.started":
       return {
         state: {
           ...state,
+          // A client draws the model's next text after a tool call in a block of its own.
+          texts: broken(state.texts ?? texts, channel(ctx, child)),
           tools: new Map(state.tools).set(
             toolKey(event.data.sessionID, event.data.id),
             newTool(event.data.sessionID, event.data.id, event.data.name),
@@ -401,7 +443,8 @@ export function failure(state: TurnState) {
   if (error?.type === "provider.auth") return new ACPError.AuthRequiredError()
   if (error && error.type !== "aborted" && error.type !== "provider.content-filter") {
     return new ACPError.ServiceFailureError({
-      safeMessage: error.message || "Orbit prompt failed",
+      // A provider's or a tool's words: one line with no control or format character (class 9).
+      safeMessage: plain(error.message) || "Orbit prompt failed",
       service: "session",
       errorName: error.type,
     })
@@ -456,10 +499,20 @@ export function abandonTools(state: TurnState, ctx: Context): Step {
   }
 }
 
-/** Lazy, so a message that fails to translate part way still replays the updates before the failure. */
-export function* replayMessage(message: SessionMessageInfo, cwd: string): Generator<SessionUpdate> {
+/**
+ * Lazy, so a message that fails to translate part way still replays the updates before the failure. `before` is what
+ * the messages replayed before it left open of the model's text, and the message returns what it leaves.
+ */
+export function* replayMessage(
+  message: SessionMessageInfo,
+  cwd: string,
+  before: Texts = texts,
+): Generator<SessionUpdate, Texts> {
   if (message.type === "user") {
-    yield { sessionUpdate: "user_message_chunk", messageId: message.id, content: { type: "text", text: message.text } }
+    // A slash command's prompt is replayed as the command that was run, `/name arguments`, as the terminal UI shows it;
+    // its text is the command's expansion, which only the model reads.
+    const text = message.command ? `/${message.command.name} ${message.command.arguments}`.trimEnd() : message.text
+    yield { sessionUpdate: "user_message_chunk", messageId: message.id, content: { type: "text", text } }
     const files: ReplayPart[] = (message.files ?? []).map((file) => ({
       type: "file",
       url: file.source.type === "uri" ? file.source.uri : `data:${file.mime};base64,${file.data}`,
@@ -468,7 +521,8 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
     }))
     for (const chunk of partsToContentChunks(files))
       yield { sessionUpdate: "user_message_chunk", messageId: message.id, ...chunk }
-    return
+    // A client draws the model's reply to a prompt in a block of its own.
+    return texts
   }
   // A running compaction has no live turn on this connection to settle it, so replay only settled ones.
   if (message.type === "compaction" && message.status !== "running") {
@@ -478,24 +532,31 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
       reason: message.reason,
       ...(message.status === "failed" ? { error: message.error } : {}),
     })
-    return
+    return before
   }
-  if (message.type !== "assistant") return
+  if (message.type !== "assistant") return before
   // Live reasoning ordinals count only reasoning parts, not the mixed content array.
   let reasoningOrdinal = 0
+  let carried = before
   for (const part of message.content) {
-    if (part.type === "text") {
-      yield { sessionUpdate: "agent_message_chunk", messageId: message.id, content: { type: "text", text: part.text } }
-      continue
-    }
-    if (part.type === "reasoning") {
+    if (part.type === "text" || part.type === "reasoning") {
+      const thought = part.type === "reasoning"
+      const messageId = thought ? `${message.id}:reasoning:${reasoningOrdinal++}` : message.id
+      const [next, text] = piece(carried, {
+        channel: "",
+        kind: thought ? "thought" : "message",
+        key: messageId,
+        delta: part.text,
+      })
+      carried = next
       yield {
-        sessionUpdate: "agent_thought_chunk",
-        messageId: `${message.id}:reasoning:${reasoningOrdinal++}`,
-        content: { type: "text", text: part.text },
+        sessionUpdate: thought ? "agent_thought_chunk" : "agent_message_chunk",
+        messageId,
+        content: { type: "text", text },
       }
       continue
     }
+    carried = broken(carried, "")
     // The pending call carries the recorded input, so a loaded session still shows which command ran or which URL was
     // fetched, and the recorded places, so no place comes from the input's spelling of a path (it can be a link that
     // leads somewhere else). A call recorded without places names none.
@@ -550,6 +611,39 @@ export function* replayMessage(message: SessionMessageInfo, cwd: string): Genera
         break
     }
   }
+  return carried
+}
+
+// One piece of a text the model streams, as it is written for a client on `at.channel`: a text that picks up after a
+// piece of another was sent there is written for a client that joins it to that one and for one that does not.
+function piece(
+  current: Texts,
+  at: { channel: string; kind: "message" | "thought"; key: string; delta: string },
+): [Texts, string] {
+  const stream = current.streams.get(at.channel) ?? {}
+  const own = current.prose.get(at.key) ?? prose
+  const previous = stream[at.kind]
+  const start =
+    stream.last === at.key
+      ? own
+      : follow(own, (previous === undefined ? undefined : current.prose.get(previous)) ?? prose)
+  const [next, written] = withoutImages(start, at.delta)
+  return [
+    {
+      prose: new Map(current.prose).set(at.key, next),
+      streams: new Map(current.streams).set(at.channel, { ...stream, last: at.key, [at.kind]: at.key }),
+    },
+    written,
+  ]
+}
+
+function broken(current: Texts, channel: string): Texts {
+  return { ...current, streams: without(current.streams, channel) }
+}
+
+// A client that takes a child's updates apart draws them apart from the session's own.
+function channel(ctx: Context, child: ChildSession | undefined) {
+  return child && ctx.childUpdates ? child.id : ""
 }
 
 function recordedPlaces(metadata: Readonly<Record<string, unknown>> | undefined) {
@@ -679,7 +773,9 @@ function projectChildUpdate(update: SessionUpdate, child: ChildSession) {
   }
   if (projected.sessionUpdate === "tool_call" || projected.sessionUpdate === "tool_call_update") {
     projected.toolCallId = `${child.id}:${projected.toolCallId}`
-    if (projected.title && child.title) projected.title = `${child.title}: ${projected.title}`
+    // The subagent's title, which a model chose, is one short line that reads as it is (classes 8 and 9).
+    const name = subagentName(child.title)
+    if (projected.title && name) projected.title = `${name}: ${projected.title}`
   }
   return projected
 }

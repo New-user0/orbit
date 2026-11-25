@@ -1,5 +1,6 @@
 import type { SessionConfigOption } from "@agentclientprotocol/sdk"
 import type { ModelRef } from "@orbit/client/promise"
+import { plain } from "@orbit/util/plain"
 import { builtinCommands, type Catalog } from "./catalog"
 
 export const DEFAULT_VARIANT_VALUE = "default"
@@ -50,7 +51,12 @@ export function configOptions(catalog: Catalog, selection: Selection) {
 
 export function availableCommands(catalog: Catalog) {
   return [
-    ...catalog.commands.map((command) => ({ name: command.name, description: command.description ?? "" })),
+    // A command's name and words, and a model's or mode's, come from configuration, a plugin or an MCP server: each is
+    // one line with no control or format character, as the terminal UI draws it (class 9).
+    ...catalog.commands.map((command) => ({
+      name: plain(command.name),
+      description: plain(command.description ?? ""),
+    })),
     ...Array.from(builtinCommands, ([name, command]) => ({ name, description: command.description })),
   ]
 }
@@ -90,7 +96,10 @@ export function buildModelSelectOption(input: {
     options: input.providers.flatMap((provider) =>
       provider.models
         .toSorted((a, b) => a.name.localeCompare(b.name))
-        .map((model) => ({ value: `${provider.id}/${model.id}`, name: `${provider.name}/${model.name}` })),
+        .map((model) => ({
+          value: `${provider.id}/${model.id}`,
+          name: `${plain(provider.name)}/${plain(model.name)}`,
+        })),
     ),
   }
 }
@@ -125,8 +134,8 @@ export function buildModeSelectOption(input: {
     currentValue: input.currentModeId,
     options: input.modes.map((mode) => ({
       value: mode.id,
-      name: mode.name,
-      ...(mode.description ? { description: mode.description } : {}),
+      name: plain(mode.name),
+      ...(mode.description ? { description: plain(mode.description) } : {}),
     })),
   }
 }

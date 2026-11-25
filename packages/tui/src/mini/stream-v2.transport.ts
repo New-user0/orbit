@@ -17,6 +17,7 @@ import { writeSessionOutput } from "./stream"
 import { createFragmentReconciler, fragmentRef, type FragmentReconciler } from "./stream-v2.fragment"
 import { toolImageCommits, userImageCommits, type ImageCommit } from "./stream-v2.image"
 import { messagePrompt } from "./session.shared"
+import { shownPrompt } from "../prompt/codec"
 import { createSubagentTracker, toolCommit, toolFinalPhase } from "./stream-v2.subagent"
 import { normalizeTool, toolOutputText } from "./tool"
 import { canonicalToolName, toolDisplayContent } from "../util/tool-display"
@@ -787,7 +788,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
         promoteWait(state.wait, false, message.id)
       if (state.pending.delete(message.id)) syncPending()
       state.promotedMessages.add(message.id)
-      renderUser(message.id, message.text, message.files, message.skills, render)
+      renderUser(message.id, shownPrompt(message), message.files, message.skills, render)
       return
     }
     if (message.type === "skill") {

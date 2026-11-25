@@ -58,12 +58,14 @@ export const execute = (
         .pipe(Effect.mapError((error: unknown) => toolError(error, Tool.ErrorCode.Validation)))
     yield* authorize(tool, decoded, resolved).pipe(Effect.mapError((error: unknown) => toolError(error)))
     const result = yield* tool.execute(decoded, resolved).pipe(Effect.mapError((error: unknown) => toolError(error)))
+    const ran = result.input === undefined ? {} : { input: result.input }
     if (tool.output === undefined) {
       if ("output" in result) return yield* Effect.die("Tool result declared output without an output schema")
       return {
         output: undefined,
         content: normalizeContent(result.content),
         ...(result.metadata === undefined ? {} : { metadata: result.metadata }),
+        ...ran,
       }
     }
     if (!("output" in result)) return yield* new Tool.Error({ message: "Tool did not return its declared output" })
@@ -72,6 +74,7 @@ export const execute = (
       output,
       content: normalizeContent(result.content, output),
       ...(result.metadata === undefined ? {} : { metadata: result.metadata }),
+      ...ran,
     }
   })
 

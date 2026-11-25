@@ -65,3 +65,36 @@ test("the project's themes are read only while the start folder is trusted, and 
     expect(discoveries).toBe(2)
   })
 })
+
+// m5-quality, FU-M4-380 (classes 3 and 14): the walk starts no higher than the folder the server decided trust for. Here
+// the terminal UI's own walk would take the folder with `.git` above the start folder as the root, while the server
+// decided for the start folder itself, as it does when it rejects that `.git` (a `.git` file that names no repository).
+// The theme of the folder with `.git` is read only while the server's root is that folder (the control), and each change
+// of the server's root reads the themes again.
+test("the project's themes are read from the folder the server trusted down, and a change of that folder reads again", async () => {
+  await using folders = await layout()
+  const start = path.join(folders.repo, "sub")
+  await Bun.write(path.join(start, ".orbit", "themes", "start-theme.json"), JSON.stringify({ base: "orbit" }))
+  await inside(start, async () => {
+    const source = createThemeSource({ config: folders.config, home: folders.home })
+    let discoveries = 0
+    const unsubscribe = source.subscribeDiscover(() => discoveries++)
+    const names = async () => Object.keys(await source.discover()).sort()
+
+    // The server decided for the start folder: the theme of the folder above it, which holds `.git`, is not read.
+    source.trust({ trusted: true, root: start })
+    expect(discoveries).toBe(1)
+    expect(await names()).toEqual(["start-theme", "user-theme"])
+
+    // The control: once the server's root is the folder with `.git`, its theme is read, and the change reads again.
+    source.trust({ trusted: true, root: folders.repo })
+    expect(discoveries).toBe(2)
+    expect(await names()).toEqual(["clone-own-theme", "start-theme", "user-theme"])
+
+    // And back.
+    source.trust({ trusted: true, root: start })
+    expect(discoveries).toBe(3)
+    expect(await names()).toEqual(["start-theme", "user-theme"])
+    unsubscribe()
+  })
+})
