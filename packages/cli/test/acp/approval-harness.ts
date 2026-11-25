@@ -6,7 +6,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "../fixture/environment"
-import { startSlot } from "../fixture/start-gate"
+import { takeStartSlot } from "../fixture/start-gate"
 
 // A PowerShell row needs PowerShell, a Grep row ripgrep.
 export const powershell = process.platform === "win32" ? "powershell" : Bun.which("pwsh") ? "pwsh" : undefined
@@ -287,6 +287,10 @@ export async function approval(
       },
     }),
   )
+  // The child starts only once the start gate (fixture/start-gate.ts) admits it, and gives its slot back when it has
+  // answered `initialize`, so a CI job starts no more children at once than the gate's limit, and the deadline of the
+  // first answer measures the start and not the queue.
+  const release = await takeStartSlot()
   // ORBIT_TRUST_PROJECT is unset unless the row is a trusted control: the folder is untrusted.
   const child = Bun.spawn([process.execPath, "run", "src/index.ts", "acp"], {
     cwd: path.join(import.meta.dir, "../.."),
@@ -351,11 +355,11 @@ export async function approval(
     })
   let passed = false
   try {
-    // The start gate (fixture/start-gate.ts) admits a few children at a time, and the deadline of the first answer starts
-    // at admission, so a busy runner delays a row without failing it.
-    await startSlot(() =>
-      request("initialize", { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: "test", version: "0" } }),
-    )
+    await request("initialize", {
+      protocolVersion: 1,
+      clientCapabilities: {},
+      clientInfo: { name: "test", version: "0" },
+    }).finally(release)
     const session = await request("session/new", { cwd: workspace, mcpServers: [] })
     // trust-first: no session opens in a folder that is not trusted, so the call that an untrusted row describes never
     // runs: the refusal is typed and names the folder, and the model is asked nothing. The trusted rows show the

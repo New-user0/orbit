@@ -150,6 +150,32 @@ describe("runTests", () => {
   )
 
   test(
+    "gives each run a fresh folder of start slots, in place of one it inherits, and removes it at the end",
+    async () => {
+      await using dir = await tmpdir()
+      const seen = path.join(dir.path, "seen.json")
+      await suite(dir.path, {
+        "slots.test.ts": [
+          `import { test } from "bun:test"`,
+          `import { existsSync, writeFileSync } from "node:fs"`,
+          `const folder = process.env.ORBIT_TEST_START_SLOTS ?? ""`,
+          `writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ folder, exists: existsSync(folder) }))`,
+          `test("records", () => {})`,
+        ].join("\n"),
+      })
+      const outer = path.join(dir.path, "outer-starts")
+      const code = await runTests(args(dir.path), { ...process.env, ORBIT_TEST_START_SLOTS: outer }, dir.path)
+      expect(code).toBe(0)
+      const run = (await Bun.file(seen).json()) as { folder: string; exists: boolean }
+      expect(run.exists).toBe(true)
+      expect(run.folder).not.toBe(outer)
+      expect(path.basename(run.folder)).toStartWith("orbit-starts-")
+      expect(await fs.stat(run.folder).catch(() => undefined)).toBeUndefined()
+    },
+    60_000,
+  )
+
+  test(
     "returns bun's own code when no file is stuck",
     async () => {
       await using dir = await tmpdir()

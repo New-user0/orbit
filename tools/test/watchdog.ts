@@ -15,11 +15,13 @@ import path from "node:path"
 // timings file the run balances by, whichever is longer.
 export async function runTests(args: string[], env: Record<string, string | undefined> = process.env, cwd = process.cwd()) {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-heartbeat-"))
+  // The start slots that every worker of this run shares (packages/cli/test/fixture/start-gate.ts).
+  const starts = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-starts-"))
   const child = Bun.spawn({
     cmd: [process.execPath, ...args],
     cwd,
-    // A runner started by a test must not write into its parent run's folder.
-    env: { ...env, ORBIT_TEST_HEARTBEAT: folder },
+    // A runner started by a test must not write into its parent run's folders.
+    env: { ...env, ORBIT_TEST_HEARTBEAT: folder, ORBIT_TEST_START_SLOTS: starts },
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
@@ -58,6 +60,7 @@ export async function runTests(args: string[], env: Record<string, string | unde
   process.off("SIGINT", interrupt)
   process.off("SIGTERM", terminate)
   fs.rmSync(folder, { recursive: true, force: true })
+  fs.rmSync(starts, { recursive: true, force: true })
   return stuck.stopping ? 1 : code
 }
 

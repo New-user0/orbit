@@ -104,8 +104,10 @@ runs them in parallel too. Each core worker gets its own `ORBIT_TEST_HOME`, XDG 
 Windows (on Linux and macOS `HOME` stays the shared root). `ORBIT_TEST_WORKERS=1` still gives each file of those five packages a
 fresh module registry (`--isolate`), as a parallel run does. The ACP approval matrix in cli (`acp/permission-files.subprocess.test.ts`,
 `acp/permission-spellings.subprocess.test.ts`, `acp/spelling-matrix-*` and `acp/share-links-*`) runs its rows 4 at a time inside each
-file, so two of its files in one CI job start no more `orb acp` children than the matrix did as one file; pass
-`--max-concurrency=1` to run them one by one.
+file; pass `--max-concurrency=1` to run them one by one. Each row starts its `orb acp` child only when the start gate
+(`packages/cli/test/fixture/start-gate.ts`) gives it a slot, and gives the slot back once the child has answered. The runner
+makes the slots files in a folder that all workers of one run share, so a run, and so one CI job, starts at most three such
+children at once (`ORBIT_TEST_STARTS` changes the number).
 
 A parallel run stops a test file that is still running past its deadline, names it on stderr and exits with code 1, instead of
 waiting for it forever. The deadline is `ORBIT_TEST_FILE_DEADLINE_MS` (ten minutes by default) or three times the file's
