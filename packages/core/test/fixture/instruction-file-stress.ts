@@ -1,5 +1,5 @@
 /**
- * Runs `ConfigInstructionFile.parse` over inputs that a cloned repository could ship, and prints how long each took as
+ * Runs `ConfigInstructionFile.parse` over inputs that a cloned repository could ship, and prints the CPU time each took as
  * JSON; the line separator rows at the end also carry the time of each reader and of its control. It is a script of its
  * own because the work is synchronous: a loop that never ends cannot be cut short from the process that runs it, so the
  * test starts this one with a deadline. It exits with an error when `parse` throws.
@@ -88,10 +88,18 @@ const cases: [string, string][] = [
   ...Array.from({ length: 3_000 }, (_, index): [string, string] => [`garbage ${index}`, garbage()]),
 ]
 
+// Each case is timed in CPU milliseconds of this process, not by the clock: a case that is not linear burns seconds of
+// CPU however busy the machine is, while the clock also counts the time other processes held the CPU, which put a
+// linear case past five seconds while other test files ran on a loaded CI runner.
+const cpu = () => {
+  const usage = process.cpuUsage()
+  return (usage.user + usage.system) / 1000
+}
+
 const report: { name: string; ms: number; readers?: Record<string, { readonly hostile: number; readonly control: number }> }[] = []
 let randomMs = 0
 for (const [name, text] of cases) {
-  const start = performance.now()
+  const start = cpu()
   for (const frontmatter of [true, false]) {
     const found = ConfigInstructionFile.imports(text)
     if (!Array.isArray(found)) throw new Error(`${name}: imports is not a list`)
@@ -102,7 +110,7 @@ for (const [name, text] of cases) {
     if (typeof result.content !== "string") throw new Error(`${name}: content is not a string`)
     if (!result.stripped && result.content !== text) throw new Error(`${name}: changed text that it reports as unchanged`)
   }
-  const ms = performance.now() - start
+  const ms = cpu() - start
   if (name.startsWith("garbage")) randomMs += ms
   else report.push({ name, ms: Math.round(ms) })
 }
@@ -127,9 +135,9 @@ const readers: Record<string, (text: string) => unknown> = {
   imports: (text) => ConfigInstructionFile.imports(text),
 }
 const timed = (read: () => unknown) => {
-  const start = performance.now()
+  const start = cpu()
   read()
-  return Math.round(performance.now() - start)
+  return Math.round(cpu() - start)
 }
 const withComments = (line: string) => `# a\n<!-- c -->\n${line}\n<!-- d -->\n`
 for (const [shape, make] of Object.entries(lines))
