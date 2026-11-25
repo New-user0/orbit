@@ -441,6 +441,16 @@ const icacls = (...args: string[]) =>
     stdout: "pipe",
     stderr: "pipe",
   })
+// The security identifier of the account that runs the tests, from whoami by its full path (class 10).
+const account = () => {
+  const result = Bun.spawnSync(
+    [path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe"), "/user", "/fo", "csv", "/nh"],
+    { stdout: "pipe", stderr: "pipe" },
+  )
+  const sid = result.stdout.toString().match(/"(S-1-[\d-]+)"/)?.[1]
+  if (!sid) throw new Error(`whoami gave no security identifier: ${result.stdout}${result.stderr}`)
+  return sid
+}
 const base = { managed: { mcp: { deny: ["x"] } } }
 
 describe("ManagedSettings.read unreadable input", () => {
@@ -481,9 +491,16 @@ describe("ManagedSettings.read unreadable input", () => {
       setup: (directory: string) =>
         write(directory, { "managed-settings.json": base }).pipe(
           Effect.andThen(
+            // Read is denied to Everyone and, by name, to this account, which an administrator's group membership
+            // does not cover.
             Effect.acquireRelease(
-              Effect.sync(() => icacls(path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)")),
-              () => Effect.sync(() => icacls(path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0")),
+              Effect.sync(() =>
+                icacls(path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)", `*${account()}:(R)`),
+              ),
+              () =>
+                Effect.sync(() =>
+                  icacls(path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0", `*${account()}`),
+                ),
             ),
           ),
           // The row is about a file this account cannot read. If the deny did not apply, or the account reads past it,

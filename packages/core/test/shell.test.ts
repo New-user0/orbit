@@ -91,7 +91,7 @@ describe("shell", () => {
       // The Cygwin spelling of this machine's own Git Bash, wherever Git is installed: the resolver keeps a shell only
       // when its file exists, so a fixed drive and folder would test the fallback instead.
       const bash = ShellSelect.gitbash()
-      if (!bash) throw new Error("Git Bash is required for the Windows shell tests")
+      if (!bash) throw new Error(`Git Bash is required for the Windows shell tests; git on PATH is ${which("git")}`)
       const shell = `/cygdrive/${bash[0].toLowerCase()}${bash.slice(2).replaceAll("\\", "/")}`
       await withShell(shell, async () => {
         expect(ShellSelect.resolve({ priority: "config" })).toBe(FSUtil.windowsPath(shell))
