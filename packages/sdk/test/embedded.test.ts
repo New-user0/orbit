@@ -276,6 +276,112 @@ it.live("embedded client exposes plugin-backed web search", () =>
   ),
 )
 
+type Embedded = Effect.Success<ReturnType<Sdk["Orbit"]["create"]>>
+
+// A Location boots on the first request that names it and activates its plugins in the background. A route that reads
+// what plugins contribute answers from that request on, as the agent, command and skill routes do, so the first answer
+// already holds the contribution: no client has to retry until the activation it cannot see has finished.
+const firstAnswers: ReadonlyArray<{
+  readonly name: string
+  readonly ask: (orbit: Embedded, fixture: Fixture) => Effect.Effect<unknown, unknown>
+  readonly expected: unknown
+}> = [
+  {
+    name: "websearch.providers lists the provider a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.websearch
+        .providers({ location: location(fixture) })
+        .pipe(Effect.map((page) => page.data.map((provider) => provider.id))),
+    expected: expect.arrayContaining(["first-answer-websearch"]),
+  },
+  {
+    name: "websearch.query reaches the provider a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.websearch
+        .query({
+          query: "orbit",
+          providerID: fixture.sdk.WebSearch.ID.make("first-answer-websearch"),
+          location: location(fixture),
+        })
+        .pipe(Effect.map((answer) => answer.data.providerID)),
+    expected: "first-answer-websearch",
+  },
+  {
+    name: "model.list lists the model a configured provider supplies",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.model
+        .list({ location: location(fixture) })
+        .pipe(Effect.map((page) => page.data.map((model) => `${model.providerID}/${model.id}`))),
+    expected: expect.arrayContaining(["custom/fictional-chat"]),
+  },
+]
+
+// An embedded host whose config supplies one model, with a plugin that adds one web search provider.
+const prepareFirstAnswer = (fixture: Fixture) =>
+  Effect.gen(function* () {
+    const orbit = yield* fixture.sdk.Orbit.create({
+      config: {
+        directory: fixture.directory,
+        project: false,
+        content: JSON.stringify({
+          providers: {
+            custom: {
+              package: "aisdk:@ai-sdk/openai-compatible",
+              settings: { baseURL: "https://provider.example/v1" },
+              models: { "fictional-chat": {} },
+            },
+          },
+        }),
+      },
+      models: { fetch: false },
+      fs: { filewatcher: false },
+      trust: { implicit: true },
+    })
+    yield* orbit.plugin({
+      id: `first-answer-websearch-${crypto.randomUUID()}`,
+      effect: (ctx) =>
+        ctx.websearch.transform((editor) => {
+          editor.add({
+            id: fixture.sdk.WebSearch.ID.make("first-answer-websearch"),
+            name: "First answer web search",
+            execute: () => Effect.succeed([{ url: "https://example.com", content: "found", time: {} }]),
+          })
+        }),
+    })
+    return orbit
+  })
+
+for (const row of firstAnswers) {
+  it.live(`the first request to a fresh Location: ${row.name}`, () =>
+    withEmbedded("orbit-embedded-first-answer-", (fixture) =>
+      Effect.gen(function* () {
+        const orbit = yield* prepareFirstAnswer(fixture)
+        // No retry and no wait: the request below is the one that boots the Location.
+        expect(yield* row.ask(orbit, fixture)).toEqual(row.expected)
+      }),
+    ),
+  )
+
+  // The control: the same set-up answers with the contribution once activation has had time, so the row above fails
+  // only because its answer comes before activation, not because the set-up is wrong.
+  it.live(
+    `control, once the Location has activated its plugins: ${row.name}`,
+    () =>
+      withEmbedded("orbit-embedded-first-answer-", (fixture) =>
+        Effect.gen(function* () {
+          const orbit = yield* prepareFirstAnswer(fixture)
+          // Asked until the answer holds the contribution: a busy runner may take a while to activate.
+          yield* row.ask(orbit, fixture).pipe(
+            Effect.flatMap((value) => Effect.try(() => expect(value).toEqual(row.expected))),
+            Effect.retry(Schedule.spaced("50 millis")),
+            Effect.timeout("20 seconds"),
+          )
+        }),
+      ),
+    30_000,
+  )
+}
+
 it.live(
   "Location-owned runner events reach the ready global client",
   () =>
