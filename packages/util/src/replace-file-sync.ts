@@ -18,12 +18,14 @@ export const MAX_DELAY_MS = 200
  */
 export function replaceFileSync(from: string, to: string) {
   const stop = performance.now() + DEADLINE_MS
-  for (let delay = FIRST_DELAY_MS; ; delay = Math.min(delay * 2, MAX_DELAY_MS)) {
+  const attempt = (delay: number): void => {
     const error = renamed(from, to)
     if (error === undefined) return
     if (!held(code(error)) || performance.now() + delay > stop) throw error
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay)
+    attempt(Math.min(delay * 2, MAX_DELAY_MS))
   }
+  attempt(FIRST_DELAY_MS)
 }
 
 function renamed(from: string, to: string) {
