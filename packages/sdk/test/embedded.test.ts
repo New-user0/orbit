@@ -325,9 +325,189 @@ const firstAnswers: ReadonlyArray<{
         .pipe(Effect.map((answer) => answer.data && `${answer.data.providerID}/${answer.data.id}`)),
     expected: "custom/fictional-chat",
   },
+  {
+    name: "agent.get finds the agent a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.agent
+        .get({ agentID: fixture.sdk.Agent.ID.make("first-answer-agent"), location: location(fixture) })
+        .pipe(Effect.map((answer) => answer.data.id)),
+    expected: "first-answer-agent",
+  },
+  {
+    name: "provider.list lists the provider the config names",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.provider
+        .list({ location: location(fixture) })
+        .pipe(Effect.map((page) => page.data.map((provider) => provider.id))),
+    expected: expect.arrayContaining(["custom"]),
+  },
+  {
+    name: "provider.get finds the provider the config names",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.provider
+        .get({ providerID: fixture.sdk.Provider.ID.make("custom"), location: location(fixture) })
+        .pipe(Effect.map((answer) => answer.data.id)),
+    expected: "custom",
+  },
+  {
+    name: "integration.get finds the integration a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration
+        .get({ integrationID: fixture.sdk.Integration.ID.make("first-answer"), location: location(fixture) })
+        .pipe(Effect.map((answer) => answer.data.name)),
+    expected: "First answer",
+  },
+  {
+    name: "integration.connect.key stores a key for the integration a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration.connect
+        .key({
+          integrationID: fixture.sdk.Integration.ID.make("first-answer"),
+          key: "first-answer-key",
+          location: location(fixture),
+        })
+        .pipe(Effect.as("stored")),
+    expected: "stored",
+  },
+  {
+    name: "integration.oauth.connect starts the sign-in a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration.oauth
+        .connect({
+          integrationID: fixture.sdk.Integration.ID.make("first-answer"),
+          methodID: fixture.sdk.Integration.MethodID.make("first-answer-browser"),
+          location: location(fixture),
+        })
+        .pipe(Effect.map((answer) => answer.data.url)),
+    expected: "https://example.com/first-answer",
+  },
+  {
+    name: "integration.command.connect starts the command a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration.command
+        .connect({
+          integrationID: fixture.sdk.Integration.ID.make("first-answer"),
+          methodID: fixture.sdk.Integration.MethodID.make("first-answer-command"),
+          location: location(fixture),
+        })
+        .pipe(Effect.map((answer) => typeof answer.data.attemptID)),
+    expected: "string",
+  },
+  {
+    name: "integration.oauth.status finds the integration a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration.oauth
+        .status({
+          integrationID: fixture.sdk.Integration.ID.make("first-answer"),
+          attemptID: fixture.sdk.Integration.AttemptID.make("first-answer-attempt"),
+          location: location(fixture),
+        })
+        .pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        ),
+    // The integration is found, so what is unknown is the attempt this row names.
+    expected: "OAuth attempt not found: first-answer-attempt",
+  },
+  {
+    name: "integration.oauth.complete finds the integration a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration.oauth
+        .complete({
+          integrationID: fixture.sdk.Integration.ID.make("first-answer"),
+          attemptID: fixture.sdk.Integration.AttemptID.make("first-answer-attempt"),
+          code: "first-answer-code",
+          location: location(fixture),
+        })
+        .pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        ),
+    expected: "OAuth attempt not found: first-answer-attempt",
+  },
+  {
+    name: "integration.command.status finds the integration a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration.command
+        .status({
+          integrationID: fixture.sdk.Integration.ID.make("first-answer"),
+          attemptID: fixture.sdk.Integration.AttemptID.make("first-answer-attempt"),
+          location: location(fixture),
+        })
+        .pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        ),
+    expected: "Command attempt not found: first-answer-attempt",
+  },
+  {
+    name: "mcp.list lists the server a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.mcp.list({ location: location(fixture) }).pipe(Effect.map((page) => page.data.map((info) => info.name))),
+    expected: expect.arrayContaining(["first-answer-mcp"]),
+  },
+  {
+    name: "mcp.connect finds the server a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.mcp.connect({ server: "first-answer-mcp", location: location(fixture) }).pipe(Effect.as("found")),
+    expected: "found",
+  },
+  {
+    name: "mcp.disconnect finds the server a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.mcp.disconnect({ server: "first-answer-mcp", location: location(fixture) }).pipe(Effect.as("found")),
+    expected: "found",
+  },
+  {
+    name: "mcp.remove finds the server a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.mcp.remove({ server: "first-answer-mcp", location: location(fixture) }).pipe(Effect.as("found")),
+    expected: "found",
+  },
+  {
+    name: "reference.list lists the reference a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.reference
+        .list({ location: location(fixture) })
+        .pipe(Effect.map((page) => page.data.map((reference) => reference.name))),
+    expected: expect.arrayContaining(["first-answer-reference"]),
+  },
+  {
+    name: "vcs.get names the version control a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.vcs.get({ location: location(fixture) }).pipe(Effect.map((answer) => answer.data)),
+    expected: { provider: "first-answer-vcs", branch: { current: "first-answer" } },
+  },
+  {
+    name: "vcs.base asks the version control a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.vcs.base({ location: location(fixture) }).pipe(Effect.map((answer) => answer.data?.ref)),
+    expected: "first-answer-base",
+  },
+  {
+    name: "vcs.status asks the version control a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.vcs.status({ location: location(fixture) }).pipe(Effect.map((page) => page.data.map((row) => row.file))),
+    expected: ["first-answer.txt"],
+  },
+  {
+    name: "vcs.branch.list asks the version control a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.vcs.branch.list({ location: location(fixture) }).pipe(Effect.map((answer) => answer.data)),
+    expected: ["first-answer"],
+  },
+  {
+    name: "vcs.diff asks the version control a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.vcs
+        .diff({ mode: "working", location: location(fixture) })
+        .pipe(Effect.map((page) => page.data.map((row) => row.file))),
+    expected: ["first-answer.txt"],
+  },
 ]
 
-// An embedded host whose config supplies one model, with a plugin that adds one web search provider.
+// An embedded host whose config supplies one model, with a plugin that adds a web search provider, an agent, an
+// integration with a key, a sign-in and a command method, a disabled MCP server, a reference and a version control.
 const prepareFirstAnswer = (fixture: Fixture) =>
   Effect.gen(function* () {
     const orbit = yield* fixture.sdk.Orbit.create({
@@ -349,14 +529,67 @@ const prepareFirstAnswer = (fixture: Fixture) =>
       fs: { filewatcher: false },
       trust: { implicit: true },
     })
+    const changed = [{ file: "first-answer.txt", additions: 1, deletions: 0, status: "modified" as const }]
     yield* orbit.plugin({
-      id: `first-answer-websearch-${crypto.randomUUID()}`,
+      id: `first-answer-${crypto.randomUUID()}`,
       effect: (ctx) =>
-        ctx.websearch.transform((editor) => {
-          editor.add({
-            id: fixture.sdk.WebSearch.ID.make("first-answer-websearch"),
-            name: "First answer web search",
-            execute: () => Effect.succeed([{ url: "https://example.com", content: "found", time: {} }]),
+        Effect.gen(function* () {
+          yield* ctx.websearch.transform((editor) => {
+            editor.add({
+              id: fixture.sdk.WebSearch.ID.make("first-answer-websearch"),
+              name: "First answer web search",
+              execute: () => Effect.succeed([{ url: "https://example.com", content: "found", time: {} }]),
+            })
+          })
+          yield* ctx.agent.transform((editor) => editor.update("first-answer-agent", () => {}))
+          yield* ctx.integration.transform((editor) => {
+            editor.update("first-answer", (integration) => (integration.name = "First answer"))
+            editor.method.update({ integrationID: "first-answer", method: { type: "key", label: "Key" } })
+            editor.method.update({
+              integrationID: "first-answer",
+              method: { id: "first-answer-browser", type: "oauth", label: "Browser" },
+              authorize: () =>
+                Effect.succeed({
+                  url: "https://example.com/first-answer",
+                  instructions: "Sign in",
+                  mode: "code" as const,
+                  callback: () => Effect.die("no code is entered in this row"),
+                }),
+            })
+            editor.method.update({
+              integrationID: "first-answer",
+              method: {
+                id: "first-answer-command",
+                type: "command",
+                label: "Command",
+                command: [process.execPath, "-e", "console.log('first-answer-key')"],
+              },
+            })
+          })
+          yield* ctx.mcp.transform((editor) => {
+            // Disabled, so neither activation nor a disconnect or removal starts it; a connect starts a program that
+            // exits at once, which the server records as a failed start.
+            editor.set("first-answer-mcp", {
+              type: "local",
+              command: [process.execPath, "-e", ""],
+              disabled: true,
+            })
+          })
+          yield* ctx.reference.transform((editor) => {
+            editor.add("first-answer-reference", { type: "local", path: fixture.directory })
+          })
+          yield* ctx.vcs.transform((editor) => {
+            editor.add({
+              id: "first-answer-vcs",
+              name: "First answer version control",
+              info: () => Effect.succeed({ branch: { current: "first-answer" } }),
+              base: () =>
+                Effect.succeed({ name: "first-answer", ref: "first-answer-base", source: "default" as const }),
+              branches: () => Effect.succeed(["first-answer"]),
+              status: () => Effect.succeed(changed),
+              diff: () => Effect.succeed(changed.map((row) => ({ ...row, patch: "" }))),
+            })
+            editor.default.set("first-answer-vcs")
           })
         }),
     })
