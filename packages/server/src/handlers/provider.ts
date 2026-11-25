@@ -8,12 +8,12 @@ import { response } from "../location"
 
 export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (handlers) =>
   Effect.gen(function* () {
+    // The config's providers and the ones plugins add are registered while the Location's plugins activate, which the
+    // first request to a Location starts.
     return handlers
       .handle(
         "provider.list",
         Effect.fn(function* () {
-          // The config's providers and the ones plugins add are registered while the Location's plugins activate,
-          // which the first request to a Location starts.
           yield* Plugin.awaitActivation
           const providers = yield* Provider.Service
           return yield* response(providers.available())

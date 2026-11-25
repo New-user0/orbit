@@ -29,11 +29,12 @@ export const McpHandler = HttpApiBuilder.group(Api, "server.mcp", (handlers) =>
       if (!state.trusted) return yield* untrustedFolder(state)
       return new LocalConfig({ ...config, cwd })
     })
+    // Plugins add servers while the Location's plugins activate, which the first request to a Location starts, so every
+    // route that looks a server up waits for that first.
     return handlers
       .handle(
         "mcp.list",
         Effect.fn(function* () {
-          // Plugins add servers while the Location's plugins activate, which the first request to a Location starts.
           yield* Plugin.awaitActivation
           const service = yield* Mcp.Service
           return yield* response(

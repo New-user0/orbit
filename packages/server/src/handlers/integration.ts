@@ -26,12 +26,12 @@ const authorize = <A, R>(effect: Effect.Effect<A, Integration.AuthorizationError
 
 export const IntegrationHandler = HttpApiBuilder.group(Api, "server.integration", (handlers) =>
   Effect.gen(function* () {
+    // Plugins add integrations and their methods while the Location's plugins activate, which the first request to a
+    // Location starts, so every route that looks an integration up waits for that first.
     return handlers
       .handle(
         "integration.list",
         Effect.fn(function* () {
-          // Plugins add integrations and their methods while the Location's plugins activate, which the first request
-          // to a Location starts, so every route that looks an integration up waits for that first.
           yield* Plugin.awaitActivation
           const service = yield* Integration.Service
           return yield* response(service.list())

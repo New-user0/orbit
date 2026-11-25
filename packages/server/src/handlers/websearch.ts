@@ -8,11 +8,11 @@ import { response } from "../location"
 
 export const WebSearchHandler = HttpApiBuilder.group(Api, "server.websearch", (handlers) =>
   Effect.gen(function* () {
+    // Plugins add web search providers, and the first request to a Location starts their activation.
     return handlers
       .handle(
         "websearch.providers",
         Effect.fn("server.websearch.providers")(function* () {
-          // Plugins add web search providers, and the first request to a Location starts their activation.
           yield* Plugin.awaitActivation
           const websearch = yield* WebSearch.Service
           return yield* response(websearch.providers())

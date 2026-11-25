@@ -7,12 +7,12 @@ import { response } from "../location"
 
 export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers) =>
   Effect.gen(function* () {
+    // Plugins add providers and their models, and the first request to a Location starts their activation, so each
+    // route waits for it instead of answering with only what was there before.
     return handlers
       .handle(
         "model.list",
         Effect.fn(function* () {
-          // Plugins add providers and their models, and the first request to a Location starts their activation, so
-          // this waits for it instead of answering with only what was there before.
           yield* Plugin.awaitActivation
           const models = yield* Model.Service
           return yield* response(models.available())
