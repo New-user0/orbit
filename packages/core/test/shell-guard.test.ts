@@ -785,8 +785,8 @@ describe("ShellGuard.authorize", () => {
     )
 
   // The portable scanner is quadratic on some inputs (`echo a[ a[ ...`); the analysis' length limit keeps such an input
-  // from ever reaching it. The legacy scan and the fragment split still read it for its folders, and the scan alone can
-  // take seconds on this input, so the time bound is generous.
+  // from ever reaching it. Every parse refuses an input over that limit, so the legacy scan gives up on it too, and the
+  // fragment split still names the folder it changes to.
   it.live("asks about a very long unreadable input whole and quickly, in portable mode", () =>
     Effect.gen(function* () {
       const long = `cd ../outside; echo ${"a[ ".repeat(21_000)}`

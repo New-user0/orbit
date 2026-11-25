@@ -394,8 +394,9 @@ export const prepare = Effect.fn("ShellGuard.prepare")(function* (input: Authori
     Effect.provideService(PowerShellParse.Service, parser),
   )
   const ps = isPowerShell(analysis)
-  // The scanners stop by themselves after half a second, so an input over the length limit is still read for the folders
-  // it changes to and the words it names; only the portable scanner, which is quadratic on some inputs, never sees it.
+  // Every parse refuses an input over the length limit (`ShellParse.read`), so the scanners give up on it and it is split
+  // into fragments below, which still name the folders it changes to; the portable scanner, quadratic on some inputs,
+  // is not even started for it.
   const scanned = ps
     ? undefined
     : yield* scanBash(input.command, input.shell, input.cwd.absolute, input.portable && !analysis.opaque)
