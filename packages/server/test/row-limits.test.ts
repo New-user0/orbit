@@ -1,9 +1,10 @@
-// A row that builds a real server (the embedded routes, ServerFetch or a server on a port) takes 2 to 3 s on a developer's
-// machine and up to 5 s on a GitHub Windows runner: bun's JUnit report of 22 runs of the Windows server job, on this
-// branch and on the base alike, put such rows at 3.5 to 5.4 s, so bun's 5 s default failed them at random. Each file
-// that builds a server therefore sets a default limit of at least 30 s, as session-diff.test.ts already did, and each
-// wait for a server to become ready (a retried or repeated check with a time limit) allows at least 10 s. A row that
-// hangs still fails, at its own limit. A time limit on a single request pins that the request does not wait, and stays.
+// A row that builds a real server (the embedded routes, ServerFetch, the workerd profile or a server process on a port)
+// takes 2 to 3 s on a developer's machine and up to 5 s on a GitHub Windows runner: bun's JUnit report of 22 runs of
+// the Windows server job, on this branch and on the base alike, put such rows at 3.5 to 5.4 s, so bun's 5 s default
+// failed them at random. Each file that builds a server therefore sets a default limit of at least 30 s, as
+// session-diff.test.ts already did, and each wait for a server to become ready (a retried or repeated check with a time
+// limit) allows at least 10 s. A row that hangs still fails, at its own limit. A time limit on a single request pins
+// that the request does not wait, and stays.
 import fs from "node:fs"
 import path from "node:path"
 import { describe, expect, test } from "bun:test"
@@ -19,6 +20,8 @@ describe("server test limits", () => {
     expect(buildsServer(`import { startServer } from "./fixture/server"`)).toBe(true)
     expect(buildsServer(`import { ServerFetch } from "../src/fetch"`)).toBe(true)
     expect(buildsServer(`import { createEmbeddedRoutes } from "../src/routes"`)).toBe(true)
+    expect(buildsServer(`import { ServerProcess } from "../src/process"`)).toBe(true)
+    expect(buildsServer(`import { ServerWorkerd } from "../src/workerd"`)).toBe(true)
     expect(buildsServer(`import { CorsConfig } from "../src/cors"`)).toBe(false)
     expect(defaultLimit(`import { expect } from "bun:test"\n\nsetDefaultTimeout(30_000)\n`)).toBe(30_000)
     expect(defaultLimit(`it.live("x", () => {\n  setDefaultTimeout(30_000)\n})`)).toBeUndefined()
@@ -65,9 +68,10 @@ describe("server test limits", () => {
   })
 })
 
-// A test file builds a server when it imports the server fixture, ServerFetch or the embedded routes.
+// A test file builds a server when it imports the server fixture, ServerFetch, the embedded routes, the server process
+// that the fixture wraps, or the workerd profile.
 function buildsServer(text: string) {
-  return /from "(\.\/fixture\/server|\.\.\/src\/fetch|\.\.\/src\/routes)"/.test(text)
+  return /from "(\.\/fixture\/server|\.\.\/src\/(fetch|routes|process|workerd))"/.test(text)
 }
 
 // Whether a file's own default gives each row at least 30 s.
