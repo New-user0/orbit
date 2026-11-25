@@ -15,6 +15,7 @@ for (const mode of ["dark", "light"] as const) {
   test(`${mode} pane resize handle renders themed hover and keeps parent-owned dragging and reset`, async () => {
     const [value, setValue] = createSignal(20)
     const commits: number[] = []
+    let clock = 1_000
     let resize!: ReturnType<typeof createPaneResize>
     let theme!: ReturnType<typeof useTheme>
     let parent!: BoxRenderable
@@ -30,6 +31,9 @@ for (const mode of ["dark", "light"] as const) {
           commits.push(size)
           setValue(size)
         },
+        // The double click is told apart by this clock, which moves only when the test moves it: on a loaded runner the
+        // wall clock let more than 300 ms pass between the two presses of one double click (Linux CI, run 42262021606).
+        now: () => clock,
       })
       return (
         <box
