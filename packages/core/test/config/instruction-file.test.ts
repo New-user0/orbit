@@ -561,8 +561,11 @@ describe("ConfigInstructionFile.parse on hostile input", () => {
     expect(code).toBe(0)
     const report = JSON.parse(out) as Report
     expect(report.length).toBeGreaterThan(20)
-    // A case that takes seconds is one that is not linear: the slowest that ran was a few tens of milliseconds.
-    expect(report.filter((item) => item.ms > 5_000)).toEqual([])
+    // Growth, not a time bound: the script reads each fixed case again at three times its size, and a case whose time grew
+    // by more than a linear parser can is listed. A loaded runner slows both reads alike, so it cannot fail this.
+    // Mutation: a quadratic `parse` (see the stress script) makes the list name the cases it is quadratic on.
+    expect(report.filter((item) => item.superlinear === true).map((item) => item.name)).toEqual([])
+    expect(report.filter((item) => item.scaledMs !== undefined).length).toBeGreaterThan(40)
     // Lines of 64 KB that open a fence, a quoted fence, a fence in a list item or a list item and hold U+2028, U+2029, a
     // lone CR or U+0085, each read by `parse`, `sections` and `imports` against a control of letters as long. Mutation:
     // dropping the `s` flag of `fenceOpening` or of `listItem` takes the U+2028 and U+2029 rows of its lines from a few
@@ -574,6 +577,8 @@ describe("ConfigInstructionFile.parse on hostile input", () => {
 type Report = {
   readonly name: string
   readonly ms: number
+  readonly scaledMs?: number
+  readonly superlinear?: boolean
   readonly readers?: Record<string, { readonly hostile: number; readonly control: number }>
 }[]
 
@@ -1281,8 +1286,10 @@ describe("ConfigInstructionFile.sections on hostile input", () => {
     clearTimeout(timer)
     expect(code).toBe(0)
     const report = JSON.parse(out) as Report
-    for (const wanted of ["headings", "backtickRun", "alternatingFences", "oneMegabyteLine", "headingLadder", "blankThenText"])
-      expect(report.find((item) => item.name === wanted)?.ms ?? Infinity).toBeLessThan(5_000)
+    const heading = ["headings", "backtickRun", "alternatingFences", "oneMegabyteLine", "headingLadder", "blankThenText"]
+    const rows = heading.map((wanted) => report.find((item) => item.name === wanted))
+    expect(rows.map((item) => item?.scaledMs !== undefined)).toEqual(heading.map(() => true))
+    expect(rows.filter((item) => item?.superlinear === true).map((item) => item?.name)).toEqual([])
     // The line separator rows, read by `sections`. Mutation: as for `parse` above.
     expect(slowerThanControl(report, ["sections"])).toEqual([])
   }, 90_000)
