@@ -71,6 +71,26 @@ it.live("the models listed right after a grant are those of the folder that was 
   }),
 )
 
+// A Location is built by its first request, and its providers come from plugins that start then. The first list must
+// already hold them: ACP's first session reads the models once and polled only for five seconds (FU-M4-341).
+it.live("the first models a folder trusted from the start lists are its own, as is its default", () =>
+  Effect.gen(function* () {
+    const folders = yield* project
+    yield* Effect.promise(async () => {
+      const config = await Bun.file(path.join(folders.repo, "orbit.json")).json()
+      await Bun.write(path.join(folders.repo, "orbit.json"), JSON.stringify({ ...config, model: "clone/clone-model" }))
+    })
+    const server = yield* startServer(folders.config, { trust: { implicit: true } })
+    const api = Orbit.make({ baseUrl: server.base, headers: server.headers })
+    const location = { directory: folders.repo }
+    yield* Effect.promise(async () => {
+      const [models, preferred] = await Promise.all([api.model.list({ location }), api.model.default({ location })])
+      expect(lists(models.data)).toBe(true)
+      expect(preferred.data).toMatchObject({ providerID: "clone", id: "clone-model" })
+    })
+  }),
+)
+
 it.live("a folder trusted from the start lists its provider: the control for the row above", () =>
   Effect.gen(function* () {
     const folders = yield* project
