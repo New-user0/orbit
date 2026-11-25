@@ -18,7 +18,7 @@ const workflow = Bun.YAML.parse(await Bun.file(path.join(repo, ".github/workflow
 }
 type Job = {
   "runs-on": string
-  strategy: { matrix: { package: string[]; include?: { package: string; shard?: string; part?: string }[] } }
+  strategy: { matrix: { package?: string[]; include: { package: string; shard?: string; part?: string }[] } }
   steps: { name?: string; uses?: string; run?: string; with?: Record<string, string> }[]
 }
 // The test jobs, keyed by the platform whose timings their runner reads.
@@ -28,7 +28,7 @@ const WORKERS = 2
 
 const shards = (job: Job) =>
   Map.groupBy(
-    (job.strategy.matrix.include ?? []).filter((entry) => entry.shard),
+    job.strategy.matrix.include.filter((entry) => entry.shard),
     (entry) => entry.package,
   )
 
@@ -69,8 +69,19 @@ describe("CI test shards", () => {
           pkg,
           parts: list.map((_, index) => `-${index + 1}of${n}`),
         })
-        expect(job.strategy.matrix.package).not.toContain(pkg)
+        expect(
+          job.strategy.matrix.include.filter((entry) => entry.package === pkg && !entry.shard).map((entry) => entry.package),
+        ).toEqual([])
       }
+    })
+
+    // When the 20-job concurrency limit queues jobs, GitHub starts them in the order the matrix lists them, so a long
+    // shard listed after the two-minute packages starts late and sets the run's length.
+    test(`${platform}: the matrix lists every job in include, sharded jobs first`, () => {
+      expect(job.strategy.matrix.package).toBeUndefined()
+      const sharded = job.strategy.matrix.include.map((entry) => Boolean(entry.shard))
+      expect(sharded).toEqual(sharded.toSorted((a, b) => Number(b) - Number(a)))
+      expect(sharded.filter((value) => !value).length).toBeGreaterThan(0)
     })
 
     test(`${platform}: every test job writes the timings it measured and uploads them`, () => {

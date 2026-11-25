@@ -66,12 +66,27 @@ jobs:
         # sdk holds the contract-identity tests (SDK, Core, Server and Client must share one set of contracts);
         # theme holds the theme resolution tests; compat holds the compatibility switch and root discovery tests.
         # cli runs as three jobs. `bun test --shard` splits a package's files by the Linux timings it keeps
-        # (test/timings.json); `part` names the shard's coverage and timings artifacts.
-        package: [core, tui, server, vscode, flow, ai, client, codemode, compat, plugin, protocol, schema, sdk, theme, util]
+        # (test/timings.json); `part` names the shard's coverage and timings artifacts. The sharded jobs are listed
+        # first, because GitHub starts jobs in this order when the concurrency limit queues some.
         include:
           - { package: cli, shard: "1/3", part: "-1of3" }
           - { package: cli, shard: "2/3", part: "-2of3" }
           - { package: cli, shard: "3/3", part: "-3of3" }
+          - { package: core }
+          - { package: tui }
+          - { package: server }
+          - { package: vscode }
+          - { package: flow }
+          - { package: ai }
+          - { package: client }
+          - { package: codemode }
+          - { package: compat }
+          - { package: plugin }
+          - { package: protocol }
+          - { package: schema }
+          - { package: sdk }
+          - { package: theme }
+          - { package: util }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
@@ -133,8 +148,8 @@ jobs:
       fail-fast: false
       matrix:
         # cli, core and tui run as six, three and two jobs. `bun test --shard` splits a package's files by the Windows
-        # timings it keeps (test/timings.windows.json); `part` names the shard's coverage and timings artifacts.
-        package: [server, vscode, flow, ai, client, codemode, compat, plugin, protocol, schema, sdk, theme, util]
+        # timings it keeps (test/timings.windows.json); `part` names the shard's coverage and timings artifacts. As on
+        # Linux, the sharded jobs come first so that GitHub starts them before the short ones.
         include:
           - { package: cli, shard: "1/6", part: "-1of6" }
           - { package: cli, shard: "2/6", part: "-2of6" }
@@ -147,6 +162,19 @@ jobs:
           - { package: core, shard: "3/3", part: "-3of3" }
           - { package: tui, shard: "1/2", part: "-1of2" }
           - { package: tui, shard: "2/2", part: "-2of2" }
+          - { package: server }
+          - { package: vscode }
+          - { package: flow }
+          - { package: ai }
+          - { package: client }
+          - { package: codemode }
+          - { package: compat }
+          - { package: plugin }
+          - { package: protocol }
+          - { package: schema }
+          - { package: sdk }
+          - { package: theme }
+          - { package: util }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
