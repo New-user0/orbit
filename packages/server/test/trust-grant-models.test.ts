@@ -149,3 +149,43 @@ it.live("the models listed right after a revoke by name no longer include the fo
     })
   }),
 )
+
+
+// A revoke by name reads again only the Locations whose trust it ended. A Location of another folder, never trusted, is
+// left alone: its config is not read again and its plugins are not activated again, so a slow one cannot delay the
+// answer. This server does not watch files, so a provider added to the person's own config after that Location was
+// built shows in it only once something reads its config again.
+it.live("a revoke by name leaves a Location of another folder that was never trusted alone", () =>
+  Effect.gen(function* () {
+    const folders = yield* project
+    const other = { directory: path.join(path.dirname(folders.repo), "other") }
+    yield* Effect.promise(() => fs.mkdir(other.directory, { recursive: true }))
+    const server = yield* startServer(folders.config, { trust: { implicit: false } })
+    const api = Orbit.make({ baseUrl: server.base, headers: server.headers })
+    const location = { directory: folders.repo }
+    const added = (models: ReadonlyArray<{ readonly providerID: string }>) =>
+      models.some((model) => model.providerID === "later")
+    yield* Effect.promise(async () => {
+      await api.location.trust.update({ location, trust: true })
+      expect(lists((await api.model.list({ location })).data)).toBe(true)
+      expect(added((await api.model.list({ location: other })).data)).toBe(false)
+      await Bun.write(
+        path.join(folders.config, "orbit.json"),
+        JSON.stringify({
+          providers: {
+            later: {
+              package: "aisdk:@ai-sdk/openai-compatible",
+              settings: { apiKey: "secret", baseURL: "http://127.0.0.1:9/v1" },
+              models: { "later-model": {} },
+            },
+          },
+        }),
+      )
+      expect(await api.location.trust.revoke({ directory: folders.repo })).toEqual([folders.repo])
+      // The Location whose grant ended read the person's config again; the other one did not.
+      expect(lists((await api.model.list({ location })).data)).toBe(false)
+      expect(added((await api.model.list({ location })).data)).toBe(true)
+      expect(added((await api.model.list({ location: other })).data)).toBe(false)
+    })
+  }),
+)

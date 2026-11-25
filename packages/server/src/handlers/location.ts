@@ -112,15 +112,30 @@ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (han
       .handle(
         "trust.revoke",
         Effect.fn(function* (ctx) {
+          // The grant is named here by folder, not by Location, so which held Locations it covered shows only by their
+          // answer before and after it: those that were trusted before and are not now.
+          const held = yield* Effect.forEach(
+            yield* RcMap.keys(locations.rcMap),
+            (ref) =>
+              locations.contextEffect(ref).pipe(
+                Effect.flatMap((services) =>
+                  Context.get(services, ProjectTrust.Service)
+                    .trusted()
+                    .pipe(Effect.map((trusted) => ({ ref, trusted }))),
+                ),
+                Effect.scoped,
+              ),
+            { concurrency: "unbounded" },
+          )
           const ended = yield* workspaces.forget(ctx.payload.directory)
           // A Location the server holds for a folder this left untrusted stops applying what the folder supplied before
-          // the answer, as a revoke through the Location's own route does (class 3). The grant is named here by folder,
-          // not by Location, so each Location that is now untrusted reads its config again.
+          // the answer, as a revoke through the Location's own route does (class 3). A Location that was not trusted
+          // before is left alone, so its plugins do not delay the answer.
           if (ended.length > 0)
             yield* Effect.forEach(
-              yield* RcMap.keys(locations.rcMap),
-              (ref) =>
-                locations.contextEffect(ref).pipe(
+              held.filter((item) => item.trusted),
+              (item) =>
+                locations.contextEffect(item.ref).pipe(
                   Effect.flatMap((services) =>
                     Effect.gen(function* () {
                       if (yield* Context.get(services, ProjectTrust.Service).trusted()) return
