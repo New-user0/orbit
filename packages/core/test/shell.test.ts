@@ -111,6 +111,8 @@ describe("shell", () => {
         { folder: path.join(root, "bin"), expected: bash },
         { folder: path.join(root, "mingw64", "bin"), expected: bash },
         { folder: path.join(root, "mingw32", "bin"), expected: bash },
+        { folder: path.join(root, "ucrt64", "bin"), expected: bash },
+        { folder: path.join(root, "clang64", "bin"), expected: bash },
         { folder: path.join(root, "clangarm64", "bin"), expected: bash },
         // Windows names a folder in any case, and PATH keeps the case it was written in.
         { folder: path.join(root, "MinGW64", "bin"), expected: bash },
