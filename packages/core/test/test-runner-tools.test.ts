@@ -420,11 +420,12 @@ describe("tools/test/timings.ts", () => {
     expect(await refresh(["--run", "1"], "unused", [])).toBe(2)
   })
 
-  test("downloads the run's timings artifacts with gh and merges them, and fails when gh does", async () => {
+  test("downloads the run's timings artifacts with gh and merges them, and merges nothing when gh fails", async () => {
     await using root = await tmpdir()
     await fs.mkdir(path.join(root.path, "packages", "vscode", "test"), { recursive: true })
     await Bun.write(path.join(root.path, "packages", "vscode", "test", "a.test.ts"), "")
-    // A stand-in for gh that records its arguments and leaves one artifact where --dir says.
+    // A stand-in for gh that records its arguments and leaves one artifact where --dir says, timed as the run's id.
+    // For run 9 it then fails, as a download that stops part way does.
     const gh = path.join(root.path, "gh.ts")
     await Bun.write(
       gh,
@@ -432,18 +433,17 @@ describe("tools/test/timings.ts", () => {
         `import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"`,
         `const args = process.argv.slice(2)`,
         `appendFileSync(${JSON.stringify(path.join(root.path, "gh-args.txt"))}, JSON.stringify(args) + "\\n")`,
-        `if (args[2] === "9") process.exit(1)`,
         `const dir = args[args.indexOf("--dir") + 1] + "/timings-linux-vscode"`,
         `mkdirSync(dir)`,
-        `writeFileSync(dir + "/timings.json", JSON.stringify({ version: 1, files: { "test/a.test.ts": 12 } }))`,
+        `writeFileSync(dir + "/timings.json", JSON.stringify({ version: 1, files: { "test/a.test.ts": Number(args[2]) } }))`,
+        `if (args[2] === "9") process.exit(1)`,
       ].join("\n"),
     )
+    const timings = path.join(root.path, "packages", "vscode", "test", "timings.json")
     expect(await refresh(["--run", "42"], root.path, [process.execPath, gh])).toBe(0)
-    expect(await Bun.file(path.join(root.path, "packages", "vscode", "test", "timings.json")).json()).toEqual({
-      version: 1,
-      files: { "test/a.test.ts": 12 },
-    })
+    expect(await Bun.file(timings).json()).toEqual({ version: 1, files: { "test/a.test.ts": 42 } })
     expect(await refresh(["--run", "9"], root.path, [process.execPath, gh])).toBe(1)
+    expect(await Bun.file(timings).json()).toEqual({ version: 1, files: { "test/a.test.ts": 42 } })
     const calls = (await Bun.file(path.join(root.path, "gh-args.txt")).text()).trim().split("\n").map((line) => JSON.parse(line))
     expect(calls.map((args: string[]) => args.slice(0, 5))).toEqual([
       ["run", "download", "42", "--pattern", "timings-*"],
