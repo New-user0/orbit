@@ -1,6 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { runProgram } from "./run-program"
+import { runProgram } from "./run-program.js"
 
 // What another process still holding a file in the folder answers on Windows: EBUSY for a handle opened without delete
 // sharing (SQLite opens its database that way), EPERM for a file whose deletion is still pending, and ENOTEMPTY for a
