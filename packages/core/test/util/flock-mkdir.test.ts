@@ -341,6 +341,64 @@ describe("Flock.withLock on Windows", () => {
     30_000,
   )
 
+  // EffectFlock's release removed the folder and ignored every error, so a lingering handle left the folder behind with a
+  // fresh heartbeat: the holder reported success and the next acquirer waited until the lock was stale (60 s by default)
+  // or timed out. It waits for the handle as Flock's does, and the next acquirer, whose limit is well below the stale
+  // time, gets the lock.
+  const effectHeld = (dir: string, folder: string, ms: number) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const flock = yield* EffectFlock.Service
+        yield* flock.acquire("key", dir, { timeoutMs: 10_000 })
+        const held = yield* Effect.promise(() => hold(path.join(folder, "meta.json"), ms))
+        return { held, released: performance.now() }
+      }).pipe(Effect.scoped, Effect.provide(effectLayer)),
+    )
+
+  test.skipIf(process.platform !== "win32")(
+    "EffectFlock's release waits for a handle to a file in the lock's folder, and the next acquirer gets the lock",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-effect-flock-release-"))
+      const folder = path.join(dir, Hash.fast("key") + ".lock")
+      try {
+        const first = await effectHeld(dir, folder, 800)
+        expect(await first.held.exited).toBe(0)
+        expect(await exists(folder)).toBe(false)
+        expect(await locks.EffectFlock(dir, 3_000).catch(failed)).toBe("ran")
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true })
+      }
+    },
+    30_000,
+  )
+
+  test.skipIf(process.platform !== "win32")(
+    "EffectFlock's release gives up with the removal's error when the handle is never let go",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-effect-flock-release-"))
+      const folder = path.join(dir, Hash.fast("key") + ".lock")
+      let held: { exited: Promise<number> } | undefined
+      try {
+        const started = performance.now()
+        const answer = await Effect.runPromise(
+          Effect.gen(function* () {
+            const flock = yield* EffectFlock.Service
+            yield* flock.acquire("key", dir, { timeoutMs: 10_000 })
+            held = yield* Effect.promise(() => hold(path.join(folder, "meta.json"), Flock.RELEASE_DEADLINE_MS + 3_000))
+            return "ran"
+          }).pipe(Effect.scoped, Effect.provide(effectLayer)),
+        ).catch((error: Error) => `failed: ${String(error.message ?? error)}`)
+        expect(answer).toContain("failed: ")
+        expect(answer).toContain("Busy: FileSystem.remove")
+        expect(performance.now() - started).toBeGreaterThanOrEqual(Flock.RELEASE_DEADLINE_MS - 500)
+      } finally {
+        await held?.exited
+        await fs.rm(dir, { recursive: true, force: true })
+      }
+    },
+    30_000,
+  )
+
   test.skipIf(process.platform !== "win32")(
     "Flock takes over a stale lock whose removal a handle to a file in it delays",
     async () => {
