@@ -5,6 +5,7 @@ import path from "path"
 import { testArgs } from "../../../tools/test/args"
 import { mergeTimings, refresh } from "../../../tools/test/timings"
 import { linuxState, runTests } from "../../../tools/test/watchdog"
+import { plant } from "./fixture/decoy"
 import { runProgram } from "./fixture/run-program"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -490,6 +491,47 @@ describe("tools/test/timings.ts", () => {
       ["run", "download", "9", "--pattern", "timings-*"],
     ])
   })
+
+  // class 10: Windows looks a bare program name up in the working folder before PATH. The tool finds gh on PATH itself,
+  // so a gh.exe in the folder it runs in is never started, and with no gh on PATH it stops instead.
+  test.skipIf(process.platform !== "win32")(
+    "finds gh on PATH only: a gh.exe in the working folder is never started (Windows)",
+    async () => {
+      await using root = await tmpdir()
+      await using onPath = await tmpdir()
+      await using empty = await tmpdir()
+      const folderRan = await plant(root.path, "gh")
+      const pathRan = await plant(onPath.path, "gh")
+      const driver = path.join(root.path, "driver.ts")
+      await Bun.write(
+        driver,
+        [
+          `import { refresh } from ${JSON.stringify(path.resolve(import.meta.dir, "../../../tools/test/timings.ts"))}`,
+          `process.exitCode = await refresh(["--run", "7"], ${JSON.stringify(root.path)})`,
+        ].join("\n"),
+      )
+      // The variable that hides the working folder from the lookup is left out, and PATH names one folder alone.
+      const env = (folder: string) => ({
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([key]) => key.toUpperCase() !== "PATH" && key !== "NoDefaultCurrentDirectoryInExePath",
+          ),
+        ),
+        PATH: folder,
+      })
+      const none = await runProgram([process.execPath, driver], { cwd: root.path, env: env(empty.path) })
+      expect([none.exitCode, none.stderr.toString().trim()]).toEqual([2, "gh is not on PATH"])
+      expect(await folderRan()).toEqual([])
+      // Control: the gh that PATH names is the one started.
+      const found = await runProgram([process.execPath, driver], { cwd: root.path, env: env(onPath.path) })
+      expect(found.exitCode).toBe(0)
+      expect((await pathRan()).map((line) => line.split(" ").slice(0, 6).join(" "))).toEqual([
+        "gh.exe run download 7 --pattern timings-*",
+      ])
+      expect(await folderRan()).toEqual([])
+    },
+    60_000,
+  )
 })
 
 describe("mergeTimings", () => {
