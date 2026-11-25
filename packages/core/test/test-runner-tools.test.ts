@@ -4,7 +4,7 @@ import os from "os"
 import path from "path"
 import { testArgs } from "../../../tools/test/args"
 import { mergeTimings, refresh } from "../../../tools/test/timings"
-import { runTests } from "../../../tools/test/watchdog"
+import { linuxState, runTests } from "../../../tools/test/watchdog"
 import { runProgram } from "./fixture/run-program"
 import { tmpdir } from "./fixture/tmpdir"
 
@@ -204,6 +204,24 @@ describe("tools/test/run.ts on a stuck file", () => {
     },
     60_000,
   )
+})
+
+describe("linuxState", () => {
+  // A stuck worker can exit between the look that finds it and the report: its /proc entries are gone by then. Off Linux
+  // there is no /proc at all, so every read takes the same way.
+  test("reports a worker that has gone as unknown instead of failing, so the kill after it still runs", async () => {
+    const gone = Bun.spawn([process.execPath, "-e", "0"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
+    await gone.exited
+    expect(linuxState(gone.pid).split("\n")).toEqual([`worker ${gone.pid}: State: ?, wchan ?`, "threads: ", "children: none"])
+  })
+
+  test.skipIf(process.platform !== "linux")("control: a live worker's state, threads and children are read", async () => {
+    await using child = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 10_000)"], { stdout: "ignore" })
+    const lines = linuxState(process.pid).split("\n")
+    expect(lines[0]).toMatch(new RegExp(`^worker ${process.pid}: State:\\s+[RS]`))
+    expect(lines[1]).toContain(`${process.pid} `)
+    expect(lines[2]).toContain(`${child.pid} bun`)
+  })
 })
 
 // On Linux and macOS `bun test` runs in its own process group, so a terminal's Ctrl-C and CI's SIGTERM reach only the

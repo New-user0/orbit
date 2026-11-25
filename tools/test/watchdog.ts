@@ -94,8 +94,9 @@ function report(entry: { pid: number; at: number }, file: string, deadline: numb
 }
 
 // What the stuck worker is doing, from /proc: its state and kernel wait channel, each thread's state, and its child
-// processes, so the next hang in CI carries its own evidence.
-function linuxState(pid: number) {
+// processes, so the next hang in CI carries its own evidence. A worker that exits while it is read gives `?` and no
+// threads instead of an error, so the kill that follows the report always runs.
+export function linuxState(pid: number) {
   const read = (file: string) => {
     try {
       return fs.readFileSync(file, "utf8").trim()
@@ -103,9 +104,16 @@ function linuxState(pid: number) {
       return "?"
     }
   }
+  const list = (folder: string) => {
+    try {
+      return fs.readdirSync(folder)
+    } catch {
+      return []
+    }
+  }
   // The state is the field after the command name, which is in parentheses and may hold spaces.
   const state = (stat: string) => stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]
-  const tasks = fs.readdirSync(`/proc/${pid}/task`)
+  const tasks = list(`/proc/${pid}/task`)
   const children = tasks.flatMap((task) => read(`/proc/${pid}/task/${task}/children`).split(" ").filter(Boolean))
   return [
     `worker ${pid}: ${read(`/proc/${pid}/status`).split("\n").find((line) => line.startsWith("State:")) ?? "State: ?"}, wchan ${read(`/proc/${pid}/wchan`)}`,
