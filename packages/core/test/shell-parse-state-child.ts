@@ -62,5 +62,7 @@ const result =
         ? await run(ShellParse.bare("git push origin main && > out.txt"))
         : reader === "operands"
           ? await run(ShellParse.operands(bash, "/bin/bash"))
-          : await run(ShellParse.scan(powershell, "pwsh", "/work"))
+          : reader === "nested"
+            ? await run(ShellAnalysis.inspect(`bash -c '${bash}'`, linux))
+            : await run(ShellParse.scan(powershell, "pwsh", "/work"))
 console.log(JSON.stringify(result._tag === "Success" ? { value: result.value } : { failure: String(result.cause) }))

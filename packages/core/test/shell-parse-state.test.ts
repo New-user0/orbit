@@ -32,6 +32,8 @@ const rows = [
   ["aborted-analysis", "scan"],
   ["aborted-analysis", "bare"],
   ["aborted-analysis", "operands"],
+  // The analysis reads the script a `bash -c` runs with the same parser.
+  ["aborted-analysis", "nested"],
   ["cancelled-powershell", "powershell"],
   ["long-scan", "scan"],
   ["long-scan", "analysis"],
