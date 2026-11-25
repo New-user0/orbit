@@ -63,6 +63,6 @@ const result =
         : reader === "operands"
           ? await run(ShellParse.operands(bash, "/bin/bash"))
           : reader === "nested"
-            ? await run(ShellAnalysis.inspect(`bash -c '${bash}'`, linux))
+            ? await run(ShellAnalysis.inspect(`bash -c '${bash}'`, linux, { nested: true }))
             : await run(ShellParse.scan(powershell, "pwsh", "/work"))
 console.log(JSON.stringify(result._tag === "Success" ? { value: result.value } : { failure: String(result.cause) }))

@@ -70,6 +70,31 @@ describe("replacing a file by rename", () => {
     30_000,
   )
 
+  // Only Windows holds a renamed-over file for its readers, so elsewhere the same codes mean a lasting refusal (a folder
+  // the account cannot write, a mount point) that waiting would only delay. The refusal is made here by a Windows reader
+  // while the process reports another platform: it changes nothing else the helper reads.
+  test.skipIf(process.platform !== "win32").each(Object.keys(replacers) as Array<keyof typeof replacers>)(
+    "%s fails at once on a refused rename on a system other than Windows",
+    async (name) => {
+      await using files = await scratch()
+      const reader = await fs.open(files.target, "r")
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!
+      Object.defineProperty(process, "platform", { ...platform, value: "linux" })
+      try {
+        const started = performance.now()
+        const answer = await replacers[name](files.temporary, files.target).then(() => "replaced", (error) =>
+          String(error),
+        )
+        expect(answer).toMatch(/EPERM|Unknown: FileSystem\.rename/)
+        expect(performance.now() - started).toBeLessThan(1_000)
+      } finally {
+        Object.defineProperty(process, "platform", platform)
+        await reader.close()
+      }
+    },
+    30_000,
+  )
+
   test.each(Object.keys(replacers) as Array<keyof typeof replacers>)(
     "%s fails at once on an error a reader does not cause",
     async (name) => {

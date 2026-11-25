@@ -46,6 +46,8 @@ test("end after the busy period's first event stops it: the control for the row 
   await Bun.sleep(300)
 
   expect(h.state.interrupts).toBeGreaterThanOrEqual(1)
+  // The message was delivered, so it is no longer in the queue: it is interrupted, not withdrawn.
+  expect(h.state.calls.filter((call) => call.startsWith("cancel:"))).toEqual([])
   h.emit({
     id: "evt_interrupted",
     created: 3,

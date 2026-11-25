@@ -4,6 +4,7 @@ import path from "node:path"
 import { Effect, Layer } from "effect"
 import { Database } from "@orbit/core/database/database"
 import { Global } from "@orbit/util/global"
+import { sqliteLayer } from "../src/database/sqlite.node"
 import { tmpdir } from "./fixture/tmpdir"
 
 // A server that `orb`, `orb acp` or the TUI starts opens the data folder's orbit.db while the server that the previous
@@ -53,6 +54,30 @@ test("opening a database that another process is still closing waits for its loc
     }).pipe(
       Effect.scoped,
       Effect.provideService(Global.Service, Global.make({ data: tmp.path })),
+      Effect.catchCause((cause) => Effect.succeed(String(cause))),
+    ),
+  )
+  await holder.exited
+
+  expect(opened).toBe("opened")
+}, 30_000)
+
+// The build that runs on Node opens orbit.db through node:sqlite, which Bun also provides, so its driver is held to the
+// same wait here.
+test("the Node driver also waits for the lock of a database another process is still closing", async () => {
+  await using tmp = await tmpdir()
+  const file = path.join(tmp.path, "orbit.db")
+  const seed = new Sqlite(file)
+  seed.run("PRAGMA journal_mode = WAL")
+  seed.close()
+
+  const holder = await heldFor(file, 1_000)
+  const opened = await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* Layer.build(sqliteLayer({ filename: file }))
+      return "opened"
+    }).pipe(
+      Effect.scoped,
       Effect.catchCause((cause) => Effect.succeed(String(cause))),
     ),
   )

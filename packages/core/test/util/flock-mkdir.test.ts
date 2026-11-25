@@ -147,6 +147,32 @@ describe("Flock.withLock on Windows", () => {
     }
   }, 30_000)
 
+  // Only Windows answers EPERM for a folder whose deletion is pending. Elsewhere a mkdir that answers EPERM is refused for
+  // good (a file system that holds no folders), and waiting out the lock's timeout, five minutes by default, would only
+  // delay the error. The access list makes the EPERM here while the process reports another platform.
+  test.skipIf(!deniable).each(["Flock", "EffectFlock"] as const)(
+    "%s fails at once when mkdir answers EPERM on a system other than Windows",
+    async (lock) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flock-mkdir-"))
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!
+      try {
+        await deny(dir)
+        Object.defineProperty(process, "platform", { ...platform, value: "linux" })
+        const started = performance.now()
+        const answer = await locks[lock](dir, 10_000).catch((error: Error) => `${error.name}: ${error.message}`)
+        expect(performance.now() - started).toBeLessThan(5_000)
+        // The Effect file system names EPERM's failure Unknown.
+        expect(answer).toMatch(/EPERM|Unknown: FileSystem\.makeDirectory/)
+        expect(answer).not.toContain("Timed out")
+      } finally {
+        Object.defineProperty(process, "platform", platform)
+        await restore(dir).catch(() => {})
+        await fs.rm(dir, { recursive: true, force: true })
+      }
+    },
+    30_000,
+  )
+
   test.skipIf(process.platform !== "win32")("the lock is taken when mkdir works: the control for the row above", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flock-mkdir-"))
     try {

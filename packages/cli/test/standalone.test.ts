@@ -47,6 +47,13 @@ test.each([
   ["says why", `console.error("Error: database is locked"); process.exit(3)`, "with code 3", "database is locked"],
   ["writes an escape sequence", `console.error("\\x1b[2Jcleared"); process.exit(4)`, "with code 4", "\\x1b[2Jcleared"],
   ["says nothing", `process.exit(5)`, "with code 5", "readiness"],
+  // Only the end of a long output is kept: the cause is written last, and the message stays short.
+  [
+    "writes much before it says why",
+    `console.error("x".repeat(5000)); console.error("Error: database is locked"); process.exit(6)`,
+    "with code 6",
+    "database is locked",
+  ],
 ])("the error of a standalone server that exits before it is ready and %s names its exit and output", async (_, script, exit, output) => {
   const error = await Effect.runPromise(
     Standalone.start({ command: [process.execPath, "-e", script] }).pipe(Effect.scoped, Effect.flip),
@@ -54,6 +61,7 @@ test.each([
   expect(error.message).toStartWith(`Standalone server exited ${exit} before reporting readiness`)
   expect(error.message).toEndWith(output)
   expect(error.message).not.toContain("\x1b")
+  expect(error.message.length).toBeLessThan(2_100)
 }, 30_000)
 
 async function readLine(stream: ReadableStream<Uint8Array>, prefix: string) {
