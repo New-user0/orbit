@@ -88,18 +88,26 @@ const cases: [string, string][] = [
   ...Array.from({ length: 3_000 }, (_, index): [string, string] => [`garbage ${index}`, garbage()]),
 ]
 
+// Every time here is CPU time of this process, not wall-clock time. A loaded runner takes the CPU away from a process in
+// slices: a read of 10 ms usually fits in one and a read of 100 ms does not, so the wall-clock time of the larger one grows
+// by more than its size and a linear parser looks super-linear.
+const cpuMs = () => {
+  const usage = process.cpuUsage()
+  return (usage.user + usage.system) / 1000
+}
+
 type Row = {
   name: string
   ms: number
-  // The same case at SCALE times its size, and whether that took more than a linear parser can.
-  scaledMs?: number
+  // The same case at a quarter of its size, and whether the full read took more than a linear parser can.
+  smallMs?: number
   superlinear?: boolean
   readers?: Record<string, { readonly hostile: number; readonly control: number }>
 }
 
 // Reads one document with every reader and returns how long that took.
 function readAll(name: string, text: string) {
-  const start = performance.now()
+  const start = cpuMs()
   for (const frontmatter of [true, false]) {
     const found = ConfigInstructionFile.imports(text)
     if (!Array.isArray(found)) throw new Error(`${name}: imports is not a list`)
@@ -110,37 +118,40 @@ function readAll(name: string, text: string) {
     if (typeof result.content !== "string") throw new Error(`${name}: content is not a string`)
     if (!result.stripped && result.content !== text) throw new Error(`${name}: changed text that it reports as unchanged`)
   }
-  return performance.now() - start
+  return cpuMs() - start
+}
+
+// Growth, not a time bound: a loaded runner makes every case slower, and only a parser whose cost grows faster than its
+// input is wrong. Each fixed case is read at a quarter of its size first and then at its size. A linear parser takes about four times
+// as long for the second read; a quadratic one takes sixteen times as long. A case is super-linear when the full read takes
+// more than GROWTH_LIMIT times the small read, which a floor keeps from judging a case of a few milliseconds by timer
+// noise. The small read goes first so that the full one is not the one that pays for warming up, and a pair that looks
+// super-linear is measured again, up to twice, with the best time of each size counting, so one pause of a loaded runner
+// does not decide.
+const GROWTH_LIMIT = 8
+const FLOOR_MS = 15
+const quarter = fixed(0.25)
+
+function growth(name: string, text: string, smaller: string) {
+  let small = readAll(name, smaller)
+  let large = readAll(name, text)
+  for (let again = 0; again < 2 && large > GROWTH_LIMIT * Math.max(small, FLOOR_MS); again++) {
+    small = Math.min(small, readAll(name, smaller))
+    large = Math.min(large, readAll(name, text))
+  }
+  return { smallMs: Math.round(small), ms: Math.round(large), superlinear: large > GROWTH_LIMIT * Math.max(small, FLOOR_MS) }
 }
 
 const report: Row[] = []
 let randomMs = 0
 for (const [name, text] of cases) {
-  const ms = readAll(name, text)
-  if (name.startsWith("garbage")) randomMs += ms
-  else report.push({ name, ms: Math.round(ms) })
+  if (name.startsWith("garbage")) {
+    randomMs += readAll(name, text)
+    continue
+  }
+  report.push({ name, ...growth(name, text, quarter[name]!) })
 }
 report.push({ name: "3,000 random documents", ms: Math.round(randomMs) })
-
-// Growth, not a time bound: a loaded runner makes every case slower, and only a parser whose cost grows faster than its
-// input is wrong. Each fixed case is read again at SCALE times its size. A linear parser takes about SCALE times as long
-// (less once it is warm); a quadratic one takes SCALE squared times as long. A case is super-linear when the larger read
-// takes more than GROWTH_LIMIT times the smaller one, which a floor keeps from judging a case of a few milliseconds by
-// timer noise. A read that looks slow is measured again, up to twice, and its best time counts, so one pause of a loaded
-// runner does not decide.
-const SCALE = 3
-const GROWTH_LIMIT = 5
-const FLOOR_MS = 15
-const scaled = fixed(SCALE)
-for (const row of report) {
-  const text = scaled[row.name]
-  if (text === undefined) continue
-  const limit = GROWTH_LIMIT * Math.max(row.ms, FLOOR_MS)
-  const attempts: number[] = []
-  while (attempts.length < 3 && Math.min(...attempts, Infinity) > limit) attempts.push(readAll(row.name, text))
-  row.scaledMs = Math.round(Math.min(...attempts))
-  row.superlinear = row.scaledMs > limit
-}
 
 // A line of 64 KB that starts the way a fence or a list item does, with a long run of markers or of spaces, and then holds
 // a character that the scanners do not split lines at: U+2028 and U+2029, which a plain `.` stops at, and U+0085, which it
@@ -161,9 +172,9 @@ const readers: Record<string, (text: string) => unknown> = {
   imports: (text) => ConfigInstructionFile.imports(text),
 }
 const timed = (read: () => unknown) => {
-  const start = performance.now()
+  const start = cpuMs()
   read()
-  return Math.round(performance.now() - start)
+  return Math.round(cpuMs() - start)
 }
 const withComments = (line: string) => `# a\n<!-- c -->\n${line}\n<!-- d -->\n`
 for (const [shape, make] of Object.entries(lines))
