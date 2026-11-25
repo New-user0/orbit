@@ -450,56 +450,50 @@ const powershell = (command: string, file: string) =>
       "-NonInteractive",
       "-Command",
       // A failed .NET call ends only its own statement unless errors stop the script, so without this the helper would
-      // go on to say it holds a file it never opened.
+      // go on to say it locked a file it never opened.
       `$ErrorActionPreference = 'Stop'; ${command}`,
     ],
     { env: { ...process.env, ORBIT_HELD_FILE: file }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
   )
-// Opens `file` in a PowerShell child and holds it with no sharing until the scope ends. Locally the hold alone makes a
-// read fail with EBUSY; on the GitHub Windows runner a read got through it (see docs/known-failures.md), so the row
-// prints what `unopened` finds when that happens.
-const hold = (file: string) =>
+// Locks the whole of `file` from a PowerShell child until the scope ends. Windows checks a lock on every read, whatever
+// the account and however the reader opened the file, so no reader gets the file's bytes while the child runs.
+const lock = (file: string) =>
   Effect.acquireRelease(
     Effect.promise(async () => {
-      // It waits on a timer, not on its input, so nothing but the release below ends it, and the handle with it.
+      // It waits on a timer, not on its input, so nothing but the release below ends it, and the lock with it.
       const child = powershell(
-        "$held = [System.IO.File]::Open($env:ORBIT_HELD_FILE, 'Open', 'Read', 'None'); [Console]::Out.WriteLine('held ' + $held.Name); [Console]::Out.Flush(); Start-Sleep -Seconds 300",
+        "$held = [System.IO.File]::Open($env:ORBIT_HELD_FILE, 'Open', 'Read', 'ReadWrite'); $held.Lock(0, [Int64]::MaxValue); [Console]::Out.WriteLine('locked ' + $held.Name); [Console]::Out.Flush(); Start-Sleep -Seconds 300",
         file,
       )
-      const first = await child.stdout.getReader().read()
-      const said = new TextDecoder().decode(first.value)
-      if (!said.startsWith("held "))
-        throw new Error(`Could not hold ${file}: ${said}${await new Response(child.stderr).text()}`)
-      return { child, name: said.slice("held ".length).trim() }
+      const said = new TextDecoder().decode((await child.stdout.getReader().read()).value)
+      if (!said.startsWith("locked "))
+        throw new Error(`Could not lock ${file}: ${said}${await new Response(child.stderr).text()}`)
+      return child
     }),
-    (held) =>
+    (child) =>
       Effect.promise(async () => {
-        held.child.kill()
-        await held.child.exited
+        child.kill()
+        await child.exited
       }),
   )
-// What a runner that reads a held file shows: the path the helper opened, whether a second PowerShell can open the
-// file the same way the read did (sharing read and write), and the privileges this account has enabled.
-const unopened = async (file: string, name: string) => {
-  const second = powershell(
-    "try { $file = [System.IO.File]::Open($env:ORBIT_HELD_FILE, 'Open', 'Read', 'ReadWrite'); $file.Close(); 'opened' } catch { 'refused: ' + $_.Exception.Message }",
-    file,
-  )
-  const privileges = Bun.spawnSync([path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe"), "/priv"], {
+// Whether this account's backup privilege is enabled, which lets it open a file past an access list that denies it.
+// The GitHub Windows runner's account has it enabled; a developer's account does not.
+const backup = () =>
+  Bun.spawnSync([path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe"), "/priv"], {
     stdout: "pipe",
   })
-  return [
-    `file: ${file}`,
-    `held by the helper as: ${name}`,
-    `second PowerShell open: ${(await new Response(second.stdout).text()).trim()}${await new Response(second.stderr).text()}`,
-    `enabled privileges: ${privileges.stdout
-      .toString()
-      .split(/\r?\n/)
-      .filter((line) => /\bEnabled\s*$/.test(line))
-      .map((line) => line.trim().split(/\s+/)[0])
-      .join(", ")}`,
-  ].join("\n")
-}
+    .stdout.toString()
+    .split(/\r?\n/)
+    .some((line) => /^SeBackupPrivilege\s.*\sEnabled$/.test(line.trim()))
+// What a plain read of `file` meets, with the call that failed: a lock fails the read, an access list or a file held
+// with no sharing fails the open.
+const attempt = (file: string) =>
+  Effect.promise(() =>
+    fs.readFile(file).then(
+      () => "read",
+      (error: NodeJS.ErrnoException) => `${error.code} ${error.syscall}`,
+    ),
+  )
 const base = { managed: { mcp: { deny: ["x"] } } }
 
 describe("ManagedSettings.read unreadable input", () => {
@@ -535,43 +529,36 @@ describe("ManagedSettings.read unreadable input", () => {
       listed: false,
     },
     {
-      name: "a file this account cannot open",
+      name: "a file this account cannot read",
       skip: process.platform !== "win32",
       setup: (directory: string) =>
         write(directory, { "managed-settings.json": base }).pipe(
-          // Held first: the deny below would keep the helper out too.
-          Effect.andThen(hold(path.join(directory, "managed-settings.json"))),
-          Effect.flatMap((holder) =>
+          // Locked first: the deny below would keep the helper out too.
+          Effect.andThen(lock(path.join(directory, "managed-settings.json"))),
+          // The row is about a file this account cannot read, so each step must be seen to bind before the product
+          // reads. The lock alone stops a plain read: the open succeeds and the read fails.
+          Effect.tap(() =>
+            attempt(path.join(directory, "managed-settings.json")).pipe(
+              Effect.map((outcome) => expect(outcome).toBe("EBUSY read")),
+            ),
+          ),
+          Effect.andThen(
             Effect.acquireRelease(
               Effect.sync(() => icacls(path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)")),
               () => Effect.sync(() => icacls(path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0")),
-            ).pipe(Effect.map((result) => ({ holder, result }))),
+            ),
           ),
-          // The row is about a file this account cannot open. If the deny did not apply and the hold did not take, the
-          // row would test a readable file, so a plain read must fail first: with EPERM where the access list decides,
-          // and with EBUSY where the account reads past it and meets the hold.
-          Effect.andThen((held) =>
-            Effect.promise(() =>
-              fs.readFile(path.join(directory, "managed-settings.json")).then(
-                () => "read",
-                (error: NodeJS.ErrnoException) => error.code,
-              ),
-            ).pipe(
-              Effect.flatMap((outcome) =>
-                Effect.promise(async () => {
-                  expect({ icacls: held.result.exitCode, stderr: held.result.stderr.toString() }).toEqual({
-                    icacls: 0,
-                    stderr: "",
-                  })
-                  // Still running, so the handle was still held when the read was tried.
-                  expect(held.holder.child.exitCode).toBeNull()
-                  if (outcome === "read")
-                    console.error(
-                      `read a held file:\n${await unopened(path.join(directory, "managed-settings.json"), held.holder.name)}`,
-                    )
-                  expect(outcome).toBeOneOf(["EPERM", "EBUSY"])
-                }),
-              ),
+          Effect.andThen(
+            attempt(path.join(directory, "managed-settings.json")).pipe(
+              Effect.map((outcome) => {
+                // The access list refuses the open where it binds. An account with the backup privilege opens past it
+                // and meets the lock.
+                const privileged = backup()
+                expect({ privileged, outcome }).toEqual({
+                  privileged,
+                  outcome: privileged ? "EBUSY read" : "EPERM open",
+                })
+              }),
             ),
           ),
         ),
