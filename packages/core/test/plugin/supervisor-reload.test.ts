@@ -390,6 +390,33 @@ describe("PluginSupervisor under workspace trust", () => {
     }),
   )
 
+  // A trust grant changes what the plugins read and then answers; the change reaches the supervisor through an event it
+  // reads later, so the grant asks for the activation itself (server/test/trust-grant-models.test.ts). Here nothing
+  // announces the new plugin at all: only `refresh` can make it active, and it is active when `refresh` returns.
+  it.live("refresh activates again and returns once that activation settled", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped()
+      yield* Effect.promise(() => Bun.write(path.join(directory.path, ".orbit/plugins/greeter.ts"), greeter("greet-first")))
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.gen(function* () {
+        const plugins = yield* Plugin.Service
+        const commands = yield* Command.Service
+        yield* plugins.awaitActivation
+        expect(yield* commands.get("greet-first")).toBeDefined()
+
+        const late = path.join(directory.path, ".orbit/plugins/late.ts")
+        yield* Effect.promise(() => Bun.write(late, greeter("greet-late").replace("greeter", "late")))
+        yield* plugins.awaitActivation
+        expect(yield* commands.get("greet-late")).toBeUndefined()
+        yield* plugins.refresh()
+        expect(yield* commands.get("greet-late")).toBeDefined()
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
+      )
+    }),
+  )
+
   untrusted.live("keeps the plugins a project ships off until its folder is trusted, with no restart", () =>
     Effect.gen(function* () {
       const directory = yield* tmpdirScoped()

@@ -2,6 +2,7 @@ import { InstructionNotes } from "@orbit/core/instruction-notes"
 import { Location } from "@orbit/core/location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { MemoryListing } from "@orbit/core/memory/listing"
+import { Plugin } from "@orbit/core/plugin"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { InvalidRequestError, ServiceUnavailableError } from "@orbit/protocol/errors"
@@ -94,8 +95,15 @@ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (han
         Effect.fn(function* (ctx) {
           const trust = yield* ProjectTrust.Service
           if (!ctx.payload.trust) return yield* trust.revoke()
+          const fresh = !(yield* trust.trusted())
           // The API does not know which client asked, so a grant says only that it came through here.
-          return yield* trust.grant({ persist: ctx.payload.persist ?? true, via: "api" })
+          const state = yield* trust.grant({ persist: ctx.payload.persist ?? true, via: "api" })
+          // The folder's providers, agents and commands come from plugins that activate again after the config reload
+          // that the grant made, so the answer waits for them: a client that lists or acts right after the grant then
+          // sees the folder it trusted (class 3).
+          const plugins = yield* Plugin.Service
+          if (fresh) yield* plugins.refresh()
+          return state
         }),
       )
       .handle("trust.list", () => workspaces.list())

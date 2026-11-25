@@ -276,6 +276,7 @@ export const layer = Layer.effectDiscard(
         Stream.runForEach(() => notify),
         Effect.forkScoped({ startImmediately: true }),
       )
+    yield* registry.supervise(notify)
     yield* watch(sources.changes())
     yield* watch(modules.changes())
     yield* watch(Stream.fromEffectRepeat(Effect.sleep("24 hours")))

@@ -248,12 +248,18 @@ const layer = Layer.effect(
       )
     yield* Effect.addFinalizer(close)
 
+    let request: Effect.Effect<void> = Effect.void
     return Service.of({
       activate,
       close,
       awaitActivation: ready.await,
       hold,
       list,
+      refresh: () => Effect.suspend(() => request).pipe(Effect.andThen(ready.await)),
+      supervise: (next) =>
+        Effect.sync(() => {
+          request = next
+        }),
     })
   }),
 )
