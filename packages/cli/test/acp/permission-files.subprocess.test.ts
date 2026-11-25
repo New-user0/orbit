@@ -7,7 +7,7 @@ import os from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { isolatedEnv } from "../fixture/environment"
-import { startSlot } from "../fixture/start-gate"
+import { takeSlot } from "../fixture/start-gate"
 import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 // Every row has its own folder, its own scripted model on port 0 and its own `orb acp` child, so the rows run at the
@@ -1150,6 +1150,11 @@ async function approval(
       },
     }),
   )
+  // The start gate (fixture/start-gate.ts) admits a few children at a time, from their start to their first answer: the
+  // deadline of that answer then measures this child's start and not the others'. A child started before its slot was
+  // admitted competed with every other row's start, and a loaded Windows runner passed the deadline (the 8.3 short-name
+  // row in CI run 45620323273, with nothing on the child's stderr).
+  const release = await takeSlot()
   // ORBIT_TRUST_PROJECT is unset unless the row is a trusted control: the folder is untrusted.
   const child = Bun.spawn([process.execPath, "run", "src/index.ts", "acp"], {
     cwd: path.join(import.meta.dir, "../.."),
@@ -1214,11 +1219,8 @@ async function approval(
     })
   let passed = false
   try {
-    // The start gate (fixture/start-gate.ts) admits a few children at a time, and the deadline of the first answer starts
-    // at admission, so a busy runner delays a row without failing it.
-    await startSlot(() =>
-      request("initialize", { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: "test", version: "0" } }),
-    )
+    await request("initialize", { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: "test", version: "0" } })
+    release()
     const session = await request("session/new", { cwd: workspace, mcpServers: [] })
     // trust-first: no session opens in a folder that is not trusted, so the call that an untrusted row describes never
     // runs: the refusal is typed and names the folder, and the model is asked nothing. The trusted rows show the
@@ -1237,6 +1239,7 @@ async function approval(
     await check({ root, workspace, permissions, updates, bodies })
     passed = true
   } finally {
+    release()
     // A failed row kills its child at once: a child that outlives the row keeps the folder open and fails the removal below.
     if (!passed) child.kill("SIGKILL")
     child.stdin.end()

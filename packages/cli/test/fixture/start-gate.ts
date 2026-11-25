@@ -9,11 +9,25 @@ let running = 0
 const queue: Array<() => void> = []
 
 export async function startSlot<T>(run: () => Promise<T>) {
-  if (running >= limit) await new Promise<void>((resolve) => queue.push(resolve))
-  else running++
+  const release = await takeSlot()
   try {
     return await run()
   } finally {
+    release()
+  }
+}
+
+/**
+ * Waits for a slot and answers the function that gives it back, for a caller that starts its child inside the slot: the
+ * child's start then competes only with the few others the gate admitted. Giving it back twice gives it back once.
+ */
+export async function takeSlot() {
+  if (running >= limit) await new Promise<void>((resolve) => queue.push(resolve))
+  else running++
+  let held = true
+  return () => {
+    if (!held) return
+    held = false
     // Hand the slot straight to the next waiter, so `running` stays at the limit while the queue is not empty.
     const next = queue.shift()
     if (next) next()
