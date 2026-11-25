@@ -1,3 +1,4 @@
+import { Plugin } from "@orbit/core/plugin"
 import { Vcs } from "@orbit/core/vcs"
 import { ServiceUnavailableError } from "@orbit/protocol/errors"
 import { Effect } from "effect"
@@ -7,10 +8,13 @@ import { response } from "../location"
 
 export const VcsHandler = HttpApiBuilder.group(Api, "server.vcs", (handlers) =>
   Effect.gen(function* () {
+    // Plugins add version controls and choose the one a Location uses while its plugins activate, which the first
+    // request to a Location starts, so every route waits for that before asking.
     return handlers
       .handle("vcs.get", () =>
         response(
           Effect.gen(function* () {
+            yield* Plugin.awaitActivation
             const vcs = yield* Vcs.Service
             return yield* vcs.info()
           }),
@@ -19,6 +23,7 @@ export const VcsHandler = HttpApiBuilder.group(Api, "server.vcs", (handlers) =>
       .handle("vcs.base", () =>
         response(
           Effect.gen(function* () {
+            yield* Plugin.awaitActivation
             const vcs = yield* Vcs.Service
             return yield* vcs
               .base()
@@ -29,6 +34,7 @@ export const VcsHandler = HttpApiBuilder.group(Api, "server.vcs", (handlers) =>
       .handle("vcs.status", () =>
         response(
           Effect.gen(function* () {
+            yield* Plugin.awaitActivation
             const vcs = yield* Vcs.Service
             return yield* vcs.status()
           }),
@@ -37,6 +43,7 @@ export const VcsHandler = HttpApiBuilder.group(Api, "server.vcs", (handlers) =>
       .handle("vcs.branch.list", (ctx) =>
         response(
           Effect.gen(function* () {
+            yield* Plugin.awaitActivation
             const vcs = yield* Vcs.Service
             return yield* vcs.branches({ search: ctx.query.search, limit: Math.min(ctx.query.limit ?? 50, 100) })
           }),
@@ -45,6 +52,7 @@ export const VcsHandler = HttpApiBuilder.group(Api, "server.vcs", (handlers) =>
       .handle("vcs.diff", (ctx) =>
         response(
           Effect.gen(function* () {
+            yield* Plugin.awaitActivation
             const vcs = yield* Vcs.Service
             return yield* vcs
               .diff(ctx.query.mode, { context: ctx.query.context, base: ctx.query.base })

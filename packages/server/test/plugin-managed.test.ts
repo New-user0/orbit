@@ -107,4 +107,7 @@ it.live("refuses with a 403 to update or check a plugin package that managed set
       expect(mentions("blocked")).toEqual([])
     }),
   ),
+  // The two waits above allow 10 s each for the first activation and the registry request, so the row's own limit
+  // covers them instead of the package's 5 s default.
+  30_000,
 )

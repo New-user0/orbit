@@ -7,14 +7,14 @@ import { response } from "../location"
 
 export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers) =>
   Effect.gen(function* () {
+    // Plugins add providers and their models, and the first request to a Location starts their activation, so each
+    // route waits for it instead of answering with only what was there before. It waits for the plugins available
+    // locally: a package that still has to be installed does not hold the list (ACP's first session read the models
+    // once, with a five-second cap that a loaded machine passed, FU-M4-341).
     return handlers
       .handle(
         "model.list",
         Effect.fn(function* () {
-          // The providers are the plugins' to fill in, as the agents are, so a Location that was just built lists its
-          // models once the plugins available locally are active rather than none. ACP's first session waited for them
-          // by polling with a five-second cap, which a loaded machine passed (FU-M4-341). A package that still has to be
-          // installed does not hold the list.
           yield* Plugin.awaitApplied
           const models = yield* Model.Service
           return yield* response(models.available())

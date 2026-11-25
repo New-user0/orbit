@@ -3174,6 +3174,25 @@ this.
 
 **What to do:** Nothing, unless a hook relied on the model's `old_string` after a revision: it is the whole file now.
 
+### Routes that read what plugins add answer once a Location's plugins are active
+
+A Location starts its plugins on the first request that names it, and the plugins add providers (the configured ones
+too), agents, integrations, MCP servers, references, version controls and web search providers. These routes used to
+answer that request before the plugins were active, so the first answer missed what they add: `websearch.providers`,
+`websearch.query`, `model.list`, `model.default`, `provider.list`, `provider.get`, `agent.get`, `integration.get`,
+`integration.connect.key`, `integration.oauth.connect`, `integration.oauth.status`, `integration.oauth.complete`,
+`integration.command.connect`, `integration.command.status`, `mcp.list`, `mcp.connect`, `mcp.disconnect`, `mcp.remove`,
+`reference.list`, `vcs.get`, `vcs.base`, `vcs.status`, `vcs.branch.list` and `vcs.diff`. A list came back without the
+plugin's entries, and a lookup failed with "not found" (for example "Provider not found" or "Web search provider not
+found"). They now wait for the plugins, as `agent.list`, `command.list`, `skill.list` and `integration.list` already did,
+so the first answer is complete. `mcp.resource.catalog` does not wait: it lists the resources of the servers connected
+at that moment, and a server's first connection is made in the background in any case.
+
+**Affects:** SDK and HTTP clients that ask a fresh Location for any of these, and code that retried those requests until
+the answer filled in.
+
+**What to do:** Nothing. A retry loop that waited for a model, provider or other plugin entry to appear can go.
+
 ## Agent loop
 
 Changes to how a turn runs: what a response may call, and how its failures are told apart.
@@ -4547,6 +4566,19 @@ line for the rest. An interrupt just after the hidden folder of the copy is made
 **Affects:** projects that ship agent memory snapshots with more than 200 files or with files over 250,000 bytes.
 
 **What to do:** Keep a snapshot within the bounds, or split a large file.
+
+### Orbit started from Git Bash finds Git Bash as its shell
+
+On Windows Orbit finds Git Bash next to the `git` it finds on `PATH`. Git Bash puts its own `git`, in Git's
+`ucrt64\bin` folder (`mingw64\bin` in older releases, `clangarm64\bin` on ARM), first on the `PATH` it hands to the
+programs it starts, and Orbit looked
+for Git Bash only next to the copies in Git's `cmd` and `bin` folders. So an Orbit started from Git Bash found no Git
+Bash, and `SHELL=/usr/bin/bash`, which Git Bash sets, or a bare `bash` resolved to another shell. Orbit now also finds Git
+Bash from that copy, so both resolve to Git Bash's `bin\bash.exe`.
+
+**Affects:** Windows users who start Orbit from Git Bash.
+
+**What to do:** Nothing. Set `shell` in your config to choose another shell.
 
 ## Files and web tools
 
