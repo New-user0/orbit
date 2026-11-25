@@ -488,7 +488,7 @@ test("a command that starts a standalone server is not stopped by an ORBIT_CONFI
 
   const run = await orb(["session", "list", "--standalone"], { ORBIT_CONFIG_CONTENT_FILE: own })
 
-  expect(run.stderr).not.toContain("Standalone server exited before reporting readiness")
+  expect(run.stderr).not.toMatch(/Standalone server exited( with code \d+)? before reporting readiness/)
   expect(run.code).toBe(0)
   expect(await Bun.file(own).text()).toBe('{"model":"a/b"}')
 }, 120_000)
@@ -510,7 +510,11 @@ test.each([
     await fs.rm(folder, { recursive: true, force: true })
 
     expect(run.code).toBe(code)
-    if (code !== 0) expect(run.stderr).toContain("Standalone server exited before reporting readiness")
+    // The error names the server's exit code and why it stopped.
+    if (code !== 0) {
+      expect(run.stderr).toContain("Standalone server exited with code 1 before reporting readiness")
+      expect(run.stderr).toContain("Directories cannot be read like files")
+    }
   },
   120_000,
 )
