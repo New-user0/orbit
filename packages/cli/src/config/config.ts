@@ -2,6 +2,7 @@ export * as Config from "./config"
 
 import { Global } from "@orbit/util/global"
 import { Flock } from "@orbit/util/flock"
+import { replaceFileEffect } from "@orbit/util/replace-file"
 import { Context, Effect, FileSystem, Layer, Option, Schema } from "effect"
 import { produce, type Draft } from "immer"
 import { applyEdits, modify, parse, type ParseError } from "jsonc-parser"
@@ -43,7 +44,7 @@ export const layer = Layer.effect(
       const temp = file + ".tmp"
       yield* fs.makeDirectory(path.dirname(file), { recursive: true })
       yield* fs.writeFileString(temp, text, { mode: 0o600 })
-      yield* fs.rename(temp, file)
+      yield* replaceFileEffect(fs, temp, file)
     })
 
     const migrate = ConfigMigration.run({ file, config: global.config, state: global.state }).pipe(

@@ -1,6 +1,7 @@
 export * as ServiceRegistration from "./service-registration"
 
 import { Service, type Info } from "@orbit/client/effect/service"
+import { replaceFileEffect } from "@orbit/util/replace-file"
 import path from "node:path"
 import { Effect, FileSystem, Schedule, Schema } from "effect"
 import { HttpServer } from "effect/unstable/http"
@@ -35,7 +36,7 @@ export const register = Effect.fnUntraced(function* (options: {
     found.url === info.url &&
     found.pid === info.pid &&
     found.password === info.password
-  yield* fs.writeFileString(temp, encoded, { mode: 0o600 }).pipe(Effect.andThen(fs.rename(temp, options.file)))
+  yield* fs.writeFileString(temp, encoded, { mode: 0o600 }).pipe(Effect.andThen(replaceFileEffect(fs, temp, options.file)))
   yield* current.pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("managed service registration check failed; shutting down", {
