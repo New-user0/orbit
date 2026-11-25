@@ -2254,6 +2254,39 @@ code block whose fence no line of them can close, so they keep their lines.
 on the call's `rawInput`. Something that reads a call's text content should allow for the fence around it, or read the
 call's `rawOutput`.
 
+### Trusting a folder answers once its plugins are active
+
+Trusting a folder (the TUI's trust dialog, `orb trust`, `--trust`, ACP, VS Code, or `location.trust.update`) read the
+folder's config before it answered, but the providers, agents and commands of the folder come from plugins that start
+again a moment later. A client that listed models right after the grant, as `orb doctor --probe --trust` does, could
+get the list of before the grant. The answer now comes once that start has finished, so it can take a little longer.
+
+**Affects:** clients and scripts that trust a folder and then list or use its models, agents or commands.
+
+**What to do:** Nothing. A wait or a retry after a grant is no longer needed.
+
+### A private server that stops before it is ready says why
+
+When `orb`, `orb acp`, `orb flow` or the TUI started a private server that exited before it was ready, the error said
+only "Standalone server exited before reporting readiness". It now names the server's exit code and the end of what it
+wrote to stderr, escaped. The server also waits up to five seconds for orbit.db when the previous command's server is
+still closing it, where it used to exit at once with "database is locked".
+
+**Affects:** anyone who runs Orbit commands one after another in a script or a test.
+
+**What to do:** Nothing.
+
+### Writes of state and config files wait for a reader on Windows
+
+On Windows, replacing a file that another program has open fails until that program lets go of it. The TUI's state
+files, the TUI and plugin config files and the background service's config and registration are written by replacing
+the file, so a write could fail while another TUI or a client was reading it. Such a write now tries again for up to
+five seconds, and then fails with the original error.
+
+**Affects:** Windows users who run more than one TUI or client at once.
+
+**What to do:** Nothing.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -2931,6 +2964,18 @@ an ACP client's `session/load` replay now show a slash command's prompt as the c
 terminal UI's rows and transcript do. The expansion is still what the model reads.
 
 **Affects:** people who copy or replay a command's prompt.
+
+**What to do:** Nothing.
+
+### A shell command over 10,000 characters is asked about as a whole
+
+The shell analysis already treated a command longer than 10,000 characters as one it cannot read, but the older
+command scan, the scan for redirections and the scan for paths read inputs of any length, and a very long one could stop
+the parser for the rest of the process, so later commands were misread. All of them now refuse such a command before
+reading it, and the command is asked about as a whole. Each read
+also starts from a fresh parser, so a slow earlier command no longer changes how the next one is read.
+
+**Affects:** people who approve very long shell commands.
 
 **What to do:** Nothing.
 
