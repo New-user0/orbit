@@ -142,7 +142,8 @@ const DESTINATION = /^[ \t]*(?:<[^>]*>|[^<\s]\S*)/
 // keeps it open at least as long.
 const TITLE = { '"': /^(?:\\"?|[^"\\])*/, "'": /^(?:\\.|[^'\\])*/, ")": /^[^()]*/ }
 const TITLE_OPENER: Record<string, Title | undefined> = { '"': '"', "'": "'", "(": ")" }
-// A label, a `"` title and a `(` title run on over a blank line to `marked`.
+// A label, a `"` title and a `(` title run on over a blank line to `marked`. Its `'` title needs a character on each
+// line it runs on to, and a space or a tab is one, so that title ends only at an empty line.
 const OVER_BLANK: Definition[] = ["label", '"', ")"]
 
 /**
@@ -248,7 +249,7 @@ function newline(state: Prose, char: string, out: string[]): Prose {
 // Where a line leaves a link reference definition that `marked` may read over the next line, or undefined where the
 // tracker cannot tell. Any line that starts with a `[` may start one, as far as the tracker knows.
 function definition(before: Definition, line: string, blank: boolean): Definition | undefined {
-  if (blank) return OVER_BLANK.includes(before) ? before : ""
+  if (blank) return OVER_BLANK.includes(before) || (before === "'" && line !== "") ? before : ""
   const text = line.replace(CONTAINER, "")
   const opener = TITLE_OPENER[text.charAt(0)]
   if (before === "after" && opener) return title(opener, text.slice(1))

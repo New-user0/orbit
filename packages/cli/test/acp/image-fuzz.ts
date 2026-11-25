@@ -58,7 +58,18 @@ const DEFINITIONS = [
   "[r]: <a<b>",
   "[r]: <a>b>",
   '[r]: <a>b> "',
+  // Fix loop 11: a `'` title that `marked` runs on over a line of only spaces or a tab, opened on the destination's line
+  // or on the next one, and one that holds a fence line and closes after it. Their destination is no address, which
+  // would leave the tracker unsure of every later block by itself.
+  "[r]: /u 'a\n   ",
+  "[r]: /u '\n\t",
+  "[r]: /u\n'a\n \t",
+  "[r]:\n/u '\n ",
+  "[r]: /u 'a\n   \n```\n'",
+  "[r]: /u\n'\n\t\n~~~\n'",
 ]
+// A blank line: empty, or of only spaces or tabs, which `marked` reads differently in a `'` title.
+const BLANK = ["", "", "", " ", "   ", "\t", " \t"]
 
 const INLINE = [
   "word",
@@ -215,7 +226,7 @@ function fenceLine(random: Random) {
 function line(random: Random, html: boolean): string {
   const roll = random.int(100)
   if (roll < 30) return fenceLine(random)
-  if (roll < 38) return ""
+  if (roll < 38) return random.pick(BLANK)
   if (roll < 48) {
     const special = random.pick(SPECIAL)
     return !html && special.startsWith("<") ? "" : special

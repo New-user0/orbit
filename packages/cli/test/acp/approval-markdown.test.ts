@@ -667,6 +667,11 @@ describe("acp: other text a model, a tool or a server chose", () => {
     expect(withoutImages(follow(prose, title), "\n```\n<img src=x>\n```")[1]).toBe(
       `\n\`\`\`\n<${JOINER}img src=x>\n\`\`\``,
     )
+    // And a `'` title over a line of spaces that ends the text before.
+    const [spaces] = withoutImages(prose, "[r]: /u 'a\n   \n")
+    expect(withoutImages(follow(prose, spaces), "```\n'\n<img src=x>\n```")[1]).toBe(
+      `\`\`\`\n'\n<${JOINER}img src=x>\n\`\`\``,
+    )
   })
 
   // Fix loop 4 (classes 6 and 9): ACP gives a chunk no text boundary. A client may draw the chunks of each message ID
@@ -901,6 +906,24 @@ describe("acp: other text a model, a tool or a server chose", () => {
     // of spaces after the `]:`.
     ["N: a `<` destination with a space and a `>` in it", ['[r]: <a> b>\n"\n\n```\n"\nIMAGE\n```']],
     ["N: a `<` destination with a `>` in it, two spaces after the `]:`", ['[r]:  <a>b>\n"\n\n```\n"\nIMAGE\n```']],
+    // Fix loop 11, O: `marked` runs a `'` title on to any line with a character in it, a line of only spaces or a tab
+    // too, and ends it only at an empty line, so the fence line after such a line is part of the title to it.
+    ["O: a `'` title over a line of spaces", ["[r]: /u 'a\n   \n```\n'\nIMAGE\n```\n"]],
+    ["O: a `'` title over a tab", ["[r]: /u 'a\n\t\n```\n'\nIMAGE\n```\n"]],
+    ["O: a `'` title over a space and a tab", ["[r]: /u 'a\n \t\n```\n'\nIMAGE\n```\n"]],
+    ["O: a `'` title opened on the next line, over spaces", ["[r]: /u\n'a\n  \n```\n'\nIMAGE\n```\n"]],
+    ["O: a `'` alone over a space, before a tilde fence", ["[r]: /u '\n \n~~~\n'\nIMAGE\n~~~\n"]],
+    ["O: a `]:` alone, then a destination and a `'` title over spaces", ["[r]:\n/u 'a\n   \n```\n'\nIMAGE\n```\n"]],
+    ["O: in a list item", ["- [r]: /u 'a\n   \n  ```\n  '\n  IMAGE\n  ```\n"]],
+    ["O: in a list item, before a fence at no indentation", ["- [r]: /u 'a\n  \n```\n'\nIMAGE\n```\n"]],
+    ["O: in a quote", ["> [r]: /u 'a\n>    \n> ```\n> '\n> IMAGE\n> ```\n"]],
+    ["O: a text that ends with the line of spaces", ["[r]: /u 'a\n   \n", "```\n'\nIMAGE\n```\n"]],
+    ["O: a message's text that ends with the line of spaces", ["[r]: /u 'a\n   \n", "```\n'\nIMAGE\n```\n"], "apart"],
+    // O's controls: a `'` title that an empty line ends, and a `"` or `(` title over a line of spaces.
+    ["O's control: a `'` title over an empty line", ["[r]: /u 'a\n\n```\n'\nIMAGE\n```\n"]],
+    ["O's control: a `'` title over a line of spaces and an empty line", ["[r]: /u 'a\n   \n\n```\n'\nIMAGE\n```\n"]],
+    ['O\'s control: a `"` title over a line of spaces', ['[r]: /u "a\n   \n```\n"\nIMAGE\n```\n']],
+    ["O's control: a `(` title over a line of spaces", ["[r]: /u (a\n   \n```\n)\nIMAGE\n```\n"]],
     // The controls: a definition does not start inside a paragraph or past a quote's marks for `marked`.
     ["M's control: a label after a line of text", ["a\n[r]:\n```\nIMAGE\n```"]],
     ["M's control: a label in a quote", ["> [r]:\n> ```\n> IMAGE\n> ```"]],
@@ -982,6 +1005,19 @@ describe("acp: other text a model, a tool or a server chose", () => {
     ['[r]: /u\n"t"\n\n```\n<img>\n```', '[r]: /u\n"t"\n\n```\n<img>\n```'],
     ["[r]: /u '\n\n```\n<img>\n```", "[r]: /u '\n\n```\n<img>\n```"],
     ["[r]:\n/u '\n\n```\n<img>\n```", "[r]:\n/u '\n\n```\n<img>\n```"],
+    // A line of only spaces or a tab does not end a `'` title to `marked`, which runs it on to the fence line, so that
+    // block takes joiners; an empty line after that line still ends it, and the block after the empty line is code.
+    ["[r]: /u 'a\n   \n```\n'\n<img>\n```", `[r]: /u 'a\n   \n\`\`\`\n'\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u 'a\n\t\n```\n'\n<img>\n```", `[r]: /u 'a\n\t\n\`\`\`\n'\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u 'a\n \t\n```\n'\n<img>\n```", `[r]: /u 'a\n \t\n\`\`\`\n'\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u\n'a\n  \n```\n'\n<img>\n```", `[r]: /u\n'a\n  \n\`\`\`\n'\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u '\n \n~~~\n'\n<img>\n~~~", `[r]: /u '\n \n~~~\n'\n<${JOINER}img>\n~~~`],
+    ["[r]:\n/u 'a\n   \n```\n'\n<img>\n```", `[r]:\n/u 'a\n   \n\`\`\`\n'\n<${JOINER}img>\n\`\`\``],
+    ["- [r]: /u 'a\n  \n```\n'\n<img>\n```", `- [r]: /u 'a\n  \n\`\`\`\n'\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u 'a\r\n   \r\n```\r\n<img>\r\n```", `[r]: /u 'a\r\n   \r\n\`\`\`\r\n<${JOINER}img>\r\n\`\`\``],
+    ["[r]: /u 'a\n   \n\n```\n<img>\n```", "[r]: /u 'a\n   \n\n```\n<img>\n```"],
+    ['[r]: /u "a\n   \n```\n<img>\n```', `[r]: /u "a\n   \n\`\`\`\n<${JOINER}img>\n\`\`\``],
+    ["[r]: /u (a\n   \n```\n<img>\n```", `[r]: /u (a\n   \n\`\`\`\n<${JOINER}img>\n\`\`\``],
     // A line under a `'` title still open is that title's, not a label of its own, so the blank line ends it.
     ["[r]: /u '\n[s\n\n```\n<img>\n```", "[r]: /u '\n[s\n\n```\n<img>\n```"],
     ["[r]: /u '\n[s]:\n/v \"\n\n```\n<img>\n```", "[r]: /u '\n[s]:\n/v \"\n\n```\n<img>\n```"],
