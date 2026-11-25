@@ -9,8 +9,8 @@ const cli = path.join(import.meta.dir, "..", "..", "..", "cli")
 
 /**
  * Puts at `file` an `orb` that runs the CLI from source with its home and its XDG folders under `root`, so it starts its
- * own background service, plus whatever `env` adds. orb reads its working folder from PWD, so the stand-in hands on
- * the folder it was started in, as a real `orb` on PATH would run there.
+ * own background service, plus whatever `env` adds. orb reads its working folder from PWD, and the stand-in leaves PWD
+ * as its caller set it: the script's own `cd` changes it, so the script puts it back.
  */
 export async function standIn(file: string, root: string, env: Record<string, string> = {}) {
   const variables = {
@@ -29,7 +29,7 @@ export async function standIn(file: string, root: string, env: Record<string, st
       file,
       `const child = Bun.spawn([${JSON.stringify(process.execPath)}, "run", "src/index.ts", ...process.argv.slice(2)], {
   cwd: ${JSON.stringify(cli)},
-  env: { ...process.env, ...${JSON.stringify(variables)}, PWD: process.cwd() },
+  env: { ...process.env, ...${JSON.stringify(variables)} },
   stdio: ["inherit", "inherit", "inherit"],
 })
 process.exit(await child.exited)
@@ -51,12 +51,7 @@ export async function failing(file: string, message: string, code: number) {
 }
 
 async function compile(file: string, source: string) {
-  const result = await Bun.build({
-    entrypoints: ["/orb.ts"],
-    files: { "/orb.ts": source },
-    // The stand-in must not read a bunfig.toml or .env of the folder it is started in.
-    compile: { outfile: `${file}.exe`, autoloadBunfig: false, autoloadDotenv: false },
-  })
+  const result = await Bun.build({ entrypoints: ["/orb.ts"], files: { "/orb.ts": source }, compile: { outfile: `${file}.exe` } })
   if (!result.success) throw new AggregateError(result.logs, "Could not build the stand-in orb")
 }
 

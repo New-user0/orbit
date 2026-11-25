@@ -18,6 +18,12 @@ afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
+test("the stand-in orb runs in its own home, not the machine's", async () => {
+  // Windows takes the home folder from USERPROFILE and POSIX from HOME; the stand-in sets both, so a service it starts
+  // reads no config of the person running the tests.
+  expect((await launch(orb, ["debug", "paths", "home"], { timeout: 60_000 })).trim()).toBe(root)
+}, 60_000)
+
 test("starts the background service through orb and returns an endpoint that authenticates", async () => {
   const endpoint = await start(orb)
 
