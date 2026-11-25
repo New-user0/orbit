@@ -14,8 +14,12 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { git, repository } from "./fixture/git"
 import { keys, live, plain, planted } from "./fixture/git-keys"
 import { traced } from "./fixture/git-trace"
+import { runProgram } from "./fixture/run-program"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
+
+// Decided at load, so a host without git-lfs reports its row as skipped and not as a pass.
+const lfsInstalled = (await runProgram(["git", "lfs", "version"])).exitCode === 0
 
 // Classes 1, 4 and 6 (review of #118, M4 verification rounds 2 to 7): every git command applies config that a clone
 // chooses, the folder's own and that of each nested repository git looks into while it walks the work tree, even when the
@@ -356,9 +360,8 @@ describe("Snapshot runs no attribute driver of the person's config for an untrus
         SLOW,
       )
 
-  const lfs = Bun.spawnSync(["git", "lfs", "version"]).exitCode === 0
   for (const trusted of [false, true])
-    (lfs ? it.live : it.live.skip)(
+    (lfsInstalled ? it.live : it.live.skip)(
       `an LFS pointer with .lfsconfig naming a host (${trusted ? "trusted: the control" : "untrusted"})`,
       () =>
         Effect.gen(function* () {

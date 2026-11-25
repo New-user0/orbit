@@ -15,8 +15,8 @@ describe("shellArgument", () => {
       const quoted = shellArgument(name, "linux")
       expect(quoted).toBeDefined()
       if (sh === null || process.platform === "win32") continue
-      const ran = Bun.spawnSync([sh, "-c", `printf %s ${quoted}`])
-      expect(ran.stdout.toString()).toBe(name)
+      const ran = Bun.spawn([sh, "-c", `printf %s ${quoted}`], { stdin: "ignore", stdout: "pipe", stderr: "ignore" })
+      expect(await new Response(ran.stdout).text()).toBe(name)
     }
   })
 

@@ -1,4 +1,4 @@
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Agent } from "@orbit/schema/agent"
@@ -7,6 +7,8 @@ import { Effect, Schedule, Schema } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
+
+setDefaultTimeout(30_000)
 
 const options = {
   app: { version: "test-version" },
@@ -315,7 +317,7 @@ it.live("routes pending requests through the Session's instance", () =>
     }).pipe(
       Effect.filterOrFail((ready) => ready),
       Effect.retry(Schedule.spaced("10 millis")),
-      Effect.timeout("2 seconds"),
+      Effect.timeout("10 seconds"),
     )
     const createdPermission = yield* Effect.promise(() =>
       handler(

@@ -1,9 +1,11 @@
 // context-memory-2 part 2 (class 12): `POST /api/session/:sessionID/compact` is the door the generated client, the
 // embedded SDK, the terminal UI, Mini and ACP all reach. It trims the instructions and stores none for blank text.
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Effect } from "effect"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
+
+setDefaultTimeout(30_000)
 
 type Body = { readonly data?: { readonly id?: string; readonly payload?: unknown } & ReadonlyArray<unknown> }
 

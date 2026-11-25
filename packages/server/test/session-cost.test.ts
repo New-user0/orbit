@@ -3,7 +3,7 @@
 // untrusted folder without opening a file (class 12). An unknown session is a typed 404 (classes 7 and 13).
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { App } from "@orbit/core/app"
 import { Bus } from "@orbit/core/bus"
 import { Database } from "@orbit/core/database/database"
@@ -30,6 +30,8 @@ import { TestLLM } from "../../ai/src/testing"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { createEmbeddedRoutes } from "../src/routes"
+
+setDefaultTimeout(30_000)
 
 const model = SessionRunnerModel.resolved(
   LanguageModel.make({ id: "cost-model", provider: "test", route: OpenAIChat.route }),

@@ -1,4 +1,4 @@
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { App } from "@orbit/core/app"
 import { Bus } from "@orbit/core/bus"
 import { Database } from "@orbit/core/database/database"
@@ -30,6 +30,8 @@ import { tempGlobalLayer } from "../../core/test/fixture/global"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { createEmbeddedRoutes } from "../src/routes"
+
+setDefaultTimeout(30_000)
 
 it.live(
   "isolates same-directory Session tools, hooks, commands, and HTTP requests through one selector",

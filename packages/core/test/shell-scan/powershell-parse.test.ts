@@ -255,10 +255,21 @@ beforeAll(async () => {
   const queue = [...new Set(everything)]
   await Promise.all(
     Array.from({ length: 6 }, async () => {
-      for (let text = queue.shift(); text !== undefined; text = queue.shift()) rows.set(text, await parse(text))
+      for (let text = queue.shift(); text !== undefined; text = queue.shift()) rows.set(text, await prepare(text))
     }),
   )
 }, 180_000)
+
+// A host run that could not start or did not finish says nothing about the text, and PowerShellParse keeps no such
+// result: its next caller runs the parser again. The preparation does the same, once, so a pwsh run that failed on a
+// loaded runner (Linux CI run 45533775334 met `invalid (spawn)` for two texts) does not fail rows about what the parser
+// answers. A second failure still fails them, and the rows below pin how a failed run is reported.
+async function prepare(text: string, layer: Layer.Layer<PowerShellParse.Service> = real) {
+  const first = await parse(text, layer)
+  if (first.valid || (first.reason !== "spawn" && first.reason !== "timeout")) return first
+  console.warn(`PowerShellParse: the run for ${JSON.stringify(text)} ended with ${first.reason}; running it again`)
+  return parse(text, layer)
+}
 
 describe.skipIf(!hasHost)(`PowerShellParse real parser${hasHost ? "" : ` (${noHost})`}`, () => {
   test.each(hiddenCommand)("shows the command behind %s", (_label, text) => {
@@ -742,6 +753,18 @@ describe("PowerShellParse fails closed", () => {
     const host = fake(() => ({ fail: true }))
     expect(await parse("Get-Date", host.layer())).toEqual({ valid: false, reason: "spawn" })
     expect(host.calls).toHaveLength(1)
+  })
+
+  test("the real parser rows' preparation runs a text again after a failed run, once, and not after an answer", async () => {
+    const failedOnce = fake((attempt) => (attempt === 1 ? { fail: true } : { out: ok }))
+    expect((await prepare("Get-Date", failedOnce.layer())).valid).toBe(true)
+    expect(failedOnce.calls).toHaveLength(2)
+    const failing = fake(() => ({ fail: true }))
+    expect(await prepare("Get-Date", failing.layer())).toEqual({ valid: false, reason: "spawn" })
+    expect(failing.calls).toHaveLength(2)
+    const exiting = fake(() => ({ exit: 1, out: ok }))
+    expect(await prepare("Get-Date", exiting.layer())).toEqual({ valid: false, reason: "exit" })
+    expect(exiting.calls).toHaveLength(1)
   })
 
   test("a timeout is retried once and then is timeout", async () => {

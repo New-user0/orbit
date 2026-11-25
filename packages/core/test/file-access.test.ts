@@ -14,6 +14,7 @@ import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location, tempLocationLayer } from "./fixture/location"
 import { untrustedProjectNodes } from "./fixture/project-trust"
+import { runProgram } from "./fixture/run-program"
 import { shortName } from "./fixture/short-name"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
@@ -338,7 +339,7 @@ describe("FileAccess in a project that is not trusted", () => {
       return Effect.gen(function* () {
         const { project, outside } = yield* layout
         yield* Effect.promise(() => fs.symlink(outside, path.join(project, "linked folder"), "junction"))
-        const short = shortName(project, "linked folder")
+        const short = yield* Effect.promise(() => shortName(project, "linked folder"))
         expect(short).toEqual(expect.stringContaining("~"))
         yield* Effect.gen(function* () {
           const access = yield* FileAccess.Service
@@ -481,7 +482,7 @@ describe.skipIf(process.platform !== "linux")("FileAccess.authorizeRead refuses 
           await fs.symlink("/proc/self/fd/0", path.join(project, "fd-link"))
           await fs.symlink("/dev/stdin", path.join(project, "stdin-link"))
           await fs.writeFile(path.join(project, "plain.txt"), "plain")
-          const made = Bun.spawnSync(["mkfifo", path.join(project, "pipe")])
+          const made = await runProgram(["mkfifo", path.join(project, "pipe")])
           expect(made.exitCode).toBe(0)
         })
         const refused = [

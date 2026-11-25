@@ -5,6 +5,7 @@ import { Effect } from "effect"
 import { ShellAnalysis } from "../../src/shell/analysis"
 import { PowerShellParse } from "../../src/shell/powershell-parse"
 import { currentDirectoryOnPath, plant } from "../fixture/decoy"
+import { runProgram } from "../fixture/run-program"
 import { tmpdir } from "../fixture/tmpdir"
 import { linux, SHELL_START, windows } from "./helper"
 
@@ -61,7 +62,7 @@ onWindows("Windows decoys", () => {
     using _ = currentDirectoryOnPath()
     const ran = await plant(tmp.path, "ls", "cat")
     // Control: the decoy really is what cmd runs in that folder.
-    Bun.spawnSync(["cmd", "/c", "ls"], { cwd: tmp.path, env: { ...process.env } })
+    await runProgram(["cmd", "/c", "ls"], { cwd: tmp.path, env: { ...process.env } })
     expect(await ran()).toHaveLength(1)
 
     // The real locator, with PATH naming the folder by its full path.

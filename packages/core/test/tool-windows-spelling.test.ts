@@ -380,7 +380,10 @@ describe.skipIf(process.platform !== "win32")("file tools and Windows spellings 
                 await fs.writeFile(path.join(directory, "README.md"), "readme\n")
                 await fs.mkdir(path.join(directory, "src"))
               })
-              const names = { env: shortName(directory, ".env"), script: shortName(directory, "deploy-script.sh") }
+              const names = {
+                env: yield* Effect.promise(() => shortName(directory, ".env")),
+                script: yield* Effect.promise(() => shortName(directory, "deploy-script.sh")),
+              }
               // The volume of the test folder makes 8.3 names, as the system volume does by default.
               expect(names).toEqual({ env: expect.stringContaining("~"), script: expect.stringContaining("~") })
               yield* withTools(directory, (registry) =>
@@ -471,7 +474,7 @@ describe.skipIf(process.platform !== "win32")("a Windows short name in a folder 
               await fs.mkdir(vault)
               await fs.writeFile(path.join(vault, ".env"), "API_KEY=SECRET-MARKER\n")
             })
-            const short = shortName(vault, ".env")
+            const short = yield* Effect.promise(() => shortName(vault, ".env"))
             expect(short).toEqual(expect.stringContaining("~"))
             unlisted.folder = row.listable ? undefined : vault
             yield* withTools(tmp.path, (registry) =>

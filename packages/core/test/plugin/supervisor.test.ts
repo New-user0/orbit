@@ -23,6 +23,7 @@ import { Database } from "../../src/database/database"
 import { Bus } from "../../src/bus"
 import { tempGlobalLayer } from "../fixture/global"
 import { offlineModels } from "../fixture/models"
+import { runProgram } from "../fixture/run-program"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { advance } from "../lib/clock"
 import { testEffect } from "../lib/effect"
@@ -334,8 +335,8 @@ describe("PluginSupervisor", () => {
         return root
       })
     // The 8.3 short name of an existing folder, or undefined when this machine cannot report one.
-    const shortName = (folder: string) => {
-      const result = Bun.spawnSync(
+    const shortName = async (folder: string) => {
+      const result = await runProgram(
         ["powershell", "-NoProfile", "-Command", "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:P).ShortPath"],
         { env: { ...process.env, P: folder } },
       )
@@ -532,7 +533,7 @@ describe("PluginSupervisor", () => {
         if (process.platform !== "win32") return
         const tmp = (yield* tmpdirScoped()).path
         const long = yield* plugin(tmp, "longpluginname", "corp.long")
-        const short = shortName(long)
+        const short = yield* Effect.promise(() => shortName(long))
         // The volume may not create short names; the row then has nothing to spell.
         if (short === undefined || short.toLowerCase() === long.toLowerCase()) return
         const add = { type: "add" as const, target: short, options: {} }

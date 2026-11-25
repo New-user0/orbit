@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { runProgram } from "../../core/test/fixture/run-program"
 import { isolatedEnv } from "./fixture/environment"
 
 // `orb flow` end to end: a real standalone server, a scripted local model and a real git repository. Each agent node
@@ -743,7 +744,7 @@ test("orb flow clean leaves a run whose folder is a link alone, says so, and cle
   expect(cleaned.stderr.split(/\r?\n/).filter((line) => line.startsWith("Left run"))).toEqual([
     `Left run ${linked} alone: ${path.join(await fs.realpath(repository), ".orbit", "worktrees", linked)} is a link, not a folder`,
   ])
-  const branches = Bun.spawnSync(["git", "for-each-ref", "--format=%(refname:short)", "refs/heads/orbit/"], { cwd: repository })
+  const branches = await runProgram(["git","for-each-ref", "--format=%(refname:short)", "refs/heads/orbit/"], { cwd: repository })
   expect(branches.stdout.toString().trim()).toBe(`orbit/${linked}/build`)
   expect(await Bun.file(path.join(side, "precious.txt")).text()).toBe("keep\n")
 }, 120_000)

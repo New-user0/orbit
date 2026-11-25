@@ -4,7 +4,7 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { spawnSync } from "child_process"
+import { runProgram } from "./fixture/run-program"
 import { Effect, Layer } from "effect"
 import { FileAccess } from "@orbit/core/file-access"
 import { Location } from "@orbit/core/location"
@@ -58,7 +58,7 @@ const layout = Effect.gen(function* () {
     },
   ].filter((item) => process.platform === "win32" && item.spelled !== project)
   // The 8.3 short names of the project's folder, and of it and the folders above it. Only where the volume makes them.
-  const shortened = process.platform === "win32" ? shortPath(project) : project
+  const shortened = process.platform === "win32" ? yield* Effect.promise(() => shortPath(project)) : project
   const short =
     shortened === project
       ? []
@@ -80,12 +80,11 @@ const layout = Effect.gen(function* () {
   return { project, outside, spellings: existing.flat() }
 })
 
-function shortPath(file: string) {
-  const result = spawnSync("cmd", ["/d", "/c", `for %I in ("${file}") do @echo %~sI`], {
-    encoding: "utf8",
+async function shortPath(file: string) {
+  const result = await runProgram(["cmd", "/d", "/c", `for %I in ("${file}") do @echo %~sI`], {
     windowsVerbatimArguments: true,
   })
-  return result.stdout.trim() || file
+  return result.stdout.toString().trim() || file
 }
 
 describe("FileAccess for another spelling of the project's folder", () => {
@@ -419,8 +418,8 @@ describe("FileAccess for another spelling of the project's folder", () => {
         })
         if (free === undefined) return yield* Effect.die("no free drive letter for subst")
         const drive = `${free}:`
-        expect(Bun.spawnSync(["subst", drive, project]).exitCode).toBe(0)
-        yield* Effect.addFinalizer(() => Effect.sync(() => void Bun.spawnSync(["subst", drive, "/D"])))
+        expect((yield* Effect.promise(() => runProgram(["subst", drive, project]))).exitCode).toBe(0)
+        yield* Effect.addFinalizer(() => Effect.promise(() => runProgram(["subst", drive, "/D"])))
         yield* Effect.gen(function* () {
           const access = yield* FileAccess.Service
           const key = yield* access.resolve({ path: `${drive}\\secret\\key.txt` })

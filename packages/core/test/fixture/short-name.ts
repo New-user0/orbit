@@ -1,14 +1,15 @@
 import path from "path"
+import { runProgram } from "./run-program"
 
 /**
  * The 8.3 short name that Windows gave `name` in `directory`, as `dir /x` lists it, or undefined where there is none:
  * off Windows, on a volume that does not make short names, or for a name that is already short. A link's row ends with
  * its target in brackets.
  */
-export function shortName(directory: string, name: string) {
+export async function shortName(directory: string, name: string) {
   if (process.platform !== "win32") return undefined
   const cmd = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe")
-  const listing = Bun.spawnSync([cmd, "/d", "/c", "dir", "/x", "/a", directory]).stdout.toString()
+  const listing = (await runProgram([cmd, "/d", "/c", "dir", "/x", "/a", directory])).stdout.toString()
   const row = listing
     .split(/\r?\n/)
     .map((line) => line.replace(/ \[[^\]]*\]$/, ""))

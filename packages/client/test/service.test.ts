@@ -3,6 +3,7 @@ import { expect, test } from "bun:test"
 import { Effect, FileSystem } from "effect"
 import { writeFile } from "node:fs/promises"
 import { Service, type EnsureReason } from "../src/effect/service"
+import { defaultEnsureTiming } from "../src/service-timing"
 import { recordedSignal, serviceFixture, stoppedByClient } from "./fixture/service-fixture"
 import { accelerate } from "./fixture/service-timing"
 
@@ -100,12 +101,18 @@ test("replaces an incompatible registered service", async () => {
   expect(starts).toEqual(["version-mismatch"])
 })
 
+// The service answers each status probe after 300 ms, as a starting one did under load in CI run 45533775334, where
+// three probes past the accelerated 100 ms limit made `ensure` judge it unresponsive and start a replacement, which
+// this row gives no command. The row is about waiting and not about an unresponsive service, so its probes get the
+// product's own limit.
+const patient = accelerate(Service.ensure, { requestTimeout: defaultEnsureTiming.requestTimeout })
+
 test("waits for a registered service to finish starting", async () => {
   await using fixture = await serviceFixture()
   const registration = fixture.registration
-  const process = fixture.spawn("starting")
+  const process = fixture.spawn("starting", "300")
   await fixture.waitForFile()
-  const result = run(ensure({ file: registration, version: "test", command: [] }))
+  const result = run(patient({ file: registration, version: "test", command: [] }))
 
   await fixture.waitForFile(registration + ".status-request")
   expect(process.exitCode).toBe(null)

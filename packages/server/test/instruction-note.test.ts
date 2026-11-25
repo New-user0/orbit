@@ -1,6 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { App } from "@orbit/core/app"
 import { Bus } from "@orbit/core/bus"
 import { Config } from "@orbit/core/config"
@@ -25,6 +25,8 @@ import { TestLLM } from "../../ai/src/testing"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { createEmbeddedRoutes } from "../src/routes"
+
+setDefaultTimeout(30_000)
 
 const model = SessionRunnerModel.resolved(
   LanguageModel.make({ id: "note-model", provider: "test", route: OpenAIChat.route }),

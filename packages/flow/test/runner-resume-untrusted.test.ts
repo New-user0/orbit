@@ -7,6 +7,7 @@ import os from "node:os"
 import path from "node:path"
 import { run } from "../src/runner"
 import type { Workflow } from "../src/workflow"
+import { runProgram } from "../../core/test/fixture/run-program"
 
 // Classes 1, 5 and 12: a run store is a file that a clone ships, and a resume reuses the results it records. Each row
 // makes a run, then rewrites one value of its store the way a clone could ship it, then resumes the run with a client
@@ -89,16 +90,16 @@ async function repositories(name: string, place: Place) {
   // A link named as the victim, so a check that runs through it prints the word as one in the victim does.
   const stored = place === "link" ? path.join(worktrees, "victim") : victim
   await fs.mkdir(clone, { recursive: true })
-  const vcs = (directory: string, ...args: string[]) =>
-    expect(Bun.spawnSync(["git", ...args], { cwd: directory }).exitCode).toBe(0)
-  vcs(clone, "init", "-q", "-b", "main")
-  vcs(clone, "config", "user.email", "t@t")
-  vcs(clone, "config", "user.name", "t")
+  const vcs = async (directory: string, ...args: string[]) =>
+    expect((await runProgram(["git", ...args], { cwd: directory })).exitCode).toBe(0)
+  await vcs(clone, "init", "-q", "-b", "main")
+  await vcs(clone, "config", "user.email", "t@t")
+  await vcs(clone, "config", "user.name", "t")
   await Bun.write(path.join(clone, "a.txt"), "one\n")
-  vcs(clone, "add", "-A")
-  vcs(clone, "commit", "-qm", "one", "--no-gpg-sign")
+  await vcs(clone, "add", "-A")
+  await vcs(clone, "commit", "-qm", "one", "--no-gpg-sign")
   await fs.mkdir(path.dirname(victim), { recursive: true })
-  vcs(path.dirname(victim), "clone", "-q", clone, victim)
+  await vcs(path.dirname(victim), "clone", "-q", clone, victim)
   if (place === "link") {
     await fs.mkdir(worktrees, { recursive: true })
     await fs.symlink(victim, stored, process.platform === "win32" ? "junction" : "dir")
@@ -125,7 +126,7 @@ async function monitored(clone: string, victim: string) {
   const program = path.join(path.dirname(victim), "fsmonitor.sh")
   await Bun.write(program, `#!/bin/sh\necho ran >> "${path.join(path.dirname(victim), "ran").replaceAll("\\", "/")}"\n`)
   await fs.chmod(program, 0o755)
-  expect(Bun.spawnSync(["git", "config", "core.fsmonitor", program.replaceAll("\\", "/")], { cwd: victim }).exitCode).toBe(0)
+  expect((await runProgram(["git", "config", "core.fsmonitor", program.replaceAll("\\", "/")], { cwd: victim })).exitCode).toBe(0)
   await Bun.write(path.join(victim, "a.txt"), "two\n")
 }
 

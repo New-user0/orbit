@@ -1,4 +1,4 @@
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { define } from "@orbit/plugin/effect/plugin"
 import { Rpc } from "@orbit/schema/rpc"
@@ -7,6 +7,8 @@ import { HttpEffect, HttpRouter, HttpServer } from "effect/unstable/http"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { createEmbeddedRoutes } from "../src/routes"
+
+setDefaultTimeout(30_000)
 
 const Broken = Rpc.define({
   id: "broken",

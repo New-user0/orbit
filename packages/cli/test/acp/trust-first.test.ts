@@ -50,6 +50,10 @@ describe("acp trust-first over the wire", () => {
     })
     acp.server.sessions.set("ses_saved", makeSession("ses_saved"))
     await acp.initialize()
+    // The agent subscribes to the server's events when it starts, apart from any session. On a cold Windows runner that
+    // request reached the server after the first refusal below, where it read as a request made after the answer
+    // (`Received: "/api/event"`). Waiting for it here leaves the check below unchanged.
+    await acp.until(() => acp.server.requests.some((request) => request.path === "/api/event"), "the agent's event stream")
 
     for (const method of ["session/load", "session/resume"] as const) {
       const before = acp.server.requests.length

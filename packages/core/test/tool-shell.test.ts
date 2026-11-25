@@ -57,6 +57,7 @@ import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { which } from "@orbit/util/which"
 import type { ConfigManaged } from "@orbit/schema/config/managed"
 import { offlineModels } from "./fixture/models"
+import { runProgram } from "./fixture/run-program"
 import { installPolicy } from "./fixture/policy"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -64,6 +65,12 @@ import { Expected } from "./lib/session-message"
 import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions, toolTraits } from "./lib/tool"
 
 type ManagedNetwork = NonNullable<ConfigManaged.Restrictions["network"]>
+
+// Whether bubblewrap runs here, decided at load so a host without it reports the sandbox rows as skipped.
+const bwrapWorks =
+  process.platform === "linux" &&
+  which("bwrap") !== null &&
+  (await runProgram(["bwrap", "--dev-bind", "/", "/", "true"])).exitCode === 0
 
 const sessionID = Session.ID.make("ses_shell_tool_test")
 const sessionModel = Model.Ref.make({ id: Model.ID.make("test"), providerID: Provider.ID.make("test") })
@@ -3233,10 +3240,7 @@ describe("ShellTool", () => {
 
   // Runs the real thing where bubblewrap works. The sandbox mounts its own /proc, so the interfaces listed there are those
   // of the sandbox's network namespace: only the loopback means the network is off.
-  const bwrapTest =
-    process.platform === "linux" && which("bwrap") !== null && Bun.spawnSync(["bwrap", "--dev-bind", "/", "/", "true"]).exitCode === 0
-      ? it.live
-      : it.live.skip
+  const bwrapTest = bwrapWorks ? it.live : it.live.skip
   bwrapTest("has no network interface but the loopback when domain settings force the network off", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
@@ -4921,7 +4925,7 @@ describe("ShellGuard: a deny for the spelling of a path a link leads out of", ()
                 await fs.writeFile(path.join(outside, "s"), "secret")
                 await fs.symlink(outside, path.join(active, "cfg"), isWindows ? "junction" : "dir")
               })
-              Bun.spawnSync(["git", "init", "-q", active])
+              yield* Effect.promise(() => runProgram(["git", "init", "-q", active]))
               const spellings = [undefined, "../cfg/s", "../cfg/*"]
               const decided = yield* withSession(below, () =>
                 Effect.gen(function* () {

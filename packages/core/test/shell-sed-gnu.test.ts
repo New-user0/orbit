@@ -3,6 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { SedScript } from "../src/shell/sed"
+import { runProgram } from "./fixture/run-program"
 import { bash } from "./shell-analysis/helper"
 
 // Differential test: real GNU sed against the emulator on a fixed, seeded corpus. Every row runs `sed -i` on one copy
@@ -10,7 +11,7 @@ import { bash } from "./shell-analysis/helper"
 // Windows' sed): the oracle is the real program, never a table of expected output. Run it on Linux with tools/linux-test.
 
 const sed = Bun.which("sed")
-const probe = sed ? Bun.spawnSync([sed, "--version"], { cwd: os.tmpdir() }) : undefined
+const probe = sed ? await runProgram([sed, "--version"], { cwd: os.tmpdir() }) : undefined
 const gnu = probe !== undefined && SedScript.classify({ stdout: probe.stdout.toString(), code: probe.exitCode }, process.platform) === "gnu"
 // MSYS_NO_PATHCONV and MSYS2_ARG_CONV_EXCL stop Git for Windows' runtime from rewriting a script such as `/c$/d` as a path.
 const env = { ...process.env, LC_ALL: "C.UTF-8", MSYS_NO_PATHCONV: "1", MSYS2_ARG_CONV_EXCL: "*" }
@@ -181,7 +182,7 @@ afterAll(() => directories.forEach((directory) => fs.rmSync(directory, { recursi
 describe("SedScript against GNU sed", () => {
   test.skipIf(!gnu)(
     "the emulator writes the bytes GNU sed writes",
-    () => {
+    async () => {
       const directory = fs.mkdtempSync(path.join(os.tmpdir(), "sed-gnu-"))
       directories.push(directory)
       let compared = 0
@@ -205,7 +206,7 @@ describe("SedScript against GNU sed", () => {
         // The scripts go in a file: the MSYS runtime re-parses a command line's backslashes and braces, and -e scripts are
         // joined with newlines by sed anyway, so `-f` runs the same program.
         fs.writeFileSync(path.join(directory, "script.sed"), row.scripts.join("\n") + "\n")
-        const real = Bun.spawnSync([sed!, "-i", ...row.options, "-f", "script.sed", ...names], { cwd: directory, env })
+        const real = await runProgram([sed!, "-i", ...row.options, "-f", "script.sed", ...names], { cwd: directory, env })
         const expected = names.map((name) => fs.readFileSync(path.join(directory, name)))
         const got = applied.map((result) => Buffer.from(result.ok ? result.text : "", "utf8"))
         const same = real.exitCode === 0 && expected.every((bytes, position) => bytes.equals(got[position]))

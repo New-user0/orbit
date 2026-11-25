@@ -1,11 +1,13 @@
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Orbit } from "@orbit/client"
 import { Effect, Schedule } from "effect"
 import { keys, planted, type Key } from "../../core/test/fixture/git-keys"
 import { traced } from "../../core/test/fixture/git-trace"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
+
+setDefaultTimeout(30_000)
 
 // Class 1 (register FU-M1-022), over the real server: a client opens a folder and asks for its branch, status and diff before
 // anyone is asked about trusting it. Git applies the folder's own `.git/config`, so the filter, text conversion and

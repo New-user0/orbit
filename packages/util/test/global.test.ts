@@ -4,28 +4,30 @@ import os from "os"
 import path from "path"
 import { pathToFileURL } from "url"
 import { Context, Effect, Layer } from "effect"
+import { runProgram } from "../../core/test/fixture/run-program.js"
 import { Global } from "../src/global.js"
 
 describe("global", () => {
-  test("importing the module does not create directories", () => {
+  test("importing the module does not create directories", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-global-import-"))
     const directories = ["data", "cache", "config", "state", "tmp"].map((directory) => path.join(root, directory))
     const module = pathToFileURL(path.join(import.meta.dir, "../src/global.ts")).href
-    const result = Bun.spawnSync({
-      cmd: [process.execPath, "-e", `const { Global } = await import(${JSON.stringify(module)}); void Global.Path.tmp`],
-      env: {
-        ...process.env,
-        XDG_DATA_HOME: directories[0],
-        XDG_CACHE_HOME: directories[1],
-        XDG_CONFIG_HOME: directories[2],
-        XDG_STATE_HOME: directories[3],
-        // As below: Windows reads TEMP and TMP, so the check of the tmp folder holds there too.
-        TMPDIR: directories[4],
-        TEMP: directories[4],
-        TMP: directories[4],
+    const result = await runProgram(
+      [process.execPath, "-e", `const { Global } = await import(${JSON.stringify(module)}); void Global.Path.tmp`],
+      {
+        env: {
+          ...process.env,
+          XDG_DATA_HOME: directories[0],
+          XDG_CACHE_HOME: directories[1],
+          XDG_CONFIG_HOME: directories[2],
+          XDG_STATE_HOME: directories[3],
+          // As below: Windows reads TEMP and TMP, so the check of the tmp folder holds there too.
+          TMPDIR: directories[4],
+          TEMP: directories[4],
+          TMP: directories[4],
+        },
       },
-      stderr: "pipe",
-    })
+    )
 
     expect(result.exitCode, result.stderr.toString()).toBe(0)
     directories.forEach((directory) => expect(fs.existsSync(path.join(directory, "orbit"))).toBe(false))
@@ -51,12 +53,12 @@ describe("global", () => {
     fs.rmSync(root, { recursive: true, force: true })
   })
 
-  test("building a layer with default tmp creates and canonicalizes it", () => {
+  test("building a layer with default tmp creates and canonicalizes it", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-global-layer-"))
     const directories = ["data", "cache", "config", "state", "tmp"].map((directory) => path.join(root, directory))
     const module = pathToFileURL(path.join(import.meta.dir, "../src/global.ts")).href
-    const result = Bun.spawnSync({
-      cmd: [
+    const result = await runProgram(
+      [
         process.execPath,
         "-e",
         `
@@ -66,21 +68,21 @@ describe("global", () => {
           process.stdout.write(Context.get(context, Global.Service).tmp)
         `,
       ],
-      cwd: path.join(import.meta.dir, ".."),
-      env: {
-        ...process.env,
-        XDG_DATA_HOME: directories[0],
-        XDG_CACHE_HOME: directories[1],
-        XDG_CONFIG_HOME: directories[2],
-        XDG_STATE_HOME: directories[3],
-        // os.tmpdir() reads TMPDIR on POSIX, and TEMP, then TMP, on Windows.
-        TMPDIR: directories[4],
-        TEMP: directories[4],
-        TMP: directories[4],
+      {
+        cwd: path.join(import.meta.dir, ".."),
+        env: {
+          ...process.env,
+          XDG_DATA_HOME: directories[0],
+          XDG_CACHE_HOME: directories[1],
+          XDG_CONFIG_HOME: directories[2],
+          XDG_STATE_HOME: directories[3],
+          // os.tmpdir() reads TMPDIR on POSIX, and TEMP, then TMP, on Windows.
+          TMPDIR: directories[4],
+          TEMP: directories[4],
+          TMP: directories[4],
+        },
       },
-      stdout: "pipe",
-      stderr: "pipe",
-    })
+    )
 
     expect(result.exitCode, result.stderr.toString()).toBe(0)
     expect(result.stdout.toString()).toBe(fs.realpathSync(path.join(directories[4], "orbit")))

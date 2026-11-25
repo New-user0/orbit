@@ -20,6 +20,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
 import { location } from "./fixture/location"
+import { runProgram } from "./fixture/run-program"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
@@ -437,10 +438,7 @@ describe("ManagedSettings.read", () => {
 const secured = process.platform !== "win32" && process.getuid?.() !== 0
 // icacls by its full path: a bare name is looked for in the working folder first on Windows (class 10).
 const icacls = (...args: string[]) =>
-  Bun.spawnSync([path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe"), ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+  runProgram([path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe"), ...args])
 // Windows PowerShell by its full path (class 10), running `command` with `file` in its environment.
 const powershell = (command: string, file: string) =>
   Bun.spawn(
@@ -478,11 +476,9 @@ const lock = (file: string) =>
   )
 // Whether this account's backup privilege is enabled, which lets it open a file past an access list that denies it.
 // The GitHub Windows runner's account has it enabled; a developer's account does not.
-const backup = () =>
-  Bun.spawnSync([path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe"), "/priv"], {
-    stdout: "pipe",
-  })
-    .stdout.toString()
+const backup = async () =>
+  (await runProgram([path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe"), "/priv"])).stdout
+    .toString()
     .split(/\r?\n/)
     .some((line) => /^SeBackupPrivilege\s.*\sEnabled$/.test(line.trim()))
 // What a plain read of `file` meets, with the call that failed: a lock fails the read, an access list or a file held
@@ -544,21 +540,20 @@ describe("ManagedSettings.read unreadable input", () => {
           ),
           Effect.andThen(
             Effect.acquireRelease(
-              Effect.sync(() => icacls(path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)")),
-              () => Effect.sync(() => icacls(path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0")),
+              Effect.promise(() => icacls(path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)")),
+              () => Effect.promise(() => icacls(path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0")),
             ),
           ),
           Effect.andThen(
-            attempt(path.join(directory, "managed-settings.json")).pipe(
-              Effect.map((outcome) => {
+            Effect.all([attempt(path.join(directory, "managed-settings.json")), Effect.promise(backup)]).pipe(
+              Effect.map(([outcome, privileged]) =>
                 // The access list refuses the open where it binds. An account with the backup privilege opens past it
                 // and meets the lock.
-                const privileged = backup()
                 expect({ privileged, outcome }).toEqual({
                   privileged,
                   outcome: privileged ? "EBUSY read" : "EPERM open",
-                })
-              }),
+                }),
+              ),
             ),
           ),
         ),
