@@ -2583,7 +2583,8 @@ runs" is a permission.
     that is not blank as that item's text), at no indentation once a list item has started in the text (a fence a few
     spaces in may be in its content), and while no link reference definition that `marked` may read over the next line
     is open (one whose label is left open, whose `]:` has no destination yet, or whose title's quote or parenthesis is
-    left open on its line or opened on the next, a `"` or `(` title and a label over a blank line too; any line that
+    left open on its line or opened on the next, a `"` or `(` title and a label over a blank line too, and a `'` title
+    over a line of only spaces or tabs, which `marked` ends only at an empty line; any line that
     starts with a `[` behind indentation and list or quote marks may start one); it closes at a line of a run of the
     same mark at least as long, at most three spaces in, with only spaces after it. Any other fence line opens no block
     the tracker is sure of, so it gives up (`lost`) and no later fence in the text counts as code, and it gives up as
@@ -2630,10 +2631,15 @@ runs" is a permission.
     the controls; 20,000 random texts in random pieces and 20,000 random pairs of texts (apart, appended and as one
     message); "a loaded session's replay"; for `marked`, one row each for an image in a link's text after a `[`, whole
     and across two texts, a fence closed by a run with a tilde, a backtick or a tab after it, a span after `www.`, after
-    `http` and after an address one text ends with, a reference whose label holds a backtick, and a definition before
-    a fence line in each of its open states, drawn by both renderers; "where the tracker is unsure, code takes
-    joiners": a tilde, a bare address's start in any case, a list fence and a closer with words after it before a
-    fence after a blank line, a definition still open over a blank line, and a `"` title with a backslash at its end or
+    `http` and after an address one text ends with, a reference whose label holds a backtick, a definition before a
+    fence line in each of its open states, and a `'` title over a line of spaces, a tab or both, opened on the
+    destination's line or the next, after a `]:` alone, in a list item, in a quote and at the end of a text or a
+    message before the fence, with a `'` title that an empty line ends and a `"` or `(` title over a line of spaces as
+    the controls, drawn by both renderers; "where the tracker is unsure, code takes joiners": a tilde, a bare
+    address's start in any case, a list fence and a closer with words after it before a fence after a blank line, a
+    definition still open over a blank line, a `'` title over a line of spaces, a tab or both (on the destination's
+    line, on the next one, after a `]:` alone, in a list item and with `\r\n`) before a fence, with a `'` title that an
+    empty line ends after its line of spaces as a control, and a `"` title with a backslash at its end or
     before its quote and a `<` destination with a `<` or a second `>` in it, with a tilde fence, a closer with spaces
     after it, an address's start cut by a line break and whole definitions or lines that are no definition as the
     controls, a `"` title with a backslash before a letter and a `<` destination with a `<` in it among them; "a `<` or
@@ -2641,9 +2647,10 @@ runs" is a permission.
     backtick, cut at every point; and `packages/cli/test/acp/image-fuzz.test.ts`, which runs `image-fuzz.ts` in a
     child process with a deadline, seed 20261124, over 20,000 fuzzed cases for each renderer: fences of both marks at
     any indentation, behind list and quote marks and with info strings, spans, links, tables, task items, HTML blocks,
-    line ends of `\n`, `\r\n` and `\r`, labels with a backtick in them and their definition, definitions left open
-    over the next line, and images and raw tags anywhere, cut into random chunks over texts, messages and kinds, through
-    `ACPTranslate.step` and `replayMessage`, and drawn as each text alone, per message ID and appended, with no image or
+    line ends of `\n`, `\r\n` and `\r`, blank lines that are empty or hold only spaces and tabs, labels with a
+    backtick in them and their definition, definitions left open over the next line (a `'` title over a line of only
+    spaces or a tab among them), and images and raw tags anywhere, cut into random chunks over texts, messages and
+    kinds, through `ACPTranslate.step` and `replayMessage`, and drawn as each text alone, per message ID and appended, with no image or
     tag drawn and the same grammar with neither coming back as written but for joiners). A client whose
     renderer reads Markdown in a way neither md4c nor `marked` does is not
     covered by a test. Names and words that a client draws as plain text are one line with no
