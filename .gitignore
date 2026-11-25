@@ -40,3 +40,6 @@ tsconfig.tsbuildinfo
 # Orbit
 probe-report.json
 __pycache__/
+
+# PowerShell module cache that a pwsh started by a test can leave in a package folder
+**/Microsoft/Windows/PowerShell/ModuleAnalysisCache
