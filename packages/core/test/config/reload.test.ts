@@ -468,10 +468,8 @@ function title(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
+// A file watch has no promise of how soon it reports, so the wait has no count of its own, which reported a loaded
+// machine as a wrong result: the test's time limit bounds it and reports a timeout as a timeout.
 const waitUntil = Effect.fnUntraced(function* (condition: Effect.Effect<boolean>) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (yield* condition) return
-    yield* Effect.sleep("10 millis")
-  }
-  return yield* Effect.die("Timed out waiting for config plugin reloads")
+  while (!(yield* condition)) yield* Effect.sleep("10 millis")
 })

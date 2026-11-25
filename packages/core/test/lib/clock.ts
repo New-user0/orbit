@@ -18,11 +18,9 @@ const tick = Effect.gen(function* () {
  * holds. Extra adjusts are harmless when nothing is pending.
  */
 export const advance = Effect.fnUntraced(function* (condition: () => boolean) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (condition()) return
-    yield* tick
-  }
-  return yield* Effect.die(new Error("condition never became true after 100 advances"))
+  // No count of its own: the real work between the steps has no promise of how long it takes, and a count reported a
+  // loaded machine as a wrong result. The test's time limit bounds the wait and reports it as a timeout.
+  while (!condition()) yield* tick
 })
 
 /**
