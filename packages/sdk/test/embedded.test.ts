@@ -66,13 +66,9 @@ for (const selection of ["explicit", "default"] as const) {
           },
         )
 
-        yield* orbit.model.list({ location: location(fixture) }).pipe(
-          Effect.filterOrFail((page) =>
-            page.data.some((model) => model.providerID === "custom" && model.id === "fictional-chat"),
-          ),
-          Effect.retry(Schedule.spaced("10 millis")),
-          Effect.timeout("2 seconds"),
-        )
+        // model.list answers once the Location's plugins are active, so its first answer already holds the model.
+        const listed = yield* orbit.model.list({ location: location(fixture) })
+        expect(listed.data.some((model) => model.providerID === "custom" && model.id === "fictional-chat")).toBe(true)
 
         const result = yield* orbit.generate.text({
           prompt: "Say ready",
@@ -247,7 +243,14 @@ for (const implicit of [false, true]) {
 it.live("embedded client exposes plugin-backed web search", () =>
   withEmbedded("orbit-embedded-websearch-", (fixture) =>
     Effect.gen(function* () {
-      const orbit = yield* fixture.sdk.Orbit.create({ trust: { implicit: true } })
+      // The host's config lives in the fixture's folder, so the row reads neither the machine's global config nor its
+      // model catalog.
+      const orbit = yield* fixture.sdk.Orbit.create({
+        config: { directory: fixture.directory, project: false, content: "{}" },
+        models: { fetch: false },
+        fs: { filewatcher: false },
+        trust: { implicit: true },
+      })
       const providerID = fixture.sdk.WebSearch.ID.make("embedded-websearch")
       yield* orbit.plugin({
         id: `embedded-websearch-${crypto.randomUUID()}`,

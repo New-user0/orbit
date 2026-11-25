@@ -1,3 +1,4 @@
+import { Plugin } from "@orbit/core/plugin"
 import { WebSearch } from "@orbit/core/websearch"
 import { InvalidRequestError, ServiceUnavailableError } from "@orbit/protocol/errors"
 import { Effect } from "effect"
@@ -11,6 +12,8 @@ export const WebSearchHandler = HttpApiBuilder.group(Api, "server.websearch", (h
       .handle(
         "websearch.providers",
         Effect.fn("server.websearch.providers")(function* () {
+          // Plugins add web search providers, and the first request to a Location starts their activation.
+          yield* Plugin.awaitActivation
           const websearch = yield* WebSearch.Service
           return yield* response(websearch.providers())
         }),
@@ -18,6 +21,7 @@ export const WebSearchHandler = HttpApiBuilder.group(Api, "server.websearch", (h
       .handle(
         "websearch.query",
         Effect.fn("server.websearch.query")(function* (request) {
+          yield* Plugin.awaitActivation
           const websearch = yield* WebSearch.Service
           return yield* response(
             websearch.query(request.payload).pipe(
