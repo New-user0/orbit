@@ -17,7 +17,16 @@ if (mode === "environment") {
 }
 if (mode === "signal") process.kill(process.pid, process.platform === "win32" ? "SIGTERM" : "SIGKILL")
 
-if (mode === "delayed" || mode === "delayed-failed" || mode === "coordinated" || mode === "coordinated-failed-loser") {
+// The real service has one owner: a contender that finds the registration owned exits. `ensure` starts a second
+// contender when the first has not registered within the spawn delay, so every mode two contenders can share takes the
+// lock; one that had none, as `environment` had, let both register, and the later one replaced the first's endpoint.
+if (
+  mode === "environment" ||
+  mode === "delayed" ||
+  mode === "delayed-failed" ||
+  mode === "coordinated" ||
+  mode === "coordinated-failed-loser"
+) {
   await appendFile(registration + ".starts", process.pid + "\n")
   const owner = await writeFile(registration + ".owner", String(process.pid), { flag: "wx" })
     .then(() => true)
@@ -26,7 +35,7 @@ if (mode === "delayed" || mode === "delayed-failed" || mode === "coordinated" ||
   if (mode === "coordinated" || mode === "coordinated-failed-loser") {
     while ((await Bun.file(registration + ".starts").text()).trim().split("\n").length < 2) await Bun.sleep(10)
     if (mode === "coordinated-failed-loser") await Bun.sleep(Number(delay ?? 1_500))
-  } else await Bun.sleep(Number(delay))
+  } else if (mode !== "environment") await Bun.sleep(Number(delay))
   if (mode === "delayed-failed") process.exit(1)
 }
 
