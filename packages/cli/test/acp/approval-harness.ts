@@ -291,7 +291,15 @@ export async function approval(
   // The child starts only once the start gate (fixture/start-gate.ts) admits it, and gives its slot back when it has
   // answered `initialize`, so a CI job starts no more children at once than the gate's limit, and the deadline of the
   // first answer measures the start and not the queue.
+  const asked = performance.now()
   const release = await takeStartSlot()
+  // When each step of the child's start happened, in seconds from its spawn: a failed row prints them, so a start that
+  // never answered shows whether the slot, the child's first output or its first answer was late (FU-M4-341).
+  const times: Record<string, number> = { slot: Math.round(performance.now() - asked) / 1000 }
+  const spawned = performance.now()
+  const mark = (step: string) => {
+    times[step] ??= Math.round(performance.now() - spawned) / 1000
+  }
   // ORBIT_TRUST_PROJECT is unset unless the row is a trusted control: the folder is untrusted.
   const child = Bun.spawn([process.execPath, "run", "src/index.ts", "acp"], {
     cwd: path.join(import.meta.dir, "../.."),
@@ -307,7 +315,15 @@ export async function approval(
     stdout: "pipe",
     stderr: "pipe",
   })
-  const stderr = new Response(child.stderr).text()
+  const stderr = (async () => {
+    const decoder = new TextDecoder()
+    let text = ""
+    for await (const chunk of child.stderr) {
+      mark("first stderr")
+      text += decoder.decode(chunk, { stream: true })
+    }
+    return text
+  })()
   const pending = new Map<number, (value: any) => void>()
   const permissions: any[] = []
   const updates: any[] = []
@@ -319,6 +335,7 @@ export async function approval(
     const decoder = new TextDecoder()
     let buffered = ""
     for await (const chunk of child.stdout) {
+      mark("first stdout")
       buffered += decoder.decode(chunk, { stream: true })
       while (buffered.includes("\n")) {
         const line = buffered.slice(0, buffered.indexOf("\n")).trim()
@@ -361,6 +378,7 @@ export async function approval(
       clientCapabilities: {},
       clientInfo: { name: "test", version: "0" },
     }).finally(release)
+    mark("initialize answered")
     const session = await request("session/new", { cwd: workspace, mcpServers: [] })
     // trust-first: no session opens in a folder that is not trusted, so the call that an untrusted row describes never
     // runs: the refusal is typed and names the folder, and the model is asked nothing. The trusted rows show the
@@ -387,7 +405,10 @@ export async function approval(
     await child.exited
     await reader.catch(() => {})
     const output = await stderr
-    if (!passed) console.error(`the orb acp child of the failed row wrote:\n${output}`)
+    if (!passed)
+      console.error(
+        `the orb acp child of the failed row (exit ${child.exitCode}, start ${JSON.stringify(times)}) wrote:\n${output}`,
+      )
     llm.stop(true)
     await removeTree(root, { parents: [child.pid] }).catch(() => {})
   }

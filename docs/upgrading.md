@@ -2303,9 +2303,9 @@ naming the lock, instead of at once.
 ### Writes of state and config files wait for a reader on Windows
 
 On Windows, replacing a file that another program has open fails until that program lets go of it. The TUI's state
-files, the TUI and plugin config files and the background service's config and registration are written by replacing
-the file, so a write could fail while another TUI or a client was reading it. Such a write now tries again for up to
-five seconds, and then fails with the original error.
+files, the TUI and plugin config files, the background service's config and registration and the VS Code extension's
+IDE lock are written by replacing the file, so a write could fail while another TUI or a client was reading it. Such a
+write now tries again for up to five seconds, and then fails with the original error.
 
 **Affects:** Windows users who run more than one TUI or client at once.
 
