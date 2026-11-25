@@ -190,6 +190,38 @@ describe("runTests", () => {
   )
 })
 
+describe("tools/test/heartbeat.ts", () => {
+  // The watchdog takes a live worker whose last line starts a file as one still in that file ("counts a worker as in a
+  // file only while its last line starts one"), so every file a worker finishes must leave an end line after its start.
+  test("writes a start line when a worker loads a file and an end line after its tests", async () => {
+    await using dir = await tmpdir()
+    await suite(dir.path, { "a.test.ts": quick, "b.test.ts": quick })
+    const folder = path.join(dir.path, "heartbeat")
+    await fs.mkdir(folder)
+    const result = await runProgram([process.execPath, "test", "--parallel=2", `--preload=${heartbeat}`], {
+      cwd: dir.path,
+      env: { ...process.env, ORBIT_TEST_HEARTBEAT: folder },
+    })
+    expect(result.exitCode).toBe(0)
+    const workers = await Promise.all(
+      (await fs.readdir(folder)).map(async (pid) =>
+        (await fs.readFile(path.join(folder, pid), "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const match = /^\d+ (start|end) (.+)$/.exec(line)
+            return match ? `${match[1]} ${path.basename(match[2])}` : line
+          }),
+      ),
+    )
+    for (const lines of workers) {
+      const starts = lines.filter((line) => line.startsWith("start "))
+      expect(lines).toEqual(starts.flatMap((line) => [line, line.replace("start", "end")]))
+    }
+    expect(workers.flat().toSorted()).toEqual(["end a.test.ts", "end b.test.ts", "start a.test.ts", "start b.test.ts"])
+  })
+})
+
 describe("tools/test/run.ts on a stuck file", () => {
   test(
     "annotates the file for GitHub, prints on Linux what the worker was doing, and uses no inherited heartbeat folder",
