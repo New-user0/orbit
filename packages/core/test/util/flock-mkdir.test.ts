@@ -86,11 +86,19 @@ async function armDenial(dir: string) {
   }
 }
 
-// A lock's folder that a holder left behind an hour ago, with the files a holder writes.
+// A lock's folder that a holder left behind an hour ago, with the files a holder writes, and `files` more that make its
+// removal take a while. Those sit in a folder that keeps its own copy of the entries it inherits: setting an access list
+// on a folder rewrites the inherited entries of everything below it first, which for 20,000 files took longer than the
+// removal and let the contender make the folder again before the denial was in place.
 async function staleLock(folder: string, files: number) {
   await fs.mkdir(folder)
   await Bun.write(path.join(folder, "meta.json"), "{}")
-  await Promise.all(Array.from({ length: files }, (_, index) => Bun.write(path.join(folder, `f${index}`), "")))
+  const filler = path.join(folder, "filler")
+  if (files > 0) {
+    await fs.mkdir(filler)
+    await icaclsRun(filler, "/inheritance:d")
+  }
+  await Promise.all(Array.from({ length: files }, (_, index) => Bun.write(path.join(filler, `f${index}`), "")))
   const old = new Date(Date.now() - 60 * 60_000)
   await fs.utimes(path.join(folder, "meta.json"), old, old)
   await fs.utimes(folder, old, old)
@@ -261,7 +269,13 @@ describe("Flock.withLock on Windows", () => {
         await denial.fire()
         // The removal is still running, so the denial reaches the mkdir that follows it.
         expect(await exists(folder)).toBe(true)
-        const lifted = Bun.sleep(500).then(() => restore(dir))
+        // The denial is taken away only once the removal has ended and the mkdir after it has been refused for a while:
+        // the folder cannot come back while the denial lasts.
+        const lifted = (async () => {
+          while (await exists(folder)) await Bun.sleep(5)
+          await Bun.sleep(500)
+          await restore(dir)
+        })()
         const ran = await contender
         await lifted
         expect(ran).toBe("ran")
