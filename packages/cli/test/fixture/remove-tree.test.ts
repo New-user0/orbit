@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { currentDirectoryOnPath, plant } from "../../../core/test/fixture/decoy"
 import { createAcpFixture } from "../acp/subprocess"
 import { removeTree } from "./remove-tree"
 
@@ -70,6 +71,50 @@ describe("removing a test's folder", () => {
       expect(error?.message).toContain(`${root} could not be removed within 1 s (EBUSY)`)
       expect(error?.message).toContain(`${holder.pid} `)
       expect(error?.message).toContain("bun:sqlite")
+    },
+    90_000,
+  )
+
+  // Class 10: the holder list starts PowerShell by its full path. A bare name is looked up, and a working folder that
+  // PATH names (or, for a program that Windows itself looks up, any working folder) would supply its own powershell.exe,
+  // which would run instead and leave the list empty. Bun.spawn looks a bare name up on PATH only, so this row puts the
+  // working folder first on PATH.
+  test.skipIf(process.platform !== "win32")(
+    "listing what holds the folder starts no powershell.exe from the working folder, even when PATH names it (Windows)",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-cli-remove-"))
+      const work = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-cli-decoy-"))
+      using _ = currentDirectoryOnPath()
+      const ran = await plant(work, "powershell")
+      const holder = await holdDatabase(path.join(root, "orbit.db"), 30_000)
+      const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH"
+      const child = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `import { removeTree } from ${JSON.stringify(path.join(import.meta.dir, "remove-tree.ts"))}
+const error = await removeTree(${JSON.stringify(root)}, { deadline: 500, parents: [${process.pid}] }).then(() => undefined, (error) => error)
+console.log(error?.message ?? "removed")`,
+        ],
+        {
+          cwd: work,
+          // Windows spells the variable as it likes (`Path`), so the one that is there is replaced.
+          env: { ...process.env, [pathKey]: `${work}${path.delimiter}${process.env[pathKey] ?? ""}` },
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "inherit",
+        },
+      )
+      const [output, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
+      holder.kill("SIGKILL")
+      await holder.exited
+      const started = await ran()
+      await removeTree(root)
+      await removeTree(work)
+      expect(code).toBe(0)
+      expect(started).toEqual([])
+      expect(output).toContain(`${root} could not be removed within 0.5 s (EBUSY)`)
+      expect(output).toContain(`${holder.pid} `)
     },
     90_000,
   )
