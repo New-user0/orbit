@@ -59,7 +59,8 @@ test.skipIf(process.platform !== "win32")("fails at its deadline and names the h
   const dir = await folder()
   const holder = await hold(path.join(dir, "nested", "orbit.db"), 20_000)
   try {
-    const error = await removeTree(dir, { deadline: 300, parents: [process.pid] }).then(
+    // The holder's parent is this process, which is whom a removal names when the caller does not say.
+    const error = await removeTree(dir, { deadline: 300 }).then(
       () => undefined,
       (error: Error) => error,
     )

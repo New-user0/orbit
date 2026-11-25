@@ -8,7 +8,8 @@ const HELD = new Set(["EBUSY", "EPERM", "ENOTEMPTY"])
 
 /**
  * Removes a test's folder, waiting for a process that still holds a file in it, and fails once the deadline passes,
- * naming the processes that `parents` started that still run.
+ * naming the processes that `parents` started that still run: by default those the test's own process started, which
+ * on Windows keep its id as their parent's after they exit too.
  *
  * Bun's fs.rm takes `maxRetries` and `retryDelay` and ignores them, so a removal that meets a held file fails at once.
  * A program the test ran (a compiled binary, a planted decoy, a server with its database) can hold its folder for a
@@ -16,6 +17,7 @@ const HELD = new Set(["EBUSY", "EPERM", "ENOTEMPTY"])
  */
 export async function removeTree(folder: string, options: { deadline?: number; parents?: number[] } = {}) {
   const limit = options.deadline ?? 30_000
+  const parents = options.parents ?? [process.pid]
   const started = Date.now()
   while (true) {
     const error = await fs.rm(folder, { recursive: true, force: true }).then(
@@ -26,7 +28,7 @@ export async function removeTree(folder: string, options: { deadline?: number; p
     if (!HELD.has(String(error.code)) || Date.now() - started >= limit)
       throw new Error(
         `${folder} could not be removed within ${limit / 1000} s (${error.code}). Processes still running that ` +
-          `${options.parents?.join(", ") || "the test"} started:\n${await running(options.parents ?? [])}`,
+          `${parents.join(", ")} started:\n${await running(parents)}`,
         { cause: error },
       )
     // A handle that only the garbage collector would close (a finished Bun.spawn's pipe) goes now.
