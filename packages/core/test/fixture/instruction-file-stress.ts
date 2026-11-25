@@ -125,11 +125,11 @@ function readAll(name: string, text: string) {
 // input is wrong. Each fixed case is read at a quarter of its size first and then at its size. A linear parser takes about four times
 // as long for the second read; a quadratic one takes sixteen times as long. A case is super-linear when the full read takes
 // more than GROWTH_LIMIT times the small read, which a floor keeps from judging a case of a few milliseconds by timer
-// noise. The small read goes first so that the full one is not the one that pays for warming up, and a pair that looks
+// noise: Windows counts process CPU time in ticks of about 16 ms, so a read of 30 ms can report 16. The small read goes first so that the full one is not the one that pays for warming up, and a pair that looks
 // super-linear is measured again, up to twice, with the best time of each size counting, so one pause of a loaded runner
 // does not decide.
 const GROWTH_LIMIT = 8
-const FLOOR_MS = 15
+const FLOOR_MS = 50
 const quarter = fixed(0.25)
 
 function growth(name: string, text: string, smaller: string) {
