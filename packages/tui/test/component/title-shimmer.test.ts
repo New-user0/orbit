@@ -143,3 +143,47 @@ test("native Unicode clipping and shorter replacement leave no split glyphs or o
     app.renderer.destroy()
   }
 })
+
+// The renderer draws a live title again on a timer of its own, whose delay depends on how long the frame before it took
+// in real time (OpenTUI's `loop` waits `minTargetFrameTime - floor(frame time)`). The 240 ms fade-out is therefore spread
+// over frames whose first boundary moves with the speed of the machine: on a slow runner the first frame fell 10 or 11 ms
+// into it and the fade ended at 1e-16, not 0, which left the title live (`liveCount` 1) after the whole fade had passed.
+// Every row spends the same 240 ms of the test clock with its first frame at a different point.
+test.each([1, 10, 11, 12, 33, 100, 120, 239])(
+  "the fade-out ends after 240 ms whatever frame boundary falls %d ms into it",
+  async (first) => {
+    const clock = new ManualClock()
+    const app = await createTestRenderer({ width: 24, height: 1, useThread: false, clock })
+    const title = new TitleShimmerRenderable(app.renderer, {
+      width: 24,
+      height: 1,
+      content: "Compiler cleanup",
+      fg: "#eeeeee",
+      backdrop: RGBA.fromHex("#111111"),
+      rename: { title: "Compiler cleanup", pending: false },
+    })
+    app.renderer.root.add(title)
+    try {
+      await app.renderOnce()
+      const colors = app.captureSpans()
+      clock.advance(2000)
+      title.rename = { title: "Compiler cleanup", pending: true }
+      await app.renderOnce()
+      clock.advance(120)
+      await app.renderOnce()
+      clock.advance(120)
+      await app.renderOnce()
+      title.rename = { title: "Compiler cleanup", pending: false }
+      await app.renderOnce()
+      expect(app.renderer.root.liveCount).toBe(1)
+      clock.advance(first)
+      await app.renderOnce()
+      clock.advance(240 - first)
+      await app.renderOnce()
+      expect(app.renderer.root.liveCount).toBe(0)
+      expect(app.captureSpans()).toEqual(colors)
+    } finally {
+      app.renderer.destroy()
+    }
+  },
+)
