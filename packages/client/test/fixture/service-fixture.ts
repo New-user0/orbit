@@ -3,6 +3,19 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { waitForExit } from "./service-timing"
 
+// How a fixture service ends when the client stops it. On POSIX the client's SIGTERM reaches the fixture's handler,
+// which records the signal and exits with status 0. Windows has no signal that one process can send another: a kill
+// there is TerminateProcess, so the process ends with status 1 and no handler runs, which leaves nothing recorded.
+export const stoppedByClient =
+  process.platform === "win32" ? { exitCode: 1, signal: undefined } : { exitCode: 0, signal: "SIGTERM" }
+
+/** The signal the fixture's handler recorded before it exited, or undefined when no handler ran. */
+export async function recordedSignal(registration: string) {
+  const file = Bun.file(registration + ".signal")
+  if (!(await file.exists())) return undefined
+  return file.text()
+}
+
 export async function serviceFixture() {
   const directory = await mkdtemp(join(tmpdir(), "orbit-client-service-"))
   const registration = join(directory, "service.json")
