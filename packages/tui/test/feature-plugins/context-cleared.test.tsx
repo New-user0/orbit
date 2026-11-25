@@ -79,8 +79,16 @@ async function screen(messages: unknown[], width: number, done: string) {
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
   try {
-    // The last text of the history must be drawn before the frame is taken; the first frame can come before it on a slow runner.
-    await setup.waitForFrame((frame) => frame.includes("Run it") && frame.includes(done))
+    // The last text of the history must be drawn, and the startup notice gone (it stays until every plugin is ready),
+    // before the frame is taken: on a slow runner the first frames come before either, and a frame read with the notice
+    // differs from one read after it. The wait is bounded by time, within the row's limit, not by a count of frames.
+    const deadline = Date.now() + 20_000
+    while (Date.now() < deadline) {
+      const frame = setup.captureCharFrame()
+      const starting = frame.includes("Finishing startup") || frame.includes("Loading plugins")
+      if (frame.includes("Run it") && frame.includes(done) && !starting) break
+      await Bun.sleep(25)
+    }
     await setup.waitForVisualIdle()
     return setup.captureCharFrame()
   } finally {
