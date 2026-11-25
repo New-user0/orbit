@@ -1,7 +1,7 @@
 import { describe, expect, setDefaultTimeout } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Deferred, Duration, Effect, Fiber, Layer, LayerMap, Schedule } from "effect"
+import { Deferred, Duration, Effect, Fiber, Layer, LayerMap, Schedule, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { define } from "@orbit/plugin/effect/plugin"
 import { Event } from "@orbit/schema/config"
@@ -11,6 +11,7 @@ import { Global } from "@orbit/util/global"
 import { Npm } from "@orbit/util/npm"
 import { Bus } from "@orbit/core/bus"
 import { Command } from "@orbit/core/command"
+import { ConfigPluginSource } from "@orbit/core/config/plugin/source"
 import { Database } from "@orbit/core/database/database"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Instance } from "@orbit/core/instance"
@@ -94,6 +95,21 @@ const app = (instances: ReturnType<typeof instancesWith>) =>
   )
 
 const it = app(instancesWith())
+// Locations whose plugin sources can be read once, at startup: every later activation fails before it applies anything.
+const sourced = { reads: 0 }
+const failing = app(
+  instancesWith([
+    ConfigPluginSource.node.replace(
+      Layer.succeed(
+        ConfigPluginSource.Service,
+        ConfigPluginSource.Service.of({
+          operations: () => (sourced.reads++ === 0 ? Effect.succeed([]) : Effect.die(new Error("sources unreadable"))),
+          changes: () => Stream.never,
+        }),
+      ),
+    ),
+  ]),
+)
 // Locations whose folder nothing trusts until a test grants it.
 const untrusted = app(instancesWith([WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false }))]))
 
@@ -410,6 +426,26 @@ describe("PluginSupervisor under workspace trust", () => {
         expect(yield* commands.get("greet-late")).toBeUndefined()
         yield* plugins.refresh()
         expect(yield* commands.get("greet-late")).toBeDefined()
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
+      )
+    }),
+  )
+
+  // A caller of `refresh` (a trust grant) must get its answer even when the activation it asked for fails: it then
+  // reads what is still running, as every other reader does.
+  failing.live("refresh returns when the activation it asked for fails", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped()
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.gen(function* () {
+        const plugins = yield* Plugin.Service
+        yield* plugins.awaitActivation
+        expect(sourced.reads).toBe(1)
+        const refreshed = yield* plugins.refresh().pipe(Effect.timeoutOption("5 seconds"))
+        expect(refreshed._tag).toBe("Some")
+        expect(sourced.reads).toBe(2)
       }).pipe(
         Effect.scoped,
         Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),

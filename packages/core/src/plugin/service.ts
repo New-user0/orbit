@@ -15,13 +15,14 @@ export interface Interface {
   /** Keep readiness pending while preparing an update. Run the returned Effect to release it. */
   readonly hold: () => Effect.Effect<Effect.Effect<void>>
   /**
-   * Activate again now, as when a source of the plugins changes, and wait for that activation to settle. A change
-   * reaches the supervisor through an event it reads later, so a caller that has just changed what the plugins read
-   * (a trust grant that reloaded the config) asks here, and what it reads next is the new activation's. Without a
-   * supervisor it waits as `awaitActivation` does.
+   * Activate again now, as when a source of the plugins changes, and wait until that activation has applied every
+   * plugin that is available locally. A change reaches the supervisor through an event it reads later, so a caller that
+   * has just changed what the plugins read (a trust grant or revoke that reloaded the config) asks here, and what it
+   * reads next is the new activation's. It does not wait for packages that still have to be installed: those apply
+   * later, as they do at startup. Without a supervisor it waits as `awaitActivation` does.
    */
   readonly refresh: () => Effect.Effect<void>
-  /** Set by the supervisor: what `refresh` runs to request an activation, counted and held before it returns. */
+  /** Set by the supervisor: what `refresh` runs to request an activation and wait for its local plugins. */
   readonly supervise: (request: Effect.Effect<void>) => Effect.Effect<void>
 }
 

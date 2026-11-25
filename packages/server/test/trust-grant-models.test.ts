@@ -31,12 +31,29 @@ const project = Effect.gen(function* () {
         },
       }),
     )
+    // A plugin the folder ships, which only a trusted folder runs: what it adds tells whether it is active.
+    await Bun.write(
+      path.join(folders.repo, ".orbit/plugins/greeter.ts"),
+      `export default {
+        id: "greeter",
+        async setup(ctx) {
+          await ctx.command.transform((editor) => editor.add({ name: "greet-project", execute: async () => {} }))
+        },
+      }`,
+    )
   })
   return folders
 })
 
 const lists = (models: ReadonlyArray<{ readonly providerID: string; readonly id: string }>) =>
   models.some((model) => model.providerID === "clone" && model.id === "clone-model")
+
+const greets = (commands: ReadonlyArray<{ readonly name: string }>) =>
+  commands.some((command) => command.name === "greet-project")
+
+// The plugin list answers from what is running now, without waiting for an activation that is under way.
+const runs = (plugins: ReadonlyArray<{ readonly id?: string; readonly state: { readonly status: string } }>) =>
+  plugins.some((plugin) => plugin.id === "greeter" && plugin.state.status === "active")
 
 it.live("the models listed right after a grant are those of the folder that was granted", () =>
   Effect.gen(function* () {
@@ -67,4 +84,45 @@ it.live("a folder trusted from the start lists its provider: the control for the
     })
   }),
   15_000,
+)
+
+// The same route ends trust, and a revoke has to take effect as promptly as a grant: a client that revokes and then
+// starts work must not reach the provider, and the address, that the folder chose.
+it.live("the models listed right after a revoke no longer include the folder's provider", () =>
+  Effect.gen(function* () {
+    const folders = yield* project
+    const server = yield* startServer(folders.config, { trust: { implicit: false } })
+    const api = Orbit.make({ baseUrl: server.base, headers: server.headers })
+    const location = { directory: folders.repo }
+    yield* Effect.promise(async () => {
+      await api.location.trust.update({ location, trust: true })
+      expect(lists((await api.model.list({ location })).data)).toBe(true)
+      expect(greets((await api.command.list({ location })).data)).toBe(true)
+      await api.location.trust.update({ location, trust: false })
+      expect(lists((await api.model.list({ location })).data)).toBe(false)
+      // The folder's own plugin has stopped by the answer too.
+      expect(runs((await api.plugin.list({ location })).data)).toBe(false)
+      expect(greets((await api.command.list({ location })).data)).toBe(false)
+    })
+  }),
+)
+
+// A grant can also be ended by the folder's name, with no Location in the request. The Location the server holds for
+// that folder stops listing its provider before the answer.
+it.live("the models listed right after a revoke by name no longer include the folder's provider", () =>
+  Effect.gen(function* () {
+    const folders = yield* project
+    const server = yield* startServer(folders.config, { trust: { implicit: false } })
+    const api = Orbit.make({ baseUrl: server.base, headers: server.headers })
+    const location = { directory: folders.repo }
+    yield* Effect.promise(async () => {
+      await api.location.trust.update({ location, trust: true })
+      expect(lists((await api.model.list({ location })).data)).toBe(true)
+      expect(greets((await api.command.list({ location })).data)).toBe(true)
+      expect(await api.location.trust.revoke({ directory: folders.repo })).toEqual([folders.repo])
+      expect(lists((await api.model.list({ location })).data)).toBe(false)
+      expect(runs((await api.plugin.list({ location })).data)).toBe(false)
+      expect(greets((await api.command.list({ location })).data)).toBe(false)
+    })
+  }),
 )

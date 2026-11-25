@@ -37,7 +37,11 @@ export interface Interface {
    * again before this returns, so what the project holds applies by the time the answer arrives.
    */
   readonly grant: (input: { readonly persist: boolean; readonly via: string }) => Effect.Effect<Trust.Status>
-  /** Ends the grants for this Location's project; see `WorkspaceTrust.revoke`. */
+  /**
+   * Ends the grants for this Location's project; see `WorkspaceTrust.revoke`. When that leaves the project untrusted,
+   * the config is read again before this returns, so what the project held no longer applies by the time the answer
+   * arrives.
+   */
   readonly revoke: () => Effect.Effect<Trust.Status>
   /**
    * Whether code that reads the folder around a file, such as a language server or a formatter, may run for that file.
@@ -292,7 +296,13 @@ const layer = Layer.effect(
         if (fresh && reload !== undefined) yield* reload()
         return yield* report(state)
       }),
-      revoke: Effect.fn("ProjectTrust.revoke")(() => trust.revoke(root).pipe(Effect.flatMap(report))),
+      revoke: Effect.fn("ProjectTrust.revoke")(function* () {
+        const was = (yield* trust.status(root)).trusted
+        const state = yield* trust.revoke(root)
+        const reload = config.reload
+        if (was && !state.trusted && reload !== undefined) yield* reload()
+        return yield* report(state)
+      }),
       // The decision is the store's now, for every entry that the file could be under: an entry's stamp is the last
       // load's, and a revoke it has not seen yet must not let the file run.
       allows: Effect.fn("ProjectTrust.allows")(function* (file) {

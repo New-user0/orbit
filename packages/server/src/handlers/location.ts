@@ -1,3 +1,4 @@
+import { Config } from "@orbit/core/config"
 import { InstructionNotes } from "@orbit/core/instruction-notes"
 import { Location } from "@orbit/core/location"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
@@ -7,7 +8,7 @@ import { ProjectTrust } from "@orbit/core/project-trust"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { InvalidRequestError, ServiceUnavailableError } from "@orbit/protocol/errors"
 import { AbsolutePath } from "@orbit/schema/schema"
-import { Cause, Effect } from "effect"
+import { Cause, Context, Effect, RcMap } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { requireTrusted } from "./trust-error"
@@ -94,19 +95,45 @@ export const LocationHandler = HttpApiBuilder.group(Api, "server.location", (han
         "location.trust.update",
         Effect.fn(function* (ctx) {
           const trust = yield* ProjectTrust.Service
-          if (!ctx.payload.trust) return yield* trust.revoke()
-          // The API does not know which client asked, so a grant says only that it came through here.
-          const state = yield* trust.grant({ persist: ctx.payload.persist ?? true, via: "api" })
-          // The folder's providers, agents and commands come from plugins that activate again after the config reload
-          // that the grant made, so the answer waits for them: a client that lists or acts right after the grant then
-          // sees the folder it trusted (class 3). A grant of a folder that was already trusted changes no plugin, so its
-          // activation applies the same ones.
           const plugins = yield* Plugin.Service
+          // The API does not know which client asked, so a grant says only that it came through here.
+          const state = ctx.payload.trust
+            ? yield* trust.grant({ persist: ctx.payload.persist ?? true, via: "api" })
+            : yield* trust.revoke()
+          // The folder's providers, agents and commands come from plugins that activate again after the config reload
+          // that the grant or revoke made, so the answer waits for the plugins available locally: a client that lists
+          // or acts right after it then sees the folder as it now stands (class 3). A package that still has to be
+          // installed applies later and does not hold the answer.
           yield* plugins.refresh()
           return state
         }),
       )
       .handle("trust.list", () => workspaces.list())
-      .handle("trust.revoke", (ctx) => workspaces.forget(ctx.payload.directory).pipe(Effect.map((ended) => ended.map((item) => AbsolutePath.make(item)))))
+      .handle(
+        "trust.revoke",
+        Effect.fn(function* (ctx) {
+          const ended = yield* workspaces.forget(ctx.payload.directory)
+          // A Location the server holds for a folder this left untrusted stops applying what the folder supplied before
+          // the answer, as a revoke through the Location's own route does (class 3). The grant is named here by folder,
+          // not by Location, so each Location that is now untrusted reads its config again.
+          if (ended.length > 0)
+            yield* Effect.forEach(
+              yield* RcMap.keys(locations.rcMap),
+              (ref) =>
+                locations.contextEffect(ref).pipe(
+                  Effect.flatMap((services) =>
+                    Effect.gen(function* () {
+                      if (yield* Context.get(services, ProjectTrust.Service).trusted()) return
+                      yield* Context.get(services, Config.Service).reload?.() ?? Effect.void
+                      yield* Context.get(services, Plugin.Service).refresh()
+                    }),
+                  ),
+                  Effect.scoped,
+                ),
+              { discard: true, concurrency: "unbounded" },
+            )
+          return ended.map((item) => AbsolutePath.make(item))
+        }),
+      )
   }),
 )

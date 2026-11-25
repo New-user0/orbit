@@ -1,7 +1,7 @@
 export * as PluginSupervisor from "./supervisor.js"
 
 import { Event } from "@orbit/schema/config"
-import { Cause, Effect, Layer, Queue, Stream } from "effect"
+import { Cause, Deferred, Effect, Layer, Queue, Stream } from "effect"
 import path from "path"
 import { realpath } from "node:fs/promises"
 import { ConfigPluginSource } from "../config/plugin/source.js"
@@ -177,7 +177,16 @@ export const layer = Layer.effectDiscard(
     let generation = 0
     let observed = 0
 
-    const activate = Effect.fn("PluginSupervisor.activate")(function* () {
+    // The `refresh` callers waiting for an activation, each for the first one that starts after it asked (`target`).
+    let waiting: { readonly target: number; readonly done: Deferred.Deferred<void> }[] = []
+    const answer = (target: number) =>
+      Effect.suspend(() => {
+        const due = waiting.filter((item) => item.target <= target)
+        waiting = waiting.filter((item) => item.target > target)
+        return Effect.forEach(due, (item) => Deferred.succeed(item.done, undefined), { discard: true })
+      })
+
+    const activate = Effect.fn("PluginSupervisor.activate")(function* (target: number) {
       const current = ++generation
       // Combine internal plugins with host-contributed plugins in boot order.
       // Instance-bound plugins come last: later activation can override earlier
@@ -236,6 +245,10 @@ export const layer = Layer.effectDiscard(
           resolved.failures.map((failure) => ({ ...failure, source: source(failure.source) })),
         )
       yield* apply(immediate)
+      // What is available locally now applies. A package that still has to be installed can take as long as its
+      // registry does, so a caller of `refresh` (a trust grant, which a client waits on with a limit) gets its answer
+      // here and the package applies when it arrives.
+      yield* answer(target)
       const resolved = immediate.pending.length
         ? yield* resolve(modules, pre, post, operations, true, running, managed)
         : immediate
@@ -276,7 +289,15 @@ export const layer = Layer.effectDiscard(
         Stream.runForEach(() => notify),
         Effect.forkScoped({ startImmediately: true }),
       )
-    yield* registry.supervise(notify)
+    yield* registry.supervise(
+      Effect.gen(function* () {
+        const done = yield* Deferred.make<void>()
+        // Every activation the consumer takes up from here on reads the sources after this request was made.
+        waiting.push({ target: observed + 1, done })
+        yield* notify
+        yield* Deferred.await(done)
+      }),
+    )
     yield* watch(sources.changes())
     yield* watch(modules.changes())
     yield* watch(Stream.fromEffectRepeat(Effect.sleep("24 hours")))
@@ -296,7 +317,11 @@ export const layer = Layer.effectDiscard(
     yield* Stream.concat(Stream.succeed(0), Stream.fromQueue(triggers).pipe(Stream.debounce("100 millis"))).pipe(
       Stream.runForEach((target) =>
         Effect.gen(function* () {
-          yield* activate().pipe(Effect.catchCause((cause) => Effect.logError("failed to reload plugins", { cause })))
+          yield* activate(target).pipe(
+            Effect.catchCause((cause) => Effect.logError("failed to reload plugins", { cause })),
+          )
+          // An activation that failed before it applied anything still answers its callers: they read what is running.
+          yield* answer(target)
           if (observed !== target) return
           const settled = release
           release = undefined
