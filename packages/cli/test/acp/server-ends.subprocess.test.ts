@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import { runProgram } from "../../../core/test/fixture/run-program"
-import { createAcpFixture, initialize, type AcpProcess } from "./subprocess"
+import { createAcpFixture, initialize, newSession, type AcpProcess } from "./subprocess"
 
 // `orb acp` ends with process.exit and does not wait for the private server it started (src/commands/handlers/acp.ts): the
 // server ends because the pipe it reads as its lease closes with the process. The server then closes orbit.db and exits on
@@ -16,6 +16,19 @@ describe("orb acp and its private server", () => {
     const acp = fixture.spawn()
     await initialize(acp)
     const server = await serverOf(acp)
+    expect(await acp.close()).toBe(0)
+    await expectEnded(server)
+  }, 120_000)
+
+  // The server has the most to close here: a session, a model call it is waiting on, and the database it writes them to.
+  test("stdin EOF with a model call in flight: the server ends", async () => {
+    await using fixture = await createAcpFixture({ respond: () => new Promise<string>(() => {}) })
+    const acp = fixture.spawn()
+    await initialize(acp)
+    const session = await newSession(acp, fixture.home)
+    const server = await serverOf(acp)
+    void acp.send("session/prompt", { sessionId: session.sessionId, prompt: [{ type: "text", text: "hello" }] }).response.catch(() => undefined)
+    while (fixture.llm.requests.length === 0) await Bun.sleep(50)
     expect(await acp.close()).toBe(0)
     await expectEnded(server)
   }, 120_000)
