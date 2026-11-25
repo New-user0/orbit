@@ -2254,16 +2254,26 @@ code block whose fence no line of them can close, so they keep their lines.
 on the call's `rawInput`. Something that reads a call's text content should allow for the fence around it, or read the
 call's `rawOutput`.
 
-### Trusting a folder answers once its plugins are active
+### Trusting or untrusting a folder answers once its plugins have changed
 
-Trusting a folder (the TUI's trust dialog, `orb trust`, `--trust`, ACP, VS Code, or `location.trust.update`) read the
+Trusting a folder (the TUI's trust dialog, `orb trust`, `--trust`, VS Code, or `location.trust.update`) read the
 folder's config before it answered, but the providers, agents and commands of the folder come from plugins that start
 again a moment later. A client that listed models right after the grant, as `orb doctor --probe --trust` does, could
-get the list of before the grant. The answer now comes once that start has finished, so it can take a little longer.
+get the list of before the grant. The answer now comes once the plugins that are already on the machine have started.
+A plugin package the folder names that still has to be installed does not hold the answer: it starts when its install
+finishes, as at startup.
 
-**Affects:** clients and scripts that trust a folder and then list or use its models, agents or commands.
+Ending trust works the same way. `location.trust.update` with `trust: false` and `orb trust --revoke` (the
+`trust.revoke` route) used to answer while the folder's provider, plugins and commands were still active. They now read
+the config again and stop the folder's plugins before they answer.
 
-**What to do:** Nothing. A wait or a retry after a grant is no longer needed.
+The model list and the default model of a folder (`model.list`, `model.default`) also wait for its plugins to start
+now, as its agents and commands already did, so the first list after a folder is opened holds its providers. An editor's
+first ACP session in a busy machine no longer fails because the models were not listed yet.
+
+**Affects:** clients and scripts that trust or untrust a folder and then list or use its models, agents or commands.
+
+**What to do:** Nothing. A wait or a retry after a grant or a revoke is no longer needed.
 
 ### A private server that stops before it is ready says why
 
@@ -2275,6 +2285,20 @@ still closing it, where it used to exit at once with "database is locked".
 **Affects:** anyone who runs Orbit commands one after another in a script or a test.
 
 **What to do:** Nothing.
+
+### A lock on Windows waits while its folder is still being removed
+
+Orbit serializes some work across processes (the TUI's tabs, config writes, plugin updates) with a lock
+folder. On Windows, making that folder could fail with "operation not permitted" right after the previous holder
+removed it, and removing it could fail with "resource busy" while another program had a file in it open. Both used to
+fail the work at once. A contender now waits for the lock as it would for one that is held, up to the lock's timeout
+(five minutes unless the caller sets another), and the holder's release waits up to five seconds for the other handle
+before it fails with the original error. Other systems still fail at once.
+
+**Affects:** Windows users who run more than one TUI or client at once.
+
+**What to do:** Nothing. Where a lock is denied for good (an access list), the error now comes at the lock's timeout,
+naming the lock, instead of at once.
 
 ### Writes of state and config files wait for a reader on Windows
 
