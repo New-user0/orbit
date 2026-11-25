@@ -1,6 +1,13 @@
 import { expect, test } from "bun:test"
 import { createServer } from "node:net"
 import path from "node:path"
+import { sharedTranspilerCache } from "../test/fixture/environment"
+import { startSlot } from "../test/fixture/start-gate"
+
+// The child runs src/index.ts from source, whose imports load the whole CLI before the askpass branch answers. On a loaded
+// runner with no transpiler cache that start alone took longer than the test's 30 s. It now shares the run's transpiler
+// cache and takes a start slot like every other `orb` the tests start, and its deadline measures the start, not the queue.
+const START_DEADLINE = 60_000
 
 test("the executable askpass branch returns only the response, without CLI output", async () => {
   const requests: string[] = []
@@ -14,23 +21,33 @@ test("the executable askpass branch returns only the response, without CLI outpu
   const address = server.address()
   if (!address || typeof address === "string") throw new Error("missing listener")
   try {
-    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "index.ts"), "Enter passphrase:"], {
-      env: {
-        ...process.env,
-        ORBIT_SSH_ASKPASS_PORT: String(address.port),
-        ORBIT_SSH_ASKPASS_TOKEN: "fixture",
-        SSH_ASKPASS_PROMPT: "confirm",
-      },
-      stdout: "pipe",
-      stderr: "pipe",
+    const run = await startSlot(async () => {
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "index.ts"), "Enter passphrase:"], {
+        env: {
+          ...process.env,
+          ...sharedTranspilerCache(),
+          ORBIT_SSH_ASKPASS_PORT: String(address.port),
+          ORBIT_SSH_ASKPASS_TOKEN: "fixture",
+          SSH_ASKPASS_PROMPT: "confirm",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: START_DEADLINE,
+      })
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ])
+      return { stdout, stderr, code }
     })
-    expect(await new Response(child.stdout).text()).toBe('passphrase"with spaces\n')
-    expect(await child.exited).toBe(0)
+    expect(run.stdout).toBe('passphrase"with spaces\n')
+    expect(run.code).toBe(0)
     expect(requests.map((request) => JSON.parse(request))).toEqual([
       { token: "fixture", text: "Enter passphrase:", confirm: true },
     ])
-    expect(await new Response(child.stderr).text()).toBe("")
+    expect(run.stderr).toBe("")
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
-}, 30_000)
+}, 180_000)
