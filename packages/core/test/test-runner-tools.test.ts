@@ -30,6 +30,26 @@ const args = (root: string) => [
 
 const quick = `import { test } from "bun:test"\ntest("quick", () => {})\n`
 
+// The environment of a run under test. GitHub reads `::error` lines from a job's output, which a run started in this
+// process shares, so GITHUB_ACTIONS is left out for the runner and for the bun under it: a stand-in file stopped on
+// purpose must not put a "Test file stuck" annotation, or bun's own failure annotation, on a passing CI job. The
+// annotation rows set it on purpose and read their own piped output.
+const quiet = (extra: Record<string, string> = {}) => ({ ...process.env, GITHUB_ACTIONS: undefined, ...extra })
+
+// A stand-in for `bun test`: one worker that writes the given heartbeat lines for test/a.test.ts, named by its full path
+// as Bun.main gives it, then lives for three seconds.
+const standIn = (root: string, lines: string[]) => [
+  "-e",
+  [
+    `const log = require("node:path").join(process.env.ORBIT_TEST_HEARTBEAT, String(process.pid))`,
+    ...lines.map(
+      (line) =>
+        `require("node:fs").appendFileSync(log, Date.now() + " ${line} " + ${JSON.stringify(path.join(root, "test", "a.test.ts"))} + "\\n")`,
+    ),
+    `setTimeout(() => {}, 3000)`,
+  ].join("\n"),
+]
+
 // The heartbeat folders this worker's runs left in the temporary folder.
 const heartbeats = async () =>
   (await fs.readdir(os.tmpdir())).filter((name) => name.startsWith("orbit-heartbeat-")).length
@@ -50,7 +70,7 @@ describe("runTests", () => {
         ].join("\n"),
       })
       const before = await heartbeats()
-      const code = await runTests(args(dir.path), { ...process.env, ORBIT_TEST_FILE_DEADLINE_MS: "1000" }, dir.path)
+      const code = await runTests(args(dir.path), quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "1000" }), dir.path)
       const ended = Date.now()
       expect(code).toBe(1)
       const started = (await Bun.file(startFile).json()) as { pid: number; at: number }
@@ -73,7 +93,7 @@ describe("runTests", () => {
         { "slow.test.ts": `import { test } from "bun:test"\nawait Bun.sleep(4000)\ntest("slow", () => {})\n`, "a.test.ts": quick },
         { "test/slow.test.ts": 2000 },
       )
-      const code = await runTests(args(dir.path), { ...process.env, ORBIT_TEST_FILE_DEADLINE_MS: "1500" }, dir.path)
+      const code = await runTests(args(dir.path), quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "1500" }), dir.path)
       expect(code).toBe(0)
     },
     60_000,
@@ -87,8 +107,7 @@ describe("runTests", () => {
         "slow.test.ts": `import { test } from "bun:test"\nawait Bun.sleep(3000)\ntest("slow", () => {})\n`,
         "a.test.ts": quick,
       })
-      const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "ORBIT_TEST_FILE_DEADLINE_MS"))
-      expect(await runTests(args(dir.path), env, dir.path)).toBe(0)
+      expect(await runTests(args(dir.path), { ...quiet(), ORBIT_TEST_FILE_DEADLINE_MS: undefined }, dir.path)).toBe(0)
     },
     60_000,
   )
@@ -98,21 +117,11 @@ describe("runTests", () => {
     async () => {
       await using dir = await tmpdir()
       // bun ends an idle worker and starts the next file at once, so a real run seldom shows a live worker whose last
-      // line ends a file. This stand-in for `bun test` writes such a line as a worker would, then lives past the deadline.
-      // A worker names its file by its full path, as Bun.main gives it.
-      const file = JSON.stringify(path.join(dir.path, "test", "a.test.ts"))
-      const worker = (lines: string[]) => [
-        "-e",
-        [
-          `const log = require("node:path").join(process.env.ORBIT_TEST_HEARTBEAT, String(process.pid))`,
-          ...lines.map((line) => `require("node:fs").appendFileSync(log, Date.now() + " ${line} " + ${file} + "\\n")`),
-          `setTimeout(() => {}, 3000)`,
-        ].join("\n"),
-      ]
-      const env = { ...process.env, ORBIT_TEST_FILE_DEADLINE_MS: "1000" }
-      expect(await runTests(worker(["start", "end"]), env, dir.path)).toBe(0)
+      // line ends a file. The stand-in writes such a line as a worker would, then lives past the deadline.
+      const env = quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "1000" })
+      expect(await runTests(standIn(dir.path, ["start", "end"]), env, dir.path)).toBe(0)
       // Control: the same worker still in its file is stopped.
-      expect(await runTests(worker(["start"]), env, dir.path)).toBe(1)
+      expect(await runTests(standIn(dir.path, ["start"]), env, dir.path)).toBe(1)
     },
     60_000,
   )
@@ -132,7 +141,7 @@ describe("runTests", () => {
       })
       const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "../../../tools/test/run.ts")], {
         cwd: dir.path,
-        env: { ...process.env, ORBIT_TEST_WORKERS: "2", ORBIT_TEST_FILE_DEADLINE_MS: "3000" },
+        env: quiet({ ORBIT_TEST_WORKERS: "2", ORBIT_TEST_FILE_DEADLINE_MS: "3000" }),
         stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",
@@ -165,7 +174,7 @@ describe("runTests", () => {
         ].join("\n"),
       })
       const outer = Object.fromEntries(Object.keys(names).map((name) => [name, path.join(dir.path, `outer-${name}`)]))
-      const code = await runTests(args(dir.path), { ...process.env, ...outer }, dir.path)
+      const code = await runTests(args(dir.path), quiet(outer), dir.path)
       expect(code).toBe(0)
       const run = (await Bun.file(seen).json()) as { folder: string; exists: boolean }[]
       expect(run.map((entry) => entry.exists)).toEqual([true, true])
@@ -182,9 +191,40 @@ describe("runTests", () => {
     async () => {
       await using dir = await tmpdir()
       await suite(dir.path, { "fails.test.ts": `import { expect, test } from "bun:test"\ntest("x", () => expect(1).toBe(2))\n` })
-      expect(await runTests(args(dir.path), { ...process.env, ORBIT_TEST_FILE_DEADLINE_MS: "5000" }, dir.path)).toBe(1)
+      expect(await runTests(args(dir.path), quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "5000" }), dir.path)).toBe(1)
       await suite(dir.path, { "fails.test.ts": `import { expect, test } from "bun:test"\ntest("x", () => expect(1).toBe(1))\n` })
-      expect(await runTests(args(dir.path), { ...process.env, ORBIT_TEST_FILE_DEADLINE_MS: "5000" }, dir.path)).toBe(0)
+      expect(await runTests(args(dir.path), quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "5000" }), dir.path)).toBe(0)
+    },
+    60_000,
+  )
+
+  test(
+    "annotates a stuck file for GitHub when the environment it is given says so, whatever its own process's says",
+    async () => {
+      await using dir = await tmpdir()
+      // A program that calls runTests on a stuck stand-in worker with GITHUB_ACTIONS set to its first argument, or left
+      // out when that is empty, while its own environment holds the opposite.
+      const driver = path.join(dir.path, "driver.ts")
+      await Bun.write(
+        driver,
+        [
+          `import { runTests } from ${JSON.stringify(path.resolve(import.meta.dir, "../../../tools/test/watchdog.ts"))}`,
+          `const env = { ...process.env, GITHUB_ACTIONS: process.argv[2] || undefined, ORBIT_TEST_FILE_DEADLINE_MS: "1000" }`,
+          `process.exitCode = await runTests(${JSON.stringify(standIn(dir.path, ["start"]))}, env, ${JSON.stringify(dir.path)})`,
+        ].join("\n"),
+      )
+      const drive = async (own: string | undefined, given: string) => {
+        const result = await runProgram([process.execPath, driver, given], {
+          cwd: dir.path,
+          env: { ...process.env, GITHUB_ACTIONS: own },
+        })
+        expect(result.exitCode).toBe(1)
+        const stderr = result.stderr.toString()
+        expect(stderr).toMatch(/^Test file stuck: test\/a\.test\.ts has run for/m)
+        return stderr
+      }
+      expect(await drive("true", "")).not.toContain("::error")
+      expect(await drive(undefined, "true")).toContain("::error title=Test file stuck::test/a.test.ts")
     },
     60_000,
   )
@@ -200,7 +240,7 @@ describe("tools/test/heartbeat.ts", () => {
     await fs.mkdir(folder)
     const result = await runProgram([process.execPath, "test", "--parallel=2", `--preload=${heartbeat}`], {
       cwd: dir.path,
-      env: { ...process.env, ORBIT_TEST_HEARTBEAT: folder },
+      env: quiet({ ORBIT_TEST_HEARTBEAT: folder }),
     })
     expect(result.exitCode).toBe(0)
     const workers = await Promise.all(
@@ -305,7 +345,7 @@ describe.skipIf(process.platform === "win32")("tools/test/run.ts on a signal", (
         })
         const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "../../../tools/test/run.ts")], {
           cwd: dir.path,
-          env: { ...process.env, ORBIT_TEST_WORKERS: "2" },
+          env: quiet({ ORBIT_TEST_WORKERS: "2" }),
           stdin: "ignore",
           stdout: "ignore",
           stderr: "ignore",

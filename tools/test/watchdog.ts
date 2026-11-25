@@ -60,7 +60,7 @@ export async function runTests(args: string[], env: Record<string, string | unde
       .find((entry) => entry !== undefined && Date.now() - entry.at > deadline(entry.file) && alive(entry.pid))
     if (!found) return
     clearInterval(watch)
-    report(found, relative(found.file), deadline(found.file))
+    report(found, relative(found.file), deadline(found.file), env)
     stuck.stopping = stop(child)
   }, Math.min(5_000, base / 4))
   const code = await child.exited
@@ -98,12 +98,14 @@ function alive(pid: number) {
   }
 }
 
-function report(entry: { pid: number; at: number }, file: string, deadline: number) {
+// The annotation follows the environment the run was given, not this process's own, so a runner started by a test with
+// GITHUB_ACTIONS left out puts nothing in the CI job's annotations when its stand-in file is stopped.
+function report(entry: { pid: number; at: number }, file: string, deadline: number, env: Record<string, string | undefined>) {
   const seconds = Math.round((Date.now() - entry.at) / 1000)
   console.error(
     `Test file stuck: ${file} has run for ${seconds} s, past its deadline of ${deadline / 1000} s (worker ${entry.pid}). Stopping the run.`,
   )
-  if (process.env.GITHUB_ACTIONS) console.error(`::error title=Test file stuck::${file}`)
+  if (env.GITHUB_ACTIONS) console.error(`::error title=Test file stuck::${file}`)
   if (process.platform === "linux") console.error(linuxState(entry.pid))
 }
 

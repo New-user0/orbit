@@ -55,6 +55,8 @@ async function run(input: { cmd: string[]; cwd: string; pidFile: string; deadlin
       FIXTURE_PID_FILE: input.pidFile,
       // The outer run's own heartbeat folder must not leak into the run under test.
       ORBIT_TEST_HEARTBEAT: undefined,
+      // A stuck stand-in stopped on purpose must not annotate the CI job this run is part of.
+      GITHUB_ACTIONS: undefined,
     },
     stdin: "ignore",
     stdout: "pipe",
