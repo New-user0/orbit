@@ -57,8 +57,9 @@ jobs:
   test:
     name: test (${{ matrix.package }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ubuntu-latest
-    # A stuck test file fails the run within its deadline (tools/test/watchdog.ts, ten minutes by default), so the limit
-    # only has to cover the longest job, not a hang.
+    # In the parallel packages (core, cli, tui, server, vscode) a stuck test file fails the run within its deadline
+    # (tools/test/watchdog.ts, ten minutes by default). A serial package's run has no watchdog, so a stuck file there
+    # holds the job until this limit.
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -142,7 +143,8 @@ jobs:
   windows:
     name: test on Windows (${{ matrix.package }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: windows-latest
-    # Windows runners are slower than Linux ones; a stuck file still fails the run within its deadline.
+    # Windows runners are slower than Linux ones. As on Linux, only the parallel packages' runs stop a stuck file at its
+    # deadline; a serial package's run ends at this limit.
     timeout-minutes: 90
     strategy:
       fail-fast: false

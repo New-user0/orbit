@@ -11,6 +11,9 @@ import path from "node:path"
 // ago than its deadline in a worker that is still alive is stuck. The run is then stopped, the file is named, and the
 // exit code is 1. A run whose files all end in time exits with bun's own code.
 //
+// Only a parallel run preloads the heartbeat (tools/test/args.ts). A serial run (`--serial` or ORBIT_TEST_WORKERS=1)
+// writes nothing to the folder, so the watchdog never finds a stuck file in it and the run ends when bun ends it.
+//
 // The deadline of a file is ORBIT_TEST_FILE_DEADLINE_MS (ten minutes by default) or three times its entry in the
 // timings file the run balances by, whichever is longer.
 export async function runTests(args: string[], env: Record<string, string | undefined> = process.env, cwd = process.cwd()) {

@@ -150,7 +150,8 @@ describe("the start gate", () => {
         )
         while (roots.length === 0) await Bun.sleep(50)
         await Bun.sleep(4_000)
-        // A started child writes bun's transpiler cache under its XDG cache folder within a second.
+        // A started child creates orb's own cache folder (its XDG_CACHE_HOME, `cache`) within a second. Bun's
+        // transpiler cache goes to the run's shared ORBIT_TEST_TRANSPILER_CACHE folder, not here.
         expect(await fs.readdir(roots[0]!)).not.toContain("cache")
         // Given the slot, the row starts its child, which answers, refuses the untrusted folder, and gives the slot back.
         await fs.rm(path.join(folder.path, "0"))

@@ -3233,8 +3233,10 @@ applied to gates, allowlists and platform skips.
   directories).
 - A gate that hangs says nothing. Test code starts programs with `runProgram`
   (`packages/core/test/fixture/run-program.ts`), never with a synchronous spawn, which on Linux can fail to return and
-  stops the worker's timers (`test-sync-spawn.test.ts` lists any that remain), and the package runners stop a test file
-  that runs past its deadline and name it (`tools/test/watchdog.ts`, `test-runner-deadline.test.ts`).
+  stops the worker's timers (`test-sync-spawn.test.ts` lists any that remain), and the parallel package runners (core,
+  cli, tui, server, vscode) stop a test file that runs past its deadline and name it (`tools/test/watchdog.ts`,
+  `test-runner-deadline.test.ts`). A serial run (`--serial` or `ORBIT_TEST_WORKERS=1`) preloads no heartbeat, so its
+  watchdog never sees a file and a stuck file holds the run until the CI job's time limit.
 - A flaky test is fixed in the PR that meets it, or that PR names it and says why it stays: the repository has no list
   of known failures to put it in yet (Known gaps). A test that the milestone plan names as a gate must pass, not be
   "known".
