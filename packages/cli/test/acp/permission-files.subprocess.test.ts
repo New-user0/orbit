@@ -1230,6 +1230,9 @@ async function approval(
       passed = true
       return
     }
+    // A trusted folder opens a session: a failure shows its typed error here, and the child's stderr below, rather than
+    // a TypeError on the missing result (FU-M4-341).
+    expect(session.error).toBeUndefined()
     await request("session/prompt", { sessionId: session.result.sessionId, prompt: [{ type: "text", text: "go" }] })
     await check({ root, workspace, permissions, updates, bodies })
     passed = true
@@ -1241,7 +1244,8 @@ async function approval(
     if (exited === undefined) child.kill("SIGKILL")
     await child.exited
     await reader.catch(() => {})
-    void (await stderr)
+    const output = await stderr
+    if (!passed) console.error(`the orb acp child of the failed row wrote:\n${output}`)
     llm.stop(true)
     await removeTree(root).catch(() => {})
   }
