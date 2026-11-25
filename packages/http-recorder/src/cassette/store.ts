@@ -1,4 +1,4 @@
-import { Context, Effect, FileSystem, Layer, Schema, Semaphore } from "effect"
+import { Context, Effect, FileSystem, Layer, Schedule, Schema, Semaphore } from "effect"
 import { existsSync, rmSync } from "node:fs"
 import path from "node:path"
 import { secretFindings, SecretFindingSchema, type SecretFinding } from "../redaction/secrets.js"
@@ -85,6 +85,23 @@ const invalidCassette = (name: string, error: unknown) =>
 const failIfUnsafe = (name: string, findings: ReadonlyArray<SecretFinding>) =>
   findings.length === 0 ? Effect.void : Effect.fail(new UnsafeCassetteError({ cassetteName: name, findings }))
 
+/** How long an append waits for readers to let go of the cassette before it gives up. */
+export const REPLACE_DEADLINE_MS = 5_000
+
+// A cassette is written by renaming a temporary file over it. On Windows the rename answers EPERM, EACCES or EBUSY while
+// another handle has the cassette open (a test reading it, an editor, a scanner), so it is tried again with a short
+// backoff until the deadline, and then fails with the rename's error. Elsewhere those codes are lasting refusals.
+const whileHeld = {
+  while: (error: { readonly reason: { readonly cause?: unknown } }) => {
+    const cause = error.reason.cause
+    if (process.platform !== "win32" || typeof cause !== "object" || cause === null || !("code" in cause)) return false
+    return cause.code === "EPERM" || cause.code === "EACCES" || cause.code === "EBUSY"
+  },
+  schedule: Schedule.min([Schedule.exponential(10), Schedule.spaced(200)]).pipe(
+    Schedule.while((meta) => meta.elapsed < REPLACE_DEADLINE_MS),
+  ),
+}
+
 export const fileSystem = (
   options: { readonly directory?: string } = {},
 ): Layer.Layer<Service, never, FileSystem.FileSystem> =>
@@ -137,7 +154,7 @@ export const fileSystem = (
               yield* fs.makeDirectory(path.dirname(target), { recursive: true }).pipe(Effect.orDie)
               const temporary = `${target}.${crypto.randomUUID()}.tmp`
               yield* fs.writeFileString(temporary, formatCassette(cassette)).pipe(
-                Effect.flatMap(() => fs.rename(temporary, target)),
+                Effect.flatMap(() => fs.rename(temporary, target).pipe(Effect.retry(whileHeld))),
                 Effect.ensuring(fs.remove(temporary, { force: true }).pipe(Effect.catch(() => Effect.void))),
                 Effect.orDie,
               )

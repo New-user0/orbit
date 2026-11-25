@@ -1,7 +1,8 @@
 export * as PtyHandoff from "./pty-handoff.js"
 
 import type { PersistentPty } from "@orbit/schema/persistent-pty"
-import { readFile, rename, rm, writeFile } from "node:fs/promises"
+import { readFile, rm, writeFile } from "node:fs/promises"
+import { replaceFile } from "./replace-file.js"
 import type { Info } from "./service.js"
 
 type Sidecar = {
@@ -72,7 +73,7 @@ async function publish(file: string, info: Info, handoff: PersistentPty.Handoff 
     } satisfies Sidecar),
     { mode: 0o600, flag: "wx" },
   )
-  await rename(temporary, file + ".pty-handoff").finally(() => rm(temporary, { force: true }))
+  await replaceFile(temporary, file + ".pty-handoff").finally(() => rm(temporary, { force: true }))
 }
 
 export async function environment(file: string, env?: Readonly<Record<string, string>>) {
