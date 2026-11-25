@@ -131,6 +131,19 @@ for (const mode of ["dark", "light"] as const) {
       expect(resize.hovered()).toBe(false)
       expect(line.backgroundColor.a).toBe(0)
       expect(commits).toEqual([40, 16])
+
+      // Two presses that the given clock puts 300 ms apart are two clicks, however close together they arrive: the second
+      // starts a drag instead of resetting the size.
+      await app.mockMouse.pressDown(15, 2)
+      await app.mockMouse.release(15, 2)
+      await app.renderOnce()
+      clock += 300
+      await app.mockMouse.pressDown(15, 2)
+      expect(resize.resizing()).toBe(true)
+      await app.mockMouse.release(15, 2)
+      await app.renderOnce()
+      expect(resize.resizing()).toBe(false)
+      expect(value()).toBe(16)
     } finally {
       app.renderer.destroy()
     }

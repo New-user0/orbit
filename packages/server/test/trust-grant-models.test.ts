@@ -191,3 +191,41 @@ it.live("a revoke by name leaves a Location of another folder that was never tru
     })
   }),
 )
+
+// The same for a Location of another folder that is trusted and stays trusted: the revoke did not end its grant, so it
+// is not read again either.
+it.live("a revoke by name leaves a Location of another folder that stays trusted alone", () =>
+  Effect.gen(function* () {
+    const folders = yield* project
+    const other = { directory: path.join(path.dirname(folders.repo), "other") }
+    yield* Effect.promise(() => fs.mkdir(other.directory, { recursive: true }))
+    const server = yield* startServer(folders.config, { trust: { implicit: false } })
+    const api = Orbit.make({ baseUrl: server.base, headers: server.headers })
+    const location = { directory: folders.repo }
+    const added = (models: ReadonlyArray<{ readonly providerID: string }>) =>
+      models.some((model) => model.providerID === "later")
+    yield* Effect.promise(async () => {
+      await api.location.trust.update({ location, trust: true })
+      await api.location.trust.update({ location: other, trust: true })
+      expect(lists((await api.model.list({ location })).data)).toBe(true)
+      expect(added((await api.model.list({ location: other })).data)).toBe(false)
+      await Bun.write(
+        path.join(folders.config, "orbit.json"),
+        JSON.stringify({
+          providers: {
+            later: {
+              package: "aisdk:@ai-sdk/openai-compatible",
+              settings: { apiKey: "secret", baseURL: "http://127.0.0.1:9/v1" },
+              models: { "later-model": {} },
+            },
+          },
+        }),
+      )
+      expect(await api.location.trust.revoke({ directory: folders.repo })).toEqual([folders.repo])
+      // The Location whose grant ended read the person's config again; the other one, still trusted, did not.
+      expect(added((await api.model.list({ location })).data)).toBe(true)
+      expect(added((await api.model.list({ location: other })).data)).toBe(false)
+      expect(await api.location.trust.get({ location: other })).toMatchObject({ trusted: true })
+    })
+  }),
+)
