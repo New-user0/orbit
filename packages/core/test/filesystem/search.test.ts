@@ -14,6 +14,7 @@ import { Ripgrep } from "@orbit/core/ripgrep"
 import { AbsolutePath, RelativePath } from "@orbit/core/schema"
 import { Workspace } from "@orbit/core/workspace"
 import { location } from "../fixture/location"
+import { runProgram } from "../fixture/run-program"
 import { tmpdir } from "../fixture/tmpdir"
 import { it } from "../lib/effect"
 
@@ -42,7 +43,7 @@ describe("FileSystemSearch", () => {
       yield* Effect.promise(() => mkdir(path.join(directory, "rust/target/debug/deps"), { recursive: true }))
       yield* Effect.promise(() => Bun.write(path.join(directory, ".gitignore"), "**/target/\n"))
       yield* Effect.promise(() => Bun.write(path.join(directory, "rust/target/debug/deps/ignored.rs"), "ignored"))
-      expect(Bun.spawnSync(["git", "init", "-q"], { cwd: directory }).exitCode).toBe(0)
+      expect((yield* Effect.promise(() => runProgram(["git", "init", "-q"], { cwd: directory }))).exitCode).toBe(0)
 
       const ref = Location.Ref.make({ directory: AbsolutePath.make(directory) })
       const layer = FileSystemSearch.fffLayer.pipe(

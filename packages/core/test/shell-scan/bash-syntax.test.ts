@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { ShellParse } from "../../src/shell/parse.js"
 import { ShellScan } from "../../src/shell/scan.js"
+import { runProgram } from "../fixture/run-program"
 
 const fixtures = [
   ["if true; then VALUE=$(scan_probe); fi", ["true", "scan_probe"]],
@@ -77,8 +78,8 @@ describe("ordinary Bash and Zsh syntax", () => {
       test.skipIf(
         !executable ||
           (shell === "zsh" && (source.includes('$"') || source.startsWith("{fd}") || source.includes("$["))),
-      )(`${shell} accepts the source grammar: ${source}`, () => {
-        const result = Bun.spawnSync([
+      )(`${shell} accepts the source grammar: ${source}`, async () => {
+        const result = await runProgram([
           executable ?? shell,
           ...(shell === "bash" ? ["--noprofile", "--norc"] : ["-f"]),
           "-n",
@@ -105,8 +106,8 @@ describe("ordinary Bash and Zsh syntax", () => {
         "printf '%s' `printf \\`scan_probe\\``",
         'array=(one "$(scan_probe)"); :',
         "(( value = $(scan_probe) + 1 )); :",
-      ])(`${shell} runs only the explicitly found probes: %s`, (source) => {
-      const execution = Bun.spawnSync(
+      ])(`${shell} runs only the explicitly found probes: %s`, async (source) => {
+      const execution = await runProgram(
         [
           executable ?? shell,
           ...(shell === "bash" ? ["--noprofile", "--norc"] : ["-f"]),
@@ -229,8 +230,8 @@ describe("Bash shared heredoc delimiter grammar", () => {
       "(cat <<$'E\\x4fF'\n$(scan_probe)\nEOF\nprintf done)",
       '(cat <<-"E\\OF"\n\t$(scan_probe)\n\tE\\OF\nprintf done)',
       "(cat <<EO\\\nF\n$(scan_probe)\nEOF\nprintf done)",
-    ])("real Bash agrees with delimiter quoting: %s", (source) => {
-    const execution = Bun.spawnSync(
+    ])("real Bash agrees with delimiter quoting: %s", async (source) => {
+    const execution = await runProgram(
       [bash!, "--noprofile", "--norc", "-c", `scan_probe() { printf 'executed\\n' >&2; }; ${source}`],
       { env: { PATH: "/usr/bin:/bin", LC_ALL: "C" } },
     )

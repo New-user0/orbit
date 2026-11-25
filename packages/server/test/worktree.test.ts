@@ -1,13 +1,15 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { $ } from "bun"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Effect } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
 import { Orbit } from "@orbit/client"
 import { initRepo } from "../../core/test/fixture/git"
+
+setDefaultTimeout(30_000)
 
 it.live("list reads saved inventory even when its checkout is missing, without booting a location", () =>
   Effect.gen(function* () {

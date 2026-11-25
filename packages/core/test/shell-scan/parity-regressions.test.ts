@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { ShellParse } from "../../src/shell/parse.js"
 import { ShellScan } from "../../src/shell/scan.js"
+import { runProgram } from "../fixture/run-program"
 
 const conditions = ["[[ -n <(scan_probe) ]]", "[[ -n >(scan_probe) ]]"]
 const contexts = [
@@ -89,9 +90,9 @@ describe("legacy-accepted shell syntax regressions", () => {
         "probe \\\n() \\\n{ scan_probe; }; probe",
         "function \\\nprobe() # ignored \\\n{ scan_probe; }; probe",
         ...(shell === "bash" ? conditions : ["() { scan_probe; }"]),
-      ])(`${shell} really executes the extracted command: %s`, (source) => {
+      ])(`${shell} really executes the extracted command: %s`, async (source) => {
       if (!executable) throw new Error(`${shell} is unavailable`)
-      const execution = Bun.spawnSync(
+      const execution = await runProgram(
         [
           executable,
           ...(shell === "bash" ? ["--noprofile", "--norc"] : ["-f"]),

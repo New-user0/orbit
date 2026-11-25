@@ -2,6 +2,7 @@ import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "../test/fixture/tmpdir"
 import { testArgs } from "../../../tools/test/args"
+import { runTests } from "../../../tools/test/watchdog"
 
 await using directory = await tmpdir("oc-")
 const home = directory.path
@@ -37,19 +38,4 @@ const environment = {
   ...(process.platform === "win32" ? { USERPROFILE: home, TMP: temporary, TEMP: temporary } : {}),
 }
 
-const child = Bun.spawn({
-  cmd: [process.execPath, ...testArgs(["--only-failures", ...process.argv.slice(2)])],
-  env: environment,
-  stdin: "inherit",
-  stdout: "inherit",
-  stderr: "inherit",
-})
-const interrupt = () => child.kill("SIGINT")
-const terminate = () => child.kill("SIGTERM")
-process.once("SIGINT", interrupt)
-process.once("SIGTERM", terminate)
-const result = await child.exited
-process.off("SIGINT", interrupt)
-process.off("SIGTERM", terminate)
-
-process.exitCode = result
+process.exitCode = await runTests(testArgs(["--only-failures", ...process.argv.slice(2)]), environment)

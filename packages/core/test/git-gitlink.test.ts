@@ -22,6 +22,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { AppProcess } from "@orbit/util/process"
 import { git } from "./fixture/git"
+import { runProgram } from "./fixture/run-program"
 import { plain } from "./fixture/git-keys"
 import { opened, outer } from "./fixture/git-passed-over"
 import { location } from "./fixture/location"
@@ -56,9 +57,9 @@ const it = testEffect(Layer.empty)
 const SLOW = 120_000
 const abs = AbsolutePath.make
 
-const output = (cwd: string, ...args: string[]) =>
-  Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "ignore" })
-    .stdout.toString()
+const output = async (cwd: string, ...args: string[]) =>
+  (await runProgram(["git", ...args], { cwd })).stdout
+    .toString()
     .trim()
 
 /**
@@ -69,7 +70,7 @@ const output = (cwd: string, ...args: string[]) =>
  */
 const nested = (found: { readonly root: string; readonly sub: string }, none: boolean) =>
   Effect.promise(async () => {
-    const head = output(found.root, "rev-parse", "HEAD")
+    const head = await output(found.root, "rev-parse", "HEAD")
     await Bun.write(path.join(found.root, ".git", "info", "attributes"), "*.txt filter=marker diff=marker\n")
     await git(found.sub, "init", "-b", "main")
     await git(found.sub, "config", "user.email", "test@orbit.test")

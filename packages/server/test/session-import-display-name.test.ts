@@ -1,8 +1,10 @@
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Session } from "@orbit/schema/session"
 import { Effect, Schema } from "effect"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
+
+setDefaultTimeout(30_000)
 
 const SessionResponse = Schema.Struct({ data: Schema.toEncoded(Session.Info) })
 

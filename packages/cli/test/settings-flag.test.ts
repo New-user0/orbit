@@ -5,6 +5,7 @@ import path from "node:path"
 import { Global } from "@orbit/util/global"
 import { Effect } from "effect"
 import { ConfigOverlay } from "../src/config-overlay"
+import { runProgram } from "../../core/test/fixture/run-program"
 import { isolatedEnv } from "./fixture/environment"
 
 // --settings takes a config file or the JSON itself. The value's shape decides which, never the disk (a folder can ship
@@ -16,6 +17,29 @@ const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-se
 const typed = path.join(root, "typed")
 const opened = path.join(root, "opened")
 const overlays = path.join(Global.Path.state, "overlays")
+
+// The 8.3 short name of a folder (Windows), or undefined where the volume makes none.
+const shortName = async (target: string) => {
+  if (process.platform !== "win32") return undefined
+  const short = (
+    await runProgram(
+      [
+        "powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:SHORT_OF).ShortPath",
+      ],
+      { env: { ...process.env, SHORT_OF: target } },
+    )
+  ).stdout
+    .toString()
+    .trim()
+  return short === "" || short.toLowerCase() === target.toLowerCase() ? undefined : short
+}
+
+// Decided at load so a volume without short names reports a skip and not a pass. The project folder does not exist until
+// the e2e rows' beforeAll, so the root (which does) is probed and the rest appended.
+const rootShort = await shortName(root)
 
 beforeAll(async () => {
   await fs.mkdir(typed, { recursive: true })
@@ -473,26 +497,6 @@ describe("what the private server loads", () => {
     }
   })
 
-  // The 8.3 short name of a folder (Windows), or undefined where the volume makes none.
-  const shortName = (target: string) => {
-    if (process.platform !== "win32") return undefined
-    const short = Bun.spawnSync(
-      [
-        "powershell.exe",
-        "-NoProfile",
-        "-Command",
-        "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:SHORT_OF).ShortPath",
-      ],
-      { env: { ...process.env, SHORT_OF: target } },
-    )
-      .stdout.toString()
-      .trim()
-    return short === "" || short.toLowerCase() === target.toLowerCase() ? undefined : short
-  }
-
-  // Decided at load so a volume without short names reports a skip and not a pass.
-  // The project folder does not exist until beforeAll, so the root (which does) is probed and the rest appended.
-  const rootShort = shortName(root)
   const projectShort = rootShort === undefined ? undefined : path.join(rootShort, "e2e", "work", "project")
   test.skipIf(projectShort === undefined)(
     "the folder's own file, named from a folder spelled by its 8.3 short name, is not read as a flag document either",

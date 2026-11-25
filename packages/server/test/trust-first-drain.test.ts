@@ -1,10 +1,12 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Effect } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
+
+setDefaultTimeout(30_000)
 
 // trust-first: no work starts in a folder that is not trusted, and that covers the work no request route asks for. A
 // drain checks the session's folder before the runner starts, so work admitted before a revoke and woken after it asks

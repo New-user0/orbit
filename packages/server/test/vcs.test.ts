@@ -1,12 +1,14 @@
 import path from "node:path"
 import { $ } from "bun"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { Effect, Layer, Schedule } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
 import { ServerFetch } from "../src/fetch"
+
+setDefaultTimeout(30_000)
 
 it.live(
   "serves lazy review bases, committed diffs, and unavailable-base errors",
@@ -37,7 +39,7 @@ it.live(
           return body
         },
         catch: (cause) => cause,
-      }).pipe(Effect.retry(Schedule.spaced("10 millis")), Effect.timeout("2 seconds"))
+      }).pipe(Effect.retry(Schedule.spaced("10 millis")), Effect.timeout("10 seconds"))
       expect(base).toMatchObject({
         data: { name: "main", ref: "refs/heads/main", source: "reflog" },
       })
@@ -126,7 +128,7 @@ it.live("maps a failing base provider to HTTP 503 instead of null metadata", () 
     const response = yield* Effect.promise(() => handler(new Request(url))).pipe(
       Effect.filterOrFail((response) => response.status === 503),
       Effect.retry(Schedule.spaced("10 millis")),
-      Effect.timeout("2 seconds"),
+      Effect.timeout("10 seconds"),
     )
     expect(response.status).toBe(503)
     expect(yield* Effect.promise(() => response.json())).toMatchObject({

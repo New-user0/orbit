@@ -20,6 +20,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
 import { location } from "./fixture/location"
+import { runProgram } from "./fixture/run-program"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
@@ -476,12 +477,12 @@ describe("ManagedSettings.read unreadable input", () => {
         write(directory, { "managed-settings.json": base }).pipe(
           Effect.andThen(
             Effect.acquireRelease(
-              Effect.sync(() =>
-                Bun.spawnSync(["icacls", path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)"]),
+              Effect.promise(() =>
+                runProgram(["icacls", path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)"]),
               ),
               () =>
-                Effect.sync(() =>
-                  Bun.spawnSync(["icacls", path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0"]),
+                Effect.promise(() =>
+                  runProgram(["icacls", path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0"]),
                 ),
             ),
           ),

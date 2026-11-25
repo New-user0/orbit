@@ -25,6 +25,7 @@ import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes
 import { withEnv } from "../fixture/env"
 import { grantFolder } from "../fixture/grant"
 import { location } from "../fixture/location"
+import { runProgram } from "../fixture/run-program"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 
@@ -639,6 +640,37 @@ describe("Config under workspace trust", () => {
   )
 })
 
+// Class 4 spellings of the project's own file that are not its lexical path: the 8.3 short name (Windows) and a link.
+// Each must still count as the file discovery loaded. The short folder is the CLI end-to-end row.
+const shortOf = async (target: string) =>
+  (
+    await runProgram(
+      [
+        "powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "(New-Object -ComObject Scripting.FileSystemObject).GetFile($env:SHORT_OF).ShortPath",
+      ],
+      { env: { ...process.env, SHORT_OF: target } },
+    )
+  ).stdout
+    .toString()
+    .trim()
+// Decided once at load, so a row that cannot run is reported as skipped and not as a pass.
+const probe = nodeFs.mkdtempSync(path.join(os.tmpdir(), "orbit-probe-"))
+const probeFile = path.join(probe, "a-long-file-name-for-probe.json")
+nodeFs.writeFileSync(probeFile, "{}")
+const hasShortNames = process.platform === "win32" && (await shortOf(probeFile)) !== probeFile
+const hasLinks = (() => {
+  try {
+    nodeFs.symlinkSync(probeFile, path.join(probe, "link.json"))
+    return true
+  } catch {
+    return false // unelevated Windows cannot make links
+  }
+})()
+nodeFs.rmSync(probe, { recursive: true, force: true })
+
 describe("Config explicit file", () => {
   it.live("does not load the project's own file of an untrusted folder as the explicit file", () =>
     Effect.gen(function* () {
@@ -661,35 +693,6 @@ describe("Config explicit file", () => {
     }),
   )
 
-  // Class 4 spellings of the project's own file that are not its lexical path: the 8.3 short name (Windows) and a link.
-  // Each must still count as the file discovery loaded. The short folder is the CLI end-to-end row.
-  const shortOf = (target: string) =>
-    Bun.spawnSync(
-      [
-        "powershell.exe",
-        "-NoProfile",
-        "-Command",
-        "(New-Object -ComObject Scripting.FileSystemObject).GetFile($env:SHORT_OF).ShortPath",
-      ],
-      { env: { ...process.env, SHORT_OF: target } },
-    )
-      .stdout.toString()
-      .trim()
-  // Decided once at load, so a row that cannot run is reported as skipped and not as a pass.
-  const probe = nodeFs.mkdtempSync(path.join(os.tmpdir(), "orbit-probe-"))
-  const probeFile = path.join(probe, "a-long-file-name-for-probe.json")
-  nodeFs.writeFileSync(probeFile, "{}")
-  const hasShortNames = process.platform === "win32" && shortOf(probeFile) !== probeFile
-  const hasLinks = (() => {
-    try {
-      nodeFs.symlinkSync(probeFile, path.join(probe, "link.json"))
-      return true
-    } catch {
-      return false // unelevated Windows cannot make links
-    }
-  })()
-  nodeFs.rmSync(probe, { recursive: true, force: true })
-
   const spellings = [
     ["the 8.3 short name of the file", "file", hasShortNames],
     ["a link to the file", "link", hasLinks],
@@ -702,7 +705,7 @@ describe("Config explicit file", () => {
           const project = path.join(folders.repo, "orbit.json")
           const link = path.join(folders.work, "link.json")
           if (kind === "link") yield* Effect.promise(() => fs.symlink(project, link))
-          const file = kind === "file" ? shortOf(project) : link
+          const file = kind === "file" ? yield* Effect.promise(() => shortOf(project)) : link
           yield* Effect.gen(function* () {
             const config = yield* Config.Service
             const entries = yield* config.entries()

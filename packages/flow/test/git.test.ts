@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { Git } from "../src/git"
+import { runProgram } from "../../core/test/fixture/run-program"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flow-git-"))
 
@@ -373,7 +374,7 @@ test.skipIf(process.platform !== "win32")("holder reads a start spelled with an 
   await fs.mkdir(inner, { recursive: true })
   // The system's own cmd.exe by its full path: a bare name would be looked up in the working folder first (class 10).
   const cmd = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe")
-  const listing = Bun.spawnSync([cmd, "/d", "/c", "dir", "/x", root]).stdout.toString()
+  const listing = (await runProgram([cmd, "/d", "/c", "dir", "/x", root])).stdout.toString()
   const short = listing
     .split(/\r?\n/)
     .find((line) => line.trimEnd().endsWith(" short-name-repository"))

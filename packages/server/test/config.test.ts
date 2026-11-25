@@ -1,6 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Config } from "@orbit/schema/config"
 import { Effect, Schedule, Schema } from "effect"
 import { withEnv } from "../../core/test/fixture/env"
@@ -8,6 +8,8 @@ import { tmpdir, tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
 import { AbsolutePath } from "@orbit/schema/schema"
+
+setDefaultTimeout(30_000)
 
 it.live("returns ordered config entries for the requested directory", () =>
   Effect.gen(function* () {

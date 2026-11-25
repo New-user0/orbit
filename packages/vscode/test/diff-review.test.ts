@@ -34,6 +34,7 @@ import {
 } from "../src/review"
 import { answeredLabel } from "../src/webview/approval"
 import { serve, until } from "./fixture/serve"
+import { runProgram } from "../../core/test/fixture/run-program"
 
 setDefaultTimeout(60_000)
 
@@ -133,12 +134,12 @@ beforeAll(async () => {
   await fs.symlink(path.join(project, "sub"), path.join(project, "alias"), linkType)
   await fs.symlink(path.join(root, "removed"), path.join(project, "gone"), linkType)
   await fs.rm(path.join(root, "removed"), { recursive: true })
-  git(project, "init", "--quiet")
-  git(work, "init", "--quiet")
-  git(main, "init", "--quiet")
-  git(main, "add", ".")
-  git(main, "commit", "--quiet", "-m", "init")
-  git(main, "worktree", "add", "--quiet", tree)
+  await git(project, "init", "--quiet")
+  await git(work, "init", "--quiet")
+  await git(main, "init", "--quiet")
+  await git(main, "add", ".")
+  await git(main, "commit", "--quiet", "-m", "init")
+  await git(main, "worktree", "add", "--quiet", tree)
   server = await serve(root)
   for (const folder of [project, main, work])
     await server.client.location.trust.update({ location: { directory: folder }, trust: true, persist: false })
@@ -154,8 +155,8 @@ afterAll(async () => {
   await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
-function git(cwd: string, ...args: string[]) {
-  const result = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t.invalid", ...args], { cwd })
+async function git(cwd: string, ...args: string[]) {
+  const result = await runProgram(["git", "-c", "user.name=t", "-c", "user.email=t@t.invalid", ...args], { cwd })
   if (result.exitCode !== 0) throw new Error(result.stderr.toString())
 }
 
@@ -552,7 +553,7 @@ test("a path the disk cannot resolve for another reason than its absence is refu
 
 test.skipIf(process.platform !== "win32")("a case variant or short name of an inside file is inside", async () => {
   const variant = inside.replace(/project/i, "PROJECT")
-  const result = Bun.spawnSync([process.env.ComSpec ?? "cmd.exe", "/d", "/s", "/c", `"for %I in ("${inside}") do @echo %~sI"`], {
+  const result = await runProgram([process.env.ComSpec ?? "cmd.exe", "/d", "/s", "/c", `"for %I in ("${inside}") do @echo %~sI"`], {
     windowsVerbatimArguments: true,
   })
   const short = result.stdout.toString().trim()
@@ -734,7 +735,7 @@ describe("the session's folders as the server names them", () => {
     const folder = path.join(root, "elsewhere")
     await fs.mkdir(folder, { recursive: true })
     await Bun.write(path.join(folder, "a.txt"), text)
-    git(folder, "init", "--quiet")
+    await git(folder, "init", "--quiet")
     await server.client.location.trust.update({ location: { directory: folder }, trust: true, persist: false })
     const session = await server.client.session.create({ location: { directory: folder } })
     const { controller } = await chat(project)
@@ -785,7 +786,7 @@ test("no server folders means text only", async () => {
   // A trusted session folder other than the chat's, so the trust read of the session's own folder is told apart by name.
   const own = path.join(root, "own-trust")
   await fs.mkdir(own, { recursive: true })
-  git(own, "init", "--quiet")
+  await git(own, "init", "--quiet")
   await server.client.location.trust.update({ location: { directory: own }, trust: true, persist: false })
   const elsewhere = await server.client.session.create({ location: { directory: own } })
   const hang = (init: RequestInit | undefined) =>
@@ -1544,7 +1545,7 @@ test("the changes view reads no file, whatever the names", async () => {
 
   // On a real server: two Writes in one prompt give two entries whose sides are the files before and after.
   await Promise.all([Bun.write(path.join(work, "c1.txt"), "first\n"), Bun.write(path.join(work, "c2.txt"), "second\n")])
-  git(work, "add", ".")
+  await git(work, "add", ".")
   const run = await chat(work, { auto: true })
   await run.controller.send(calls([read("c1.txt"), read("c2.txt")], [write("c1.txt", "FIRST\n"), write("c2.txt", "SECOND\n")]))
   await run.idle()
@@ -1567,9 +1568,9 @@ test("a server that cannot diff a prompt gets a note", async () => {
   const repo = path.join(root, "moves")
   await fs.mkdir(repo, { recursive: true })
   await Bun.write(path.join(repo, "seed.txt"), "seed\n")
-  git(repo, "init", "--quiet")
-  git(repo, "add", ".")
-  git(repo, "commit", "--quiet", "-m", "init")
+  await git(repo, "init", "--quiet")
+  await git(repo, "add", ".")
+  await git(repo, "commit", "--quiet", "-m", "init")
   await server.client.location.trust.update({ location: { directory: repo }, trust: true, persist: false })
   const run = await chat(repo, { auto: true })
   await run.controller.send(calls([{ name: "EnterWorktree", args: { name: "exp" } }], [write("x.txt", "x\n")]))
@@ -1584,7 +1585,7 @@ test("a server that cannot diff a prompt gets a note", async () => {
 
 test("View changes and a restore give up on a service that does not answer, with one note each", async () => {
   await Bun.write(path.join(work, "slow.txt"), "one\n")
-  git(work, "add", ".")
+  await git(work, "add", ".")
   const run = await chat(work, { auto: true })
   await run.controller.send(calls([read("slow.txt")], [write("slow.txt", "two\n")]))
   await run.idle()
@@ -1637,7 +1638,7 @@ test("View changes and a restore give up on a service that does not answer, with
 
 test("a prompt's changes are its own, not those of a prompt steered into the same turn", async () => {
   await Promise.all([Bun.write(path.join(work, "p1.txt"), "first\n"), Bun.write(path.join(work, "p2.txt"), "second\n")])
-  git(work, "add", ".")
+  await git(work, "add", ".")
   const run = await chat(work)
   await run.controller.send(calls([read("p1.txt"), write("p1.txt", "FIRST\n")]))
   const first = await run.question()
@@ -1725,7 +1726,7 @@ test("only a pending question is marked as open for review in the editor, and on
 describe("restore files", () => {
   async function prompted(options: { fetcher?: typeof fetch } = {}) {
     await Promise.all([Bun.write(path.join(work, "r1.txt"), "keep\n"), fs.rm(path.join(work, "r2.txt"), { force: true })])
-    git(work, "add", ".")
+    await git(work, "add", ".")
     // A row may stop allowing questions as they come, to leave one waiting.
     const settings = { ...options, auto: true }
     const run = await chat(work, settings)

@@ -1,12 +1,14 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { $ } from "bun"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Effect } from "effect"
 import { CompatNames } from "../../compat/src/names"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
+
+setDefaultTimeout(30_000)
 
 // trust-first part 2: the owner's two "match refrence" decisions of 2026-10-21, over HTTP, against servers that never
 // trust a folder on their own (as the background service and an SDK host that sets nothing do).

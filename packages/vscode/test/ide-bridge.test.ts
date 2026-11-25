@@ -9,6 +9,7 @@ import WebSocket from "ws"
 import { permissionItem } from "../src/controller"
 import { startBridge, type Bridge, type DiffService, type EditorSelection } from "../src/ide-bridge"
 import { contained, disk, Review, tooLargeNotice, type Disk, type Host, type Tab } from "../src/review"
+import { runProgram } from "../../core/test/fixture/run-program"
 
 const cleanup: Array<() => Promise<unknown> | unknown> = []
 afterEach(async () => {
@@ -428,18 +429,18 @@ const world = await (async () => {
   await fs.symlink(path.join(project, "sub"), path.join(project, "alias"), linkType)
   await fs.symlink(path.join(root, "removed"), path.join(project, "gone"), linkType)
   await fs.rm(path.join(root, "removed"), { recursive: true })
-  const git = (cwd: string, ...args: string[]) => {
+  const git = async (cwd: string, ...args: string[]) => {
     // The worktree's file is checked out as it was written, whatever the machine's line ending setting.
-    const result = Bun.spawnSync(
+    const result = await runProgram(
       ["git", "-c", "user.name=t", "-c", "user.email=t@t.invalid", "-c", "core.autocrlf=false", ...args],
       { cwd },
     )
     if (result.exitCode !== 0) throw new Error(result.stderr.toString())
   }
-  git(main, "init", "--quiet")
-  git(main, "add", ".")
-  git(main, "commit", "--quiet", "-m", "init")
-  git(main, "worktree", "add", "--quiet", tree)
+  await git(main, "init", "--quiet")
+  await git(main, "add", ".")
+  await git(main, "commit", "--quiet", "-m", "init")
+  await git(main, "worktree", "add", "--quiet", tree)
   return {
     root,
     project,
@@ -592,14 +593,14 @@ test("a diff to open that a client sends before its hello opens nothing and answ
 })
 
 describe("opens a diff the terminal UI asks for from the request's place and patch, with an Orbit title", () => {
-  const short = () => {
-    const result = Bun.spawnSync(
+  const short = async () => {
+    const result = await runProgram(
       [process.env.ComSpec ?? "cmd.exe", "/d", "/s", "/c", `"for %I in ("${world.inside}") do @echo %~sI"`],
       { windowsVerbatimArguments: true },
     )
     return result.stdout.toString().trim()
   }
-  const rows: Array<{ name: string; fields: () => Frame; left: string; right: string; read?: () => string; windows?: boolean }> = [
+  const rows: Array<{ name: string; fields: () => Frame | Promise<Frame>; left: string; right: string; read?: () => string; windows?: boolean }> = [
     { name: "inside", fields: () => ({}), left: text, right: proposal, read: () => world.inside },
     {
       name: "added",
@@ -617,7 +618,7 @@ describe("opens a diff the terminal UI asks for from the request's place and pat
     },
     {
       name: "short",
-      fields: () => ({ place: short() || world.inside }),
+      fields: async () => ({ place: (await short()) || world.inside }),
       left: text,
       right: proposal,
       read: () => world.inside,
@@ -635,7 +636,7 @@ describe("opens a diff the terminal UI asks for from the request's place and pat
   for (const row of rows)
     test.skipIf(row.windows === true && process.platform !== "win32")(row.name, async () => {
       const { client, editor, review, seen } = await reviewing()
-      ask(client, row.fields())
+      ask(client, await row.fields())
       await until(() => editor.shown.length === 1, "the tab")
       const tab = editor.shown[0]!
       expect(tab.mode).toBe("review")

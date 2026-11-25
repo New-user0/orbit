@@ -6,6 +6,7 @@ import os from "node:os"
 import path from "node:path"
 import { Git } from "../src/git"
 import { run } from "../src/runner"
+import { runProgram } from "../../core/test/fixture/run-program"
 
 // Classes 1 and 3 (M4 verification round 9): `orb flow run` in a folder `sub` that a person trusted, which is a repository
 // of its own inside a repository `clone` that nobody trusted. The index of `sub` holds a gitlink `inner` that names the
@@ -32,9 +33,8 @@ const root = realpathSync.native(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-
 afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
 const unix = (file: string) => file.replaceAll("\\", "/")
 
-const plain = (cwd: string, ...args: string[]) =>
-  Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" })
-const sh = (cwd: string, ...args: string[]) => expect(plain(cwd, ...args).exitCode).toBe(0)
+const plain = (cwd: string, ...args: string[]) => runProgram(["git", ...args], { cwd })
+const sh = async (cwd: string, ...args: string[]) => expect((await plain(cwd, ...args)).exitCode).toBe(0)
 
 let count = 0
 // `clone`, whose config gives every `.txt` file a clean filter and sets a file system monitor, both the recording program,
@@ -46,29 +46,29 @@ async function nested(none: boolean) {
   const sub = path.join(clone, "sub")
   await fs.mkdir(sub, { recursive: true })
   for (const directory of [clone, sub]) {
-    sh(directory, "init", "-q", "-b", "main")
-    sh(directory, "config", "user.email", "t@t")
-    sh(directory, "config", "user.name", "t")
-    sh(directory, "config", "commit.gpgsign", "false")
+    await sh(directory, "init", "-q", "-b", "main")
+    await sh(directory, "config", "user.email", "t@t")
+    await sh(directory, "config", "user.name", "t")
+    await sh(directory, "config", "commit.gpgsign", "false")
   }
   await Bun.write(path.join(clone, "a.txt"), "one\n")
-  sh(clone, "add", "a.txt")
-  sh(clone, "commit", "-qm", "one")
+  await sh(clone, "add", "a.txt")
+  await sh(clone, "commit", "-qm", "one")
   const marker = path.join(folder, "ran")
   const program = path.join(folder, "program.sh")
   await Bun.write(program, `#!/bin/sh\necho ran >> "${unix(marker)}"\n`)
   await fs.chmod(program, 0o755)
-  sh(clone, "config", "core.fsmonitor", unix(program))
-  sh(clone, "config", "filter.marker.clean", `"${unix(program)}"`)
+  await sh(clone, "config", "core.fsmonitor", unix(program))
+  await sh(clone, "config", "filter.marker.clean", `"${unix(program)}"`)
   await Bun.write(path.join(clone, ".git", "info", "attributes"), "*.txt filter=marker\n")
   await Bun.write(path.join(sub, "x.txt"), "x\n")
-  sh(sub, "add", "x.txt")
-  sh(
+  await sh(sub, "add", "x.txt")
+  await sh(
     sub,
     "update-index",
     "--add",
     "--cacheinfo",
-    `160000,${plain(clone, "rev-parse", "HEAD").stdout.toString().trim()},inner`,
+    `160000,${(await plain(clone, "rev-parse", "HEAD")).stdout.toString().trim()},inner`,
   )
   if (none) {
     // A name with `=` in it, which `-c` would cut short.
@@ -76,15 +76,15 @@ async function nested(none: boolean) {
       path.join(sub, ".gitmodules"),
       '[submodule "in=ner"]\n\tpath = inner\n\turl = ./inner\n\tignore = none\n',
     )
-    sh(sub, "add", ".gitmodules")
+    await sh(sub, "add", ".gitmodules")
   }
-  sh(sub, "commit", "-qm", "sub")
+  await sh(sub, "commit", "-qm", "sub")
   await fs.mkdir(path.join(sub, "inner"))
   await fs.writeFile(path.join(sub, "inner", ".git"), "gitdir: ../../.git\n")
   await Bun.write(path.join(sub, "inner", "a.txt"), "six\n")
   const runs = async () => (existsSync(marker) ? (await Bun.file(marker).text()).split("\n").filter(Boolean).length : 0)
   // The gitlink is live: a plain `git status` in `sub` runs the program of `clone`.
-  plain(sub, "status")
+  await plain(sub, "status")
   expect(await runs()).toBeGreaterThan(0)
   return { folder, clone, sub, inner: path.join(sub, "inner"), runs }
 }
@@ -159,14 +159,14 @@ const rows: readonly Row[] = [
   {
     name: "Git.merge of a branch that conflicts",
     prepare: async (found) => {
-      sh(found.sub, "checkout", "-q", "-b", "agent")
+      await sh(found.sub, "checkout", "-q", "-b", "agent")
       await Bun.write(path.join(found.sub, "x.txt"), "agent\n")
-      sh(found.sub, "add", "x.txt")
-      sh(found.sub, "commit", "-qm", "agent")
-      sh(found.sub, "checkout", "-q", "main")
+      await sh(found.sub, "add", "x.txt")
+      await sh(found.sub, "commit", "-qm", "agent")
+      await sh(found.sub, "checkout", "-q", "main")
       await Bun.write(path.join(found.sub, "x.txt"), "main\n")
-      sh(found.sub, "add", "x.txt")
-      sh(found.sub, "commit", "-qm", "main")
+      await sh(found.sub, "add", "x.txt")
+      await sh(found.sub, "commit", "-qm", "main")
     },
     act: (found) => Git.merge(found.sub, "agent", "merge agent"),
     check: (value) => expect(value).toEqual({ merged: false, files: ["x.txt"], blocked: [] }),

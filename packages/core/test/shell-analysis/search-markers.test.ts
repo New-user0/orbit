@@ -3,6 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { which } from "@orbit/util/which"
+import { runProgram } from "../fixture/run-program"
 import { bash, pwsh, powershell, SHELL_START } from "./helper"
 
 // Each attack plants a marker outside a temporary project and a control run shows that the attack really reads it. The
@@ -26,8 +27,8 @@ function project() {
   return { root, outside, inside }
 }
 
-function run(cwd: string, command: string) {
-  const result = Bun.spawnSync([bashPath!, "-c", command], { cwd, env: { ...process.env, RIPGREP_CONFIG_PATH: "" } })
+async function run(cwd: string, command: string) {
+  const result = await runProgram([bashPath!, "-c", command], { cwd, env: { ...process.env, RIPGREP_CONFIG_PATH: "" } })
   return result.stdout.toString() + result.stderr.toString()
 }
 
@@ -45,7 +46,7 @@ process.on("exit", () => {
 })
 
 describe("xargs splits a name at a blank", () => {
-  withBash.skipIf(windows)("a directory named `a ` plus an absolute path reads the outside marker", () => {
+  withBash.skipIf(windows)("a directory named `a ` plus an absolute path reads the outside marker", async () => {
     const { outside, inside } = project()
     // `./a <outside>/x.txt` splits into `./a` and `<outside>/x.txt`.
     const planted = path.join(inside, `a ${outside}`)
@@ -55,10 +56,10 @@ describe("xargs splits a name at a blank", () => {
     const unsafe = "find . -type f | xargs head"
     const safe = "find . -type f -print0 | xargs -0 head"
     // Control: the attack prints the marker.
-    expect(run(inside, unsafe)).toContain("OUTSIDE_MARKER")
+    expect(await run(inside, unsafe)).toContain("OUTSIDE_MARKER")
     expect(bash(unsafe).readOnly).toBe(false)
     // The safe form prints only the files that exist under the project and is read-only.
-    const output = run(inside, safe)
+    const output = await run(inside, safe)
     expect(output).not.toContain("OUTSIDE_MARKER")
     expect(output).toContain("INSIDE")
     expect(bash(safe).readOnly).toBe(true)
@@ -66,27 +67,27 @@ describe("xargs splits a name at a blank", () => {
 })
 
 describe("recursion that follows a link", () => {
-  withBash("grep -R reads through a link and grep -r does not", () => {
+  withBash("grep -R reads through a link and grep -r does not", async () => {
     const { outside, inside } = project()
     expect(link(outside, path.join(inside, "docs"))).toBe(true)
-    const control = run(inside, "grep -R OUTSIDE_MARKER .")
+    const control = await run(inside, "grep -R OUTSIDE_MARKER .")
     expect(control).toContain("OUTSIDE_MARKER")
-    expect(run(inside, "grep -r OUTSIDE_MARKER .")).not.toContain("OUTSIDE_MARKER")
+    expect(await run(inside, "grep -r OUTSIDE_MARKER .")).not.toContain("OUTSIDE_MARKER")
     expect(bash("grep -R OUTSIDE_MARKER .").readOnly).toBe(false)
     expect(bash("grep -r OUTSIDE_MARKER .").readOnly).toBe(true)
   }, SHELL_START)
-  test.skipIf(!bashPath || !rg)("rg -L reads through a link and rg does not", () => {
+  test.skipIf(!bashPath || !rg)("rg -L reads through a link and rg does not", async () => {
     const { outside, inside } = project()
     expect(link(outside, path.join(inside, "docs"))).toBe(true)
-    expect(run(inside, "rg -L OUTSIDE_MARKER")).toContain("OUTSIDE_MARKER")
-    expect(run(inside, "rg OUTSIDE_MARKER")).not.toContain("OUTSIDE_MARKER")
+    expect(await run(inside, "rg -L OUTSIDE_MARKER")).toContain("OUTSIDE_MARKER")
+    expect(await run(inside, "rg OUTSIDE_MARKER")).not.toContain("OUTSIDE_MARKER")
     expect(bash("rg -L OUTSIDE_MARKER").readOnly).toBe(false)
     expect(bash("rg OUTSIDE_MARKER").readOnly).toBe(true)
   }, SHELL_START)
-  test.skipIf(!windows)("findstr /S reads through a junction, so it is not on the list", () => {
+  test.skipIf(!windows)("findstr /S reads through a junction, so it is not on the list", async () => {
     const { outside, inside } = project()
     expect(link(outside, path.join(inside, "docs"))).toBe(true)
-    const result = Bun.spawnSync(["findstr", "/S", "/M", "OUTSIDE_MARKER", "*"], { cwd: inside })
+    const result = await runProgram(["findstr", "/S", "/M", "OUTSIDE_MARKER", "*"], { cwd: inside })
     expect(result.stdout.toString()).toContain("marker.txt")
     expect(powershell("findstr /S foo *.ts", pwsh()).readOnly).toBe(false)
     expect(powershell("findstr /I foo *.ts", pwsh()).readOnly).toBe(true)
@@ -94,25 +95,25 @@ describe("recursion that follows a link", () => {
 })
 
 describe("the program a search starts", () => {
-  test.skipIf(!bashPath || !rg || windows)("rg --pre runs a program per file, and the verdict refuses it", () => {
+  test.skipIf(!bashPath || !rg || windows)("rg --pre runs a program per file, and the verdict refuses it", async () => {
     const { inside } = project()
     fs.writeFileSync(path.join(inside, "a.txt"), "hello\n")
     fs.writeFileSync(path.join(inside, "pre.sh"), "#!/bin/sh\necho PRE_RAN > ran.txt\ncat \"$1\"\n", { mode: 0o755 })
-    expect(run(inside, "rg --pre ./pre.sh hello a.txt")).toContain("hello")
+    expect(await run(inside, "rg --pre ./pre.sh hello a.txt")).toContain("hello")
     expect(fs.existsSync(path.join(inside, "ran.txt"))).toBe(true)
     expect(bash("rg --pre ./pre.sh hello a.txt").readOnly).toBe(false)
   }, SHELL_START)
-  withBash("find -exec writes a file, and the verdict refuses it", () => {
+  withBash("find -exec writes a file, and the verdict refuses it", async () => {
     const { inside } = project()
     fs.writeFileSync(path.join(inside, "a.txt"), "x\n")
-    run(inside, "find . -name a.txt -exec touch made.txt ';'")
+    await run(inside, "find . -name a.txt -exec touch made.txt ';'")
     expect(fs.existsSync(path.join(inside, "made.txt"))).toBe(true)
     expect(bash("find . -name a.txt -exec touch made.txt ';'").readOnly).toBe(false)
   }, SHELL_START)
-  withBash("sed w writes a file, and the verdict refuses it", () => {
+  withBash("sed w writes a file, and the verdict refuses it", async () => {
     const { inside } = project()
     fs.writeFileSync(path.join(inside, "a.txt"), "x\n")
-    run(inside, "sed -n 'w copy.txt' a.txt")
+    await run(inside, "sed -n 'w copy.txt' a.txt")
     expect(fs.existsSync(path.join(inside, "copy.txt"))).toBe(true)
     expect(bash("sed -n 'w copy.txt' a.txt").readOnly).toBe(false)
     expect(bash("sed -n 1p a.txt").readOnly).toBe(true)
@@ -120,21 +121,21 @@ describe("the program a search starts", () => {
 })
 
 describe("a path operand that a joined folder does not change (class 4)", () => {
-  test.skipIf(!windows)("findstr /D: with an absolute outside file prints the marker, and the reads hold that file", () => {
+  test.skipIf(!windows)("findstr /D: with an absolute outside file prints the marker, and the reads hold that file", async () => {
     const { outside, inside } = project()
     fs.mkdirSync(path.join(inside, "sub"))
     const file = path.join(outside, "marker.txt")
-    const result = Bun.spawnSync(["findstr", "/D:sub", "OUTSIDE_MARKER", file], { cwd: inside })
+    const result = await runProgram(["findstr", "/D:sub", "OUTSIDE_MARKER", file], { cwd: inside })
     expect(result.stdout.toString()).toContain("OUTSIDE_MARKER")
     // The analysis reads PowerShell's recorded answer for the same shape, since the temporary path is not recorded.
     expect(powershell("findstr /D:sub foo C:\\x\\f", pwsh()).readPaths).toContain("C:\\x\\f")
   })
   const fd = which("fd") ?? which("fdfind")
-  test.skipIf(!bashPath || !fd)("fd with a repeated --base-directory uses the last one, so the verdict refuses", () => {
+  test.skipIf(!bashPath || !fd)("fd with a repeated --base-directory uses the last one, so the verdict refuses", async () => {
     const { inside } = project()
     fs.mkdirSync(path.join(inside, "src"))
     const text = `${path.basename(fd!, path.extname(fd!))} --base-directory src --base-directory .. -t f .`
-    expect(run(inside, text)).toContain("outside")
+    expect(await run(inside, text)).toContain("outside")
     expect(bash(text).readOnly).toBe(false)
   }, SHELL_START)
 })

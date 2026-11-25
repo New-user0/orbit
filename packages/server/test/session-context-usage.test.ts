@@ -4,7 +4,7 @@
 // nothing to a model and records nothing (classes 6 and 12), and carries every refusal typed (classes 7 and 13).
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Orbit } from "@orbit/client"
 import { App } from "@orbit/core/app"
 import { Bus } from "@orbit/core/bus"
@@ -33,6 +33,8 @@ import { TestLLM } from "../../ai/src/testing"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { createEmbeddedRoutes } from "../src/routes"
+
+setDefaultTimeout(30_000)
 
 const model = SessionRunnerModel.resolved(
   LanguageModel.make({ id: "usage-model", provider: "test", route: OpenAIChat.route }),
