@@ -177,10 +177,22 @@ export const layer = Layer.effectDiscard(
     let generation = 0
     let observed = 0
 
-    // The `refresh` callers waiting for an activation, each for the first one that starts after it asked (`target`).
+    // The callers waiting until the activation for change `target` has applied what is available locally, and the
+    // newest change applied that far.
     let waiting: { readonly target: number; readonly done: Deferred.Deferred<void> }[] = []
+    let applied = -1
+    const until = (target: number) =>
+      Effect.suspend(() => {
+        if (applied >= target) return Effect.void
+        return Effect.gen(function* () {
+          const done = yield* Deferred.make<void>()
+          waiting.push({ target, done })
+          yield* Deferred.await(done)
+        })
+      })
     const answer = (target: number) =>
       Effect.suspend(() => {
+        applied = Math.max(applied, target)
         const due = waiting.filter((item) => item.target <= target)
         waiting = waiting.filter((item) => item.target > target)
         return Effect.forEach(due, (item) => Deferred.succeed(item.done, undefined), { discard: true })
@@ -289,15 +301,14 @@ export const layer = Layer.effectDiscard(
         Stream.runForEach(() => notify),
         Effect.forkScoped({ startImmediately: true }),
       )
-    yield* registry.supervise(
-      Effect.gen(function* () {
-        const done = yield* Deferred.make<void>()
-        // Every activation the consumer takes up from here on reads the sources after this request was made.
-        waiting.push({ target: observed + 1, done })
-        yield* notify
-        yield* Deferred.await(done)
+    yield* registry.supervise({
+      // Every activation the consumer takes up from here on reads the sources after this request was made.
+      refresh: Effect.suspend(() => {
+        const target = observed + 1
+        return notify.pipe(Effect.andThen(until(target)))
       }),
-    )
+      applied: Effect.suspend(() => until(observed)),
+    })
     yield* watch(sources.changes())
     yield* watch(modules.changes())
     yield* watch(Stream.fromEffectRepeat(Effect.sleep("24 hours")))

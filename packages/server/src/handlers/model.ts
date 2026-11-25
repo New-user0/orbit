@@ -12,9 +12,10 @@ export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers)
         "model.list",
         Effect.fn(function* () {
           // The providers are the plugins' to fill in, as the agents are, so a Location that was just built lists its
-          // models once its plugins are active rather than none. ACP's first session waited for them by polling with a
-          // five-second cap, which a loaded machine passed (FU-M4-341).
-          yield* Plugin.awaitActivation
+          // models once the plugins available locally are active rather than none. ACP's first session waited for them
+          // by polling with a five-second cap, which a loaded machine passed (FU-M4-341). A package that still has to be
+          // installed does not hold the list.
+          yield* Plugin.awaitApplied
           const models = yield* Model.Service
           return yield* response(models.available())
         }),
@@ -22,7 +23,7 @@ export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers)
       .handle(
         "model.default",
         Effect.fn(function* () {
-          yield* Plugin.awaitActivation
+          yield* Plugin.awaitApplied
           const models = yield* Model.Service
           return yield* response(models.default())
         }),

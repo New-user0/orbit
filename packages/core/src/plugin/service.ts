@@ -22,8 +22,14 @@ export interface Interface {
    * later, as they do at startup. Without a supervisor it waits as `awaitActivation` does.
    */
   readonly refresh: () => Effect.Effect<void>
-  /** Set by the supervisor: what `refresh` runs to request an activation and wait for its local plugins. */
-  readonly supervise: (request: Effect.Effect<void>) => Effect.Effect<void>
+  /**
+   * Wait until the changes announced so far have been applied as far as what is available locally: unlike
+   * `awaitActivation`, it does not wait for a package that still has to be installed. Without a supervisor it waits as
+   * `awaitActivation` does.
+   */
+  readonly awaitApplied: Effect.Effect<void>
+  /** Set by the supervisor: what `refresh` and `awaitApplied` run. */
+  readonly supervise: (input: { readonly refresh: Effect.Effect<void>; readonly applied: Effect.Effect<void> }) => Effect.Effect<void>
 }
 
 export type Failure = Plugin.Info & { readonly state: Extract<Plugin.State, { readonly status: "failed" }> }
@@ -42,3 +48,6 @@ export class Service extends Context.Service<Service, Interface>()("@orbit/Plugi
  * early request observes an empty registry and admits or fails work the plugins would have shaped.
  */
 export const awaitActivation = Service.use((plugins) => plugins.awaitActivation)
+
+/** `awaitActivation` for what is available locally; see `Interface.awaitApplied`. */
+export const awaitApplied = Service.use((plugins) => plugins.awaitApplied)

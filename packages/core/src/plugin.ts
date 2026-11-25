@@ -13,7 +13,7 @@ import { PluginLegacyNames } from "./plugin/legacy-names.js"
 import { type Failure, type Generation, Service } from "./plugin/service.js"
 import { State } from "./state.js"
 
-export { awaitActivation, type Generation, type Interface, Service } from "./plugin/service.js"
+export { awaitActivation, awaitApplied, type Generation, type Interface, Service } from "./plugin/service.js"
 
 const layer = Layer.effect(
   Service,
@@ -248,17 +248,18 @@ const layer = Layer.effect(
       )
     yield* Effect.addFinalizer(close)
 
-    let request: Effect.Effect<void> = ready.await
+    let supervised = { refresh: ready.await, applied: ready.await }
     return Service.of({
       activate,
       close,
       awaitActivation: ready.await,
       hold,
       list,
-      refresh: () => Effect.suspend(() => request),
+      awaitApplied: Effect.suspend(() => supervised.applied),
+      refresh: () => Effect.suspend(() => supervised.refresh),
       supervise: (next) =>
         Effect.sync(() => {
-          request = next
+          supervised = next
         }),
     })
   }),

@@ -12,13 +12,19 @@ import { startServer } from "./fixture/server"
 // folder can also name a plugin package that has to be installed first, and an install takes as long as the registry
 // does. The clients wait for a grant with a limit (VS Code's is 10 s), so a grant that waited for the install would be
 // reported as failed although it was stored. Here the registry accepts the connection and never answers.
-const silent = net.createServer(() => {})
+// Its connections are cut when the file ends, so the install fails then and lets go of what it holds (the package
+// cache's lock) before the next file runs.
+const connections = new Set<net.Socket>()
+const silent = net.createServer((socket) => {
+  connections.add(socket)
+})
 await new Promise<void>((resolve) => silent.listen(0, "127.0.0.1", resolve))
 const registry = process.env.npm_config_registry
 process.env.npm_config_registry = `http://127.0.0.1:${(silent.address() as net.AddressInfo).port}/`
 afterAll(() => {
   if (registry === undefined) delete process.env.npm_config_registry
   if (registry !== undefined) process.env.npm_config_registry = registry
+  connections.forEach((socket) => socket.destroy())
   silent.close()
 })
 
