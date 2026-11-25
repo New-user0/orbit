@@ -103,7 +103,6 @@
     "test/context/storage.test.ts": 170,
     "test/copy-session-id.test.tsx": 3930,
     "test/editor-bridge-app.test.tsx": 4498,
-    "test/editor-context-envelope.test.ts": 1165,
     "test/editor-program.test.ts": 2357,
     "test/editor.test.ts": 506,
     "test/exit-status.test.ts": 2758,
