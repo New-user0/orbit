@@ -3,8 +3,8 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "../fixture/environment"
-import { startSlot } from "../fixture/start-gate"
 import { removeTree } from "../../../core/test/fixture/remove-tree"
+import { startSlot } from "../fixture/start-gate"
 
 type JsonRpcRequest = {
   readonly jsonrpc: "2.0"
@@ -134,7 +134,7 @@ export async function createAcpFixture(
       )
       const serverResults = await Promise.allSettled([llm.stop(true)])
       const directoryResults = await Promise.allSettled([
-        removeTree(root),
+        removeTree(root, { parents: [...processes].map((process) => process.pid) }),
       ])
       const failure = [...processResults, ...serverResults, ...directoryResults].find(
         (result): result is PromiseRejectedResult => result.status === "rejected",

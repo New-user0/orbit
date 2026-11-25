@@ -5,6 +5,7 @@ import { ShellAnalysis } from "../../src/shell/analysis"
 import { ShellReadOnly } from "../../src/shell/readonly"
 import { PowerShellParse } from "../../src/shell/powershell-parse"
 import { currentDirectoryOnPath, plant } from "../fixture/decoy"
+import { runProgram } from "../fixture/run-program"
 import { tmpdir } from "../fixture/tmpdir"
 import { bash, linux, powershell, pwsh, pwshLinux, SHELL_START, windows } from "./helper"
 import { toolNotReadOnly as psNotReadOnly, toolPlatform, toolReadOnly as psReadOnly } from "./powershell-cases"
@@ -415,9 +416,9 @@ describe("the working folder cannot supply the program (class 10)", () => {
       .map((up) => path.resolve(path.dirname(git), up, "usr", "bin", "bash.exe"))
       .find((candidate) => Bun.file(candidate).size > 0)
   })()
-  ;(gitBash ? test : test.skip)("Git Bash drops the empty entries of a Windows Path", () => {
+  ;(gitBash ? test : test.skip)("Git Bash drops the empty entries of a Windows Path", async () => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"))
-    const result = Bun.spawnSync([gitBash!, "-c", 'printf %s "$PATH"'], {
+    const result = await runProgram([gitBash!, "-c", 'printf %s "$PATH"'], {
       env: { ...env, Path: "C:\\Windows\\System32;;C:\\Windows;" },
     })
     const entries = result.stdout.toString().split(":")

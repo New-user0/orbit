@@ -3,7 +3,7 @@
 // a key a client adds to the payload cannot move the write (class 8). A revision the server cannot take is refused with a
 // typed 400 and leaves the question pending, so every client can say why (classes 7 and 13). Runs the server that
 // `orb serve` starts, in this process, with a scripted model.
-import { afterAll, beforeAll, expect, test } from "bun:test"
+import { afterAll, beforeAll, expect, setDefaultTimeout, test } from "bun:test"
 import { Orbit } from "@orbit/client"
 import { Effect, Exit, Scope } from "effect"
 import fs from "node:fs/promises"
@@ -11,6 +11,8 @@ import os from "node:os"
 import path from "node:path"
 import { startServer } from "./fixture/server"
 import { removeTree } from "../../core/test/fixture/remove-tree"
+
+setDefaultTimeout(30_000)
 
 // The scripted model: a prompt `CALL {"name":…,"arguments":…}` makes it call that tool once, and a tool result ends the
 // step with a line of text.

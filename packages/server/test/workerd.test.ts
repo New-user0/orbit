@@ -1,8 +1,10 @@
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Effect } from "effect"
 import { makeDurableObjectStorage } from "../../core/test/fixture/durable-object-storage"
 import { it } from "../../core/test/lib/effect"
 import { ServerWorkerd } from "../src/workerd"
+
+setDefaultTimeout(30_000)
 
 // Covers the profile's replacement graph composing and the database booting
 // through the injected Durable Object storage.

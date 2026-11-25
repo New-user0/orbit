@@ -1,5 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
+import { runProgram } from "./run-program"
 
 // What another process still holding a file in the folder answers on Windows: EBUSY for a handle opened without delete
 // sharing (SQLite opens its database that way), EPERM for a file whose deletion is still pending, and ENOTEMPTY for a
@@ -51,7 +52,7 @@ async function running(parents: number[]) {
     "powershell.exe",
   )
   const filter = parents.map((pid) => `ParentProcessId=${pid}`).join(" OR ")
-  const child = Bun.spawn(
+  const result = await runProgram(
     [
       powershell,
       "-NoProfile",
@@ -59,9 +60,7 @@ async function running(parents: number[]) {
       "-Command",
       `Get-CimInstance Win32_Process -Filter '${filter}' | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }`,
     ],
-    { stdout: "pipe", stderr: "ignore", stdin: "ignore", timeout: 30_000 },
+    { deadline: 30_000 },
   )
-  const output = await new Response(child.stdout).text()
-  await child.exited
-  return output.trim() || "(none)"
+  return result.stdout.toString().trim() || "(none)"
 }

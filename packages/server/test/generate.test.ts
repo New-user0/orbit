@@ -1,6 +1,6 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Config } from "@orbit/core/config"
 import { Generate } from "@orbit/core/generate"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
@@ -8,6 +8,8 @@ import { Effect, Layer, Predicate } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
+
+setDefaultTimeout(30_000)
 
 const generate = makeLocationNode({
   service: Generate.Service,

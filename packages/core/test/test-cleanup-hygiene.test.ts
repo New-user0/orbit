@@ -18,13 +18,54 @@ test("no test, fixture or script asks fs.rm for retries that Bun ignores", async
   const offenders: string[] = []
   for (const tree of trees) {
     for await (const file of new Bun.Glob(`${tree}.{ts,tsx,cjs,mjs,js}`).scan({ cwd: root, onlyFiles: true })) {
-      if (file.includes("node_modules")) continue
+      // This file holds the scan's own examples.
+      if (file.includes("node_modules") || file.endsWith("test-cleanup-hygiene.test.ts")) continue
       const text = await Bun.file(path.join(root, file)).text()
-      text.split("\n").forEach((line, index) => {
-        // A removal's options, not another option of the same name (an MCP transport's reconnection has one).
-        if (/\brm(Sync)?\(.*\bmaxRetries\s*:/.test(line)) offenders.push(`${file.replaceAll("\\", "/")}:${index + 1}`)
-      })
+      offenders.push(...retried(text).map((line) => `${file.replaceAll("\\", "/")}:${line}`))
     }
   }
   expect(offenders).toEqual([])
 })
+
+// The scan reads a call's whole argument list, so options written over several lines are found too, and an option of
+// the same name outside a removal (an MCP transport's reconnection has one) is not.
+test("the scan finds maxRetries in a removal's options on one line or several, and nowhere else", () => {
+  expect(
+    retried(
+      [
+        `await fs.rm(dir, { recursive: true, maxRetries: 20 })`,
+        `await fs.rm(dir, {`,
+        `  recursive: true,`,
+        `  force: true,`,
+        `  maxRetries: 20,`,
+        `})`,
+        `fs.rmSync(path.join(dir, "x"), { force: true,`,
+        `  maxRetries: 3 })`,
+        `await fs.rm(dir, { recursive: true, force: true })`,
+        `const transport = connect({ reconnection: { maxRetries: 2 } })`,
+        `await removeTree(dir)`,
+      ].join("\n"),
+    ),
+  ).toEqual([1, 2, 7])
+})
+
+// The line of each `rm(` or `rmSync(` call whose argument list names `maxRetries`. The argument list runs to the
+// parenthesis that closes the call; parentheses inside it (a `path.join(...)`) are counted.
+function retried(text: string) {
+  return [...text.matchAll(/\brm(?:Sync)?\(/g)].flatMap((match) => {
+    const start = match.index + match[0].length
+    const end = closing(text, start)
+    if (!/\bmaxRetries\s*:/.test(text.slice(start, end))) return []
+    return [text.slice(0, match.index).split("\n").length]
+  })
+}
+
+function closing(text: string, start: number) {
+  let depth = 1
+  for (let index = start; index < text.length; index++) {
+    if (text[index] === "(") depth++
+    if (text[index] === ")") depth--
+    if (depth === 0) return index
+  }
+  return text.length
+}

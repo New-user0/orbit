@@ -64,6 +64,8 @@ const server = Bun.serve({
     if (pathname !== "/api/info") return new Response(null, { status: 404 })
     requests += 1
     if (mode === "starting") await writeFile(registration + ".status-request", "")
+    // A starting service that answers slowly, as one did on a loaded Windows runner.
+    if (mode === "starting" && delay !== undefined) await Bun.sleep(Number(delay))
     if (mode === "hanging") {
       await appendFile(registration + ".requests", process.pid + "\n")
       return new Promise<Response>(() => {})

@@ -3,6 +3,7 @@ import os from "node:os"
 import { describe, expect, test } from "bun:test"
 import { ShellSandbox } from "@orbit/core/shell/sandbox"
 import { which } from "@orbit/util/which"
+import { runProgram } from "./fixture/run-program"
 
 const base = {
   shell: "/bin/sh",
@@ -180,7 +181,7 @@ describe("ShellSandbox.wrap", () => {
   // Runs the real thing where bubblewrap is installed: writes inside the project work, writes elsewhere fail.
   test.skipIf(process.platform !== "linux" || which("bwrap") === null)("confines writes with bubblewrap", async () => {
     const project = await Bun.$`mktemp -d`.text()
-    const run = (script: string) => {
+    const run = async (script: string) => {
       const result = ShellSandbox.wrap({
         shell: "/bin/sh",
         args: ["-c", script],
@@ -195,9 +196,9 @@ describe("ShellSandbox.wrap", () => {
         tool: which("bwrap")!,
       })
       if (result.type !== "wrapped") throw new Error("expected a wrapped command")
-      return Bun.spawnSync([result.command, ...result.args]).exitCode
+      return (await runProgram([result.command, ...result.args])).exitCode
     }
-    expect(run("echo ok > inside.txt")).toBe(0)
-    expect(run("echo no > /etc/orbit-sandbox-test")).not.toBe(0)
+    expect(await run("echo ok > inside.txt")).toBe(0)
+    expect(await run("echo no > /etc/orbit-sandbox-test")).not.toBe(0)
   })
 })

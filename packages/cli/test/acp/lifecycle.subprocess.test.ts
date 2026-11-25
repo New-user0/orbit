@@ -8,6 +8,7 @@ import type {
 import { describe, expect, test } from "bun:test"
 import { selectConfigOption } from "./select-options"
 import { createAcpFixture, expectOk, initialize, newSession } from "./subprocess"
+import { runProgram } from "../../../core/test/fixture/run-program"
 
 describe("acp lifecycle subprocess", () => {
   test("stdin EOF exits cleanly", async () => {
@@ -123,8 +124,8 @@ describe("acp lifecycle subprocess", () => {
       const acp = fixture.spawn()
       await initialize(acp)
       await newSession(acp, fixture.home)
-      const servers = Bun.spawnSync(["pgrep", "-P", String(acp.pid)])
-        .stdout.toString()
+      const servers = (await runProgram(["pgrep", "-P", String(acp.pid)])).stdout
+        .toString()
         .split("\n")
         .filter(Boolean)
         .map(Number)

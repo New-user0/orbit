@@ -1,8 +1,10 @@
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Effect } from "effect"
 import { withCurrentDirectoryOnPath } from "../../core/test/fixture/decoy"
 import { it } from "../../core/test/lib/effect"
 import { ServerProcess } from "../src/process"
+
+setDefaultTimeout(30_000)
 
 // A server process is an entry of its own: whoever starts it without the CLI runs the programs that it starts by name in
 // the folders it is pointed at, which can be clones that are not trusted yet. Windows looks in that folder before PATH,

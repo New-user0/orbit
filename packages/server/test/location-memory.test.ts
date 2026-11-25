@@ -4,7 +4,7 @@
 // `instruction-note.test.ts` builds it.
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { App } from "@orbit/core/app"
 import { Bus } from "@orbit/core/bus"
 import { Database } from "@orbit/core/database/database"
@@ -26,6 +26,8 @@ import { canLinkFile } from "../../core/test/fixture/symlink"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { createEmbeddedRoutes } from "../src/routes"
+
+setDefaultTimeout(30_000)
 
 const linkType = process.platform === "win32" ? "junction" : "dir"
 

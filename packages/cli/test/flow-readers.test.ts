@@ -16,6 +16,7 @@ import show from "../src/commands/handlers/flow/show"
 import trace from "../src/commands/handlers/flow/trace"
 import watch from "../src/commands/handlers/flow/watch"
 import { ORBIT_VERSION } from "../src/version"
+import { runProgram } from "../../core/test/fixture/run-program"
 import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // The readers of a folder's run store (`orb flow ls`, `show`, `cost`, `trace`, `watch`, `approve`) ask the server whether
@@ -146,7 +147,7 @@ test("resume, replay, eval --resume and clean open no run store above the projec
   const above = path.join(root, "above-writers")
   const inner = path.join(above, "inner")
   await fs.mkdir(inner, { recursive: true })
-  expect(Bun.spawnSync(["git", "init", "--quiet", above]).exitCode).toBe(0)
+  expect((await runProgram(["git", "init", "--quiet", above])).exitCode).toBe(0)
   const id = "run_20260101000011_0a1b2c"
   const { Store } = await import("@orbit/flow")
   const store = Store.at(above)

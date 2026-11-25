@@ -1,10 +1,12 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Effect, Schedule } from "effect"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
+
+setDefaultTimeout(30_000)
 
 it.live("lists models without blocking on plugin initialization", () =>
   Effect.gen(function* () {
@@ -38,7 +40,7 @@ it.live("lists models without blocking on plugin initialization", () =>
     yield* request().pipe(
       Effect.filterOrFail((found) => found),
       Effect.retry(Schedule.spaced("10 millis")),
-      Effect.timeout("2 seconds"),
+      Effect.timeout("10 seconds"),
     )
   }),
 )

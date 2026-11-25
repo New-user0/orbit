@@ -145,12 +145,18 @@ export namespace Flock {
     return performance.timeOrigin + mono()
   }
 
+  // Windows answers EPERM, not ENOENT, for a file whose deletion is pending: another holder has
+  // removed it but a handle (often a contender's own stat) is still open. It is gone for the lock.
+  export function gone(err: unknown) {
+    const errCode = code(err)
+    return errCode === "ENOENT" || errCode === "ENOTDIR" || (errCode === "EPERM" && process.platform === "win32")
+  }
+
   async function stats(file: string) {
     try {
       return await stat(file)
     } catch (err) {
-      const errCode = code(err)
-      if (errCode === "ENOENT" || errCode === "ENOTDIR") return
+      if (gone(err)) return
       throw err
     }
   }

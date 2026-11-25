@@ -1,0 +1,86 @@
+// Refreshes the committed test timings from a CI run: `bun tools/test/timings.ts --run <run id>`.
+//
+// Every test job in .github/workflows/check.yml measures its files with `--update-timings` and uploads what it wrote as
+// `timings-<linux|windows>-<package><part>`. This downloads those artifacts with `gh run download` and writes, for each
+// package, `test/timings.json` from the Linux jobs and `test/timings.windows.json` from the Windows jobs: every shard's
+// files together, sorted by name, without files that no longer exist. It is a developer tool; nothing in Orbit runs it.
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
+import { parseArgs } from "node:util"
+
+const repo = path.resolve(import.meta.dir, "../..")
+
+if (import.meta.main) process.exitCode = await refresh(process.argv.slice(2))
+
+/**
+ * The command: downloads the run's timings artifacts with `gh` into a fresh folder and merges them into the packages
+ * under `root`. Returns the exit code: 2 for a usage error or no `gh`, 1 when the download fails.
+ */
+export async function refresh(
+  argv: string[],
+  root = repo,
+  // Found on PATH, so Windows never starts a gh.exe from the working folder (class 10).
+  gh = [Bun.which("gh")].filter((found) => found !== null),
+) {
+  const run = parseArgs({ args: argv, options: { run: { type: "string" } } }).values.run
+  if (!run || !/^\d+$/.test(run)) {
+    console.error("Usage: bun tools/test/timings.ts --run <CI run id>")
+    return 2
+  }
+  if (gh.length === 0) {
+    console.error("gh is not on PATH")
+    return 2
+  }
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-timings-"))
+  const download = Bun.spawn([...gh, "run", "download", run, "--pattern", "timings-*", "--dir", folder], {
+    cwd: root,
+    stdin: "ignore",
+    stdout: "inherit",
+    stderr: "inherit",
+  })
+  const code = await download.exited
+  if (code === 0) for (const line of await mergeTimings(folder, root)) console.log(line)
+  await fs.rm(folder, { recursive: true, force: true })
+  return code === 0 ? 0 : 1
+}
+
+/**
+ * Writes the timings of the artifacts downloaded into `folder` (one folder per artifact, named as CI names it) into the
+ * packages under `root`, and returns one line per file written.
+ */
+export async function mergeTimings(folder: string, root = repo) {
+  const artifacts = Map.groupBy(
+    (await fs.readdir(folder)).flatMap((name) => {
+      const match = /^timings-(linux|windows)-([a-z-]+?)(?:-\d+of\d+)?$/.exec(name)
+      return match ? [{ name, platform: match[1], pkg: match[2] }] : []
+    }),
+    (artifact) => `${artifact.pkg}/${artifact.platform}`,
+  )
+  return Promise.all(
+    [...artifacts].map(async ([key, list]) => {
+      const [pkg, platform] = key.split("/")
+      const file = platform === "windows" ? "timings.windows.json" : "timings.json"
+      const target = path.join(root, "packages", pkg, "test", file)
+      const read = async (from: string) =>
+        (await Bun.file(from).exists())
+          ? Object.entries(((await Bun.file(from).json()) as { files: Record<string, number> }).files)
+          : []
+      // The committed times first, then what the run measured, so a file that no job measured (a job that was stopped
+      // uploads nothing) keeps its time.
+      const measured = [
+        await read(target),
+        ...(await Promise.all(list.map((artifact) => read(path.join(folder, artifact.name, file))))),
+      ].flat()
+      // An unsharded job keeps what it read for files it did not run, so a file that is gone is dropped here.
+      const kept = await Promise.all(
+        measured.map(async ([name, ms]) =>
+          (await Bun.file(path.join(root, "packages", pkg, name)).exists()) ? [[name, ms] as const] : [],
+        ),
+      )
+      const files = Object.fromEntries(kept.flat().sort(([a], [b]) => a.localeCompare(b)))
+      await Bun.write(target, JSON.stringify({ version: 1, files }, null, 2) + "\n")
+      return `${pkg}: ${Object.keys(files).length} files in test/${file}`
+    }),
+  )
+}

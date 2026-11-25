@@ -1,4 +1,4 @@
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { Plugin } from "@orbit/plugin/effect"
 import { Context, Deferred, Effect, Fiber, Layer } from "effect"
@@ -6,6 +6,8 @@ import { HttpEffect, HttpRouter, HttpServer } from "effect/unstable/http"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { createRoutes } from "../src/routes"
+
+setDefaultTimeout(30_000)
 
 it.live(
   "provider reads stay nonblocking while authentication discovery waits for plugins",

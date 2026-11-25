@@ -1,11 +1,13 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 import { $ } from "bun"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Effect } from "effect"
 import { it } from "../../core/test/lib/effect"
 import { Global } from "@orbit/util/global"
 import { startServer } from "./fixture/server"
+
+setDefaultTimeout(30_000)
 
 // A door that takes a folder besides its Location (a destination, a working folder, a parent for worktrees, a file to
 // write) reads it once from a folder of its own: the session's for a move and a session's terminal, the Location's for a

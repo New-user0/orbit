@@ -5,6 +5,7 @@ import fs from "node:fs/promises"
 import net from "node:net"
 import os from "node:os"
 import path from "node:path"
+import { runProgram } from "../../core/test/fixture/run-program"
 import { isolatedEnv } from "./fixture/environment"
 import { removeTree } from "../../core/test/fixture/remove-tree"
 
@@ -198,7 +199,7 @@ test(
 async function fresh(name: string, project?: object) {
   const directory = path.join(root, "work", name)
   await fs.mkdir(directory, { recursive: true })
-  expect(Bun.spawnSync(["git", "init", "--quiet", directory]).exitCode).toBe(0)
+  expect((await runProgram(["git", "init", "--quiet", directory])).exitCode).toBe(0)
   if (project) await Bun.write(path.join(directory, "orbit.json"), JSON.stringify(project))
   return directory
 }

@@ -17,6 +17,7 @@ import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { FSUtil } from "@orbit/util/fs-util"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location } from "./fixture/location"
+import { runProgram } from "./fixture/run-program"
 import { untrustedProjectNodes } from "./fixture/project-trust"
 import { recordedFileSystem, sharesTouched } from "./fixture/recorded-fs"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -203,9 +204,12 @@ describe("ShellGuard.facts: places", () => {
     Effect.gen(function* () {
       const { project, outside } = yield* layout
       yield* Effect.promise(() => fs.writeFile(path.join(outside, "a long file name.txt"), "x"))
-      const short = (file: string) =>
-        Bun.spawnSync(["cmd.exe", "/d", "/c", `for %I in ("${file}") do @echo %~sI`]).stdout.toString().trim()
-      const shortName = short(path.join(outside, "a long file name.txt"))
+      const file = path.join(outside, "a long file name.txt")
+      const shortName = (yield* Effect.promise(() =>
+        runProgram(["cmd.exe", "/d", "/c", `for %I in ("${file}") do @echo %~sI`]),
+      )).stdout
+        .toString()
+        .trim()
       yield* Effect.gen(function* () {
         expect((yield* facts(`cat ${slash(project.toUpperCase())}/a/x`, { cwd: project })).external).toEqual([])
         expect((yield* facts(`cat //?/${slash(project)}/a/x`, { cwd: project })).external).toEqual([])

@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { run } from "../src/runner"
 import type { Workflow } from "../src/workflow"
+import { runProgram } from "../../core/test/fixture/run-program"
 import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Class 14/15: a node that asks for a worktree, a team in a worktree, or a merge fails in a folder that is not trusted,
@@ -20,10 +21,10 @@ for (const args of [
   ["config", "user.email", "t@t"],
   ["config", "user.name", "t"],
 ])
-  Bun.spawnSync(["git", ...args], { cwd: directory })
+  await runProgram(["git", ...args], { cwd: directory })
 await Bun.write(path.join(directory, "a.txt"), "one\n")
-Bun.spawnSync(["git", "add", "-A"], { cwd: directory })
-Bun.spawnSync(["git", "commit", "-qm", "one", "--no-gpg-sign"], { cwd: directory })
+await runProgram(["git", "add", "-A"], { cwd: directory })
+await runProgram(["git", "commit", "-qm", "one", "--no-gpg-sign"], { cwd: directory })
 
 const rows = [
   ["a worktree agent", (ctx: Parameters<Workflow["run"]>[0]) => ctx.agent("a", { prompt: "go", worktree: true })],

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { ShellScan } from "../../src/shell/scan.js"
+import { runProgram } from "../fixture/run-program"
 
 const executions = [
   ['printf safe; "scan_probe"', "scan_probe"],
@@ -21,8 +22,8 @@ const executions = [
 describe("Bash execution safety", () => {
   for (const shell of ["bash", "zsh"]) {
     const executable = Bun.which(shell)
-    test.skipIf(!executable).each([...executions])(`${shell} command syntax is visible: %s`, (source, head) => {
-      const execution = Bun.spawnSync(
+    test.skipIf(!executable).each([...executions])(`${shell} command syntax is visible: %s`, async (source, head) => {
+      const execution = await runProgram(
         [
           executable!,
           ...(shell === "bash" ? ["--noprofile", "--norc"] : ["-f"]),
@@ -209,8 +210,8 @@ describe("Bash real-shell differential grammar", () => {
         : words
     ).flatMap((source) => contexts.map((context) => context(source)))
 
-    test.skipIf(!executable).each(sources)(`${shell}: %s`, (source) => {
-      const execution = Bun.spawnSync(
+    test.skipIf(!executable).each(sources)(`${shell}: %s`, async (source) => {
+      const execution = await runProgram(
         [
           executable!,
           ...(shell === "bash" ? ["--noprofile", "--norc"] : shell === "zsh" ? ["-f"] : []),
@@ -243,8 +244,8 @@ describe("Bash real-shell redirect-only statements", () => {
         "{ scan_probe; } >/dev/null",
         "{ scan_probe; } >$(scan_target)",
         "VALUE=ok >$(scan_target); scan_probe",
-      ])(`${shell} preserves commands around redirect-only syntax: %s`, (source) => {
-      const execution = Bun.spawnSync(
+      ])(`${shell} preserves commands around redirect-only syntax: %s`, async (source) => {
+      const execution = await runProgram(
         [
           executable!,
           ...(shell === "bash" ? ["--noprofile", "--norc"] : ["-f"]),
