@@ -441,16 +441,33 @@ const icacls = (...args: string[]) =>
     stdout: "pipe",
     stderr: "pipe",
   })
-// The security identifier of the account that runs the tests, from whoami by its full path (class 10).
-const account = () => {
-  const result = Bun.spawnSync(
-    [path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe"), "/user", "/fo", "csv", "/nh"],
-    { stdout: "pipe", stderr: "pipe" },
+// Opens `file` in a PowerShell child, by its full path (class 10), and holds it with no sharing until the scope ends.
+// An administrator whose backup privilege is on reads past any access list (the GitHub Windows runner does, even with
+// a deny for its own account), but no account opens a file another process holds this way.
+const hold = (file: string) =>
+  Effect.acquireRelease(
+    Effect.promise(async () => {
+      const child = Bun.spawn(
+        [
+          path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "$held = [System.IO.File]::Open($env:ORBIT_HELD_FILE, 'Open', 'Read', 'None'); [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); [void][Console]::In.ReadLine(); $held.Dispose()",
+        ],
+        { env: { ...process.env, ORBIT_HELD_FILE: file }, stdin: "pipe", stdout: "pipe", stderr: "pipe" },
+      )
+      const first = await child.stdout.getReader().read()
+      const said = new TextDecoder().decode(first.value)
+      if (!said.includes("held")) throw new Error(`Could not hold ${file}: ${said}${await new Response(child.stderr).text()}`)
+      return child
+    }),
+    (child) =>
+      Effect.promise(async () => {
+        child.stdin.end()
+        await child.exited
+      }),
   )
-  const sid = result.stdout.toString().match(/"(S-1-[\d-]+)"/)?.[1]
-  if (!sid) throw new Error(`whoami gave no security identifier: ${result.stdout}${result.stderr}`)
-  return sid
-}
 const base = { managed: { mcp: { deny: ["x"] } } }
 
 describe("ManagedSettings.read unreadable input", () => {
@@ -486,25 +503,21 @@ describe("ManagedSettings.read unreadable input", () => {
       listed: false,
     },
     {
-      name: "a file that an access list denies",
+      name: "a file this account cannot open",
       skip: process.platform !== "win32",
       setup: (directory: string) =>
         write(directory, { "managed-settings.json": base }).pipe(
+          // Held first: the deny below would keep the helper out too.
+          Effect.andThen(hold(path.join(directory, "managed-settings.json"))),
           Effect.andThen(
-            // Read is denied to Everyone and, by name, to this account, which an administrator's group membership
-            // does not cover.
             Effect.acquireRelease(
-              Effect.sync(() =>
-                icacls(path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)", `*${account()}:(R)`),
-              ),
-              () =>
-                Effect.sync(() =>
-                  icacls(path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0", `*${account()}`),
-                ),
+              Effect.sync(() => icacls(path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)")),
+              () => Effect.sync(() => icacls(path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0")),
             ),
           ),
-          // The row is about a file this account cannot read. If the deny did not apply, or the account reads past it,
-          // the row would test a readable file, so both are checked before the product reads it.
+          // The row is about a file this account cannot open. If the deny did not apply and the hold did not take, the
+          // row would test a readable file, so a plain read must fail first: with EPERM where the access list decides,
+          // and with EBUSY where the account reads past it and meets the hold.
           Effect.andThen((result) =>
             Effect.promise(() =>
               fs.readFile(path.join(directory, "managed-settings.json")).then(
@@ -514,7 +527,7 @@ describe("ManagedSettings.read unreadable input", () => {
             ).pipe(
               Effect.map((outcome) => {
                 expect({ icacls: result.exitCode, stderr: result.stderr.toString() }).toEqual({ icacls: 0, stderr: "" })
-                expect(outcome).toBe("EPERM")
+                expect(outcome).toBeOneOf(["EPERM", "EBUSY"])
               }),
             ),
           ),
