@@ -475,28 +475,37 @@ describe("what the private server loads", () => {
     expect(list.filter((entry) => entry.scope === "flag").map((entry) => entry.info.shell)).toEqual(["flag-shell"])
   })
 
-  test("a file the person named is not held back in a folder nothing trusts, and the project's own file is not read", async () => {
+  // One row per `orb` start, each with its own limit: three cold starts of `orb debug config` once shared one 30 s limit,
+  // which a loaded Windows runner passed (CI run 45701859003, Windows cli 5/6), as the orb -p gate's starts did
+  // (FU-M3-365). Every assertion is kept.
+  const untrusted = { ORBIT_TRUST_PROJECT: undefined }
+  test("a file the person named is not held back in a folder nothing trusts", async () => {
     const team = path.join(project, "team.json")
     await Bun.write(team, '{"shell":"team-shell","username":"team-user"}')
-    const untrusted = { ORBIT_TRUST_PROJECT: undefined }
     const named = await entries(["--settings", team], untrusted)
     const flag = named.filter((entry) => entry.scope === "flag")
     expect(flag).toHaveLength(1)
     expect(flag[0]).not.toHaveProperty("trusted")
     expect(flag[0].info.shell).toBe("team-shell")
+  })
 
-    // The folder's own orbit.json, named again, is not read at all: not at its own scope, which an untrusted folder's
-    // files are not read in (trust-first), and not as a flag document, whose scope would apply none of the folder's trust.
+  // The folder's own orbit.json, named again, is not read at all: not at its own scope, which an untrusted folder's
+  // files are not read in (trust-first), and not as a flag document, whose scope would apply none of the folder's trust.
+  test("the project's own file, named with --settings in a folder nothing trusts, is not read", async () => {
     const own = await entries(["--settings", path.join(project, "orbit.json")], untrusted)
     const documents = own.filter((entry) => entry.path === path.join(project, "orbit.json"))
     expect(documents).toEqual([])
     expect(JSON.stringify(own)).not.toContain("project-shell")
     expect(scopes(own)).not.toContain("flag")
-    if (process.platform === "win32") {
+  })
+
+  test.skipIf(process.platform !== "win32")(
+    "the project's own file, named in another case in a folder nothing trusts, is not read as a flag document (Windows)",
+    async () => {
       const upper = await entries(["--settings", path.join(project, "ORBIT.JSON")], untrusted)
       expect(scopes(upper)).not.toContain("flag")
-    }
-  })
+    },
+  )
 
   const projectShort = rootShort === undefined ? undefined : path.join(rootShort, "e2e", "work", "project")
   test.skipIf(projectShort === undefined)(
