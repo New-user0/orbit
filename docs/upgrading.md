@@ -2336,15 +2336,20 @@ folder. Deleting the folder still works while the server runs.
 ### A slow status line command is no longer cut off after 2 s
 
 The status line used to stop its command 2 s after starting it and keep the old line, so a script that took longer
-(for example a cold start on a busy machine) never showed its output until something else ran it again. A run now has
-no time limit. When the session, the selection or the vim mode changes, the next run starts 300 ms later as before and
-stops the command still running from the earlier change, together with what it started, and only the newest run's
-output is drawn. The interval does not stop a running command. Closing the terminal UI stops it as before. A command
-that never ends keeps the last good line until the next change replaces it.
+(for example a cold start on a busy machine) never showed its output until something else ran it again. A run may now
+last up to ten minutes, the default time limit of a hook command, and is then stopped with what it started; the next
+change or interval runs the command again. When the session, the selection, the vim mode or the command itself
+changes, the next run starts 300 ms later as before and first stops the command still running from the earlier change,
+together with what it started, and only the newest run's output is drawn. This also holds when the change leaves no
+command to run: the folder in view is no longer trusted, managed settings turn hooks off, or `status_line` is removed.
+The interval leaves a running command alone while it is still the configured one, and stops it once the command has
+been edited or removed. Closing the terminal UI stops it as before. Until it ends or is stopped, a slow command keeps
+the last good line.
 
 **Affects:** people with a `status_line` command, in particular one that can take longer than 2 s.
 
-**What to do:** Nothing. A script that relied on being stopped after 2 s should end on its own.
+**What to do:** Nothing. A script that relied on being stopped after 2 s should end on its own; one that runs for more
+than ten minutes is stopped.
 
 ## Permissions
 

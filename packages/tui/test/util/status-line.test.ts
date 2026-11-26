@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createRoot } from "solid-js"
+import { createRoot, createSignal } from "solid-js"
 import { currentDirectoryOnPath, plant } from "../../../core/test/fixture/decoy"
 import { createStatusLine, firstLine } from "../../src/util/status-line"
 import { statusLinePayload } from "../../src/util/status-line-payload"
@@ -146,6 +146,123 @@ test("the interval leaves a running command alone", async () => {
   dispose.current()
 })
 
+// The prompt hands no command once the folder in view is not trusted or hooks are off, and asks for a run: that run
+// has nothing to start, and still stops the one in flight.
+test("a command that goes away while a run hangs stops that run", async () => {
+  const runs: AbortSignal[] = []
+  const [command, setCommand] = createSignal<string | undefined>("line")
+  const dispose = { current: () => {} }
+  const status = createRoot((stop) => {
+    dispose.current = stop
+    return createStatusLine({
+      command,
+      interval: () => 60_000,
+      payload: () => ({}),
+      run: (_command, _stdin, signal) => {
+        runs.push(signal)
+        return new Promise<string>(() => {})
+      },
+    })
+  })
+  await wait(20)
+  setCommand(undefined)
+  status.trigger()
+  await wait(400)
+  const aborted = runs.map((signal) => signal.aborted)
+  dispose.current()
+  expect(aborted).toEqual([true])
+})
+
+// Without a trigger, the interval notices that the command in flight is no longer the configured one.
+test.each([
+  { name: "is edited", next: "new" as string | undefined, runs: ["old", "new"], line: "fresh" },
+  { name: "goes away", next: undefined, runs: ["old"], line: undefined },
+])("the interval stops a hanging run whose command $name", async (row) => {
+  const runs: Array<{ command: string; signal: AbortSignal }> = []
+  const [command, setCommand] = createSignal<string | undefined>("old")
+  const dispose = { current: () => {} }
+  const status = createRoot((stop) => {
+    dispose.current = stop
+    return createStatusLine({
+      command,
+      interval: () => 1_000,
+      payload: () => ({}),
+      run: (value, _stdin, signal) => {
+        runs.push({ command: value, signal })
+        return value === "old" ? new Promise<string>(() => {}) : Promise.resolve("fresh\n")
+      },
+    })
+  })
+  await wait(20)
+  setCommand(row.next)
+  await wait(1_300)
+  const seen = { runs: runs.map((run) => run.command), oldStopped: runs[0].signal.aborted, line: status.line() }
+  dispose.current()
+  expect(seen).toEqual({ runs: [...row.runs], oldStopped: true, line: row.line })
+})
+
+// The limit is cut down from ten minutes to two seconds. Each run's own timer must stop only that run: the first run's
+// timer is due while the third run is going (it ended), and so is the second's (a trigger replaced it).
+test("a run is stopped at its time limit, and an earlier run's limit leaves a later run alone", async () => {
+  const runs: AbortSignal[] = []
+  const dispose = { current: () => {} }
+  const status = createRoot((stop) => {
+    dispose.current = stop
+    return createStatusLine({
+      command: () => "line",
+      interval: () => 60_000,
+      payload: () => ({}),
+      limit: 2_000,
+      run: (_command, _stdin, signal) => {
+        runs.push(signal)
+        return runs.length === 1 ? Promise.resolve("one\n") : new Promise<string>(() => {})
+      },
+    })
+  })
+  await wait(20)
+  status.trigger()
+  await wait(700)
+  status.trigger()
+  // Past the first run's limit (2.0 s) and the second's (2.3 s); the third's is due at 3.0 s.
+  await wait(1_900)
+  const early = runs.map((signal) => signal.aborted)
+  await wait(800)
+  const late = runs.map((signal) => signal.aborted)
+  // A run stopped at its limit leaves the way open: the next trigger starts another run.
+  status.trigger()
+  await wait(400)
+  const count = runs.length
+  dispose.current()
+  expect({ early, late, count, line: status.line() }).toEqual({
+    early: [false, true, false],
+    late: [false, true, true],
+    count: 4,
+    line: "one",
+  })
+}, 10_000)
+
+test("the interval starts a new run once a hanging run was stopped at its limit", async () => {
+  const runs: AbortSignal[] = []
+  const dispose = { current: () => {} }
+  const status = createRoot((stop) => {
+    dispose.current = stop
+    return createStatusLine({
+      command: () => "line",
+      interval: () => 1_000,
+      payload: () => ({}),
+      limit: 500,
+      run: (_command, _stdin, signal) => {
+        runs.push(signal)
+        return runs.length === 1 ? new Promise<string>(() => {}) : Promise.resolve("two\n")
+      },
+    })
+  })
+  await wait(1_300)
+  const seen = { stopped: runs.map((signal) => signal.aborted), line: status.line() }
+  dispose.current()
+  expect(seen).toEqual({ stopped: [true, false], line: "two" })
+})
+
 test("the interval still fires", async () => {
   const test = harness({ interval: 1_000 })
   await wait(1_200)
@@ -253,7 +370,7 @@ test("a real command that takes longer than two seconds still draws its line", a
   expect({ line: status.line(), slow: Date.now() - started > 2_000 }).toEqual({ line: "slow", slow: true })
 }, 15_000)
 
-test("a command that a newer run replaces, or that runs when the line goes away, is stopped with what it started", async () => {
+test("a command that a newer run replaces, that goes away, or that runs when the line goes away, is stopped with what it started", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "status-line-kill-"))
   try {
     const marker = (name: string) => path.join(dir, name + ".txt")
@@ -274,15 +391,24 @@ test("a command that a newer run replaces, or that runs when the line goes away,
       createStatusLine({ command: () => command(8, marker("closed")), interval: () => 60_000, payload: () => ({}) })
       setTimeout(dispose, 1_000)
     })
+    // The command goes away (the folder in view is no longer trusted) and the change asks for a run.
+    const [gone, setGone] = createSignal<string | undefined>(command(8, marker("gone")))
+    const left = createRoot((dispose) => {
+      setTimeout(dispose, 9_000)
+      return createStatusLine({ command: gone, interval: () => 60_000, payload: () => ({}) })
+    })
     await wait(1_000)
     line.trigger()
+    setGone(undefined)
+    left.trigger()
     await wait(8_500)
     expect({
       control: await Bun.file(marker("control")).exists(),
       replaced: await Bun.file(marker("replaced")).exists(),
       closed: await Bun.file(marker("closed")).exists(),
+      gone: await Bun.file(marker("gone")).exists(),
       line: line.line(),
-    }).toEqual({ control: true, replaced: false, closed: false, line: "after" })
+    }).toEqual({ control: true, replaced: false, closed: false, gone: false, line: "after" })
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

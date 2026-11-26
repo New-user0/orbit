@@ -4,14 +4,17 @@ import { ProgramLookup } from "@orbit/util/program-lookup"
 import { ansiSpans, ansiText, type AnsiSpan } from "./ansi-spans"
 
 const DEBOUNCE_MS = 300
+// The default time limit of a hook command, which the status line command stands in for.
+const RUN_LIMIT_MS = 10 * 60 * 1_000
 
 /**
  * Runs the user's status line command every `interval` milliseconds, and again after `trigger()`, and keeps the
  * non-empty lines it prints (up to ten). The command gets the current session as JSON on stdin; a command that fails
- * leaves the last good line in place. Triggers are gathered for 300 ms, so a burst gives one run. That run stops the
- * command still running from an earlier change, with what it started, and only the newest run's output is drawn. A run
- * has no time limit of its own: a slow command keeps the last good line until it ends or the next change replaces it.
- * The interval leaves a running command alone.
+ * leaves the last good line in place. Triggers are gathered for 300 ms, so a burst gives one run. A triggered run first
+ * stops the command still running from an earlier change, with what it started, also when no command is left to run
+ * (the folder is no longer trusted, hooks are off), and only the newest run's output is drawn. The interval leaves a
+ * running command alone while it is still the configured one. Like a hook, a run is stopped after ten minutes; until
+ * then a slow command keeps the last good line.
  */
 export function createStatusLine(input: {
   readonly command: () => string | undefined
@@ -25,25 +28,39 @@ export function createStatusLine(input: {
    * signal aborts when a newer run replaces this one or the status line goes away.
    */
   readonly run?: (command: string, stdin: string, signal: AbortSignal) => Promise<string | undefined>
+  /** How long a run may last before it is stopped: ten minutes unless a test asks for less. */
+  readonly limit?: number
 }) {
   const [output, setOutput] = createSignal<string>()
   const state = {
     disposed: false,
     current: undefined as AbortController | undefined,
+    /** The command the run in flight started. */
+    command: undefined as string | undefined,
     timer: undefined as ReturnType<typeof setTimeout> | undefined,
   }
   const run =
     input.run ?? ((command: string, stdin: string, signal: AbortSignal) => spawn(command, stdin, input.cwd, signal))
+  // Stops the run in flight, if any, with what it started.
+  const stop = () => {
+    state.current?.abort()
+    state.current = undefined
+  }
   const refresh = async (replace: boolean) => {
     if (state.disposed) return
     const command = input.command()
+    if (state.current && !replace && command === state.command) return
+    stop()
     if (!command) return
-    if (state.current && !replace) return
-    state.current?.abort()
     const controller = new AbortController()
     state.current = controller
+    state.command = command
+    // The limit's timer is cleared once this run ends or is stopped, so it never stops a later run.
+    const limit = setTimeout(stop, input.limit ?? RUN_LIMIT_MS)
+    controller.signal.addEventListener("abort", () => clearTimeout(limit), { once: true })
     const result = await run(command, JSON.stringify(input.payload()), controller.signal).catch(() => undefined)
     if (controller.signal.aborted) return
+    clearTimeout(limit)
     state.current = undefined
     if (result !== undefined) setOutput(result)
   }
@@ -59,7 +76,6 @@ export function createStatusLine(input: {
   const timer = setInterval(() => void refresh(false), Math.max(1_000, input.interval() ?? 5_000))
   // A command still running when the terminal UI goes away is stopped with what it started: its group is detached, so
   // nothing else would end it (class 10). The exit hook covers a quit that ends the process before cleanup runs.
-  const stop = () => state.current?.abort()
   process.on("exit", stop)
   onCleanup(() => {
     state.disposed = true

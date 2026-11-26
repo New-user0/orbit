@@ -19,7 +19,8 @@ export type StatusLineBus = (
 
 /**
  * A user-configured status line command, drawn under the prompt footer. It runs again when a step or an execution of
- * this session ends or starts (any session on the home screen) and when `watch()` changes, besides its interval.
+ * this session ends or starts (any session on the home screen) and when `command()` or `watch()` changes, besides its
+ * interval.
  */
 export function StatusLine(props: {
   readonly sessionID?: string
@@ -48,9 +49,11 @@ export function StatusLine(props: {
     }),
   )
   onCleanup(() => offs.forEach((off) => off()))
+  // An edited command, or one that goes away (the folder is no longer trusted, hooks are turned off), asks for a run
+  // too: that run stops the command still running.
   createEffect(
     on(
-      () => props.watch(),
+      () => [props.command(), ...props.watch()],
       () => statusLine.trigger(),
       { defer: true },
     ),

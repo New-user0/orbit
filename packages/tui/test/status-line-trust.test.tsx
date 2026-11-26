@@ -239,3 +239,74 @@ test.each(handed)("no status line runs for a session in an untrusted folder: $na
   expect(await Bun.file(path.join(scripts.path, "cwd.txt")).text()).toBe(cloneDir)
   expect(await Bun.file(marker).exists()).toBe(true)
 }, 60_000)
+
+// Trust taken back while the command runs: the change asks for a run that has no command to start, and that run stops
+// the one still going with what it started, so the late marker is never written. The control leaves trust in place and
+// the same command writes it.
+test.each([
+  { name: "trust is taken back", revoke: true, late: false },
+  { name: "trust stays (control)", revoke: false, late: true },
+])("a status line command still running when $name", async (row) => {
+  await using state = await tmpdir()
+  await using scripts = await tmpdir()
+  await using clone = await tmpdir()
+  const started = path.join(scripts.path, "started.txt").replaceAll("\\", "/")
+  const late = path.join(scripts.path, "late.txt").replaceAll("\\", "/")
+  const script = path.join(scripts.path, "line.ts").replaceAll("\\", "/")
+  await Bun.write(
+    script,
+    [
+      `import { appendFileSync } from "node:fs"`,
+      `appendFileSync(${JSON.stringify(started)}, "x")`,
+      `await Bun.sleep(4_000)`,
+      `appendFileSync(${JSON.stringify(late)}, "x")`,
+      `console.log("LINE-DRAWN")`,
+    ].join("\n"),
+  )
+  const cloneDir = clone.path.replaceAll("\\", "/")
+  const session = {
+    id: `ses_${crypto.randomUUID()}`,
+    projectID: "clone",
+    title: "Clone session",
+    agent: "build",
+    model: { providerID: "demo", id: "first" },
+    location: { directory: cloneDir },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 0, updated: 0 },
+  }
+  let trusted = true
+  await using setup = await createAppFixture({
+    state: state.path,
+    width: 300,
+    config: { animations: false, status_line: { interval: 60_000, command: `${bun} ${script}` } },
+    args: { sessionID: session.id },
+    fetch: async (url) => {
+      const forClone = url.searchParams.get("location[directory]") === cloneDir
+      if (url.pathname === "/api/location/trust" && forClone)
+        return json({
+          directory: cloneDir,
+          trusted,
+          persistent: true,
+          ...(trusted ? { source: "saved" } : {}),
+          withheld: trusted ? [] : [{ path: path.join(cloneDir, "orbit.json"), kinds: ["hooks"] }],
+        })
+      if (url.pathname === "/api/location" && forClone)
+        return json({ directory: cloneDir, project: { id: "clone", directory: cloneDir, canonical: cloneDir } })
+      if (url.pathname === `/api/session/${session.id}`) return json({ data: session })
+      if (url.pathname === `/api/session/${session.id}/message`) return json({ data: [], cursor: {} })
+      if (/^\/api\/session\/[^/]+\/(inbox|permission)$/.test(url.pathname)) return json({ data: [], cursor: {} })
+    },
+  })
+  await setup.ready
+  // The row's time limit bounds both waits.
+  while (!(await Bun.file(started).exists())) await Bun.sleep(50)
+  if (row.revoke) {
+    trusted = false
+    setup.events.emit({ id: "evt_trust", created: 2, type: "trust.updated", data: {} } as never)
+  }
+  if (row.late) while (!(await Bun.file(late).exists())) await Bun.sleep(50)
+  // Well past the 4 s the command sleeps, and the 300 ms that gather a change into a run.
+  else await Bun.sleep(6_000)
+  expect(await Bun.file(late).exists()).toBe(row.late)
+}, 60_000)

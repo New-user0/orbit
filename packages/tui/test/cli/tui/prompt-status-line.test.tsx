@@ -99,6 +99,46 @@ test("a change of what the line watches (the selected model) refreshes it", asyn
   }
 })
 
+// The prompt hands the edited command, or none once the folder is not trusted or hooks are off. No session event
+// follows, and the interval is a minute away: the change itself stops the hanging run, and an edited command is drawn.
+test.each([
+  { name: "is edited", next: "new" as string | undefined, line: "fresh" },
+  { name: "goes away", next: undefined, line: undefined },
+])("a command that $name while the old one hangs stops it at once", async (row) => {
+  const [command, setCommand] = createSignal<string | undefined>("old")
+  const runs: Array<{ command: string; signal: AbortSignal }> = []
+  const app = await testRenderTimed(
+    () => (
+      <StatusLine
+        command={command}
+        interval={() => 60_000}
+        colors={() => false}
+        payload={() => ({})}
+        on={() => () => {}}
+        watch={() => []}
+        fg={RGBA.fromHex("#808080")}
+        run={(value, _stdin, signal) => {
+          runs.push({ command: value, signal })
+          return value === "old" ? new Promise<string>(() => {}) : Promise.resolve("fresh\n")
+        }}
+      />
+    ),
+    { width: 30, height: 2 },
+  )
+  try {
+    await wait(50)
+    setCommand(row.next)
+    await wait(450)
+    const frame = await draw(app)
+    expect({ stopped: runs[0]!.signal.aborted, fresh: frame.includes("fresh") }).toEqual({
+      stopped: true,
+      fresh: row.line !== undefined,
+    })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("unmounting removes the event subscriptions", async () => {
   const test = setup({ sessionID: "ses_1", outputs: ["x\n"] })
   const app = await testRenderTimed(test.element, { width: 30, height: 2 })
