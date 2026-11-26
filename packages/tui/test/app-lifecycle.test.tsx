@@ -1887,9 +1887,10 @@ test.each([
     (frame) => promptReady(frame) && frame.includes("Open plugins") && frame.includes("1 plugin failed"),
   )
   await setup.mockMouse.click(column, row)
-  await setup.waitForFrame((frame) => frame.includes("ctrl+a") && frame.includes("broken"))
-  expect(setup.captureCharFrame()).toContain("broken")
-  expect(setup.captureCharFrame()).not.toContain("healthy")
+  // The dialog draws its footer at once and reads its plugin list afterwards, and the toast still names "broken", so the
+  // wait is for the dialog's own row. Enter pressed while the list was still loading selected nothing (this PR's CI).
+  const list = await setup.waitForFrame((frame) => frame.includes("ctrl+a") && /x broken\s+failed/.test(frame))
+  expect(list).not.toContain("healthy")
   setup.mockInput.pressEnter()
   await setup.waitForFrame((frame) => frame.includes("Server plugin error") && frame.includes("transform failed"))
   expect(setup.captureCharFrame()).toContain("Plugin disabled")
