@@ -1865,22 +1865,28 @@ test.each([
     },
   })
   await setup.ready
-  await setup.waitForFrame((frame) => promptReady(frame))
   if (!initial) {
+    await setup.waitForFrame((frame) => promptReady(frame))
     expect(setup.captureCharFrame()).not.toContain("Plugin failed")
     inventory = inventory.map((plugin) => (plugin.id === "broken" ? { ...plugin, state: failure } : plugin))
     setup.events.emit({ id: "evt_failure", created: 1, type: "plugin.updated", data: {} })
   }
-  await setup.waitForFrame((frame) => frame.includes("Plugin failed:") && frame.includes("broken"))
-  expect(setup.captureCharFrame()).toContain("/plugins")
-  expect(setup.captureCharFrame()).toContain("1 plugin failed")
-
-  const lines = setup.captureCharFrame().split("\n")
+  // The toast leaves the screen after its own 5 s, and a loaded run can take longer than that to draw the prompt. So the
+  // test looks for the toast alone, and the pointer goes onto it in the same step: a toast under the pointer keeps its
+  // time until the pointer leaves (the app's own rule), and the prompt is waited for after that.
+  const toast = await setup.waitForFrame(
+    (frame) => frame.includes("Plugin failed:") && frame.includes("broken") && frame.includes("/plugins"),
+  )
+  const lines = toast.split("\n")
   const row = lines.findIndex((line) => line.includes("Open plugins"))
   expect(row).toBeGreaterThanOrEqual(0)
-  const line = lines[row]
-  if (!line) throw new Error("Open plugins action is missing")
-  await setup.mockMouse.click(line.indexOf("Open plugins"), row)
+  const column = lines[row]?.indexOf("Open plugins") ?? -1
+  expect(column).toBeGreaterThanOrEqual(0)
+  await setup.mockMouse.moveTo(column, row)
+  await setup.waitForFrame(
+    (frame) => promptReady(frame) && frame.includes("Open plugins") && frame.includes("1 plugin failed"),
+  )
+  await setup.mockMouse.click(column, row)
   await setup.waitForFrame((frame) => frame.includes("ctrl+a") && frame.includes("broken"))
   expect(setup.captureCharFrame()).toContain("broken")
   expect(setup.captureCharFrame()).not.toContain("healthy")
