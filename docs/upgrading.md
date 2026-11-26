@@ -5083,6 +5083,20 @@ and warned that the file had changed. The diff is now the file's own, so it appl
 
 **What to do:** Nothing. A client that wants the shared indentation removed for display trims it itself.
 
+### A slow or failed first read of the Ollama model list is tried again soon
+
+When the first read of the Ollama server's model list fails or takes longer than its 1 second limit, Orbit now asks
+again after 1 second, then after 2, 4 and so on up to the refresh interval, until the server answers. It used to wait
+for the whole interval, and it kept the failed read as a fresh answer for 30 seconds, so every location that started in
+that time, and every node of a workflow that named an Ollama model, found no Ollama models ("Provider ollama has no
+models here"). A read that fails is no longer kept, so the next location asks the server itself. Once the server has
+answered, the list is read again only at the interval, as before, and a failure then keeps the models already listed.
+
+**Affects:** people who run Ollama on the same machine, for example one that is still starting or busy when Orbit
+starts.
+
+**What to do:** Nothing.
+
 ## System prompt
 
 ### The base system prompt is rewritten, with a fixed list of sections
