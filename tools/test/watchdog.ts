@@ -159,8 +159,9 @@ export function linuxState(pid: number) {
 }
 
 // Stops `bun test` and every worker under it. On Windows taskkill is started by its full path, never by its name, which
-// Windows would look up in the package's folder first (class 10). Elsewhere the whole process group is killed, and the
-// run waits (a few seconds at most) until the killed workers have been reaped, so none is left when it ends.
+// Windows would look up in the package's folder first (class 10). Elsewhere the run's process group and every process under
+// it (workers have their own groups) are killed, and the run waits (a few seconds at most) until they have been
+// reaped, so none is left when it ends.
 async function stop(child: Bun.Subprocess) {
   if (process.platform === "win32") {
     const taskkill = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe")
@@ -168,7 +169,50 @@ async function stop(child: Bun.Subprocess) {
       .exited
     return
   }
+  // Bun puts each test worker in its own process group (a worker's pgrp is its own pid), so the signal to the run's
+  // group does not reach it; the worker ends when it notices that its parent has gone, a moment after the group is gone.
+  // The processes under the run are listed first, while their parents are still there, then each one is killed.
+  const tree = descendants(child.pid)
   process.kill(-child.pid, "SIGKILL")
+  for (const pid of tree) {
+    try {
+      process.kill(pid, "SIGKILL")
+    } catch {
+      // Gone already.
+    }
+  }
   const until = Date.now() + 5_000
-  while (Date.now() < until && alive(-child.pid)) await Bun.sleep(50)
+  while (Date.now() < until && (alive(-child.pid) || tree.some(alive))) await Bun.sleep(50)
+}
+
+// The processes below `root`, found by the parent each one names. Linux reads /proc; elsewhere `ps` lists them.
+function descendants(root: number) {
+  const parents = new Map<number, number>()
+  if (fs.existsSync("/proc/self/stat")) {
+    for (const name of fs.readdirSync("/proc")) {
+      if (!/^\d+$/.test(name)) continue
+      try {
+        const stat = fs.readFileSync(`/proc/${name}/stat`, "utf8")
+        // The parent is the second field after the command name, which is in parentheses and may hold spaces.
+        parents.set(Number(name), Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]))
+      } catch {
+        // The process ended while the folder was read.
+      }
+    }
+  } else {
+    for (const line of Bun.spawnSync(["ps", "-A", "-o", "pid=,ppid="], { stdout: "pipe", stderr: "ignore" }).stdout.toString().split("\n")) {
+      const [pid, parent] = line.trim().split(/\s+/).map(Number)
+      if (pid && parent !== undefined) parents.set(pid, parent)
+    }
+  }
+  const found = new Set<number>()
+  const visit = (parent: number) => {
+    for (const [pid, owner] of parents) {
+      if (owner !== parent || found.has(pid)) continue
+      found.add(pid)
+      visit(pid)
+    }
+  }
+  visit(root)
+  return [...found]
 }
