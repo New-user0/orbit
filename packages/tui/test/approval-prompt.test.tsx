@@ -7,7 +7,7 @@ import path from "node:path"
 import os from "node:os"
 import type { PermissionRequest } from "@orbit/client"
 import type { JsonValue } from "@orbit/client/promise"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import { expect, test } from "bun:test"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
@@ -92,7 +92,7 @@ async function draw(request: Omit<PermissionRequest, "id" | "sessionID">, width:
         },
       })
   }, createEventStream())
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts directory={tmp.path} paths={{ home: tmp.path, state: tmp.path, worktree: tmp.path }}>
         <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>

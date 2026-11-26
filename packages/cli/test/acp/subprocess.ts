@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "../fixture/environment"
-import { removeTree } from "../fixture/remove-tree"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 import { startSlot } from "../fixture/start-gate"
 
 type JsonRpcRequest = {

@@ -6,6 +6,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./environment"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 
 // `orb run` and its siblings against a real private server and a scripted model, in repositories that hold something
@@ -161,7 +162,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 // The settings of a project that guards its files: a hook blocks every write.

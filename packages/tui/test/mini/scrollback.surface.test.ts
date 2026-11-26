@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test"
 import type { SessionMessageAssistantTool } from "@orbit/client/promise"
 import { CliRenderEvents, MarkdownRenderable, RGBA, SyntaxStyle, TextAttributes, TextRenderable } from "@opentui/core"
-import { MockTreeSitterClient, createTestRenderer, type TestRenderer } from "@opentui/core/testing"
+import { MockTreeSitterClient, type TestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import { monoSnapshot } from "../../src/mini/mono"
 import { RunScrollbackStream } from "../../src/mini/scrollback.surface"
 import { entryLook } from "../../src/mini/scrollback.shared"
@@ -74,7 +75,7 @@ async function setup(
     failHighlight?: boolean
   } = {},
 ) {
-  const out = await createTestRenderer({
+  const out = await createTestRendererTimed({
     width: input.width ?? 80,
     screenMode: "split-footer",
     footerHeight: 6,

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { RGBA } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { createTuiAttention } from "../src/attention"
@@ -22,7 +22,7 @@ const config = {
 test("the bell rings between frames while a live tab pulse keeps the renderer running", async () => {
   const { TabPulse } = await import("../src/component/tab-pulse")
   const color = RGBA.fromHex("#ffcc00")
-  const app = await testRender(() => <TabPulse active color={color} backgroundColor={RGBA.fromHex("#101010")} />, {
+  const app = await testRenderTimed(() => <TabPulse active color={color} backgroundColor={RGBA.fromHex("#101010")} />, {
     width: 8,
     height: 1,
   })
@@ -61,7 +61,7 @@ test("the bell rings between frames while a live tab pulse keeps the renderer ru
 test("the bell rings when a pending frame starts a live animation", async () => {
   const { TabPulse } = await import("../src/component/tab-pulse")
   const [active, setActive] = createSignal(false)
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => <TabPulse active={active()} color={RGBA.fromHex("#ffcc00")} backgroundColor={RGBA.fromHex("#101010")} />,
     { width: 8, height: 1 },
   )

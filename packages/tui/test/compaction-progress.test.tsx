@@ -1,7 +1,7 @@
 // context-memory-2 part 2 (class 9): a running compaction row draws how long it has run and an estimate of the reply's
 // tokens after 30 seconds, and never the reply itself. The count arrives as `session.compaction.delta`.
 import { expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
@@ -22,9 +22,14 @@ async function drawCompaction(input: {
   readonly wait?: number
   /** Called with the screen settled, before it is torn down. */
   readonly settled?: () => void
+  /**
+   * What the screen settles to: read once it holds for the drawn frame, within the row's limit. A loaded runner handles
+   * the events later than the fixed wait above, and a row that reads before then sees the state of before the event.
+   */
+  readonly until?: (frame: string) => boolean
 }) {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: input.width, height: 30, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width: input.width, height: 30, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const ready = Promise.withResolvers<void>()
   const events = createEventStream()
@@ -104,9 +109,17 @@ async function drawCompaction(input: {
       } as never)
     // The deltas have no mark of their own on screen when they change nothing, so give them time to be handled.
     await Bun.sleep(200 + (input.wait ?? 0))
-    await setup.renderOnce()
+    const deadline = Date.now() + 20_000
+    const settle = async (): Promise<string> => {
+      await setup.renderOnce()
+      const frame = setup.captureCharFrame()
+      if (!input.until || input.until(frame) || Date.now() >= deadline) return frame
+      await Bun.sleep(25)
+      return settle()
+    }
+    const frame = await settle()
     input.settled?.()
-    return setup.captureCharFrame()
+    return frame
   } finally {
     setup.renderer.destroy()
     await task
@@ -138,6 +151,9 @@ test("the row's one-second clock stops when the compaction ends", async () => {
       age: running,
       deltas: [{ characters: 4800 }],
       status: "completed",
+      // The end of the compaction stops the clock once the event is handled, which under load comes after the fixed
+      // wait (Windows CI, an interval still open at 5.4 s). A clock that never stops still fails, at the bound.
+      until: () => started.size === 0,
       settled: () => {
         open = started.size
       },
@@ -150,10 +166,15 @@ test("the row's one-second clock stops when the compaction ends", async () => {
 }, 60_000)
 
 test("a running compaction shows its elapsed time and estimated tokens after 30 seconds, never its reply", async () => {
+  // The figure appears once the delta is handled, which a loaded runner does after the fixed wait (Linux CI drew
+  // "Compaction · 31.0s" with no figure yet), so the rows that expect it read once it is drawn. A row that never draws
+  // it still fails, at the bound.
+  const figure = /Compaction · 3\d(\.\d)?s · ↓ 1\.2K tokens/
+  const drawn = (frame: string) => figure.test(frame)
   // (a) after 30 s with a count: elapsed time and characters / 4 as tokens (4800 -> 1200 -> "1.2K").
-  const after = await drawCompaction({ width: 120, age: running, deltas: [{ characters: 4800 }] })
+  const after = await drawCompaction({ width: 120, age: running, deltas: [{ characters: 4800 }], until: drawn })
   expect(after).toContain("Compaction")
-  expect(after).toMatch(/Compaction · 3\d(\.\d)?s · ↓ 1\.2K tokens/)
+  expect(after).toMatch(figure)
 
   // (b) before 30 s the row shows neither, whatever the count.
   const before = await drawCompaction({ width: 120, age: 1_000, deltas: [{ characters: 4800 }] })
@@ -189,8 +210,14 @@ test("a running compaction shows its elapsed time and estimated tokens after 30 
   // (g) the clock keeps running: a row 1.5 s short of 30 seconds shows its time once it passes them.
   const early = await drawCompaction({ width: 120, age: 28_500, deltas: [{ characters: 4800 }] })
   expect(early).not.toMatch(/Compaction ·/)
-  const ticked = await drawCompaction({ width: 120, age: 28_500, deltas: [{ characters: 4800 }], wait: 2_500 })
-  expect(ticked).toMatch(/Compaction · 3\d(\.\d)?s · ↓ 1\.2K tokens/)
+  const ticked = await drawCompaction({
+    width: 120,
+    age: 28_500,
+    deltas: [{ characters: 4800 }],
+    wait: 2_500,
+    until: drawn,
+  })
+  expect(ticked).toMatch(figure)
 
   // Trusted control: the completed row draws the stored summary.
   const done = await drawCompaction({ width: 120, age: running, deltas: [{ characters: 4800 }], status: "completed" })

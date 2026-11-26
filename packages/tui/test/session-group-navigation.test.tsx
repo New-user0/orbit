@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
@@ -17,7 +17,7 @@ test.each([
   "restores exact part/group anchors at width %s with %s trailing lines",
   async (width, lines) => {
     await using state = await tmpdir()
-    const setup = await createTestRenderer({ width, height: 30, useThread: false, kittyKeyboard: true })
+    const setup = await createTestRendererTimed({ width, height: 30, useThread: false, kittyKeyboard: true })
     setup.renderer.start()
     const session = {
       id: "ses_group_navigation",

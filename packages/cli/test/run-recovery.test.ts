@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // `orb run` against a real private server and a model whose first answer stops short, as a connection that drops does.
 // The runner continues after it and the run ends with an answer, so the step that failed is not the failure of the run.
@@ -67,7 +68,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await model.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("orb run does not report a step that failed when the runner continued after it", async () => {

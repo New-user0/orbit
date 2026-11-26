@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import { CliRenderEvents, RGBA, TextRenderable } from "@opentui/core"
 import path from "node:path"
 import { Writable } from "node:stream"
@@ -107,7 +107,7 @@ async function setup(
 ) {
   const mono = input.mono ?? true
   const output: string[] = []
-  const app = await createTestRenderer({
+  const app = await createTestRendererTimed({
     width: 112,
     height: 24,
     screenMode: "split-footer",

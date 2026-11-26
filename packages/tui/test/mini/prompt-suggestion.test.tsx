@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 // clients-ux-37 part 2: Mini draws a held next-prompt suggestion as dimmed text in its empty prompt, and Tab, Right and
 // Enter take exactly the escaped text it draws (classes 8 and 9).
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { plain } from "@orbit/util/plain"
@@ -108,7 +108,7 @@ async function render(
     )
   }
 
-  const app = await testRender(() => <Harness />, { width, height: 8, kittyKeyboard: true })
+  const app = await testRenderTimed(() => <Harness />, { width, height: 8, kittyKeyboard: true })
   const settle = async () => {
     await app.renderOnce()
     await Bun.sleep(20)

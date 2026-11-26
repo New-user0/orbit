@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { InputRenderable } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { usePromptMove } from "../../../src/component/prompt/move"
 import { ConfigProvider } from "../../../src/config"
 import { ClientProvider } from "../../../src/context/client"
@@ -384,7 +384,7 @@ async function renderMove(input: {
     ) : null
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts cwd={launch}>
         <ConfigProvider config={createTuiResolvedConfig()}>

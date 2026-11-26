@@ -8,7 +8,13 @@ export function createPaneResize(options: {
   fromMouse: (event: MouseEvent) => number
   contains: (event: MouseEvent, size: number) => boolean
   onCommit: (size: number) => void
+  /**
+   * The time, in milliseconds, that tells a double click from two clicks; the wall clock unless given. A test gives its
+   * own, so a loaded machine that delivers the second press late does not turn the reset into a new drag.
+   */
+  now?: () => number
 }) {
+  const now = options.now ?? Date.now
   const [preferredSize, setPreferredSize] = createSignal(options.value())
   const [hovered, setHovered] = createSignal(false)
   const [resizing, setResizing] = createSignal(false)
@@ -32,7 +38,7 @@ export function createPaneResize(options: {
     if (!resizing()) return
     const next = moved ? options.fromMouse(event) : size()
     setResizing(false)
-    lastBoundaryClick = moved ? 0 : Date.now()
+    lastBoundaryClick = moved ? 0 : now()
     commit(next)
     setHovered(options.contains(event, options.clamp(next)))
     event.stopPropagation()
@@ -48,8 +54,7 @@ export function createPaneResize(options: {
     onMouseOut: () => setHovered(false),
     onMouseDown: (event: MouseEvent) => {
       if (event.button !== MouseButton.LEFT) return
-      const now = Date.now()
-      if (now - lastBoundaryClick < 300) {
+      if (now() - lastBoundaryClick < 300) {
         lastBoundaryClick = 0
         setResizing(false)
         setHovered(false)

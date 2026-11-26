@@ -1,4 +1,4 @@
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import type { TuiInput } from "../../src/app"
@@ -29,7 +29,7 @@ export async function createAppFixture(
 ) {
   const { run } = await import("../../src/app")
   const state = input.state ? undefined : await tmpdir()
-  const setup = await createTestRenderer({
+  const setup = await createTestRendererTimed({
     width: input.width ?? 100,
     height: input.height ?? 30,
     useThread: false,
@@ -39,7 +39,10 @@ export async function createAppFixture(
   const ready = Promise.withResolvers<void>()
   const events = createEventStream()
   const calls = createFetch(input.fetch, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  // No idle timeout: a test holds some answers back on purpose (a slow trust read, a late location), and Bun.serve's 10 s
+  // default ended such a request in a loaded run, so the app saw a failed request the test never sent (status-line-app,
+  // Linux tui run at bcfcfd7).
+  const server = Bun.serve({ port: 0, idleTimeout: 0, fetch: (request) => calls.fetch(request) })
   // The terminal UI sets the process's exit status when a person declines to trust its folder; the test process's own
   // status is put back when the app is disposed.
   const exitCode = process.exitCode

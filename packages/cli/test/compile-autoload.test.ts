@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { autoload } from "../script/autoload"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // The compiled binary starts in whatever folder it is run in, which can be a repository that is not trusted yet. A
 // `tsconfig.json` whose `paths` map every import to a file of the repository would make an import inside the binary run
@@ -17,7 +18,7 @@ const entry = `for (const name of process.argv.slice(2)) await import(name).catc
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-autoload-"))
 let compiled = 0
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 // The binary is started in the repository, so that is where every file leaves its marker.
 const marker = (name: string) => `await Bun.write(\`\${process.cwd()}/${name}.marker\`, "ran")\nexport default {}\n`

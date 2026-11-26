@@ -1,7 +1,7 @@
 import path from "path"
 import fs from "fs/promises"
 import { writeFileSync } from "node:fs"
-import { describe, expect } from "bun:test"
+import { describe, expect, setDefaultTimeout } from "bun:test"
 import { CompatNames } from "@orbit/compat/names"
 import { Document, Event, Info } from "@orbit/schema/config"
 import { Agent } from "@orbit/core/agent"
@@ -45,6 +45,12 @@ const decode = Schema.decodeUnknownSync(Info)
 const document = path.join(import.meta.dir, "orbit.json")
 
 const probeSkill = (description: string) => `---\nname: probe\ndescription: ${description}\n---\nTest skill`
+
+// Most rows here wait for the operating system to report a file change through the native watcher. On a machine with
+// more busy processes than cores that report took longer than bun's 5 s default in about 30 of 100 runs, and the same
+// runs passed with a 60 s limit (the rows end in about a second when the machine is not loaded), so the wait is latency
+// and not a lost event; the limit bounds a wait that has no count of its own.
+setDefaultTimeout(30_000)
 
 describe("config plugin reloads", () => {
   for (const input of [
@@ -234,7 +240,7 @@ describe("config plugin reloads", () => {
             const publish = yield* Deferred.await(parent)
             yield* Effect.promise(() => fs.mkdir(root))
             publish({ path: root, type: "create" })
-            yield* Deferred.await(starting).pipe(Effect.timeout("2 seconds"))
+            yield* Deferred.await(starting)
             // No file event: the recursive native watch has not been acquired yet.
             yield* Effect.promise(() =>
               fs.writeFile(path.join(root, "orbit.json"), JSON.stringify({ references: { docs: "./docs" } })),
@@ -398,7 +404,11 @@ describe("config plugin reloads", () => {
             (yield* integrations.get(Integration.ID.make("second"))) !== undefined &&
             (yield* references.list()).some((reference) => reference.name === "second") &&
             (yield* providers.get(Provider.ID.make("first"))) === undefined &&
-            (yield* providers.get(Provider.ID.make("second"))) !== undefined
+            (yield* providers.get(Provider.ID.make("second"))) !== undefined &&
+            // Skills are read from disk, so they finish after the domains above; waiting for them is what makes the two
+            // checks below read the state after the reload, not a state it has not reached yet.
+            (yield* skills.list()).every((skill) => skill.id !== "first") &&
+            (yield* skills.list()).some((skill) => skill.id === "second")
           )
         }),
       )
@@ -468,10 +478,8 @@ function title(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
+// A file watch has no promise of how soon it reports, so the wait has no count of its own, which reported a loaded
+// machine as a wrong result: the test's time limit bounds it and reports a timeout as a timeout.
 const waitUntil = Effect.fnUntraced(function* (condition: Effect.Effect<boolean>) {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (yield* condition) return
-    yield* Effect.sleep("10 millis")
-  }
-  return yield* Effect.die("Timed out waiting for config plugin reloads")
+  while (!(yield* condition)) yield* Effect.sleep("10 millis")
 })

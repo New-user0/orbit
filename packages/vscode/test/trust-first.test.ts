@@ -6,6 +6,7 @@ import path from "node:path"
 import { Controller, type TrustAnswer, type Update } from "../src/controller"
 import type { TrustView } from "../src/protocol"
 import { serve, until } from "./fixture/serve"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // trust-first: the chat asks before the first message in any folder that is not trusted, whatever the folder holds, and
 // without an answer of "trust" it starts nothing there: no session, no model request. Against a real `orb serve` that
@@ -65,7 +66,7 @@ afterEach(() => {
 afterAll(async () => {
   await main?.stop()
   await llm.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 setDefaultTimeout(60_000)

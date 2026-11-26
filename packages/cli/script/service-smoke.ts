@@ -7,6 +7,7 @@ import { Effect, Schema } from "effect"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const nodeBuild = process.argv.includes("--node")
 const target = `cli${nodeBuild ? "-node" : ""}-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`
@@ -96,7 +97,7 @@ try {
 
 const output = await Promise.all(errors)
 // Windows can retain directory handles briefly after the service processes exit.
-await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch((cause: unknown) => {
+await removeTree(root).catch((cause: unknown) => {
   console.error("Failed to remove service smoke-test directory", cause)
   failure ??= cause
 })

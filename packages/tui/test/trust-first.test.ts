@@ -276,31 +276,44 @@ test("typing ahead into Home before the question opens, and Enter as it opens, s
   expect(created).toEqual([])
 }, 15_000)
 
-test("a slow trust read keeps Home's prompt closed, and a trusted folder's prompt opens and takes typing", async () => {
-  await using state = await tmpdir()
-  const release = Promise.withResolvers<void>()
-  await using setup = await createAppFixture({
-    state: state.path,
-    fetch: async (url) => {
-      if (url.pathname !== "/api/location/trust") return undefined
-      // The start folder's reads let Home be drawn; those of the folder in view are slow. They are told apart by folder,
-      // because two reads made in the same moment can reach the server in either order.
-      if (url.searchParams.get("location[directory]") === directory) await release.promise
-      return json(trusted(root))
-    },
-  })
+// The start folder's read and the folder in view's are made in the same moment and can reach the server in either order.
+// Until 48bdd784 this row held every read after the first, so when the folder in view's read came first it was answered
+// at once and the prompt opened before the person was meant to type (Windows tui, PR #150 run 39837691389 at 5d7a0a6e,
+// the one failure behind its known-failures row). Each order is now forced: in the second, the start folder's reads wait
+// until the folder in view's read has reached the server.
+test.each(["the start folder's", "the folder in view's"])(
+  "a slow trust read keeps Home's prompt closed, and a trusted folder's prompt opens and takes typing, when %s read arrives first",
+  async (first) => {
+    await using state = await tmpdir()
+    const release = Promise.withResolvers<void>()
+    const viewed = Promise.withResolvers<void>()
+    await using setup = await createAppFixture({
+      state: state.path,
+      fetch: async (url) => {
+        if (url.pathname !== "/api/location/trust") return undefined
+        // The start folder's reads let Home be drawn; those of the folder in view are slow. They are told apart by folder.
+        if (url.searchParams.get("location[directory]") === directory) {
+          viewed.resolve()
+          await release.promise
+        }
+        if (first === "the folder in view's") await viewed.promise
+        return json(trusted(root))
+      },
+    })
 
-  const waiting = await frameWhere(setup, (frame) => frame.includes("Welcome back."))
-  expect(waiting).not.toContain("Ask anything")
-  await setup.mockInput.typeText("early")
-  release.resolve()
+    const waiting = await frameWhere(setup, (frame) => frame.includes("Welcome back."))
+    expect(waiting).not.toContain("Ask anything")
+    await setup.mockInput.typeText("early")
+    release.resolve()
 
-  const open = await frameWhere(setup, (frame) => frame.includes("Ask anything"))
-  expect(open).not.toContain("early")
-  expect(open).not.toContain(title)
-  await setup.mockInput.typeText("hello there")
-  await frameWhere(setup, (frame) => frame.includes("hello there"))
-}, 15_000)
+    const open = await frameWhere(setup, (frame) => frame.includes("Ask anything"))
+    expect(open).not.toContain("early")
+    expect(open).not.toContain(title)
+    await setup.mockInput.typeText("hello there")
+    await frameWhere(setup, (frame) => frame.includes("hello there"))
+  },
+  15_000,
+)
 
 // Class 7: a read that fails, does not decode or does not come back in time stands for a folder that is not trusted, so
 // the question opens and the prompt stays closed behind it.

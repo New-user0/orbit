@@ -4,7 +4,7 @@ import os from "os"
 import path from "path"
 import { testArgs } from "../../../tools/test/args"
 import { mergeTimings, refresh } from "../../../tools/test/timings"
-import { linuxState, pollInterval, runTests } from "../../../tools/test/watchdog"
+import { descendants, linuxState, pollInterval, runTests, stop } from "../../../tools/test/watchdog"
 import { plant } from "./fixture/decoy"
 import { runProgram } from "./fixture/run-program"
 import { tmpdir } from "./fixture/tmpdir"
@@ -91,6 +91,74 @@ describe("runTests", () => {
       // Gone, not only killed: on Linux the run waits until the killed worker has been reaped.
       expect(() => process.kill(started.pid, 0)).toThrow()
       expect(await heartbeats()).toBe(before)
+    },
+    60_000,
+  )
+
+  test(
+    "stops a process under the run that is in its own process group, as Bun's test workers are",
+    async () => {
+      await using dir = await tmpdir()
+      const pidFile = path.join(dir.path, "grandchild")
+      const code = await runTests(
+        [
+          "-e",
+          [
+            `const { spawn } = require("node:child_process")`,
+            `const fs = require("node:fs")`,
+            // `detached` starts its own session and group, so the signal to the run's group cannot reach it.
+            `const other = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"], { detached: true, stdio: "ignore" })`,
+            `fs.writeFileSync(${JSON.stringify(pidFile)}, String(other.pid))`,
+            `const log = require("node:path").join(process.env.ORBIT_TEST_HEARTBEAT, String(process.pid))`,
+            `fs.appendFileSync(log, (Date.now() - 60_000) + " start " + ${JSON.stringify(path.join(dir.path, "test", "a.test.ts"))} + "\\n")`,
+            `setTimeout(() => {}, 30_000)`,
+          ].join("\n"),
+        ],
+        quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "1000" }),
+        dir.path,
+        captured().output,
+      )
+      expect(code).toBe(1)
+      const other = Number(await Bun.file(pidFile).text())
+      expect(() => process.kill(other, 0)).toThrow()
+    },
+    60_000,
+  )
+
+  test(
+    "stops a process that one in its own process group started in a group of its own, below the run's children",
+    async () => {
+      await using dir = await tmpdir()
+      const middleFile = path.join(dir.path, "middle")
+      const deepFile = path.join(dir.path, "deep")
+      // The deep process is not a child of the run, and neither process is in the run's group.
+      const middle = [
+        `const deep = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"], { detached: true, stdio: "ignore" })`,
+        `require("node:fs").writeFileSync(${JSON.stringify(deepFile)}, String(deep.pid))`,
+        `setTimeout(() => {}, 30_000)`,
+      ].join("\n")
+      const code = await runTests(
+        [
+          "-e",
+          [
+            `const { spawn } = require("node:child_process")`,
+            `const fs = require("node:fs")`,
+            `const middle = spawn(process.execPath, ["-e", ${JSON.stringify(middle)}], { detached: true, stdio: "ignore" })`,
+            `fs.writeFileSync(${JSON.stringify(middleFile)}, String(middle.pid))`,
+            // The file is reported stuck only once the deep process is there, so the stop finds both.
+            `while (!fs.existsSync(${JSON.stringify(deepFile)})) Bun.sleepSync(20)`,
+            `const log = require("node:path").join(process.env.ORBIT_TEST_HEARTBEAT, String(process.pid))`,
+            `fs.appendFileSync(log, (Date.now() - 60_000) + " start " + ${JSON.stringify(path.join(dir.path, "test", "a.test.ts"))} + "\\n")`,
+            `setTimeout(() => {}, 30_000)`,
+          ].join("\n"),
+        ],
+        quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "1000" }),
+        dir.path,
+        captured().output,
+      )
+      expect(code).toBe(1)
+      const pids = await Promise.all([middleFile, deepFile].map(async (file) => Number(await Bun.file(file).text())))
+      pids.forEach((pid) => expect(() => process.kill(pid, 0)).toThrow())
     },
     60_000,
   )
@@ -419,6 +487,75 @@ describe("pollInterval", () => {
     expect(pollInterval(20_000)).toBe(5_000)
     expect(pollInterval(600_000)).toBe(5_000)
   })
+})
+
+// The runTests rows above stop real runs, whose killed processes are always reaped before the stop's next look, so they
+// cannot show that the stop waits for each process it listed, or that it gives up at its bound. These rows drive the
+// stop's probe, and list the processes from each source a platform can use (Linux has both /proc and ps; macOS only ps).
+describe.skipIf(process.platform === "win32")("stop and descendants", () => {
+  // A run whose process starts one in a session and group of its own, as Bun's test workers are, and names it.
+  const run = async (dir: string) => {
+    const pidFile = path.join(dir, "other")
+    const child = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "-e",
+        [
+          `const other = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"], { detached: true, stdio: "ignore" })`,
+          `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(other.pid))`,
+          `setTimeout(() => {}, 30_000)`,
+        ].join("\n"),
+      ],
+      detached: true,
+      stdio: ["ignore", "ignore", "ignore"],
+    })
+    const other = await until(10_000, async () => Number(await Bun.file(pidFile).text().catch(() => "")) || undefined)
+    return { child, other }
+  }
+
+  test("lists the process in a group of its own below the run, the same from every source", async () => {
+    await using dir = await tmpdir()
+    const started = await run(dir.path)
+    const sources = process.platform === "linux" ? (["proc", "ps"] as const) : (["ps"] as const)
+    const listed = sources.map((source) => descendants(started.child.pid, source).sort((a, b) => a - b))
+    await stop(started.child)
+    listed.forEach((pids) => expect(pids).toContain(started.other))
+    listed.forEach((pids) => expect(pids).toEqual(listed[0]))
+    // The ps source asks ps, which runs below this process while it lists and is gone afterwards; /proc read in this
+    // process finds only processes that are still there.
+    expect(descendants(process.pid, "ps").some((pid) => !running(pid))).toBe(true)
+  }, 20_000)
+
+  // Without a named source Linux reads /proc: a listing that starts no ps names no process that is gone once it returns.
+  test.skipIf(process.platform !== "linux")("reads /proc on Linux unless a source is named", () => {
+    // Control: the ps source names the ps it started, gone by the time it is asked about.
+    expect(descendants(process.pid, "ps").some((pid) => !running(pid))).toBe(true)
+    expect(descendants(process.pid).every(running)).toBe(true)
+  })
+
+  test("does not return while a process it listed is still there", async () => {
+    await using dir = await tmpdir()
+    const started = await run(dir.path)
+    // The listed process reads as still there for the first three looks, as a killed one does until it is reaped.
+    const looks = { other: 0 }
+    const probe = (pid: number) => {
+      if (pid !== started.other) return running(pid)
+      looks.other++
+      return looks.other <= 3 || running(pid)
+    }
+    await stop(started.child, probe)
+    expect(looks.other).toBeGreaterThan(3)
+    expect(running(started.other)).toBe(false)
+  }, 20_000)
+
+  test("returns at its bound when a process it listed never goes", async () => {
+    await using dir = await tmpdir()
+    const started = await run(dir.path)
+    const begun = Date.now()
+    await stop(started.child, (pid) => pid === started.other || running(pid), 400)
+    expect(Date.now() - begun).toBeGreaterThanOrEqual(400)
+    expect(Date.now() - begun).toBeLessThan(5_000)
+  }, 20_000)
 })
 
 // On Linux and macOS `bun test` runs in its own process group, so a terminal's Ctrl-C and CI's SIGTERM reach only the

@@ -17,6 +17,7 @@ import trace from "../src/commands/handlers/flow/trace"
 import watch from "../src/commands/handlers/flow/watch"
 import { ORBIT_VERSION } from "../src/version"
 import { runProgram } from "../../core/test/fixture/run-program"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // The readers of a folder's run store (`orb flow ls`, `show`, `cost`, `trace`, `watch`, `approve`) ask the server whether
 // the folder is trusted before they open the store (trust-first, class 12; FU-M4-202). `trust-first.test.ts` runs each
@@ -50,7 +51,7 @@ afterAll(async () => {
   if (before === undefined) delete process.env.PWD
   else process.env.PWD = before
   await server.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 const connection = { server: Option.some(server.url.origin), standalone: false, trust: false }

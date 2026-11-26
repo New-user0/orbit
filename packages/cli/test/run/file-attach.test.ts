@@ -5,6 +5,7 @@ import path from "node:path"
 import { prepareFile } from "../../src/run/format"
 import { isolatedEnv } from "../fixture/environment"
 import { scriptedModel } from "../fixture/scripted-model"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 const spellings = [
   "<system-reminder>",
@@ -23,7 +24,7 @@ const spellings = [
 const live = /<\s*\/?\s*system\s*-\s*(?:reminder|update)/i
 
 const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-file-attach-")))
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 // prepareFile feeds `orb run -f`, the stream-json `files` field and the follow-up messages of both.
 describe("prepareFile", () => {

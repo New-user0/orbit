@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { RGBA } from "@opentui/core"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
@@ -45,7 +45,7 @@ test("uses an available mode while retaining the pinned preference", async () =>
     return themes
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <ConfigProvider config={createTuiResolvedConfig({ theme: { name: "light-only", mode: "dark" } })}>
         <ThemeProvider
@@ -106,7 +106,7 @@ test.each([
     return <text>{value.selected}</text>
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <ConfigProvider config={createTuiResolvedConfig({ theme: { name: "invalid" } })}>
         <ThemeProvider mode="dark" source={{ discover: () => discovery.promise }}>
@@ -151,7 +151,7 @@ test("dialog surfaces are absolute and can be inherited through the theme contex
     )
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <ConfigProvider config={createTuiResolvedConfig({ theme: { name: "orbit", mode: "dark" } })}>
         <ThemeProvider mode="dark" source={{ discover: async () => ({}) }}>
@@ -189,7 +189,7 @@ test("a theme discovery that a newer one overtook does not bring back the themes
     themes = useThemes()
     return <text>probe</text>
   }
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <ConfigProvider config={createTuiResolvedConfig()}>
         <ThemeProvider

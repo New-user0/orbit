@@ -26,6 +26,7 @@ import { traced } from "./fixture/git-trace"
 import { tempGlobalLayer } from "./fixture/global"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it, testEffect } from "./lib/effect"
+import { removeTree } from "./fixture/remove-tree"
 
 // Class 1 (register FU-M1-022): `Project.resolve` ran `git rev-parse`, `git remote get-url`, `git rev-list` and
 // `git worktree list` in any folder that holds `.git`, when a client opened it and before anyone was asked, and git applies
@@ -550,7 +551,7 @@ describe("Project.resolve keeps a folder's project across the grant when git or 
         expect(result.session).toBe(result.after.id)
         expect(result.trusted).toBe(true)
       } finally {
-        await fs.rm(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+        await removeTree(base)
       }
     },
     SLOW,

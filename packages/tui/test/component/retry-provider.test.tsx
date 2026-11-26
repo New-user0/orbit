@@ -1,13 +1,14 @@
 import { expect, test } from "bun:test"
 import { BoxRenderable, RGBA, TextAttributes, TextRenderable } from "@opentui/core"
-import { createTestRenderer, ManualClock } from "@opentui/core/testing"
-import { testRender } from "@opentui/solid"
+import { ManualClock } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
+import { testRenderTimed } from "../fixture/render"
 import { createSignal, Show } from "solid-js"
 import { RetryProvider, RetryProviderRenderable } from "../../src/component/retry-provider"
 
 async function fixture() {
   const clock = new ManualClock()
-  const app = await createTestRenderer({ width: 60, height: 2, useThread: false, clock })
+  const app = await createTestRendererTimed({ width: 60, height: 2, useThread: false, clock })
   app.renderer.pause()
   const text = new TextRenderable(app.renderer, { fg: "#eeeeee", bg: "#111111", attributes: TextAttributes.BOLD })
   const provider = new RetryProviderRenderable(app.renderer, {
@@ -211,7 +212,7 @@ test("Solid unmount releases a running transition and its frame listener", async
   const clock = new ManualClock()
   const [visible, setVisible] = createSignal(true)
   const [provider, setProvider] = createSignal("exa")
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <Show when={visible()}>
         <text fg="#eeeeee">
@@ -240,7 +241,7 @@ test("the Solid inline span inherits colors and wraps like ordinary text after a
   const clock = new ManualClock()
   const [provider, setProvider] = createSignal("firecrawl")
   const [running, setRunning] = createSignal(true)
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={24}>
         <text fg="#222222" bg="#eeeeee">

@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { parseInterval } from "../src/commands/handlers/loop"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // A scripted Ollama that answers every prompt with how many user messages it has seen, so repeated loop runs in one
 // session show up as a growing count.
@@ -61,7 +62,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("intervals take seconds, minutes or hours, and at least ten seconds", () => {

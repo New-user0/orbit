@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { TrustStatus } from "@orbit/client"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { onMount } from "solid-js"
 import { ConfigProvider } from "../../../src/config"
@@ -181,6 +181,31 @@ test("a grant the server refuses is reported and leaves the question open", asyn
     expect(fixture.toast().currentToast).toMatchObject({ variant: "error", message: expect.stringContaining("503") })
     expect(fixture.app.captureCharFrame()).toContain(title)
     expect(fixture.updates).toEqual([{ directory: away.directory, trust: true, persist: true }])
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
+// While its own grant waits, a read that says trusted leaves the dialog to the grant's answer; once a refused grant has
+// answered, trusting the folder somewhere else settles the question again.
+test("after a grant the server refuses, trusting the folder somewhere else closes the question", async () => {
+  const fixture = await elsewhere({ refuse: true })
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
+    fixture.app.mockInput.pressArrow("up")
+    fixture.app.mockInput.pressEnter()
+    await until(() => fixture.toast().currentToast !== null)
+    expect(fixture.app.captureCharFrame()).toContain(title)
+
+    fixture.trustElsewhere(away.directory)
+    fixture.events.emit({
+      id: "evt_trust",
+      created: 1,
+      type: "trust.updated",
+      data: { directory: away.directory, trusted: true },
+    })
+    await fixture.app.waitForFrame((frame) => !frame.includes(title))
   } finally {
     fixture.app.renderer.destroy()
   }
@@ -400,7 +425,7 @@ async function renderTrust(
     return null
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ExitProvider exit={(reason) => void exits.push(reason)}>

@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { beforeAll, describe, expect } from "bun:test"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -18,6 +18,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location } from "./fixture/location"
 import { runProgram } from "./fixture/run-program"
+import { pwshStarted } from "./fixture/pwsh-started"
 import { untrustedProjectNodes } from "./fixture/project-trust"
 import { recordedFileSystem, sharesTouched } from "./fixture/recorded-fs"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -595,6 +596,9 @@ describe("ShellGuard.authorize", () => {
   // The rows that read PowerShell's own parse need a host; they skip where there is none.
   const host = Bun.which("pwsh") ?? Bun.which("powershell") ?? undefined
   const real = host ? it.live : it.live.skip
+  beforeAll(async () => {
+    if (host) await pwshStarted(host)
+  }, 150_000)
 
   // Runs the gate over a project with the given deny rule in force. A request that `denied` matches fails when it is
   // asserted, as a rule would; every other one is recorded as a question.
@@ -789,8 +793,8 @@ describe("ShellGuard.authorize", () => {
     )
 
   // The portable scanner is quadratic on some inputs (`echo a[ a[ ...`); the analysis' length limit keeps such an input
-  // from ever reaching it. The legacy scan and the fragment split still read it for its folders, and the scan alone can
-  // take seconds on this input, so the time bound is generous.
+  // from ever reaching it. Every parse refuses an input over that limit, so the legacy scan gives up on it too, and the
+  // fragment split still names the folder it changes to.
   it.live("asks about a very long unreadable input whole and quickly, in portable mode", () =>
     Effect.gen(function* () {
       const long = `cd ../outside; echo ${"a[ ".repeat(21_000)}`

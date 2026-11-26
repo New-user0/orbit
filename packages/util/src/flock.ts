@@ -73,6 +73,37 @@ export namespace Flock {
     return value
   }
 
+  // Windows answers EPERM to a mkdir while a folder of that name is still being deleted, as the folder of a lock that
+  // its holder just released is until every handle to it closes. The lock is then as good as held: wait and try again.
+  // A denial that lasts ends at the timeout, with the error that names the key.
+  function releasing(err: unknown) {
+    return process.platform === "win32" && code(err) === "EPERM"
+  }
+
+  // Windows refuses to delete a file that another handle has open without sharing deletion (EBUSY), and a scanner or a
+  // contender reading the lock holds one for a moment; a folder whose deletion is still pending answers EPERM or EACCES.
+  function busy(err: unknown) {
+    const errCode = code(err)
+    return process.platform === "win32" && (errCode === "EBUSY" || errCode === "EPERM" || errCode === "EACCES")
+  }
+
+  /** How long a holder that is releasing its lock waits for other handles to its folder to close. */
+  export const RELEASE_DEADLINE_MS = 5_000
+
+  // The holder's release removes the folder; a handle that lingers on Windows delays it, and the work already ran, so
+  // the release waits for the handle rather than failing the call. A handle that is never let go fails it at the
+  // deadline with the removal's error.
+  async function removeHeld(lockDir: string) {
+    const stop = mono() + RELEASE_DEADLINE_MS
+    const attempt = async (delay: number): Promise<void> =>
+      rm(lockDir, { recursive: true, force: true }).catch(async (err: unknown) => {
+        if (!busy(err) || mono() + delay > stop) throw err
+        await sleep(delay)
+        return attempt(Math.min(delay * 2, 200))
+      })
+    return attempt(10)
+  }
+
   function sleep(ms: number, signal?: AbortSignal) {
     return new Promise<void>((resolve, reject) => {
       if (signal?.aborted) {
@@ -159,6 +190,7 @@ export namespace Flock {
     try {
       await mkdir(lockDir, { mode: 0o700 })
     } catch (err) {
+      if (releasing(err)) return { acquired: false }
       if (code(err) !== "EEXIST") {
         throw err
       }
@@ -180,7 +212,7 @@ export namespace Flock {
           return { acquired: false }
         }
 
-        if (errCode === "ENOENT" || errCode === "ENOTDIR") {
+        if (errCode === "ENOENT" || errCode === "ENOTDIR" || releasing(claimErr)) {
           return { acquired: false }
         }
 
@@ -193,13 +225,22 @@ export namespace Flock {
           return { acquired: false }
         }
 
-        await rm(lockDir, { recursive: true, force: true })
+        // A handle to the stale folder that lingers on Windows makes the removal fail; the lock is then tried again.
+        const removed = await rm(lockDir, { recursive: true, force: true }).then(
+          () => true,
+          (err: unknown) => {
+            if (busy(err)) return false
+            throw err
+          },
+        )
+        if (!removed) return { acquired: false }
 
         try {
           await mkdir(lockDir, { mode: 0o700 })
         } catch (retryErr) {
           const errCode = code(retryErr)
-          if (errCode === "EEXIST" || errCode === "ENOTEMPTY") {
+          // The folder just removed can still be pending deletion, as the first mkdir's EPERM above.
+          if (errCode === "EEXIST" || errCode === "ENOTEMPTY" || releasing(retryErr)) {
             return { acquired: false }
           }
           throw retryErr
@@ -267,7 +308,7 @@ export namespace Flock {
         throw new Error("Refusing to release: lock token mismatch (not the owner).")
       }
 
-      await rm(lockDir, { recursive: true, force: true })
+      await removeHeld(lockDir)
     }
 
     return {

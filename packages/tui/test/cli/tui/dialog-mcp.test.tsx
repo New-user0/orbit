@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { onMount } from "solid-js"
 import { DialogMcp } from "../../../src/component/dialog-mcp"
@@ -135,7 +135,7 @@ async function renderMcp(options?: { failed?: boolean; location?: { directory: s
     return null
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>

@@ -8,6 +8,7 @@ import type { TrustView } from "../src/protocol"
 import { prompt } from "../src/trust"
 import { serve, until } from "./fixture/serve"
 import { runProgram } from "../../core/test/fixture/run-program"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // The chat against a real `orb serve` that trusts a folder only when a grant says so, which is how the shared background
 // service behaves, with a scripted model. Whether a folder is trusted is the server's to say: these tests check that the
@@ -68,7 +69,7 @@ afterEach(() => {
 afterAll(async () => {
   await main?.stop()
   await llm.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 let count = 0
@@ -163,6 +164,42 @@ test("shows, trusts and works in one folder when VS Code opened a folder inside 
     })
   }
   expect(await until(() => (trusts(updates).at(-1)?.trust === undefined ? true : undefined))).toBe(true)
+})
+
+// Class 3: the folder's providers come from plugins that start again after a grant. The chat grants and sends at once,
+// so its first message must reach the model the folder names, on the provider the folder supplies, and not the person's
+// own default: the grant answers only once the folder's plugins have started.
+test("the first message after a grant goes to the model and provider the trusted folder names", async () => {
+  const repo = await folder()
+  await Bun.write(
+    path.join(repo, "orbit.json"),
+    JSON.stringify({
+      model: "clone/clone-model",
+      providers: {
+        clone: {
+          name: "Clone",
+          package: "aisdk:@ai-sdk/openai-compatible",
+          settings: { apiKey: "test", baseURL: `http://127.0.0.1:${llm.port}/v1` },
+          models: {
+            "clone-model": {
+              name: "Clone Model",
+              capabilities: { tools: true, input: ["text"], output: ["text"] },
+              cost: { input: 0, output: 0 },
+              limit: { context: 100_000, output: 10_000 },
+            },
+          },
+        },
+      },
+    }),
+  )
+  const { controller, updates } = chat(main.client, repo, "trust")
+  await Bun.sleep(500)
+  const asked = steps.length
+
+  await controller.send("hello")
+  await idle(updates)
+
+  expect(steps.slice(asked).map((step) => (step as { model?: string }).model)).toEqual(["clone-model"])
 })
 
 test("asks before the first message in an untrusted folder, and the model is asked only after the answer", async () => {
@@ -312,7 +349,7 @@ test("trust persists across a restart of the server, for the folder that was tru
     }
   } finally {
     // A killed server can hold its files for a moment on Windows, and a folder left in the temp directory harms nothing.
-    await fs.rm(home, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 }).catch(() => undefined)
+    await removeTree(home).catch(() => undefined)
   }
 }, 180_000)
 

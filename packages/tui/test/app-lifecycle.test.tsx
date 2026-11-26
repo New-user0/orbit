@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { EmbeddedTerminalRenderable } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import path from "node:path"
@@ -214,9 +214,53 @@ test.each(["dismissed", "refreshing"])(
   },
 )
 
+// FU-M3-070: a plugin route names the window after the route, and the name is the plugin's own string, so the title is
+// cleaned of control characters as a session title is (class 9): an escape in the name cannot reach the terminal.
+test("a plugin route titles the window with its name, without the control characters in it", async () => {
+  await using state = await tmpdir()
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
+  const titles: string[] = []
+  const named = Promise.withResolvers<void>()
+  const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
+  setup.renderer.setTerminalTitle = (title) => {
+    titles.push(title)
+    if (title !== "" && title !== "Orbit") named.resolve()
+    setTitle(title)
+  }
+  const route = process.env.ORBIT_ROUTE
+  process.env.ORBIT_ROUTE = JSON.stringify({ type: "plugin", id: "orbit.test", name: "diff\u001b]0;owned\u0007" })
+  const events = createEventStream()
+  const calls = createFetch(undefined, events)
+  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        app: { name: "test", version: "test", channel: "test" },
+        server: { endpoint: { url: server.url.toString() } },
+        config: { get: async () => ({}), update: async () => ({}) },
+        packages: { prepare: async () => ({ directory: "" }) },
+        terminalHandoff: async () => ({ renderer: setup.renderer, mode: "dark", complete: () => {} }),
+        args: {},
+        log: () => {},
+      }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
+    )
+    await named.promise
+    setup.renderer.destroy()
+    await task
+
+    expect(titles.filter((title) => title !== "" && title !== "Orbit")).toEqual(["Orbit · diff]0;owned"])
+  } finally {
+    if (route === undefined) delete process.env.ORBIT_ROUTE
+    if (route !== undefined) process.env.ORBIT_ROUTE = route
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    await server.stop()
+  }
+})
+
 test("SIGHUP clears title and disposes scoped resources once", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   const titles: string[] = []
   let started!: () => void
   const ready = new Promise<void>((resolve) => {
@@ -260,7 +304,7 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
 
 test("session lifecycle updates the terminal title and prints the epilogue after cleanup", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   let initialTitle!: () => void
   const initialTitleSet = new Promise<void>((resolve) => {
     initialTitle = resolve
@@ -421,7 +465,7 @@ test.each<[string, OrbitEvent]>([
   ],
 ])("the terminal title says needs input for %s", async (_name, request) => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   const seen: string[] = []
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   setup.renderer.setTerminalTitle = (title) => {
@@ -497,7 +541,7 @@ test.each<[string, OrbitEvent]>([
 // once the interface has gone.
 test("a session title with control characters is cleaned in the terminal title and written out in the epilogue", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   const titles: string[] = []
   const oddTitle = Promise.withResolvers<void>()
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
@@ -570,7 +614,7 @@ test("a session title with control characters is cleaned in the terminal title a
 
 test("session title generated while an untitled session is loading remains visible", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   const titles: string[] = []
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   const generatedTitle = Promise.withResolvers<void>()
@@ -1034,7 +1078,7 @@ test("keeps assistant footer metrics current after prepend, same-length refresh,
 
 test("session startup prompt is submitted exactly once", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   const events = createEventStream()
   const cwd = process.cwd()
   const location = { directory: cwd, project: { id: "project", directory: cwd } }
@@ -1583,7 +1627,7 @@ test.skipIf(process.platform === "win32").each(["manual", "select"] as const)(
   "selection copy and pane management respect %s mode in the prompt and terminal pane",
   async (copy) => {
     await using state = await tmpdir()
-    const setup = await createTestRenderer({ width: 100, height: 30, useThread: false, kittyKeyboard: true })
+    const setup = await createTestRendererTimed({ width: 100, height: 30, useThread: false, kittyKeyboard: true })
     setup.renderer.start()
     const ready = Promise.withResolvers<void>()
     const session = {
@@ -1821,25 +1865,32 @@ test.each([
     },
   })
   await setup.ready
-  await setup.waitForFrame((frame) => promptReady(frame))
   if (!initial) {
+    await setup.waitForFrame((frame) => promptReady(frame))
     expect(setup.captureCharFrame()).not.toContain("Plugin failed")
     inventory = inventory.map((plugin) => (plugin.id === "broken" ? { ...plugin, state: failure } : plugin))
     setup.events.emit({ id: "evt_failure", created: 1, type: "plugin.updated", data: {} })
   }
-  await setup.waitForFrame((frame) => frame.includes("Plugin failed:") && frame.includes("broken"))
-  expect(setup.captureCharFrame()).toContain("/plugins")
-  expect(setup.captureCharFrame()).toContain("1 plugin failed")
-
-  const lines = setup.captureCharFrame().split("\n")
+  // The toast leaves the screen after its own 5 s, and a loaded run can take longer than that to draw the prompt. So the
+  // test looks for the toast alone, and the pointer goes onto it in the same step: a toast under the pointer keeps its
+  // time until the pointer leaves (the app's own rule), and the prompt is waited for after that.
+  const toast = await setup.waitForFrame(
+    (frame) => frame.includes("Plugin failed:") && frame.includes("broken") && frame.includes("/plugins"),
+  )
+  const lines = toast.split("\n")
   const row = lines.findIndex((line) => line.includes("Open plugins"))
   expect(row).toBeGreaterThanOrEqual(0)
-  const line = lines[row]
-  if (!line) throw new Error("Open plugins action is missing")
-  await setup.mockMouse.click(line.indexOf("Open plugins"), row)
-  await setup.waitForFrame((frame) => frame.includes("ctrl+a") && frame.includes("broken"))
-  expect(setup.captureCharFrame()).toContain("broken")
-  expect(setup.captureCharFrame()).not.toContain("healthy")
+  const column = lines[row]?.indexOf("Open plugins") ?? -1
+  expect(column).toBeGreaterThanOrEqual(0)
+  await setup.mockMouse.moveTo(column, row)
+  await setup.waitForFrame(
+    (frame) => promptReady(frame) && frame.includes("Open plugins") && frame.includes("1 plugin failed"),
+  )
+  await setup.mockMouse.click(column, row)
+  // The dialog draws its footer at once and reads its plugin list afterwards, and the toast still names "broken", so the
+  // wait is for the dialog's own row. Enter pressed while the list was still loading selected nothing (this PR's CI).
+  const list = await setup.waitForFrame((frame) => frame.includes("ctrl+a") && /x broken\s+failed/.test(frame))
+  expect(list).not.toContain("healthy")
   setup.mockInput.pressEnter()
   await setup.waitForFrame((frame) => frame.includes("Server plugin error") && frame.includes("transform failed"))
   expect(setup.captureCharFrame()).toContain("Plugin disabled")

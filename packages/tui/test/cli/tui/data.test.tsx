@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import type { OrbitEvent } from "@orbit/client"
 import { SessionMessage } from "@orbit/core/session/message"
 import { Bus } from "@orbit/core/bus"
@@ -94,7 +94,7 @@ test("does not preload session summaries into the data context", async () => {
     return undefined
   }, events)
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -131,7 +131,7 @@ test("syncs VCS info and applies branch updates", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -186,7 +186,7 @@ test("proactively syncs project metadata most recently active first", async () =
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -229,7 +229,7 @@ test("bootstraps MCP data for the TUI location", async () => {
     return undefined
   }, events)
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -274,7 +274,7 @@ test("syncs MCP status when a connection settles during bootstrap", async () => 
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -350,7 +350,7 @@ test("refreshes resources into reactive getters", async () => {
     return <text>{data.session.message.get("ses_test", "msg_second")?.id ?? "missing"}</text>
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -410,7 +410,7 @@ test("applies absolute usage events to session info", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -495,7 +495,7 @@ test("truncates committed revert messages without changing lifetime usage", asyn
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -635,7 +635,7 @@ test("updates session location when moved", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -708,7 +708,7 @@ test("restores running manual compaction before applying live deltas", async () 
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -804,7 +804,7 @@ test("reconnects the event stream and resyncs active data", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -871,7 +871,7 @@ test("completes exploration when a queued prompt is promoted", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -965,7 +965,7 @@ test("a compaction with instructions shows them trimmed on its pending row and p
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -1011,7 +1011,7 @@ test("updates and removes queued inputs from durable lifecycle events", async ()
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -1109,7 +1109,7 @@ test("classifies live tool rows independently of their call ID", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -1189,7 +1189,7 @@ test("loads older pages until the oldest exploration group is complete before re
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -1229,7 +1229,7 @@ test("removes committed revert messages from local state", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -1320,7 +1320,7 @@ test("distinguishes initial connection from reconnection", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -1389,7 +1389,7 @@ test("tracks session status from active sessions and execution events", async ()
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -1746,7 +1746,7 @@ test.each(["before", "between", "after"])("shows compaction admitted %s steers i
     rows = createSessionRows(() => sessionID)
     return <box />
   }
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -1851,7 +1851,7 @@ test("restores queued compaction from durable pending input", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -1989,7 +1989,7 @@ test("refreshes integrations after integration updates", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -2055,7 +2055,7 @@ test("refreshes MCP resources after catalog updates", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -2104,7 +2104,7 @@ test("refreshes provider and model data independently after domain updates", asy
     }
   }, events)
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -2157,7 +2157,7 @@ test("refreshes agents after agent updates", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -2201,7 +2201,7 @@ test("refreshes references after updates", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -2285,7 +2285,7 @@ test("keeps shell state scoped to location", async () => {
     )
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -2356,7 +2356,7 @@ test("adds and dismisses permission requests from live events", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -2439,7 +2439,7 @@ test("reconciles active session permissions when the event stream reconnects", a
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(fetch.fetch)}>
         <ProjectProvider>
@@ -2487,7 +2487,7 @@ test("dismisses a permission that expired before its reply", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -2538,7 +2538,7 @@ test("adds, dismisses, and refreshes form requests", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -2608,7 +2608,7 @@ test("tracks global forms by location", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -2692,7 +2692,7 @@ test("syncs global forms once for each requested location", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -2770,7 +2770,7 @@ test("resyncs global forms only for the active location after reconnect", async 
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -2829,7 +2829,7 @@ test("reconciles active session forms when the event stream reconnects", async (
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(fetch.fetch)}>
         <ProjectProvider>
@@ -2879,7 +2879,7 @@ test("settles pending tools when a live failure arrives", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -3049,7 +3049,7 @@ test("renders admitted prompts immediately and tracks them until promoted", asyn
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -3141,7 +3141,7 @@ test("skips initial instruction state and projects later updates with their mess
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -3242,7 +3242,7 @@ async function mountData(parents: Record<string, string>, costs: Record<string, 
     onMount(ready)
     return <box />
   }
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -3383,7 +3383,7 @@ test("admits prompts optimistically and reconciles with the durable echo", async
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -3487,7 +3487,7 @@ test("hydrates durable pending prompts into the visible transcript", async () =>
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -3543,7 +3543,7 @@ test("keeps the row when the response lands before the echo", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -3594,7 +3594,7 @@ test("rolls back an optimistic prompt the server rejected", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -3653,7 +3653,7 @@ test("a retry under the same client-minted ID cannot duplicate rows", async () =
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>
@@ -3786,7 +3786,7 @@ describe("context report", () => {
       )
     }
 
-    const app = await testRender(
+    const app = await testRenderTimed(
       () => (
         <TestTuiContexts>
           <ClientProvider api={createApi(calls.fetch)}>
@@ -3835,7 +3835,7 @@ describe("context report", () => {
   }
 
   // The colors of the drawn cells that hold `text`, on the line that holds it.
-  function colorsOf(app: Awaited<ReturnType<typeof testRender>>, text: string) {
+  function colorsOf(app: Awaited<ReturnType<typeof testRenderTimed>>, text: string) {
     const joined = (spans: CapturedSpan[]) => spans.reduce((result, span) => result + span.text, "")
     const line = app.renderer.currentRenderBuffer.getSpanLines().find((line) => joined(line.spans).includes(text))
     if (!line) return []
@@ -4105,7 +4105,7 @@ async function withCompactionData(
     data = useData()
     return <box />
   }
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <ProjectProvider>

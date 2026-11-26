@@ -2,7 +2,7 @@
 // only while prompt.suggestions is on in the person's cli.json (class 8). A refusal, a failure or an answer of another
 // shape draws nothing and leaves Mini running (classes 7 and 13).
 import { expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import type { CliRenderer } from "@opentui/core"
 import { createRuntimeLifecycle } from "../../src/mini/runtime.lifecycle"
 import type { MiniHost } from "../../src/mini/types"
@@ -37,7 +37,7 @@ async function start(input: {
   /** Collects what Mini writes to its trace. */
   traces?: unknown[]
 }) {
-  const app = await createTestRenderer({
+  const app = await createTestRendererTimed({
     width: 100,
     height: 24,
     screenMode: "split-footer",

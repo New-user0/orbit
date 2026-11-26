@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import type { TextareaRenderable } from "@opentui/core"
 import { VimAdapter } from "../../src/component/prompt/vim-adapter"
 import { Vim } from "../../src/component/prompt/vim-state"
@@ -9,7 +9,7 @@ import { Vim } from "../../src/component/prompt/vim-state"
 // are what is read back.
 async function mount(text: string, width = 20) {
   let input!: TextareaRenderable
-  const setup = await testRender(
+  const setup = await testRenderTimed(
     () => <textarea ref={(node: TextareaRenderable) => (input = node)} focused width={width} height={8} />,
     {
       width,

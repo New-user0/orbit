@@ -5,6 +5,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // clients-ux-23: `orb run "/context"` and `orb -p "/context"` print the context usage report of the run's session and
 // send nothing to the model. The folder's trust is settled first (`trustRefusal`), and the route asks again for the
@@ -65,7 +66,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 // CL1, class 12: the report, and no chat request.

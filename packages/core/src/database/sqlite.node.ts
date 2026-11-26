@@ -81,7 +81,9 @@ const nativeLayer = (config: Config) =>
     Effect.gen(function* () {
       const native = new DatabaseSync(config.filename, {
         readOnly: config.readonly,
-        timeout: config.timeout,
+        // Set on open, before any statement: SQLite waits for no lock by default, so the first statement would fail at
+        // once while another process, such as the previous server, still holds the file's lock as it closes.
+        timeout: config.timeout ?? 5_000,
         allowExtension: config.allowExtension,
         enableForeignKeyConstraints: true,
         open: true,

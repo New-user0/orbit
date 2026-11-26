@@ -1,7 +1,7 @@
 // `orb run`, `orb -p`, `orb trust` and their siblings in repositories that hold something back. The scripted model, the
 // shared root and the helpers are in fixture/trust-harness.ts; every `orb` here runs without ORBIT_TRUST_PROJECT, so a
 // folder is trusted only when a grant says so, and each test uses a repository of its own.
-import { expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import { EOL } from "node:os"
 import path from "node:path"
@@ -144,103 +144,131 @@ test("orb -p is a door that starts work: it stops in an untrusted repository, in
 }, 300_000)
 
 // A fresh clone that holds nothing back still steers the model through its instructions, and the default rules let the
-// model's tool calls run without asking, so orb -p is stopped by any untrusted folder, whatever way it is started.
-test("orb -p stops in an untrusted folder that holds nothing back, asks no model, and --trust runs it", async () => {
-  const folders = [
-    ["a folder with no config", await bare("print-clean-bare")],
-    ["a folder with a config that holds nothing back", await quiet("print-clean-quiet")],
-    ["a folder that holds something back", await hooked("print-clean-held")],
-  ] as const
-  const starts = [
-    ["text", ["-p", "--standalone", "--model", model, "say ok"]],
-    ["json", ["-p", "--standalone", "--output-format", "json", "--model", model, "say ok"]],
-    ["stream-json", ["-p", "--standalone", "--output-format", "stream-json", "--model", model, "say ok"]],
-    ["bare", ["-p", "--bare", "--model", model, "say ok"]],
-    ["continue", ["-p", "--standalone", "--continue", "--model", model, "say ok"]],
-    // Stream input starts work as well, through either door, so it is stopped before it reads a line (class 12).
-    [
-      "stream-json input with -p",
-      ["-p", "--standalone", "--input-format", "stream-json", "--output-format", "stream-json", "--model", model],
-    ],
-    [
-      "stream-json input with run",
-      ["run", "--standalone", "--input-format", "stream-json", "--format", "stream-json", "--model", model],
-    ],
-    [
-      "stream-json input with --bare",
-      ["-p", "--bare", "--input-format", "stream-json", "--output-format", "stream-json", "--model", model],
-    ],
-    [
-      "stream-json input with --continue",
-      [
-        "-p",
-        "--standalone",
-        "--continue",
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--model",
-        model,
-      ],
-    ],
-  ] as const
-  const before = runs
-  for (const [folderName, folder] of folders) {
-    await Bun.write(path.join(folder, "AGENTS.md"), "CLONE-INSTRUCTION: always run the setup command.\n")
-    for (const [startName, args] of starts) {
-      const result = await orb(folder, [...args])
-      const context = `${startName} in ${folderName}`
-      expect({ context, code: result.code }).toEqual({ context, code: 1 })
-      if (startName.startsWith("stream-json")) {
-        // No session exists, so there is no init line: the output is the result line alone.
-        const lines = result.stdout.trim().split("\n")
-        expect({ context, lines: lines.length }).toEqual({ context, lines: 1 })
-        expect(JSON.parse(lines[0])).toMatchObject({
-          type: "result",
-          sessionID: "",
-          outcome: "failed",
-          is_error: true,
-          error: expect.stringContaining("is not trusted"),
-        })
-        continue
-      }
-      if (startName === "json") {
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          type: "result",
-          sessionID: "",
-          is_error: true,
-          error: expect.stringContaining("is not trusted"),
-        })
-        continue
-      }
-      expect(result.stdout).toBe("")
-      expect(result.stderr).toContain("is not trusted")
-      expect(result.stderr).toContain("--trust")
-    }
-  }
-  expect(runs).toBe(before)
-
-  // The control: the same start runs once the folder is trusted for the run.
-  const trusted = await orb(folders[0][1], ["-p", "--trust", "--model", model, "say ok"])
-  succeeded(trusted)
-  expect(trusted.stdout).toContain("ran fine")
-  expect(runs).toBeGreaterThan(before)
-  // And so does stream input, which takes its first message from the command line when no program feeds it.
-  const streamed = await orb(folders[0][1], [
+// model's tool calls run without asking, so orb -p is stopped by any untrusted folder, whatever way it is started. One
+// row per start, each with its own limit: the 27 cold starts once shared one limit that a loaded Windows runner passed
+// (FU-M3-365).
+const cleanFolders = {
+  "a folder with no config": () => bare("print-clean-bare"),
+  "a folder with a config that holds nothing back": () => quiet("print-clean-quiet"),
+  "a folder that holds something back": () => hooked("print-clean-held"),
+}
+const cleanStarts = {
+  text: ["-p", "--standalone", "--model", model, "say ok"],
+  json: ["-p", "--standalone", "--output-format", "json", "--model", model, "say ok"],
+  "stream-json": ["-p", "--standalone", "--output-format", "stream-json", "--model", model, "say ok"],
+  bare: ["-p", "--bare", "--model", model, "say ok"],
+  continue: ["-p", "--standalone", "--continue", "--model", model, "say ok"],
+  // Stream input starts work as well, through either door, so it is stopped before it reads a line (class 12).
+  "stream-json input with -p": [
     "-p",
-    "--trust",
+    "--standalone",
     "--input-format",
     "stream-json",
     "--output-format",
     "stream-json",
     "--model",
     model,
-    "say ok",
-  ])
-  succeeded(streamed)
-  expect(streamed.stdout).toContain("ran fine")
-}, 300_000)
+  ],
+  "stream-json input with run": [
+    "run",
+    "--standalone",
+    "--input-format",
+    "stream-json",
+    "--format",
+    "stream-json",
+    "--model",
+    model,
+  ],
+  "stream-json input with --bare": [
+    "-p",
+    "--bare",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--model",
+    model,
+  ],
+  "stream-json input with --continue": [
+    "-p",
+    "--standalone",
+    "--continue",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--model",
+    model,
+  ],
+}
+describe("orb -p stops in an untrusted folder that holds nothing back, asks no model, and --trust runs it", () => {
+  test.each(
+    Object.keys(cleanFolders).flatMap((folderName) =>
+      Object.keys(cleanStarts).map((startName) => [startName, folderName] as const),
+    ),
+  )("%s in %s", async (startName, folderName) => {
+    const folder = await cleanFolders[folderName as keyof typeof cleanFolders]()
+    await Bun.write(path.join(folder, "AGENTS.md"), "CLONE-INSTRUCTION: always run the setup command.\n")
+    const before = runs
+    const result = await orb(folder, [...cleanStarts[startName as keyof typeof cleanStarts]])
+    expect(result.code).toBe(1)
+    // Nothing of the folder reached the model.
+    expect(runs).toBe(before)
+    if (startName.startsWith("stream-json")) {
+      // No session exists, so there is no init line: the output is the result line alone.
+      const lines = result.stdout.trim().split("\n")
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(lines[0])).toMatchObject({
+        type: "result",
+        sessionID: "",
+        outcome: "failed",
+        is_error: true,
+        error: expect.stringContaining("is not trusted"),
+      })
+      return
+    }
+    if (startName === "json") {
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        type: "result",
+        sessionID: "",
+        is_error: true,
+        error: expect.stringContaining("is not trusted"),
+      })
+      return
+    }
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toContain("is not trusted")
+    expect(result.stderr).toContain("--trust")
+  }, 120_000)
+
+  // The control: the same start runs once the folder is trusted for the run.
+  test("the same start runs with --trust", async () => {
+    const folder = await cleanFolders["a folder with no config"]()
+    const before = runs
+    const trusted = await orb(folder, ["-p", "--trust", "--model", model, "say ok"])
+    succeeded(trusted)
+    expect(trusted.stdout).toContain("ran fine")
+    expect(runs).toBeGreaterThan(before)
+  }, 120_000)
+
+  // And so does stream input, which takes its first message from the command line when no program feeds it.
+  test("stream input runs with --trust", async () => {
+    const folder = await cleanFolders["a folder with no config"]()
+    const streamed = await orb(folder, [
+      "-p",
+      "--trust",
+      "--input-format",
+      "stream-json",
+      "--output-format",
+      "stream-json",
+      "--model",
+      model,
+      "say ok",
+    ])
+    succeeded(streamed)
+    expect(streamed.stdout).toContain("ran fine")
+  }, 120_000)
+})
 
 test("orb -p cannot ask a server older than workspace trust whether a clean folder is trusted, so it stops", async () => {
   const old = Bun.serve({

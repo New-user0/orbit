@@ -1,7 +1,7 @@
 export * as PluginSupervisor from "./supervisor.js"
 
 import { Event } from "@orbit/schema/config"
-import { Cause, Effect, Layer, Queue, Stream } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Queue, Stream } from "effect"
 import path from "path"
 import { realpath } from "node:fs/promises"
 import { ConfigPluginSource } from "../config/plugin/source.js"
@@ -176,8 +176,30 @@ export const layer = Layer.effectDiscard(
     const updating = new Set<string>()
     let generation = 0
     let observed = 0
+    let installing: Fiber.Fiber<void> | undefined
 
-    const activate = Effect.fn("PluginSupervisor.activate")(function* () {
+    // The callers waiting until the activation for change `target` has applied what is available locally, and the
+    // newest change applied that far.
+    let waiting: { readonly target: number; readonly done: Deferred.Deferred<void> }[] = []
+    let applied = -1
+    const until = (target: number) =>
+      Effect.suspend(() => {
+        if (applied >= target) return Effect.void
+        return Effect.gen(function* () {
+          const done = yield* Deferred.make<void>()
+          waiting.push({ target, done })
+          yield* Deferred.await(done)
+        })
+      })
+    const answer = (target: number) =>
+      Effect.suspend(() => {
+        applied = Math.max(applied, target)
+        const due = waiting.filter((item) => item.target <= target)
+        waiting = waiting.filter((item) => item.target > target)
+        return Effect.forEach(due, (item) => Deferred.succeed(item.done, undefined), { discard: true })
+      })
+
+    const activate = Effect.fn("PluginSupervisor.activate")(function* (target: number) {
       const current = ++generation
       // Combine internal plugins with host-contributed plugins in boot order.
       // Instance-bound plugins come last: later activation can override earlier
@@ -236,30 +258,58 @@ export const layer = Layer.effectDiscard(
           resolved.failures.map((failure) => ({ ...failure, source: source(failure.source) })),
         )
       yield* apply(immediate)
-      const resolved = immediate.pending.length
-        ? yield* resolve(modules, pre, post, operations, true, running, managed)
-        : immediate
-      if (resolved !== immediate) yield* apply(resolved)
-      running = resolved.packages
-      const targets = new Set(
-        [...resolved.plugins, ...resolved.failures].flatMap((plugin) =>
-          plugin.source?.type === "package" ? [plugin.source.target] : [],
+      // What is available locally now applies. A package that still has to be installed can take as long as its
+      // registry does, so a caller of `refresh` (a trust grant, which a client waits on with a limit) gets its answer
+      // here and the package applies when it arrives.
+      yield* answer(target)
+      const settle = (resolved: typeof immediate) =>
+        Effect.gen(function* () {
+          running = resolved.packages
+          const targets = new Set(
+            [...resolved.plugins, ...resolved.failures].flatMap((plugin) =>
+              plugin.source?.type === "package" ? [plugin.source.target] : [],
+            ),
+          )
+          packages = targets
+          yield* Effect.forEach(
+            targets,
+            (target) => updates.check(target).pipe(Effect.map((available) => [target, available] as const)),
+            { concurrency: "unbounded" },
+          ).pipe(
+            Effect.flatMap((checked) => {
+              if (current !== generation) return Effect.void
+              const next = new Set(checked.flatMap(([target, available]) => (available ? [target] : [])))
+              if (next.size === outdated.size && [...next].every((target) => outdated.has(target))) return Effect.void
+              outdated = next
+              return apply(resolved)
+            }),
+            Effect.forkScoped({ startImmediately: true }),
+          )
+        })
+      if (immediate.pending.length === 0) {
+        // An install that an earlier activation started has nothing left to bring.
+        if (installing) yield* Fiber.interrupt(installing)
+        return yield* settle(immediate)
+      }
+      // The install runs beside the consumer, so a change that follows (a revoke after a grant, a second grant) is taken
+      // up and answered while it waits, and readiness stays held until it ends. One install runs at a time: an
+      // activation that finds one under way leaves it to finish, and an install that a newer activation outdated applies
+      // nothing (it would bring back plugins the newer one dropped) and asks for another activation, which reads what it
+      // installed.
+      if (installing) return
+      const installed = yield* registry.hold()
+      installing = yield* resolve(modules, pre, post, operations, true, running, managed).pipe(
+        Effect.flatMap((resolved) =>
+          current === generation ? apply(resolved).pipe(Effect.andThen(settle(resolved))) : notify,
         ),
-      )
-      packages = targets
-      yield* Effect.forEach(
-        targets,
-        (target) => updates.check(target).pipe(Effect.map((available) => [target, available] as const)),
-        { concurrency: "unbounded" },
-      ).pipe(
-        Effect.flatMap((checked) => {
-          if (current !== generation) return Effect.void
-          const next = new Set(checked.flatMap(([target, available]) => (available ? [target] : [])))
-          if (next.size === outdated.size && [...next].every((target) => outdated.has(target))) return Effect.void
-          outdated = next
-          return apply(resolved)
-        }),
-        Effect.forkScoped({ startImmediately: true }),
+        Effect.catchCause((cause) => Effect.logError("failed to install plugins", { cause })),
+        Effect.ensuring(
+          Effect.sync(() => {
+            installing = undefined
+          }).pipe(Effect.andThen(installed)),
+        ),
+        // Not started at once, so `installing` names it before it can end.
+        Effect.forkScoped,
       )
     })
     // Start source consumers before activation, without an extra merge/debounce boundary delaying them.
@@ -276,6 +326,14 @@ export const layer = Layer.effectDiscard(
         Stream.runForEach(() => notify),
         Effect.forkScoped({ startImmediately: true }),
       )
+    yield* registry.supervise({
+      // Every activation the consumer takes up from here on reads the sources after this request was made.
+      refresh: Effect.suspend(() => {
+        const target = observed + 1
+        return notify.pipe(Effect.andThen(until(target)))
+      }),
+      applied: Effect.suspend(() => until(observed)),
+    })
     yield* watch(sources.changes())
     yield* watch(modules.changes())
     yield* watch(Stream.fromEffectRepeat(Effect.sleep("24 hours")))
@@ -295,7 +353,11 @@ export const layer = Layer.effectDiscard(
     yield* Stream.concat(Stream.succeed(0), Stream.fromQueue(triggers).pipe(Stream.debounce("100 millis"))).pipe(
       Stream.runForEach((target) =>
         Effect.gen(function* () {
-          yield* activate().pipe(Effect.catchCause((cause) => Effect.logError("failed to reload plugins", { cause })))
+          yield* activate(target).pipe(
+            Effect.catchCause((cause) => Effect.logError("failed to reload plugins", { cause })),
+          )
+          // An activation that failed before it applied anything still answers its callers: they read what is running.
+          yield* answer(target)
           if (observed !== target) return
           const settled = release
           release = undefined

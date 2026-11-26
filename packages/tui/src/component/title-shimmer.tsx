@@ -18,6 +18,7 @@ type TitleShimmerOptions = TextOptions & {
 
 const SHIMMER_DURATION = 1200
 const SHIMMER_FADE = 240
+const FADE_EPSILON = 1e-9
 const ARRIVAL_DURATION = 450
 const WIPE_FEATHER = 4
 const TRANSPARENT = RGBA.fromValues(0, 0, 0, 0)
@@ -123,10 +124,10 @@ export class TitleShimmerRenderable extends TextRenderable {
         this.blend = 0
       }
     }
-    this.blend = Math.max(
-      0,
-      Math.min(1, this.blend + (this.shimmering || this.arrival !== undefined ? delta : -delta) / SHIMMER_FADE),
-    )
+    const blend = this.blend + (this.shimmering || this.arrival !== undefined ? delta : -delta) / SHIMMER_FADE
+    // A fade that is spread over several frames sums to its duration only up to rounding (1 - 10/240 - 230/240 is
+    // 1e-16, not 0), which kept the title live for one more frame after its fade had ended.
+    this.blend = blend < FADE_EPSILON ? 0 : Math.min(1, blend)
     this.live = this.animating
     if (!this.animating) {
       this.previous?.destroy()

@@ -548,32 +548,48 @@ describe("ConfigInstructionFile.included", () => {
 
 // A synchronous loop cannot be interrupted, so the work runs in a child process with a deadline. Every input here is one
 // that a repository could ship, and made the block lexer of a Markdown library take seconds to minutes.
-describe("ConfigInstructionFile.parse on hostile input", () => {
-  test("finishes every case in linear time, and never throws", async () => {
+// The script runs once for the file: the `parse` and `sections` tests read the same report, and a second run of it would
+// double the work that a loaded runner has to finish before the child's deadline.
+let stressReport: Promise<Report> | undefined
+function stress() {
+  stressReport ??= (async () => {
     const child = Bun.spawn({
       cmd: [process.execPath, path.join(import.meta.dir, "..", "fixture", "instruction-file-stress.ts")],
       stdout: "pipe",
       stderr: "pipe",
     })
-    const timer = setTimeout(() => child.kill(), 60_000)
+    // Only a guard against a loop that never ends: the linearity claim is the growth check below, not this limit.
+    const timer = setTimeout(() => child.kill(), 150_000)
     const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
     clearTimeout(timer)
     expect(code).toBe(0)
-    const report = JSON.parse(out) as Report
+    return JSON.parse(out) as Report
+  })()
+  return stressReport
+}
+
+describe("ConfigInstructionFile.parse on hostile input", () => {
+  test("finishes every case in linear time, and never throws", async () => {
+    const report = await stress()
     expect(report.length).toBeGreaterThan(20)
-    // A case that takes seconds is one that is not linear: the slowest that ran was a few tens of milliseconds.
-    expect(report.filter((item) => item.ms > 5_000)).toEqual([])
+    // Growth, not a time bound: the script reads each fixed case at a quarter of its size and at its size, and a case whose time grew
+    // by more than a linear parser can is listed. A loaded runner slows both reads alike, so it cannot fail this.
+    // Mutation: a quadratic `parse` (see the stress script) makes the list name the cases it is quadratic on.
+    expect(report.filter((item) => item.superlinear === true).map((item) => item.name)).toEqual([])
+    expect(report.filter((item) => item.smallMs !== undefined).length).toBeGreaterThan(40)
     // Lines of 64 KB that open a fence, a quoted fence, a fence in a list item or a list item and hold U+2028, U+2029, a
     // lone CR or U+0085, each read by `parse`, `sections` and `imports` against a control of letters as long. Mutation:
     // dropping the `s` flag of `fenceOpening` or of `listItem` takes the U+2028 and U+2029 rows of its lines from a few
     // milliseconds to seconds for each reader, and the child's deadline kills the run.
     expect(slowerThanControl(report, ["parse", "sections", "imports"])).toEqual([])
-  }, 90_000)
+  }, 180_000)
 })
 
 type Report = {
   readonly name: string
   readonly ms: number
+  readonly smallMs?: number
+  readonly superlinear?: boolean
   readonly readers?: Record<string, { readonly hostile: number; readonly control: number }>
 }[]
 
@@ -1271,19 +1287,12 @@ describe("ConfigInstructionFile.sections and section", () => {
 // that the parse test runs; it covers the heading lookup as well.
 describe("ConfigInstructionFile.sections on hostile input", () => {
   test("finishes every case in linear time, and never throws", async () => {
-    const child = Bun.spawn({
-      cmd: [process.execPath, path.join(import.meta.dir, "..", "fixture", "instruction-file-stress.ts")],
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-    const timer = setTimeout(() => child.kill(), 60_000)
-    const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
-    clearTimeout(timer)
-    expect(code).toBe(0)
-    const report = JSON.parse(out) as Report
-    for (const wanted of ["headings", "backtickRun", "alternatingFences", "oneMegabyteLine", "headingLadder", "blankThenText"])
-      expect(report.find((item) => item.name === wanted)?.ms ?? Infinity).toBeLessThan(5_000)
+    const report = await stress()
+    const heading = ["headings", "backtickRun", "alternatingFences", "oneMegabyteLine", "headingLadder", "blankThenText"]
+    const rows = heading.map((wanted) => report.find((item) => item.name === wanted))
+    expect(rows.map((item) => item?.smallMs !== undefined)).toEqual(heading.map(() => true))
+    expect(rows.filter((item) => item?.superlinear === true).map((item) => item?.name)).toEqual([])
     // The line separator rows, read by `sections`. Mutation: as for `parse` above.
     expect(slowerThanControl(report, ["sections"])).toEqual([])
-  }, 90_000)
+  }, 180_000)
 })

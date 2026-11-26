@@ -1,5 +1,6 @@
 import path from "path"
-import { appendFile, mkdir, readFile, rename, rm, writeFile } from "fs/promises"
+import { appendFile, mkdir, readFile, rm, writeFile } from "fs/promises"
+import { replaceFile } from "@orbit/util/replace-file"
 
 export function readText(filePath: string) {
   return readFile(filePath, "utf8")
@@ -26,7 +27,7 @@ export async function writeJsonAtomic(filePath: string, value: unknown) {
     await rm(temporary, { force: true }).catch(() => undefined)
     throw error
   })
-  await rename(temporary, filePath).catch(async (error) => {
+  await replaceFile(temporary, filePath).catch(async (error) => {
     await rm(temporary, { force: true }).catch(() => undefined)
     throw error
   })

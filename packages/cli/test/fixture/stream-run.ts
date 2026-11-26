@@ -5,6 +5,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { controller as start } from "./stream-controller"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 export const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-stream-")))
 export const workspace = path.join(root, "workspace")
@@ -16,7 +17,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 export const controller = (home: string, own: Parameters<typeof start>[1], args: string[] = []) =>

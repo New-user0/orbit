@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Verify loops and evals against a scripted model. The task is to write 42 into answer.txt: good:1b always does,
 // bad:1b always writes 41, and learner:1b writes 41 until it is told its attempt failed. The reviewer approves a diff
@@ -113,7 +114,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("a verify loop feeds failed checks back to the author until they pass, then merges", async () => {

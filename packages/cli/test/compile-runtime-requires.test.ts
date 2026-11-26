@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { autoload } from "../script/autoload"
 import { runtimeRequires, verifyRuntimeRequires } from "../script/runtime-requires"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Bun resolves a name that a compiled binary does not bundle from the folder the binary starts in, and that folder can
 // be a repository that is not trusted yet. The bundler cannot follow every require, so a dependency can leave a name to
@@ -50,7 +51,7 @@ const fffLibrary =
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-runtime-requires-"))
 let compiled = 0
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 // The binary is started in the repository, so that is where every package leaves its marker. A package exports an empty
 // array, which a browserslist config that extends it and an esprima that nobody calls both accept.

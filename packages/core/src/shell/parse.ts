@@ -175,13 +175,9 @@ export const scan = Effect.fnUntraced(function* (
 })
 
 const scanLegacy = Effect.fnUntraced(function* (command: string, shell: string, cwd: string) {
-  const parsers = yield* Effect.promise(load)
   const powershell = ShellSelect.ps(shell)
-  // A scan that runs long is abandoned: the input is then asked about as a whole.
-  const deadline = performance.now() + SCAN_MS
-  const tree = (powershell ? parsers.ps : parsers.bash).parse(command, null, {
-    progressCallback: () => performance.now() > deadline,
-  })
+  // A scan that runs long or reads a long input is abandoned: the input is then asked about as a whole.
+  const tree = yield* read(powershell ? "ps" : "bash", command, SCAN_MS)
   if (!tree) return yield* Effect.fail(new Error("Failed to parse shell command"))
 
   return yield* Effect.acquireUseRelease(
@@ -217,9 +213,7 @@ const scanLegacy = Effect.fnUntraced(function* (command: string, shell: string, 
  * has no command node, so `scan` lists nothing for it. A scan that runs long gives up and lists none.
  */
 export const bare = Effect.fnUntraced(function* (command: string) {
-  const parsers = yield* Effect.promise(load)
-  const deadline = performance.now() + SCAN_MS
-  const tree = parsers.bash.parse(command, null, { progressCallback: () => performance.now() > deadline })
+  const tree = yield* read("bash", command, SCAN_MS)
   if (!tree) return []
   return yield* Effect.acquireUseRelease(
     Effect.succeed(tree),
@@ -301,12 +295,8 @@ export const scanPortable = Effect.fnUntraced(function* (command: string, shell:
  * plain words, for a check that only adds questions.
  */
 export const operands = Effect.fnUntraced(function* (command: string, shell: string) {
-  const parsers = yield* Effect.promise(load)
   const powershell = ShellSelect.ps(shell)
-  const deadline = performance.now() + SCAN_MS
-  const tree = (powershell ? parsers.ps : parsers.bash).parse(command, null, {
-    progressCallback: () => performance.now() > deadline,
-  })
+  const tree = yield* read(powershell ? "ps" : "bash", command, SCAN_MS)
   if (!tree) return []
   return yield* Effect.acquireUseRelease(
     Effect.succeed(tree),
@@ -440,6 +430,22 @@ const load = lazy(initialize)
 
 /** The tree-sitter parsers that `scan` uses, loaded once. Shared with ShellAnalysis so both read the same instances. */
 export const parsers = load
+
+/** The longest input a reader parses. A much longer one can abort the WebAssembly module for the rest of the process. */
+export const MAX_LENGTH = 10_000
+
+/**
+ * Parses `text` with the shared parser of `language`, giving up after `ms`. Null when the text is too long or the parse
+ * was given up on: the caller then asks about the input as a whole. The parser is reset first, because tree-sitter
+ * resumes a parse that its progress callback cancelled on the next call, which would read `text` from an earlier input.
+ */
+export const read = Effect.fnUntraced(function* (language: "bash" | "ps", text: string, ms: number) {
+  if (text.length > MAX_LENGTH) return null
+  const parser = (yield* Effect.promise(load))[language]
+  parser.reset()
+  const deadline = performance.now() + ms
+  return parser.parse(text, null, { progressCallback: () => performance.now() > deadline })
+})
 
 async function initialize() {
   const { Parser, Language } = await import("web-tree-sitter")

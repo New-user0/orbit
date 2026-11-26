@@ -37,6 +37,9 @@ export function harness(
     // answers it or fails it.
     labels?: boolean
     suggestions?: boolean
+    // A server that is going away with this process: an interrupt it never answers, and a wait that fails.
+    interrupt?: () => Promise<unknown>
+    wait?: () => Promise<unknown>
   } = {},
 ) {
   const lines: Array<Record<string, any>> = []
@@ -99,9 +102,10 @@ export function harness(
       interrupt: async () => {
         state.interrupts += 1
         state.calls.push("interrupt")
+        if (options.interrupt) return options.interrupt()
         return {}
       },
-      wait: () => idle.promise,
+      wait: () => (options.wait ? options.wait() : idle.promise),
       inbox: {
         list: async () => [],
         cancel: async (request: { inboxID: string }) => {

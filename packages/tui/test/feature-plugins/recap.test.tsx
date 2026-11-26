@@ -2,7 +2,7 @@
 // (cli.json, default 5, 0 turns it off), the session in view asks the server for a recap once; the recap is drawn as a dimmed `※` row through the body sanitizer. A refocus cancels the timer and drops a
 // request in flight, a turn in progress defers it to the turn's end, and a terminal that never reports focus never asks.
 import { expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import type { OrbitEvent } from "@orbit/client"
 import { Effect, FileSystem, Schema } from "effect"
 import { Global } from "@orbit/util/global"
@@ -28,9 +28,11 @@ async function start(input: {
   parentID?: string
   /** Blurs the terminal while the plugins still wait for the folder's trust, before the recap's slot has mounted. */
   blurWhileLoading?: boolean
+  /** Milliseconds that each event spends on its way to the client. */
+  eventDelay?: number
 }) {
   const state = await tmpdir()
-  const setup = await createTestRenderer({ width: input.width ?? 100, height: 30, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width: input.width ?? 100, height: 30, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const session = {
     id: sessionID,
@@ -43,7 +45,11 @@ async function start(input: {
     time: { created: 0, updated: 0 },
   }
   const requests: Request[] = []
-  const events = createEventStream()
+  const stream = createEventStream()
+  // A slow connection: every event arrives this long after it was sent, in the order it was sent.
+  const events = input.eventDelay
+    ? { ...stream, emit: (event: OrbitEvent) => void setTimeout(() => stream.emit(event), input.eventDelay) }
+    : stream
   // The plugins load only once the trust status has been read, so a blur sent with that read reaches the client before
   // the recap's slot mounts.
   let blurred = false
@@ -107,6 +113,24 @@ async function start(input: {
         location: { directory },
       } as OrbitEvent)
     },
+    /**
+     * Waits until the client has handled every event emitted before this call. The event stream is one ordered
+     * connection, so a rename that the frame shows means the events before it were handled too; a test that sends an
+     * event and then acts on what it caused needs this, not a pause that a loaded runner outlasts.
+     */
+    async handled() {
+      seq++
+      const title = `Handled ${seq}`
+      events.emit({
+        id: `evt_handled_${seq}`,
+        created: Date.now(),
+        type: "session.renamed",
+        durable: { aggregateID: sessionID, seq, version: 1 },
+        data: { sessionID, title },
+        location: { directory },
+      } as OrbitEvent)
+      await setup.waitForFrame((frame) => frame.includes(title))
+    },
     execution(
       type:
         | "session.execution.started"
@@ -150,6 +174,11 @@ const user = (text: string, created = 1): Message => ({
 
 const recap = (text: string, created = 2): Message => ({ id: `msg_recap_${created}`, type: "recap", text, time: { created } })
 
+// A window in which the trigger, if it were wrong, would have asked. The product gives no signal for a request that is
+// not sent, so a test of "asks nothing" can only wait; waiting longer can make it miss a bug but never fail a correct
+// product. What a test must not leave to a pause is the order of the events it sends: those wait on `handled()`.
+const quiet = () => Bun.sleep(400)
+
 async function until(check: () => boolean, ms = 3000) {
   const deadline = Date.now() + ms
   while (!check() && Date.now() < deadline) await Bun.sleep(10)
@@ -181,10 +210,10 @@ test("after the delay the session asks for one recap, and blur cycles with no ne
 
   app.focus()
   app.blur()
-  await Bun.sleep(400)
+  await quiet()
   app.focus()
   app.blur()
-  await Bun.sleep(400)
+  await quiet()
   expect(app.requests).toHaveLength(1)
 })
 
@@ -209,7 +238,7 @@ test("a prompt older than the loaded page of messages still lets the session ask
 test("a session resumed with a recap after its last prompt asks for none", async () => {
   await using app = await start({ messages: [user("Fix the build"), recap("Fixing the build.")] })
   app.blur()
-  await Bun.sleep(400)
+  await quiet()
   expect(app.requests).toHaveLength(0)
 })
 
@@ -226,11 +255,12 @@ test("a subagent's session in view asks for the recap of the main conversation",
   {
     await using app = await start({ messages: [user("Fix the build")], parentID })
     app.execution("session.execution.started", parentID)
+    await app.handled()
     app.blur()
-    await Bun.sleep(400)
+    await quiet()
     // The subagent's own turn ending is not the end of the main conversation's turn.
     app.execution("session.execution.succeeded")
-    await Bun.sleep(400)
+    await app.handled()
     expect(app.requests).toHaveLength(0)
     app.execution("session.execution.succeeded", parentID)
     expect(await until(() => app.requests.length === 1)).toBe(true)
@@ -248,13 +278,13 @@ test("a terminal blurred while the TUI loads asks for the recap after the delay"
 test("a terminal that never reports focus never asks, and 0 minutes turns the recap off", async () => {
   {
     await using app = await start({ messages: [user("Fix the build")] })
-    await Bun.sleep(400)
+    await quiet()
     expect(app.requests).toHaveLength(0)
   }
   {
     await using app = await start({ messages: [user("Fix the build")], afterMinutes: 0 })
     app.blur()
-    await Bun.sleep(400)
+    await quiet()
     expect(app.requests).toHaveLength(0)
   }
 })
@@ -293,8 +323,9 @@ test("a delay that ends during a turn waits for the turn's end, and asks then on
   for (const end of ["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"] as const) {
     await using app = await start({ messages: [user("Fix the build")] })
     app.execution("session.execution.started")
+    await app.handled()
     app.blur()
-    await Bun.sleep(400)
+    await quiet()
     expect(app.requests).toHaveLength(0)
     app.execution(end)
     expect({ end, asked: await until(() => app.requests.length === 1) }).toEqual({ end, asked: true })
@@ -304,22 +335,38 @@ test("a delay that ends during a turn waits for the turn's end, and asks then on
   {
     await using app = await start({ messages: [user("Fix the build")] })
     app.execution("session.execution.started")
+    await app.handled()
     app.blur()
-    await Bun.sleep(400)
+    await quiet()
     app.focus()
     app.execution("session.execution.succeeded")
-    await Bun.sleep(400)
+    await app.handled()
     expect(app.requests).toHaveLength(0)
   }
+})
+
+// The forced interleaving behind `handled()`: the start of the turn reaches the client after the delay would have ended,
+// as it does on a loaded runner. Mutation: removing the `handled()` before the blur makes the request go out at once.
+test("a turn whose start arrives late still defers the request to its end", async () => {
+  await using app = await start({ messages: [user("Fix the build")], eventDelay: 250 })
+  app.execution("session.execution.started")
+  await app.handled()
+  app.blur()
+  await quiet()
+  expect(app.requests).toHaveLength(0)
+  app.execution("session.execution.succeeded")
+  expect(await until(() => app.requests.length === 1)).toBe(true)
 })
 
 test("another session's turn ending does not send the request this session deferred", async () => {
   await using app = await start({ messages: [user("Fix the build")] })
   app.execution("session.execution.started")
+  // The turn is running when the delay ends only if the client has handled its start by then.
+  await app.handled()
   app.blur()
-  await Bun.sleep(400)
+  await quiet()
   app.execution("session.execution.succeeded", "ses_recap_other")
-  await Bun.sleep(400)
+  await app.handled()
   expect(app.requests).toHaveLength(0)
   app.execution("session.execution.succeeded")
   expect(await until(() => app.requests.length === 1)).toBe(true)

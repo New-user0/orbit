@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { type Renderable, ScrollBoxRenderable } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
@@ -26,7 +26,7 @@ test.each([
   "prepend-failure",
 ])("Home loads a stable, bounded beginning (%s)", async (mode) => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 100, height: 30, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width: 100, height: 30, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const session = {
     id: "ses_test",

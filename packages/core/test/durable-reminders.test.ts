@@ -1,8 +1,8 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, setDefaultTimeout } from "bun:test"
 import fs from "fs/promises"
 import net from "net"
 import path from "path"
-import { Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schedule, Schema, Scope } from "effect"
+import { Clock, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schedule, Schema, Scope } from "effect"
 import { Document, Info, type Entry } from "@orbit/schema/config"
 import { Agent } from "@orbit/core/agent"
 import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
@@ -56,6 +56,7 @@ import { runProgram } from "./fixture/run-program"
 import { installPolicy } from "./fixture/policy"
 import { canLinkFile } from "./fixture/symlink"
 import { tmpdirScoped } from "./fixture/tmpdir"
+import { waitingClock } from "./lib/clock"
 import { testEffect } from "./lib/effect"
 import { globalProjectNode } from "./lib/project"
 import { executeTool, registerToolPlugin } from "./lib/tool"
@@ -194,8 +195,19 @@ const graph = AppNodeBuilder.build(
     Global.node.replace(tempGlobalLayer),
   ],
 )
+// Every row runs the real tools, a database and file system work, and none of its claims is about how fast that is: on
+// a Windows machine running eight copies of this file beside busy loops, rows that take half a second alone ran past
+// Bun's 5 s default (m5-flakes). Rows with more work set their own limit.
+setDefaultTimeout(30_000)
 // `config` is one layer, built once, so `Config.Test` sets the entries the production node reads.
 const it = testEffect(Layer.merge(graph, config))
+// The rows whose claim is what a step reports, not how its budget is spent, run with a budget that load cannot use up.
+// The production node's budget is wall-clock time: with the default 750 ms a loaded machine left a file's check for a
+// later step, and such rows found no reminder where they expected one (fix loop 8 of PR #186; the link and policy gate
+// rows in m5-flakes), or passed a "nothing reported" claim without checking the file. The rows about the budget (the
+// rebuild cut short, a given budget, the producer's deadline, a collection that ends early and "a budget smaller than
+// one pass over the files") run their producer on a clock that moves only while its work waits (`waitingClock`).
+const calm = testEffect(Layer.mergeAll(graph, config, Layer.succeed(FileChangeReminder.Budget, 60_000)))
 
 const build = Agent.ID.make("build")
 const slash = (value: string) => value.replaceAll("\\", "/")
@@ -322,7 +334,9 @@ const setup = (rules: Permission.Ruleset = [allowAll, denySecrets]) =>
       yield* (options.reminders ?? reminders).collect({ loaded, step: 1 })
       return (yield* store.context(target.id))
         .filter((message) => !before.has(message.id))
-        .flatMap((message) => (message.type === "synthetic" && ReminderText.isReminder(message) ? [parse(message)] : []))
+        .flatMap((message) =>
+          message.type === "synthetic" && ReminderText.isReminder(message) ? [parse(message)] : [],
+        )
     })
     const changes = (messages?: ReadonlyArray<SessionMessage.Info>, options?: Parameters<typeof collect>[1]) =>
       collect(messages, options).pipe(Effect.map((rows) => rows.filter((row) => row.kind === FILE_CHANGE)))
@@ -383,7 +397,7 @@ const contentOf = (rows: ReadonlyArray<Row>, files: ReadonlyArray<string>) =>
   files.map((file) => rows.find((row) => row.label?.includes(file))?.content)
 
 describe("the file-change reminder", () => {
-  it.live("reports a file the session wrote and someone else changed, with the changed lines numbered", () =>
+  calm.live("reports a file the session wrote and someone else changed, with the changed lines numbered", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("notes.txt")
@@ -404,21 +418,23 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("freshness kept: the reported change counts as seen, so an edit needs no new read and nothing repeats", () =>
-    Effect.gen(function* () {
-      const h = yield* setup()
-      const file = h.inside("notes.txt")
-      yield* h.write(file, text(twenty))
-      yield* h.change(file, text(twenty.map((line) => (line === "line3" ? "three" : line))))
-      expect(yield* h.changes()).toHaveLength(1)
+  calm.live(
+    "freshness kept: the reported change counts as seen, so an edit needs no new read and nothing repeats",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* setup()
+        const file = h.inside("notes.txt")
+        yield* h.write(file, text(twenty))
+        yield* h.change(file, text(twenty.map((line) => (line === "line3" ? "three" : line))))
+        expect(yield* h.changes()).toHaveLength(1)
 
-      expect(yield* h.changes()).toEqual([])
-      const edited = yield* h.run("Edit", { file_path: file, old_string: "three", new_string: "THREE" })
-      expect(status(edited)).toBe("completed")
-    }),
+        expect(yield* h.changes()).toEqual([])
+        const edited = yield* h.run("Edit", { file_path: file, old_string: "three", new_string: "THREE" })
+        expect(status(edited)).toBe("completed")
+      }),
   )
 
-  it.live("a touch with the same bytes reports nothing and still refreshes freshness", () =>
+  calm.live("a touch with the same bytes reports nothing and still refreshes freshness", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("notes.txt")
@@ -428,11 +444,13 @@ describe("the file-change reminder", () => {
       yield* h.stamp(file)
       yield* h.change(control, text(["changed"]))
       expect(labels(yield* h.changes())).toEqual([expect.stringContaining(control)])
-      expect(status(yield* h.run("Edit", { file_path: file, old_string: "line4", new_string: "four" }))).toBe("completed")
+      expect(status(yield* h.run("Edit", { file_path: file, old_string: "line4", new_string: "four" }))).toBe(
+        "completed",
+      )
     }),
   )
 
-  it.live("a change of line endings or of the final line break alone is no change, and lines carry no CR", () =>
+  calm.live("a change of line endings or of the final line break alone is no change, and lines carry no CR", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const crlf = h.inside("crlf.txt")
@@ -452,7 +470,7 @@ describe("the file-change reminder", () => {
   )
 
   // Builder's row: a byte order mark is not part of the first line, whether the session's write or history holds it.
-  it.live("a byte order mark is no change", () =>
+  calm.live("a byte order mark is no change", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("marked.txt")
@@ -475,26 +493,28 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("watches only what the session wrote: a file it only read is not reported, and a read after a write ends it", () =>
-    Effect.gen(function* () {
-      const h = yield* setup()
-      const read = h.inside("read.txt")
-      const both = h.inside("both.txt")
-      const control = h.inside("control.txt")
-      yield* Effect.promise(() => fs.writeFile(read, text(twenty)))
-      expect(status(yield* h.run("Read", { file_path: read }))).toBe("completed")
-      yield* h.write(both, text(twenty))
-      expect(status(yield* h.run("Read", { file_path: both }))).toBe("completed")
-      yield* h.write(control, text(twenty))
+  calm.live(
+    "watches only what the session wrote: a file it only read is not reported, and a read after a write ends it",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* setup()
+        const read = h.inside("read.txt")
+        const both = h.inside("both.txt")
+        const control = h.inside("control.txt")
+        yield* Effect.promise(() => fs.writeFile(read, text(twenty)))
+        expect(status(yield* h.run("Read", { file_path: read }))).toBe("completed")
+        yield* h.write(both, text(twenty))
+        expect(status(yield* h.run("Read", { file_path: both }))).toBe("completed")
+        yield* h.write(control, text(twenty))
 
-      yield* h.change(read, text(["other"]))
-      yield* h.change(both, text(["other"]))
-      yield* h.change(control, text(["other"]))
-      expect(labels(yield* h.changes())).toEqual([expect.stringContaining(control)])
-    }),
+        yield* h.change(read, text(["other"]))
+        yield* h.change(both, text(["other"]))
+        yield* h.change(control, text(["other"]))
+        expect(labels(yield* h.changes())).toEqual([expect.stringContaining(control)])
+      }),
   )
 
-  it.live("forgets a deleted file: recreated, it is not reported and needs a read before an edit", () =>
+  calm.live("forgets a deleted file: recreated, it is not reported and needs a read before an edit", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("gone.txt")
@@ -521,7 +541,7 @@ describe("the file-change reminder", () => {
     ],
   ] as const
   for (const [name, replace] of unreadable)
-    it.live(`reports nothing for ${name}, and keeps the entry`, () =>
+    calm.live(`reports nothing for ${name}, and keeps the entry`, () =>
       Effect.gen(function* () {
         const h = yield* setup()
         const file = h.inside("kept.txt")
@@ -538,7 +558,7 @@ describe("the file-change reminder", () => {
       }),
     )
 
-  it.live("a changed notebook the session edited is not reported, and its freshness is refreshed (reference)", () =>
+  calm.live("a changed notebook the session edited is not reported, and its freshness is refreshed (reference)", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("nb.ipynb")
@@ -553,7 +573,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("an envelope tag in the file stays payload, escaped inside the data block", () =>
+  calm.live("an envelope tag in the file stays payload, escaped inside the data block", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("tag.txt")
@@ -567,7 +587,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("reports to the session that wrote the file only, a child session included", () =>
+  calm.live("reports to the session that wrote the file only, a child session included", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const other = yield* h.create()
@@ -587,7 +607,7 @@ describe("the file-change reminder", () => {
 
   // Review row: the reference releases a subagent's read-file cache when it returns. The end of a child's run drops what
   // the ledger holds for it; the parent, whose run ends too, keeps its records. A child is never rebuilt (next row).
-  it.live("a subagent's records go when its run ends, and a parent's stay", () =>
+  calm.live("a subagent's records go when its run ends, and a parent's stay", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const bus = yield* Bus.Service
@@ -614,7 +634,7 @@ describe("the file-change reminder", () => {
   // main conversation. A child that read a file and then patched it, whose run ended, is continued: its history names
   // both calls, yet nothing is rebuilt, so its own patch is not reported and an edit needs a new read. The main session
   // given the same history is rebuilt and the file counts as fresh there (control).
-  it.live("a continued subagent starts with nothing watched: its own read and patch are not rebuilt", () =>
+  calm.live("a continued subagent starts with nothing watched: its own read and patch are not rebuilt", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const bus = yield* Bus.Service
@@ -651,7 +671,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("a restarted drain does not post twice into the same run", () =>
+  calm.live("a restarted drain does not post twice into the same run", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("notes.txt")
@@ -664,7 +684,7 @@ describe("the file-change reminder", () => {
     }),
   )
 
-  it.live("a completed compaction ends the watch, and a committed revert does not hide a restored file", () =>
+  calm.live("a completed compaction ends the watch, and a committed revert does not hide a restored file", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const bus = yield* Bus.Service
@@ -698,31 +718,33 @@ describe("the file-change reminder", () => {
 })
 
 describe("the snippet of a change", () => {
-  it.live("numbers each hunk from its start in the old file, drops removed lines, and joins hunks with a separator", () =>
-    Effect.gen(function* () {
-      const h = yield* setup()
-      const file = h.inside("hunks.txt")
-      const lines = Array.from({ length: 40 }, (_, index) => `L${index + 1}`)
-      const after = [...lines]
-      after.splice(29, 1, "C")
-      after.splice(4, 1, "A", "B")
-      yield* h.write(file, text(lines))
-      yield* h.change(file, text(after))
-      const rows = yield* h.changes()
-      expect(rows).toHaveLength(1)
-      expect(rows[0].content).toBe(
-        [
-          ...numbered(1, ["L1", "L2", "L3", "L4", "A", "B", "L6", "L7", "L8", "L9", "L10", "L11", "L12", "L13"]),
-          "...",
-          // The second hunk starts at old line 22, although that line is now line 23 (the reference's numbering).
-          ...numbered(22, ["L22", "L23", "L24", "L25", "L26", "L27", "L28", "L29", "C"]),
-          ...numbered(31, ["L31", "L32", "L33", "L34", "L35", "L36", "L37", "L38"]),
-        ].join("\n"),
-      )
-    }),
+  calm.live(
+    "numbers each hunk from its start in the old file, drops removed lines, and joins hunks with a separator",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* setup()
+        const file = h.inside("hunks.txt")
+        const lines = Array.from({ length: 40 }, (_, index) => `L${index + 1}`)
+        const after = [...lines]
+        after.splice(29, 1, "C")
+        after.splice(4, 1, "A", "B")
+        yield* h.write(file, text(lines))
+        yield* h.change(file, text(after))
+        const rows = yield* h.changes()
+        expect(rows).toHaveLength(1)
+        expect(rows[0].content).toBe(
+          [
+            ...numbered(1, ["L1", "L2", "L3", "L4", "A", "B", "L6", "L7", "L8", "L9", "L10", "L11", "L12", "L13"]),
+            "...",
+            // The second hunk starts at old line 22, although that line is now line 23 (the reference's numbering).
+            ...numbered(22, ["L22", "L23", "L24", "L25", "L26", "L27", "L28", "L29", "C"]),
+            ...numbered(31, ["L31", "L32", "L33", "L34", "L35", "L36", "L37", "L38"]),
+          ].join("\n"),
+        )
+      }),
   )
 
-  it.live("is cut at a line boundary within 8,192 characters, with a count of the lines left out", () =>
+  calm.live("is cut at a line boundary within 8,192 characters, with a count of the lines left out", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("long.txt")
@@ -743,7 +765,7 @@ describe("the snippet of a change", () => {
   )
 
   // Builder's row: a snippet a little over the cap, not only one several times its size, is cut at the cap.
-  it.live("cuts a snippet that is only a little over 8,192 characters", () =>
+  calm.live("cuts a snippet that is only a little over 8,192 characters", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("medium.txt")
@@ -758,15 +780,15 @@ describe("the snippet of a change", () => {
         0,
       )
       const rows = yield* h.changes()
-      expect(rows.map((row) => row.content)).toEqual(
-        [[...full.slice(0, kept), `[${400 - kept} more lines not shown]`].join("\n")],
-      )
+      expect(rows.map((row) => row.content)).toEqual([
+        [...full.slice(0, kept), `[${400 - kept} more lines not shown]`].join("\n"),
+      ])
     }),
   )
 })
 
 describe("the re-read gate (class 4, 7)", () => {
-  it.live("a read deny rule on the file skips it silently and keeps it", () =>
+  calm.live("a read deny rule on the file skips it silently and keeps it", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const secret = h.inside("notes-secret.txt")
@@ -785,7 +807,7 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
-  const linked = canLinkFile ? it.live : it.live.skip
+  const linked = canLinkFile ? calm.live : calm.live.skip
   linked("a deny rule on where a link now leads skips the file, with a plain link as the control", () =>
     Effect.gen(function* () {
       const h = yield* setup()
@@ -811,7 +833,7 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
-  it.live("an outside file the session wrote with permission is reported; an external_directory deny skips it", () =>
+  calm.live("an outside file the session wrote with permission is reported; an external_directory deny skips it", () =>
     Effect.gen(function* () {
       const outside = (yield* tmpdirScoped()).path
       const h = yield* setup()
@@ -830,21 +852,23 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
-  it.live("once the project's trust is revoked, an outside file is skipped and a project file is still reported", () =>
-    Effect.gen(function* () {
-      const outside = (yield* tmpdirScoped()).path
-      const h = yield* setup()
-      const away = path.join(outside, "away.txt")
-      const home = h.inside("home.txt")
-      yield* h.write(away, text(twenty))
-      yield* h.write(home, text(twenty))
-      yield* h.trust.revoke()
-      yield* h.change(away, text(["AWAY-MARKER"]))
-      yield* h.change(home, text(["changed"]))
-      const rows = yield* h.changes()
-      expect(labels(rows)).toEqual([expect.stringContaining(home)])
-      expect(JSON.stringify(rows)).not.toContain("AWAY-MARKER")
-    }),
+  calm.live(
+    "once the project's trust is revoked, an outside file is skipped and a project file is still reported",
+    () =>
+      Effect.gen(function* () {
+        const outside = (yield* tmpdirScoped()).path
+        const h = yield* setup()
+        const away = path.join(outside, "away.txt")
+        const home = h.inside("home.txt")
+        yield* h.write(away, text(twenty))
+        yield* h.write(home, text(twenty))
+        yield* h.trust.revoke()
+        yield* h.change(away, text(["AWAY-MARKER"]))
+        yield* h.change(home, text(["changed"]))
+        const rows = yield* h.changes()
+        expect(labels(rows)).toEqual([expect.stringContaining(home)])
+        expect(JSON.stringify(rows)).not.toContain("AWAY-MARKER")
+      }),
   )
 
   linked("once the project's trust is revoked, a project file swapped for a link that leads out is skipped", () =>
@@ -913,7 +937,7 @@ describe("the re-read gate (class 4, 7)", () => {
     ),
   )
   for (const cell of swapCells) {
-    const row = cell.part === "the file" && !canLinkFile ? it.live.skip : it.live
+    const row = cell.part === "the file" && !canLinkFile ? calm.live.skip : calm.live
     row(
       `a file in the ${cell.home} whose path has ${cell.part} swapped for a link elsewhere is skipped (${cell.trust})`,
       () =>
@@ -958,7 +982,7 @@ describe("the re-read gate (class 4, 7)", () => {
   // into it or above it. Inside the allowed outside folder, a link swapped in can make the name lead to a file below the
   // recorded place (that place has become a folder) or to a folder above it. Neither is read; both swaps use folder links
   // (a junction on Windows, which needs no privilege). The gate's answer before each swap is the control.
-  it.live("an outside file whose name now leads below or above the place its write recorded is skipped", () =>
+  calm.live("an outside file whose name now leads below or above the place its write recorded is skipped", () =>
     Effect.gen(function* () {
       const allowed = (yield* tmpdirScoped()).path
       const h = yield* setup([
@@ -1019,7 +1043,7 @@ describe("the re-read gate (class 4, 7)", () => {
   // the rules: the name leads out of a project nobody trusts, so nothing of the file is reported whatever they say. The
   // request it would ask with still names the spelling, so a deny for it is a deny of that request, as of the read tool's.
   for (const trust of ["trusted", "revoked"] as const) {
-    it.live(`a Read deny for the spelling of a link out skips a file written through it (${trust})`, () =>
+    calm.live(`a Read deny for the spelling of a link out skips a file written through it (${trust})`, () =>
       Effect.gen(function* () {
         const outside = (yield* tmpdirScoped()).path
         const h = yield* setup([allowAll])
@@ -1034,7 +1058,9 @@ describe("the re-read gate (class 4, 7)", () => {
         const access = yield* FileAccess.Service
         const permission = yield* Permission.Service
         const target = yield* access.locate(file, "file")
-        const denied = permission.denied(FileChangeReminder.readRequest(target, { sessionID: h.session.id, agent: build }))
+        const denied = permission.denied(
+          FileChangeReminder.readRequest(target, { sessionID: h.session.id, agent: build }),
+        )
         for (const deny of denies) {
           yield* h.permit([allowAll, deny])
           yield* h.change(file, text(["SECRET-MARKER"]))
@@ -1057,48 +1083,50 @@ describe("the re-read gate (class 4, 7)", () => {
   // revoked. A policy for another file is the control.
   for (const trust of ["trusted", "revoked"] as const)
     for (const link of ["plain", "folder"] as const)
-      it.live(`a policy Read deny skips ${link === "plain" ? "a plain file" : "a file through a folder link out"} (${trust})`, () =>
-        Effect.gen(function* () {
-          const outside = (yield* tmpdirScoped()).path
-          const h = yield* setup([allowAll])
-          const spelled = link === "plain" ? "plain/s" : "cfg/s"
-          if (link === "folder") yield* Effect.promise(() => fs.symlink(outside, h.inside("cfg"), "junction"))
-          if (link === "plain") yield* Effect.promise(() => fs.mkdir(h.inside("plain")))
-          const file = h.inside(spelled)
-          yield* h.write(file, text(twenty))
-          if (trust === "revoked") yield* h.trust.revoke()
-          const access = yield* FileAccess.Service
-          const permission = yield* Permission.Service
-          const request = FileChangeReminder.readRequest(yield* access.locate(file, "file"), {
-            sessionID: h.session.id,
-            agent: build,
-          })
-          const decided = (named: string) =>
-            Effect.scoped(
+      calm.live(
+        `a policy Read deny skips ${link === "plain" ? "a plain file" : "a file through a folder link out"} (${trust})`,
+        () =>
+          Effect.gen(function* () {
+            const outside = (yield* tmpdirScoped()).path
+            const h = yield* setup([allowAll])
+            const spelled = link === "plain" ? "plain/s" : "cfg/s"
+            if (link === "folder") yield* Effect.promise(() => fs.symlink(outside, h.inside("cfg"), "junction"))
+            if (link === "plain") yield* Effect.promise(() => fs.mkdir(h.inside("plain")))
+            const file = h.inside(spelled)
+            yield* h.write(file, text(twenty))
+            if (trust === "revoked") yield* h.trust.revoke()
+            const access = yield* FileAccess.Service
+            const permission = yield* Permission.Service
+            const request = FileChangeReminder.readRequest(yield* access.locate(file, "file"), {
+              sessionID: h.session.id,
+              agent: build,
+            })
+            const decided = (named: string) =>
+              Effect.scoped(
+                Effect.gen(function* () {
+                  yield* installPolicy("user", [{ action: "permission", resource: `Read:${named}`, effect: "deny" }])
+                  return { denied: yield* permission.denied(request), allowed: yield* permission.allowed(request) }
+                }),
+              )
+            expect((yield* decided("other.txt")).denied).toBe(false)
+            if (trust === "trusted" || link === "plain") expect((yield* decided("other.txt")).allowed).toBe(true)
+            expect(yield* decided(spelled)).toEqual({ denied: true, allowed: false })
+            yield* Effect.scoped(
               Effect.gen(function* () {
-                yield* installPolicy("user", [{ action: "permission", resource: `Read:${named}`, effect: "deny" }])
-                return { denied: yield* permission.denied(request), allowed: yield* permission.allowed(request) }
+                yield* installPolicy("user", [{ action: "permission", resource: `Read:${spelled}`, effect: "deny" }])
+                yield* h.change(file, text(["SECRET-MARKER"]))
+                const rows = yield* h.changes()
+                expect(rows).toEqual([])
+                expect(JSON.stringify(rows)).not.toContain("SECRET-MARKER")
               }),
             )
-          expect((yield* decided("other.txt")).denied).toBe(false)
-          if (trust === "trusted" || link === "plain") expect((yield* decided("other.txt")).allowed).toBe(true)
-          expect(yield* decided(spelled)).toEqual({ denied: true, allowed: false })
-          yield* Effect.scoped(
-            Effect.gen(function* () {
-              yield* installPolicy("user", [{ action: "permission", resource: `Read:${spelled}`, effect: "deny" }])
-              yield* h.change(file, text(["SECRET-MARKER"]))
-              const rows = yield* h.changes()
-              expect(rows).toEqual([])
-              expect(JSON.stringify(rows)).not.toContain("SECRET-MARKER")
-            }),
-          )
-        }),
+          }),
       )
 
   // The place each writing tool records is what lets an outside file be read again, so a file outside the project that
   // the session last changed with Edit or Patch is still reported, and one changed with NotebookEdit still has its
   // freshness refreshed. Write's row is "an outside file the session wrote with permission is reported" above.
-  it.live("an outside file the session last changed with Edit or Patch is reported", () =>
+  calm.live("an outside file the session last changed with Edit or Patch is reported", () =>
     Effect.gen(function* () {
       const outside = (yield* tmpdirScoped()).path
       const h = yield* setup()
@@ -1117,7 +1145,7 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
-  it.live("an outside notebook the session edited has its freshness refreshed", () =>
+  calm.live("an outside notebook the session edited has its freshness refreshed", () =>
     Effect.gen(function* () {
       const outside = (yield* tmpdirScoped()).path
       const h = yield* setup()
@@ -1155,7 +1183,7 @@ describe("the re-read gate (class 4, 7)", () => {
     }),
   )
 
-  it.live("one entry that fails costs only itself", () =>
+  calm.live("one entry that fails costs only itself", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const broken = h.inside("broken.txt")
@@ -1170,7 +1198,7 @@ describe("the re-read gate (class 4, 7)", () => {
   )
 
   // Builder's row: a defect while one file is checked (the reader dies for it) is logged and costs only that file.
-  it.live("a defect while one file is checked costs only that file", () =>
+  calm.live("a defect while one file is checked costs only that file", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const broken = h.inside("broken.txt")
@@ -1209,7 +1237,7 @@ describe("the re-read gate (class 4, 7)", () => {
   // Gate's row (class 7): a file whose time cannot be read for a reason other than its absence is not newer, so it is
   // neither read nor forgotten, and it is checked again at the next step; another file changed at the same step is the
   // control.
-  it.live("a file whose time cannot be read is not read, and is kept for the next step", () =>
+  calm.live("a file whose time cannot be read is not read, and is kept for the next step", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const locked = h.inside("locked.txt")
@@ -1264,7 +1292,7 @@ describe("the re-read gate (class 4, 7)", () => {
 
   // Gate's row (class 7): a rule check that fails is a refusal. Here the rules cannot be read because the session they
   // belong to is gone; the same file for the live session is the control.
-  it.live("a deny check that fails refuses the file, with the live session's check as the control", () =>
+  calm.live("a deny check that fails refuses the file, with the live session's check as the control", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("checked.txt")
@@ -1278,7 +1306,7 @@ describe("the re-read gate (class 4, 7)", () => {
 
   // Gate's row (class 3, 4): outside the project only the place a write recorded is read again. With no recorded place
   // (as for a file from history) nothing outside is read; the place the write tool resolved is the control.
-  it.live("an outside file is read again only at the place its write recorded", () =>
+  calm.live("an outside file is read again only at the place its write recorded", () =>
     Effect.gen(function* () {
       const outside = (yield* tmpdirScoped()).path
       const h = yield* setup()
@@ -1354,7 +1382,7 @@ const readResult = (name: string, lines: ReadonlyArray<string>) =>
   [`Read file ${name}, lines 1-${lines.length}`, ...numbered(1, lines)].join("\n")
 
 describe("the rebuild after a restart", () => {
-  it.live("watches a whole read and a write from their time in history, and reports what changed since", () =>
+  calm.live("watches a whole read and a write from their time in history, and reports what changed since", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const read = h.inside("read.txt")
@@ -1381,7 +1409,7 @@ describe("the rebuild after a restart", () => {
 
   // A read result holds lines as the read tool shows them: a line past 2,000 characters is cut. The disk side is compared
   // in the same form, so the cut line is no change.
-  it.live("compares a read from history line by line as the read tool shows them", () =>
+  calm.live("compares a read from history line by line as the read tool shows them", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("long.txt")
@@ -1402,12 +1430,14 @@ describe("the rebuild after a restart", () => {
       const rows = yield* h.changes(messages)
       expect(rows).toHaveLength(1)
       expect(rows[0].content).toBe(
-        numbered(13, ["line12", "line13", "line14", "line15", "line16", "line17", "line18", "line19", "last"]).join("\n"),
+        numbered(13, ["line12", "line13", "line14", "line15", "line16", "line17", "line18", "line19", "last"]).join(
+          "\n",
+        ),
       )
     }),
   )
 
-  it.live("re-reads an edited file from disk at the rebuild, so it reports nothing and counts as fresh", () =>
+  calm.live("re-reads an edited file from disk at the rebuild, so it reports nothing and counts as fresh", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const edited = h.inside("edited.txt")
@@ -1422,7 +1452,7 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  it.live("seeds a write whose call failed, as the reference does, and later entries win", () =>
+  calm.live("seeds a write whose call failed, as the reference does, and later entries win", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const failed = h.inside("failed.txt")
@@ -1442,7 +1472,7 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  it.live("skips ranged, repeated, truncated and failed reads, and the tools the reference does not rebuild", () =>
+  calm.live("skips ranged, repeated, truncated and failed reads, and the tools the reference does not rebuild", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const names = ["ranged.txt", "stub.txt", "truncated.txt", "failed.txt", "notebook.txt"]
@@ -1504,7 +1534,7 @@ describe("the rebuild after a restart", () => {
   // earlier call held for a file it deletes or moves away; a NotebookEdit ends what an earlier call held for its file.
   // So a whole read followed by the session's own patch reports nothing and counts as fresh, and a later outside change
   // of that file is reported (control).
-  it.live("a patch or notebook edit in history replaces what an earlier call seeded for the file", () =>
+  calm.live("a patch or notebook edit in history replaces what an earlier call seeded for the file", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const patched = h.inside("patched.txt")
@@ -1561,13 +1591,15 @@ describe("the rebuild after a restart", () => {
       const rows = yield* h.changes(messages)
       expect(labels(rows)).toEqual([expect.stringContaining(patched)])
       expect(rows[0].content).toBe(
-        numbered(12, ["line12", "line13", "line14", "line15", "line16", "line17", "line18", "line19", "last"]).join("\n"),
+        numbered(12, ["line12", "line13", "line14", "line15", "line16", "line17", "line18", "line19", "last"]).join(
+          "\n",
+        ),
       )
     }),
   )
 
   // Builder's rows: the parts of the rebuild the rows above leave open.
-  it.live("skips a read from history with only an offset or only a limit, or one that showed no file text", () =>
+  calm.live("skips a read from history with only an offset or only a limit, or one that showed no file text", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       for (const name of ["offset.txt", "limit.txt", "image.txt", "control.txt"])
@@ -1586,7 +1618,7 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  it.live("an edit in history of a file that is no longer whole text is not rebuilt", () =>
+  calm.live("an edit in history of a file that is no longer whole text is not rebuilt", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const image = h.inside("edited.txt")
@@ -1595,79 +1627,85 @@ describe("the rebuild after a restart", () => {
       yield* h.change(control, text(twenty))
       const edit = (id: string, file: string) =>
         toolPart(id, "Edit", { file_path: file, old_string: "a", new_string: "b" }, { text: "Edited" }, T(60))
-      expect(yield* h.changes(history([assistant("msg_0000000001", [edit("c1", image), edit("c2", control)])]))).toEqual(
-        [],
-      )
+      expect(
+        yield* h.changes(history([assistant("msg_0000000001", [edit("c1", image), edit("c2", control)])])),
+      ).toEqual([])
       expect((yield* h.ledger.assertRead(h.session.id, image, "edited.txt").pipe(Effect.flip)).code).toBe("file.unread")
       yield* h.ledger.assertFresh(h.session.id, control, "control.txt")
     }),
   )
 
-  it.live("the newest call wins whatever spelling it used, and a reminder block in a read result is not file text", () =>
-    Effect.gen(function* () {
-      const h = yield* setup()
-      const spelled = h.inside("spelled.txt")
-      const reminded = h.inside("reminded.txt")
-      yield* h.change(spelled, text(["a", "B"]))
-      yield* h.change(reminded, text(["one", "two"]))
-      const messages = history([
-        assistant("msg_0000000001", [
-          toolPart("c1", "Write", { file_path: "spelled.txt", content: text(["first"]) }, {}, T(60)),
-          // What the disk holds now, so only the newest call, below, makes a change to report.
-          toolPart("c2", "Write", { file_path: spelled, content: text(["a", "B"]) }, {}, T(60)),
-          toolPart("c3", "Write", { file_path: "spelled.txt", content: text(["a", "b"]) }, {}, T(60)),
-          toolPart(
-            "c4",
-            "Read",
-            { file_path: reminded },
-            {
-              text: `${readResult("reminded.txt", ["one", "two"])}\n\n<system-reminder>\nnot in the file\n</system-reminder>`,
-              metadata: { truncated: false },
-            },
-            T(60),
-          ),
-        ]),
-      ])
-      const rows = yield* h.changes(messages)
-      // The read showed what the disk holds, so only the written file is reported, against its newest write.
-      expect(labels(rows)).toEqual([expect.stringContaining(spelled)])
-      expect(rows[0].content).toBe("1: a\n2: B")
-    }),
+  calm.live(
+    "the newest call wins whatever spelling it used, and a reminder block in a read result is not file text",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* setup()
+        const spelled = h.inside("spelled.txt")
+        const reminded = h.inside("reminded.txt")
+        yield* h.change(spelled, text(["a", "B"]))
+        yield* h.change(reminded, text(["one", "two"]))
+        const messages = history([
+          assistant("msg_0000000001", [
+            toolPart("c1", "Write", { file_path: "spelled.txt", content: text(["first"]) }, {}, T(60)),
+            // What the disk holds now, so only the newest call, below, makes a change to report.
+            toolPart("c2", "Write", { file_path: spelled, content: text(["a", "B"]) }, {}, T(60)),
+            toolPart("c3", "Write", { file_path: "spelled.txt", content: text(["a", "b"]) }, {}, T(60)),
+            toolPart(
+              "c4",
+              "Read",
+              { file_path: reminded },
+              {
+                text: `${readResult("reminded.txt", ["one", "two"])}\n\n<system-reminder>\nnot in the file\n</system-reminder>`,
+                metadata: { truncated: false },
+              },
+              T(60),
+            ),
+          ]),
+        ])
+        const rows = yield* h.changes(messages)
+        // The read showed what the disk holds, so only the written file is reported, against its newest write.
+        expect(labels(rows)).toEqual([expect.stringContaining(spelled)])
+        expect(rows[0].content).toBe("1: a\n2: B")
+      }),
   )
 
-  it.live("a record the session already holds wins over history, and a time equal to the one in history is no change", () =>
-    Effect.gen(function* () {
-      const h = yield* setup()
-      const held = h.inside("held.txt")
-      const same = h.inside("same.txt")
-      const control = h.inside("control.txt")
-      yield* h.write(held, text(twenty))
-      // A whole second, so the time on disk can equal it exactly.
-      const second = Math.floor(Date.now() / 1000) * 1000 - 60_000
-      yield* Effect.promise(async () => {
-        await fs.writeFile(same, text(["changed"]))
-        await fs.utimes(same, second / 1000, second / 1000)
-      })
-      yield* h.change(control, text(["changed"]))
-      const messages = history([
-        assistant("msg_0000000001", [
-          toolPart("c1", "Write", { file_path: held, content: text(["older"]) }, {}, T(60)),
-          toolPart("c2", "Write", { file_path: same, content: text(["old"]) }, {}, second),
-          toolPart("c3", "Write", { file_path: control, content: text(["old"]) }, {}, T(60)),
-        ]),
-      ])
-      expect(labels(yield* h.changes(messages))).toEqual([expect.stringContaining(control)])
-    }),
+  calm.live(
+    "a record the session already holds wins over history, and a time equal to the one in history is no change",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* setup()
+        const held = h.inside("held.txt")
+        const same = h.inside("same.txt")
+        const control = h.inside("control.txt")
+        yield* h.write(held, text(twenty))
+        // A whole second, so the time on disk can equal it exactly.
+        const second = Math.floor(Date.now() / 1000) * 1000 - 60_000
+        yield* Effect.promise(async () => {
+          await fs.writeFile(same, text(["changed"]))
+          await fs.utimes(same, second / 1000, second / 1000)
+        })
+        yield* h.change(control, text(["changed"]))
+        const messages = history([
+          assistant("msg_0000000001", [
+            toolPart("c1", "Write", { file_path: held, content: text(["older"]) }, {}, T(60)),
+            toolPart("c2", "Write", { file_path: same, content: text(["old"]) }, {}, second),
+            toolPart("c3", "Write", { file_path: control, content: text(["old"]) }, {}, T(60)),
+          ]),
+        ])
+        expect(labels(yield* h.changes(messages))).toEqual([expect.stringContaining(control)])
+      }),
   )
 
-  it.live("rebuilds once per session: after a completed compaction it is not repeated", () =>
+  calm.live("rebuilds once per session: after a completed compaction it is not repeated", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const bus = yield* Bus.Service
       const written = h.inside("written.txt")
       yield* h.change(written, text(["x"]))
       const messages = history([
-        assistant("msg_0000000001", [toolPart("c1", "Write", { file_path: written, content: text(["old"]) }, {}, T(60))]),
+        assistant("msg_0000000001", [
+          toolPart("c1", "Write", { file_path: written, content: text(["old"]) }, {}, T(60)),
+        ]),
       ])
       const compact = Effect.gen(function* () {
         yield* bus.publish(SessionEvent.Compaction.Started, { sessionID: h.session.id, reason: "manual", recent: "" })
@@ -1688,7 +1726,7 @@ describe("the rebuild after a restart", () => {
 
   // History can come from `orb session import`, so a path in it is a name from a store the person did not write (class
   // 5): only a file inside the project is seeded. Every row has a project control that is reported.
-  it.live("seeds no path outside the project, whatever its spelling, with a project file as the control", () =>
+  calm.live("seeds no path outside the project, whatever its spelling, with a project file as the control", () =>
     Effect.gen(function* () {
       const outside = (yield* tmpdirScoped()).path
       const h = yield* setup()
@@ -1733,7 +1771,7 @@ describe("the rebuild after a restart", () => {
   // imported), so a project file that the read tool would ask about first is neither seeded nor read: the built-in `.env`
   // asks, a rule the person wrote, and a link onto such a file, each named by a failed write, a write, a read and an edit
   // at time 0. Each history runs in its own session, with a project file the same history wrote as the reported control.
-  it.live("seeds no file that the read tool would ask about, whatever call named it", () =>
+  calm.live("seeds no file that the read tool would ask about, whatever call named it", () =>
     Effect.gen(function* () {
       const h = yield* setup([
         allowAll,
@@ -1756,7 +1794,13 @@ describe("the rebuild after a restart", () => {
           toolPart(id, "Write", { file_path: name, content: "x\n" }, { error: "declined" }, 0),
         write: (name: string, id: string) => toolPart(id, "Write", { file_path: name, content: "x\n" }, {}, 0),
         read: (name: string, id: string) =>
-          toolPart(id, "Read", { file_path: name }, { text: readResult(name, ["x"]), metadata: { truncated: false } }, 0),
+          toolPart(
+            id,
+            "Read",
+            { file_path: name },
+            { text: readResult(name, ["x"]), metadata: { truncated: false } },
+            0,
+          ),
         edit: (name: string, id: string) =>
           toolPart(id, "Edit", { file_path: name, old_string: "a", new_string: "b" }, {}, 0),
         patch: (name: string, id: string) =>
@@ -1787,42 +1831,44 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  const linkedRebuild = canLinkFile ? it.live : it.live.skip
+  const linkedRebuild = canLinkFile ? calm.live : calm.live.skip
   // Gate's row (class 4): while the project is not trusted, a project file that is a link leading out is placed outside
   // the project, so the rebuild reads nothing through it. Not seeded, it is not reported once the project is trusted
   // again, while a project file the same history wrote is.
-  linkedRebuild("while the project's trust is revoked, a file from history that is a link leading out is not seeded", () =>
-    Effect.gen(function* () {
-      const outside = (yield* tmpdirScoped()).path
-      const h = yield* setup()
-      const key = path.join(outside, "id_rsa")
-      const linked = h.inside("linked.txt")
-      const control = h.inside("control.txt")
-      yield* Effect.promise(async () => {
-        await fs.writeFile(key, text(["KEY-MARKER"]))
-        await fs.symlink(key, linked)
-      })
-      yield* h.change(control, text(["changed"]))
-      yield* h.trust.revoke()
-      const messages = history([
-        assistant("msg_0000000001", [
-          toolPart("e", "Edit", { file_path: linked, old_string: "a", new_string: "b" }, {}, T(60)),
-          toolPart("c", "Write", { file_path: control, content: text(["old"]) }, {}, T(60)),
-        ]),
-      ])
-      expect(labels(yield* h.changes(messages))).toEqual([expect.stringContaining(control)])
-      yield* h.trust.grant({ persist: false, via: "test" })
-      yield* h.change(key, text(["KEY-CHANGED"]))
-      const rows = yield* h.changes(messages)
-      expect(rows).toEqual([])
-      expect(JSON.stringify(rows)).not.toContain("KEY-")
-    }),
+  linkedRebuild(
+    "while the project's trust is revoked, a file from history that is a link leading out is not seeded",
+    () =>
+      Effect.gen(function* () {
+        const outside = (yield* tmpdirScoped()).path
+        const h = yield* setup()
+        const key = path.join(outside, "id_rsa")
+        const linked = h.inside("linked.txt")
+        const control = h.inside("control.txt")
+        yield* Effect.promise(async () => {
+          await fs.writeFile(key, text(["KEY-MARKER"]))
+          await fs.symlink(key, linked)
+        })
+        yield* h.change(control, text(["changed"]))
+        yield* h.trust.revoke()
+        const messages = history([
+          assistant("msg_0000000001", [
+            toolPart("e", "Edit", { file_path: linked, old_string: "a", new_string: "b" }, {}, T(60)),
+            toolPart("c", "Write", { file_path: control, content: text(["old"]) }, {}, T(60)),
+          ]),
+        ])
+        expect(labels(yield* h.changes(messages))).toEqual([expect.stringContaining(control)])
+        yield* h.trust.grant({ persist: false, via: "test" })
+        yield* h.change(key, text(["KEY-CHANGED"]))
+        const rows = yield* h.changes(messages)
+        expect(rows).toEqual([])
+        expect(JSON.stringify(rows)).not.toContain("KEY-")
+      }),
   )
 
   // Gate's row (class 4): the rebuild asks `reachable` on the target it resolved before it seeds it. The resolution
   // already places every link that leads out of an untrusted project outside it, so this row gives the producer a
   // `reachable` that refuses, and reads what was seeded; the real one is the control.
-  it.live("seeds only a file that reachable accepts", () =>
+  calm.live("seeds only a file that reachable accepts", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("history.txt")
@@ -1857,7 +1903,7 @@ describe("the rebuild after a restart", () => {
   // Gate's row (class 5, 7): whether the read tool would read a file from history without a question is asked of
   // `Permission.allowed`, and a check that fails seeds nothing. Here `allowed` alone fails, with the real error for a
   // session it does not know, while the deny checks pass; the real `allowed` is the control.
-  it.live("seeds nothing when the check that the read tool would read without a question fails", () =>
+  calm.live("seeds nothing when the check that the read tool would read without a question fails", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("history.txt")
@@ -1872,8 +1918,14 @@ describe("the rebuild after a restart", () => {
       const agents = yield* Agent.Service
       const agent = (yield* agents.get(build))!
       const produce = (checks: Permission.Interface, session: Session.Info) =>
-        FileChangeReminder.durable({ ledger: h.ledger, access, reader, permission: checks, trust: h.trust, environment })
-          .run({ session, agent, tools: [], model: {} as never, messages, step: 1, firstStep: true })
+        FileChangeReminder.durable({
+          ledger: h.ledger,
+          access,
+          reader,
+          permission: checks,
+          trust: h.trust,
+          environment,
+        }).run({ session, agent, tools: [], model: {} as never, messages, step: 1, firstStep: true })
       const gone = Session.ID.make("ses_durable_reminders_allowed_gone")
       const failing: Permission.Interface = {
         ...permission,
@@ -1888,7 +1940,7 @@ describe("the rebuild after a restart", () => {
   )
 
   // Review row: a file rebuilt from a read in history is one the model only read, so the harness text claims no write.
-  it.live("the harness text claims no write, so it is true of a file the model only read", () =>
+  calm.live("the harness text claims no write, so it is true of a file the model only read", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const read = h.inside("read.txt")
@@ -1918,29 +1970,37 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  // Review rows: the rebuild runs under the producer's deadline, and history can name many files.
+  // Review rows: the rebuild runs under the producer's deadline, and history can name many files. The producer runs on a
+  // clock that moves only while its work waits (`waitingClock`), so its budget, each share and its deadline are spent
+  // only by the waits a row adds; the real work takes no time on it, however busy the machine is. `read` builds the
+  // row's read from the real reader, whose work is counted.
   const producer = Effect.fnUntraced(function* (
     h: Effect.Success<ReturnType<typeof setup>>,
-    read: ReadToolFileSystem.Interface["read"],
+    read: (real: ReadToolFileSystem.Interface) => ReadToolFileSystem.Interface["read"],
     deadline?: Duration.Input,
     budget?: number,
   ) {
-    const reader = yield* ReadToolFileSystem.Service
+    const time = yield* waitingClock
+    const reader = time.counted(yield* ReadToolFileSystem.Service)
     const agents = yield* Agent.Service
     const agent = (yield* agents.get(build))!
     const made = FileChangeReminder.durable({
-      ledger: h.ledger,
-      access: yield* FileAccess.Service,
-      reader: { ...reader, read },
-      permission: yield* Permission.Service,
-      trust: h.trust,
-      environment: yield* Environment.Service,
+      ledger: time.counted(h.ledger),
+      access: time.counted(yield* FileAccess.Service),
+      reader: { ...reader, read: read(reader) },
+      permission: time.counted(yield* Permission.Service),
+      trust: time.counted(h.trust),
+      environment: time.counted(yield* Environment.Service),
       budget,
     })
-    return (messages: ReadonlyArray<SessionMessage.Info>) =>
+    const run = (messages: ReadonlyArray<SessionMessage.Info>) =>
       made
         .run({ session: h.session, agent, tools: [], model: {} as never, messages, step: 1, firstStep: true })
-        .pipe(Effect.timeoutOption(deadline ?? made.timeout ?? SessionReminders.DEFAULT_TIMEOUT))
+        .pipe(
+          Effect.timeoutOption(deadline ?? made.timeout ?? SessionReminders.DEFAULT_TIMEOUT),
+          Effect.provideService(Clock.Clock, time.clock),
+        )
+    return { run, now: time.now }
   })
   const edits = (files: ReadonlyArray<string>) =>
     history([
@@ -1959,40 +2019,41 @@ describe("the rebuild after a restart", () => {
       const edited = h.inside("edited.txt")
       yield* h.change(edited, text(twenty))
       const reads: Array<string> = []
-      const read: ReadToolFileSystem.Interface["read"] = (file) =>
+      const read = (): ReadToolFileSystem.Interface["read"] => (file) =>
         Effect.sync(() => reads.push(file)).pipe(Effect.andThen(Effect.never))
       const messages = edits([edited])
       const cut = yield* producer(h, read, "300 millis")
-      expect(Option.isNone(yield* cut(messages))).toBe(true)
-      const run = yield* producer(h, read)
+      expect(Option.isNone(yield* cut.run(messages))).toBe(true)
+      const next = yield* producer(h, read)
       expect(reads).toEqual([edited])
       // The next step finds the session claimed, so it reads nothing and finishes in time.
-      expect(yield* run(messages)).toEqual(Option.some([]))
+      expect(yield* next.run(messages)).toEqual(Option.some([]))
       expect(reads).toEqual([edited])
     }),
   )
 
-  it.live("reads only the newest files the ledger keeps", () =>
-    Effect.gen(function* () {
-      const h = yield* setup()
-      const files = Array.from({ length: FileLedger.MAX_FILES + 5 }, (_, index) => h.inside(`f${index}.txt`))
-      yield* Effect.promise(() => Promise.all(files.map((file) => fs.writeFile(file, text(["a"])))))
-      const real = yield* ReadToolFileSystem.Service
-      const reads: Array<string> = []
-      // Which files are read is the point here, not how fast: the checks and reads of 105 files can overrun the
-      // rebuild's budget on a loaded runner, so this row gives the rebuild, and the producer's deadline, more time.
-      const run = yield* producer(
-        h,
-        (file, resource, page) =>
-          Effect.sync(() => reads.push(file)).pipe(Effect.andThen(real.read(file, resource, page))),
-        undefined,
-        10_000,
-      )
-      expect(yield* run(edits(files))).toEqual(Option.some([]))
-      expect(reads.toSorted()).toEqual(files.slice(5).toSorted())
-      yield* h.ledger.assertFresh(h.session.id, files.at(-1)!, "newest")
-      expect((yield* h.ledger.assertRead(h.session.id, files[0], "oldest").pipe(Effect.flip)).code).toBe("file.unread")
-    }),
+  it.live(
+    "reads only the newest files the ledger keeps",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* setup()
+        const files = Array.from({ length: FileLedger.MAX_FILES + 5 }, (_, index) => h.inside(`f${index}.txt`))
+        yield* Effect.promise(() => Promise.all(files.map((file) => fs.writeFile(file, text(["a"])))))
+        const reads: Array<string> = []
+        // Which files are read is the point here, not how fast: the checks and reads of 105 files take no time on the
+        // producer's clock, so the default budget covers them however busy the machine is.
+        const made = yield* producer(
+          h,
+          (real) => (file, resource, page) =>
+            Effect.sync(() => reads.push(file)).pipe(Effect.andThen(real.read(file, resource, page))),
+        )
+        expect(yield* made.run(edits(files))).toEqual(Option.some([]))
+        expect(reads.toSorted()).toEqual(files.slice(5).toSorted())
+        yield* h.ledger.assertFresh(h.session.id, files.at(-1)!, "newest")
+        expect((yield* h.ledger.assertRead(h.session.id, files[0], "oldest").pipe(Effect.flip)).code).toBe(
+          "file.unread",
+        )
+      }),
     40_000,
   )
 
@@ -2000,14 +2061,15 @@ describe("the rebuild after a restart", () => {
   // rebuild's read and the watched file's read together take longer than the default deadline: without a budget the
   // edited file is left out of the rebuild and the written file is not reported, and with one whose share for a file
   // (half of it) is longer than a read, both are done in time.
-  it.live("a budget given to the producer covers the rebuild, the watched files and the deadline", () =>
-    Effect.gen(function* () {
-      const real = yield* ReadToolFileSystem.Service
-      const slow: ReadToolFileSystem.Interface["read"] = (file, resource, page) =>
-        Effect.sleep("4 seconds").pipe(Effect.andThen(real.read(file, resource, page)))
-      const results = yield* Effect.forEach(
-        [undefined, 10_000],
-        (budget) =>
+  it.live(
+    "a budget given to the producer covers the rebuild, the watched files and the deadline",
+    () =>
+      Effect.gen(function* () {
+        const slow =
+          (real: ReadToolFileSystem.Interface): ReadToolFileSystem.Interface["read"] =>
+          (file, resource, page) =>
+            Effect.sleep("4 seconds").pipe(Effect.andThen(real.read(file, resource, page)))
+        const results = yield* Effect.forEach([undefined, 10_000], (budget) =>
           Effect.gen(function* () {
             const h = yield* setup()
             const edited = h.inside(`edited-${budget ?? "default"}.txt`)
@@ -2015,8 +2077,8 @@ describe("the rebuild after a restart", () => {
             yield* Effect.promise(() => fs.writeFile(edited, text(["a"])))
             yield* h.write(written, text(["a"]))
             yield* h.change(written, text(["b"]))
-            const run = yield* producer(h, slow, undefined, budget)
-            const found = yield* run(edits([edited]))
+            const made = yield* producer(h, slow, undefined, budget)
+            const found = yield* made.run(edits([edited]))
             const seeded = Exit.isSuccess(yield* h.ledger.assertRead(h.session.id, edited, "edited").pipe(Effect.exit))
             return {
               done: Option.isSome(found),
@@ -2024,12 +2086,52 @@ describe("the rebuild after a restart", () => {
               seeded,
             }
           }),
-      )
-      expect(results).toEqual([
-        { done: true, reported: [], seeded: false },
-        { done: true, reported: [expect.stringContaining("written-10000.txt")], seeded: true },
-      ])
-    }),
+        )
+        expect(results).toEqual([
+          { done: true, reported: [], seeded: false },
+          { done: true, reported: [expect.stringContaining("written-10000.txt")], seeded: true },
+        ])
+      }),
+    40_000,
+  )
+
+  // A producer built with no budget reads `FileChangeReminder.Budget` when it runs, for the rebuild and for the watched
+  // files alike; the rows that run unhurried rely on it. Each read here takes a second, longer than a file's share of the
+  // default budget and shorter than the producer's deadline: with the default the edited file is left out of the rebuild
+  // and the written file is not reported, and with a budget set around the run both are done.
+  it.live(
+    "a budget set around the run covers the rebuild and the watched files of a producer built with none",
+    () =>
+      Effect.gen(function* () {
+        const slow =
+          (real: ReadToolFileSystem.Interface): ReadToolFileSystem.Interface["read"] =>
+          (file, resource, page) =>
+            Effect.sleep("1 second").pipe(Effect.andThen(real.read(file, resource, page)))
+        const results = yield* Effect.forEach([undefined, 10_000], (budget) =>
+          Effect.gen(function* () {
+            const h = yield* setup()
+            const edited = h.inside(`edited-set-${budget ?? "default"}.txt`)
+            const written = h.inside(`written-set-${budget ?? "default"}.txt`)
+            yield* Effect.promise(() => fs.writeFile(edited, text(["a"])))
+            yield* h.write(written, text(["a"]))
+            yield* h.change(written, text(["b"]))
+            const made = yield* producer(h, slow)
+            const found = yield* budget === undefined
+              ? made.run(edits([edited]))
+              : made.run(edits([edited])).pipe(Effect.provideService(FileChangeReminder.Budget, budget))
+            const seeded = Exit.isSuccess(yield* h.ledger.assertRead(h.session.id, edited, "edited").pipe(Effect.exit))
+            return {
+              done: Option.isSome(found),
+              reported: Option.getOrElse(found, () => []).map((entry) => entry.data?.label),
+              seeded,
+            }
+          }),
+        )
+        expect(results).toEqual([
+          { done: true, reported: [], seeded: false },
+          { done: true, reported: [expect.stringContaining("written-set-10000.txt")], seeded: true },
+        ])
+      }),
     40_000,
   )
 
@@ -2038,44 +2140,49 @@ describe("the rebuild after a restart", () => {
   // starts just before each budget ends: the rebuild's reads of the edited files take about 1.35 budgets, and the
   // checks of the written files as long again, longer than two budgets and the comparisons' time. The producer's
   // deadline covers one share past each budget, so every written file is still reported.
-  it.live("the producer's deadline covers a rebuild and checks that each run one share past their budget", () =>
-    Effect.gen(function* () {
-      const h = yield* setup()
-      const budget = 12_000
-      const edited = Array.from({ length: 17 }, (_, index) => h.inside(`edited-${index}.txt`))
-      const written = Array.from({ length: 17 }, (_, index) => h.inside(`written-${index}.txt`))
-      yield* Effect.promise(() => Promise.all([...edited, ...written].map((file) => fs.writeFile(file, text(["now"])))))
-      const real = yield* ReadToolFileSystem.Service
-      const run = yield* producer(
-        h,
-        (file, resource, page) => Effect.sleep(budget * 0.45).pipe(Effect.andThen(real.read(file, resource, page))),
-        undefined,
-        budget,
-      )
-      const started = Date.now()
-      const found = yield* run(
-        history([
-          assistant("msg_0000000001", [
-            ...edited.map((file, index) =>
-              toolPart(`e${index}`, "Edit", { file_path: file, old_string: "a", new_string: "b" }, {}, T(60)),
-            ),
-            ...written.map((file, index) =>
-              toolPart(`w${index}`, "Write", { file_path: file, content: text(["then"]) }, {}, T(60)),
-            ),
+  it.live(
+    "the producer's deadline covers a rebuild and checks that each run one share past their budget",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* setup()
+        const budget = 12_000
+        const edited = Array.from({ length: 17 }, (_, index) => h.inside(`edited-${index}.txt`))
+        const written = Array.from({ length: 17 }, (_, index) => h.inside(`written-${index}.txt`))
+        yield* Effect.promise(() =>
+          Promise.all([...edited, ...written].map((file) => fs.writeFile(file, text(["now"])))),
+        )
+        const made = yield* producer(
+          h,
+          (real) => (file, resource, page) =>
+            Effect.sleep(budget * 0.45).pipe(Effect.andThen(real.read(file, resource, page))),
+          undefined,
+          budget,
+        )
+        const started = made.now()
+        const found = yield* made.run(
+          history([
+            assistant("msg_0000000001", [
+              ...edited.map((file, index) =>
+                toolPart(`e${index}`, "Edit", { file_path: file, old_string: "a", new_string: "b" }, {}, T(60)),
+              ),
+              ...written.map((file, index) =>
+                toolPart(`w${index}`, "Write", { file_path: file, content: text(["then"]) }, {}, T(60)),
+              ),
+            ]),
           ]),
-        ]),
-      )
-      expect(Date.now() - started).toBeGreaterThan(2 * budget + 5_500)
-      expect(
-        Option.getOrElse(found, () => [])
-          .map((entry) => entry.data?.label)
-          .toSorted(),
-      ).toEqual(written.toSorted().map((file) => `Changed lines of ${file}`))
-    }),
+        )
+        // On the producer's clock: three rounds of reads in the rebuild, then three of checks.
+        expect(made.now() - started).toBeCloseTo(6 * budget * 0.45)
+        expect(
+          Option.getOrElse(found, () => [])
+            .map((entry) => entry.data?.label)
+            .toSorted(),
+        ).toEqual(written.toSorted().map((file) => `Changed lines of ${file}`))
+      }),
     60_000,
   )
 
-  it.live("refuses a device or pipe spelling in history before it opens anything", () =>
+  calm.live("refuses a device or pipe spelling in history before it opens anything", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const pipe = `\\\\.\\pipe\\orbit-pc7-${process.pid}-${Date.now()}`
@@ -2108,10 +2215,9 @@ describe("the rebuild after a restart", () => {
           toolPart("c", "Write", { file_path: control, content: text(["old"]) }, {}, T(60)),
         ]),
       ])
-      const rows = yield* h.changes(messages).pipe(
-        Effect.timeout("10 seconds"),
-        Effect.ensuring(Effect.sync(() => server?.close())),
-      )
+      const rows = yield* h
+        .changes(messages)
+        .pipe(Effect.timeout("10 seconds"), Effect.ensuring(Effect.sync(() => server?.close())))
       expect(connections).toEqual([])
       expect(labels(rows)).toEqual([expect.stringContaining(control)])
       // Nothing was seeded for a device: the control's report ended its watch, and no other record holds text.
@@ -2141,6 +2247,8 @@ describe("a collection that ends early (class 7)", () => {
       reads: Readonly<Record<string, Read>>,
       asks?: Readonly<Record<string, Permission.Interface["allowed"]>>,
     ) => Effect.Effect<SessionReminders.Interface>
+    /** Runs the row's own work on the real clock, holding the collections' clock still until it ends. */
+    readonly work: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   }
   interface Exit {
     readonly name: string
@@ -2212,7 +2320,7 @@ describe("a collection that ends early (class 7)", () => {
       run: (c) =>
         Effect.gen(function* () {
           yield* c.h.permit([allowAll, denySecrets, { action: "Read", resource: "*cut.txt", effect: "deny" }])
-          yield* c.h.changes()
+          yield* c.h.changes([], { reminders: yield* c.over({}) })
           yield* c.h.permit([allowAll, denySecrets])
         }),
       posted: ["kept"],
@@ -2247,9 +2355,7 @@ describe("a collection that ends early (class 7)", () => {
         Effect.gen(function* () {
           const written = c.h.inside("history.txt")
           const messages = history([
-            assistant("msg_0000000001", [
-              toolPart("w", "Write", { file_path: written, content: "a\n" }, {}, T(60)),
-            ]),
+            assistant("msg_0000000001", [toolPart("w", "Write", { file_path: written, content: "a\n" }, {}, T(60))]),
           ])
           yield* c.h.collect(messages, { reminders: yield* c.over({}, { "history.txt": () => Effect.never }) })
         }),
@@ -2272,22 +2378,27 @@ describe("a collection that ends early (class 7)", () => {
               ),
           })
           const fiber = yield* c.h.collect([], { reminders }).pipe(Effect.forkChild)
-          yield* Deferred.await(started)
-          const sessionID = c.h.session.id
-          yield* c.bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
-          yield* c.bus.publish(SessionEvent.Compaction.Ended, {
-            sessionID,
-            reason: "manual",
-            text: "summary",
-            recent: "",
-          })
-          // The ledger hears of the compaction on its own fiber, so wait until it dropped every record.
-          yield* c.h.ledger.watched(sessionID).pipe(
-            Effect.flatMap((watched) => (watched.length === 0 ? Effect.void : Effect.fail("still held"))),
-            Effect.retry({ times: 100, schedule: Schedule.spaced("10 millis") }),
-            Effect.orDie,
+          // The compaction is the row's own work: while it runs, no share of the collection ends.
+          yield* c.work(
+            Effect.gen(function* () {
+              yield* Deferred.await(started)
+              const sessionID = c.h.session.id
+              yield* c.bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
+              yield* c.bus.publish(SessionEvent.Compaction.Ended, {
+                sessionID,
+                reason: "manual",
+                text: "summary",
+                recent: "",
+              })
+              // The ledger hears of the compaction on its own fiber, so wait until it dropped every record.
+              yield* c.h.ledger.watched(sessionID).pipe(
+                Effect.flatMap((watched) => (watched.length === 0 ? Effect.void : Effect.fail("still held"))),
+                Effect.retry({ times: 100, schedule: Schedule.spaced("10 millis") }),
+                Effect.orDie,
+              )
+              yield* Deferred.succeed(release, undefined)
+            }),
           )
-          yield* Deferred.succeed(release, undefined)
           yield* Fiber.join(fiber)
         }),
       // Both changes are posted, but the compaction forgot what the model had read, so neither counts as seen.
@@ -2303,86 +2414,99 @@ describe("a collection that ends early (class 7)", () => {
   const txt = (files: ReadonlyArray<Name>) => files.map((name) => `${name}.txt`)
 
   for (const exit of exits)
-    it.live(`${exit.name} marks nothing seen that no posted row reported`, () =>
-      Effect.gen(function* () {
-        const h = yield* setup()
-        const bus = yield* Bus.Service
-        const real = yield* ReadToolFileSystem.Service
-        const services = {
-          ledger: h.ledger,
-          access: yield* FileAccess.Service,
-          permission: yield* Permission.Service,
-          trust: h.trust,
-          environment: yield* Environment.Service,
-        }
-        const over: ExitContext["over"] = (reads, asks = {}) =>
-          Effect.gen(function* () {
-            return yield* SessionReminders.Service
-          }).pipe(
-            Effect.provide(
-              AppNodeBuilder.build(
-                LayerNode.group([
-                  Bus.node,
-                  SessionReminders.configured({
-                    durable: [
-                      FileChangeReminder.durable({
-                        ...services,
-                        permission: {
-                          ...services.permission,
-                          allowed: (request) =>
-                            (asks[path.basename(request.resources[0] ?? "")] ?? services.permission.allowed)(request),
-                        },
-                        reader: {
-                          ...real,
-                          read: (file, resource, page) =>
-                            (reads[path.basename(file)] ?? real.read)(file, resource, page),
-                        },
-                      }),
-                    ],
-                    derived: [],
-                  }),
-                ]),
-                [Bus.node.replace(Layer.succeed(Bus.Service, bus))],
-              ),
-            ),
-          )
-        const files = { kept: h.inside("kept.txt"), cut: h.inside("cut.txt") }
-        yield* h.write(files.kept, text(twenty))
-        yield* h.write(files.cut, text(twenty))
-        yield* h.change(files.kept, text(twenty.map((line) => (line === "line4" ? "PERSON-EDIT" : line))))
-        yield* h.change(files.cut, text(twenty.map((line) => (line === "line9" ? "PERSON-EDIT" : line))))
-
-        yield* exit.run({ h, bus, real, over })
-
-        expect(names(yield* h.stored)).toEqual(txt(exit.posted))
-        for (const name of ["kept", "cut"] as const) {
-          const result = yield* h.run("Write", { file_path: files[name], content: "MODEL-OVERWRITE" })
-          if (exit.seen.includes(name)) {
-            expect(status(result)).toBe("completed")
-            continue
+    it.live(
+      `${exit.name} marks nothing seen that no posted row reported`,
+      () =>
+        Effect.gen(function* () {
+          const h = yield* setup()
+          const bus = yield* Bus.Service
+          // The collections run on a clock that moves only while their work waits, so a file's share ends only for a
+          // read that waits, never for one that a busy machine makes slow.
+          const time = yield* waitingClock
+          const real = time.counted(yield* ReadToolFileSystem.Service)
+          const services = {
+            ledger: time.counted(h.ledger),
+            access: time.counted(yield* FileAccess.Service),
+            permission: time.counted(yield* Permission.Service),
+            trust: time.counted(h.trust),
+            environment: time.counted(yield* Environment.Service),
           }
-          expect(errorType(result)).toBe(exit.refusal)
-          expect(yield* Effect.promise(() => fs.readFile(files[name], "utf8"))).toContain("PERSON-EDIT")
-        }
-        expect(names(yield* h.changes())).toEqual(txt(exit.next))
-      }),
+          const over: ExitContext["over"] = (reads, asks = {}) =>
+            Effect.gen(function* () {
+              return yield* SessionReminders.Service
+            }).pipe(
+              Effect.provide(
+                AppNodeBuilder.build(
+                  LayerNode.group([
+                    Bus.node,
+                    SessionReminders.configured({
+                      durable: [
+                        FileChangeReminder.durable({
+                          ...services,
+                          permission: {
+                            ...services.permission,
+                            allowed: (request) =>
+                              (asks[path.basename(request.resources[0] ?? "")] ?? services.permission.allowed)(request),
+                          },
+                          reader: {
+                            ...real,
+                            read: (file, resource, page) =>
+                              (reads[path.basename(file)] ?? real.read)(file, resource, page),
+                          },
+                        }),
+                      ],
+                      derived: [],
+                    }),
+                  ]),
+                  [Bus.node.replace(Layer.succeed(Bus.Service, bus))],
+                ),
+              ),
+            )
+          const files = { kept: h.inside("kept.txt"), cut: h.inside("cut.txt") }
+          yield* h.write(files.kept, text(twenty))
+          yield* h.write(files.cut, text(twenty))
+          yield* h.change(files.kept, text(twenty.map((line) => (line === "line4" ? "PERSON-EDIT" : line))))
+          yield* h.change(files.cut, text(twenty.map((line) => (line === "line9" ? "PERSON-EDIT" : line))))
+
+          yield* exit.run({ h, bus, real, over, work: time.work }).pipe(Effect.provideService(Clock.Clock, time.clock))
+
+          expect(names(yield* h.stored)).toEqual(txt(exit.posted))
+          for (const name of ["kept", "cut"] as const) {
+            const result = yield* h.run("Write", { file_path: files[name], content: "MODEL-OVERWRITE" })
+            if (exit.seen.includes(name)) {
+              expect(status(result)).toBe("completed")
+              continue
+            }
+            expect(errorType(result)).toBe(exit.refusal)
+            expect(yield* Effect.promise(() => fs.readFile(files[name], "utf8"))).toContain("PERSON-EDIT")
+          }
+          expect(
+            names(
+              yield* h.changes([], { reminders: yield* over({}) }).pipe(Effect.provideService(Clock.Clock, time.clock)),
+            ),
+          ).toEqual(txt(exit.next))
+        }),
       // Five tool calls and, should a budget break, the producer's own deadline; a loaded machine needs more than the
       // default five seconds.
       30_000,
     )
 
-  // The review's case without stubs: a formatter rewrites every line of files the agent wrote, each as long as one read
-  // returns, while the person changes one line of a small file. The comparisons of the large rewrites take seconds
-  // together, so the small file is compared first and reported at once, and every large file is reported once, at this
-  // step or a later one. How many steps that takes depends on the machine's speed (a GitHub Windows runner compared
-  // six of the eight in three steps), so later steps run until every file is reported, at most eight of them.
-  it.live(
+  // The review's case without stubs: a formatter rewrites every line of files the agent wrote while the person changes
+  // one line of a small file. The comparisons of the large rewrites take seconds together, more than a step's time for
+  // comparisons, so the small file is compared first and reported at once, and every large file is reported once, at
+  // this step or a later one. How many steps that takes depends on the machine's speed, but each step compares at least
+  // one large file while one comparison fits in that time, so later steps run until every file is reported, at most one
+  // per large file. Each large file is 1,200 lines, which a Windows machine compares in about half a second: at 1,990
+  // lines a comparison took up to 3.5 s on a loaded Windows machine, near the 5 s that all of a step's comparisons share,
+  // and a loaded run left two of the eight files unreported after nine steps, its checks also on the default budget
+  // (m5-flakes). The row runs unhurried, so a check is never what leaves a file for later.
+  calm.live(
     "a large rewrite of many files does not hold up a small change",
     () =>
       Effect.gen(function* () {
         const h = yield* setup()
-        const original = Array.from({ length: 1_990 }, (_, index) => `  a${index}()`)
-        const large = Array.from({ length: 8 }, (_, index) => h.inside(`big${index}.ts`))
+        const original = Array.from({ length: 1_200 }, (_, index) => `  a${index}()`)
+        const large = Array.from({ length: 24 }, (_, index) => h.inside(`big${index}.ts`))
         const small = h.inside("small.txt")
         for (const file of large) yield* h.write(file, text(original))
         yield* h.write(small, text(twenty))
@@ -2394,7 +2518,7 @@ describe("a collection that ends early (class 7)", () => {
         expect(status(yield* h.run("Write", { file_path: small, content: "MODEL-OVERWRITE" }))).toBe("completed")
 
         const later: Row[] = []
-        for (let step = 0; step < 8 && first.length + later.length <= large.length; step++)
+        for (let step = 0; step < large.length && first.length + later.length <= large.length; step++)
           later.push(...(yield* h.changes()))
         // Once each: a step after every file was reported finds nothing.
         later.push(...(yield* h.changes()))
@@ -2406,11 +2530,20 @@ describe("a collection that ends early (class 7)", () => {
 
 // Review fix loop 7: how a step's budget is spent when it covers only part of the watched files, as on a slow or loaded
 // machine. Every check of a file waits in its deny-rule lookup (or, in one row, every read), so one step of the real
-// producer gets through at most forty of them (eight at a time, five each within the budget), each well within its own
-// share of half the budget.
+// producer gets through forty of them (eight at a time, five each within the budget: they start at 0, 170, 340, 510 and
+// 680 ms), each well within its own share of half the budget.
+//
+// The budget, each share, the producer's deadline and the waits are measured on a clock that moves only while every
+// check waits (`waitingClock`); the real work between the waits (resolving, reading, the deny rules themselves) runs on
+// the real clock and takes no time on this one. On the wall clock these rows depended on the machine's speed: a loaded
+// Windows machine failed 16 of 50 runs, the newest file's check outlasting its share, so it was reported three steps
+// later (m5-flakes). The rows with `lag` make every real deny-rule lookup take longer than a share, which the wall clock
+// would turn into skipped checks.
 describe("a budget smaller than one pass over the files (class 7)", () => {
-  const SLOW = "160 millis"
+  const SLOW = "170 millis"
   const BUDGET = 800
+  /** A real delay longer than a file's share. */
+  const LAG = 500
   /** Far more steps than a pass of 100 files needs at forty or even ten a step, so only starvation runs out of them. */
   const STEPS = 12
   interface BudgetContext {
@@ -2425,6 +2558,11 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
       until: ReadonlyArray<string>,
       messages?: ReadonlyArray<SessionMessage.Info>,
     ) => Effect.Effect<ReadonlyMap<string, number>, unknown>
+    /**
+     * Each deny-rule lookup the producer made, in the order they started: the file's name, and how long the lookup ran
+     * before something stopped it (undefined when it finished).
+     */
+    readonly lookups: ReadonlyArray<{ readonly name: string; stopped?: number }>
   }
   interface Row {
     readonly name: string
@@ -2436,6 +2574,10 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
     readonly hung?: ReadonlyArray<number>
     /** What waits: each file's deny-rule lookup (the default), or each read of a file instead. */
     readonly slow?: "reads"
+    /** How long each wait takes, when not `SLOW`. */
+    readonly wait?: Duration.Input
+    /** Real milliseconds each deny-rule lookup's own work takes on top of its wait. */
+    readonly lag?: number
     readonly check: (c: BudgetContext) => Effect.Effect<void, unknown, Scope.Scope>
   }
   const at = (c: BudgetContext, indexes: ReadonlyArray<number>) => indexes.map((index) => path.basename(c.files[index]))
@@ -2449,6 +2591,33 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
       check: (c) =>
         Effect.gen(function* () {
           expect((yield* c.steps(at(c, [99]))).get("f99.txt")).toBe(0)
+        }),
+    },
+    {
+      // However long the real work takes, a step still starts five checks in each of its eight slots, the newest file's
+      // among the first.
+      name: "real work that outlasts a file's share changes nothing a step covers",
+      written: 100,
+      changed: [99],
+      lag: LAG,
+      check: (c) =>
+        Effect.gen(function* () {
+          expect((yield* c.steps(at(c, [99]))).get("f99.txt")).toBe(0)
+          expect(c.lookups.map((lookup) => lookup.name).toSorted()).toEqual(at(c, range(60, 100)).toSorted())
+        }),
+    },
+    {
+      // A check whose turn comes when the budget has run out is not started. Each lookup here waits exactly a quarter of
+      // the budget, so each of the eight slots starts its checks at 0, 200, 400 and 600 ms; the fifth would start at
+      // 800 ms, when no time is left, and does not.
+      name: "a check whose turn comes just as the budget ends is not started",
+      written: 100,
+      changed: [],
+      wait: "200 millis",
+      check: (c) =>
+        Effect.gen(function* () {
+          yield* c.steps([])
+          expect(c.lookups.map((lookup) => lookup.name).toSorted()).toEqual(at(c, range(68, 100)).toSorted())
         }),
     },
     {
@@ -2499,35 +2668,53 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
       // Review fix loop 8. Each slot starts a fifth check at about 640 ms, with less time left in the budget than the check
       // takes: f67 to f60 at the first step and f27 to f20 at the second. Were those checks cut at the end of the budget
       // and still counted as checked, every scan would cut the same files and f63 and f24 would never be reported; f68,
-      // checked well within the budget, is the control.
+      // checked well within the budget, is the control. Every check that starts is let run its whole share, so no lookup
+      // is stopped before its share has passed.
       name: "a check still running when the budget ends finishes, so the files then in flight are reported",
       written: 100,
       changed: [24, 63, 68],
       check: (c) =>
         Effect.gen(function* () {
           const reported = yield* c.steps(at(c, [24, 63, 68]))
-          expect(reported.get("f68.txt")).toBe(0)
-          expect(Array.from(reported.keys()).toSorted()).toEqual(at(c, [24, 63, 68]).toSorted())
+          expect(Object.fromEntries(reported)).toEqual({ "f68.txt": 0, "f63.txt": 0, "f24.txt": 1 })
+          // More checks start than finish within the budget, so some were running when it ended; none was stopped
+          // then, only by its own share running out.
+          expect(c.lookups.length).toBeGreaterThan(40)
+          expect(
+            c.lookups.filter((lookup) => lookup.stopped !== undefined && lookup.stopped < BUDGET / 2 - 50),
+          ).toEqual([])
         }),
     },
-    {
-      // After a restart: the history edits 100 files, more than the rebuild's budget can resolve and read.
-      name: "a rebuild that runs out of time keeps the newest files and leaves out the oldest",
-      written: 0,
-      changed: [],
-      check: (c) =>
-        Effect.gen(function* () {
-          const edited = range(0, 100).map((index) => c.h.inside(`h${index}.txt`))
-          yield* Effect.promise(() => Promise.all(edited.map((file) => fs.writeFile(file, text(["a"])))))
-          yield* c.steps([], edits(edited))
-          const seeded = yield* Effect.forEach([edited[99], edited[0]], (file) =>
-            c.h.ledger
-              .assertRead(c.h.session.id, file, path.basename(file))
-              .pipe(Effect.exit, Effect.map(Exit.isSuccess)),
-          )
-          expect(seeded).toEqual([true, false])
-        }),
-    },
+    // After a restart: the history edits 100 files, more than the rebuild's budget can resolve and read. The rebuild
+    // looks the newest up first, so whatever it seeds is newer than whatever it leaves out. Its names resolve within the
+    // first half of the budget, three lookups in each of the eight slots (at 0, 170 and 340 ms), so it seeds the newest
+    // 24 and leaves out the oldest, however long the real work takes.
+    ...[undefined, LAG].map(
+      (lag): Row => ({
+        name: `a rebuild that runs out of time keeps the newest files and leaves out the oldest${lag === undefined ? "" : ", however long its real work takes"}`,
+        written: 0,
+        changed: [],
+        lag,
+        check: (c) =>
+          Effect.gen(function* () {
+            const edited = range(0, 100).map((index) => c.h.inside(`h${index}.txt`))
+            yield* Effect.promise(() => Promise.all(edited.map((file) => fs.writeFile(file, text(["a"])))))
+            yield* c.steps([], edits(edited))
+            const looked = c.lookups.map((lookup) => lookup.name).filter((name) => name.startsWith("h"))
+            expect(looked.slice(0, 8).toSorted()).toEqual(
+              range(92, 100)
+                .map((index) => `h${index}.txt`)
+                .toSorted(),
+            )
+            const seeded = yield* Effect.forEach(edited, (file) =>
+              c.h.ledger
+                .assertRead(c.h.session.id, file, path.basename(file))
+                .pipe(Effect.exit, Effect.map(Exit.isSuccess)),
+            )
+            expect(seeded).toEqual(range(0, 100).map((index) => index >= 76))
+          }),
+      }),
+    ),
     {
       // The names resolve at once and each read of a file waits, so the rebuild reads only some of those it resolved.
       name: "a rebuild that runs out of time reading files reads the newest first",
@@ -2579,6 +2766,8 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
           for (const index of row.changed)
             yield* h.change(files[index], text(twenty.map((line) => (line === "line4" ? "PERSON-EDIT" : line))))
           const hung = new Set((row.hung ?? []).map((index) => files[index]))
+          const lookups: Array<{ readonly name: string; stopped?: number }> = []
+          const time = yield* waitingClock
           const reminders = yield* Effect.gen(function* () {
             return yield* SessionReminders.Service
           }).pipe(
@@ -2589,25 +2778,42 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
                   SessionReminders.configured({
                     durable: [
                       FileChangeReminder.durable({
-                        ledger: h.ledger,
-                        access: yield* FileAccess.Service,
-                        trust: h.trust,
-                        environment: yield* Environment.Service,
+                        ledger: time.counted(h.ledger),
+                        access: time.counted(yield* FileAccess.Service),
+                        trust: time.counted(h.trust),
+                        environment: time.counted(yield* Environment.Service),
                         budget: BUDGET,
                         permission: {
-                          ...permission,
+                          ...time.counted(permission),
                           denied: (request) =>
-                            Effect.sleep(row.slow === "reads" ? 0 : SLOW).pipe(
-                              Effect.andThen(permission.denied(request)),
-                            ),
+                            Effect.suspend(() => {
+                              const lookup: { readonly name: string; stopped?: number } = {
+                                name: path.basename(request.resources[0] ?? ""),
+                              }
+                              lookups.push(lookup)
+                              const started = time.now()
+                              return Effect.sleep(row.slow === "reads" ? 0 : (row.wait ?? SLOW)).pipe(
+                                Effect.andThen(
+                                  time.work(
+                                    Effect.sleep(row.lag ?? 0).pipe(Effect.andThen(permission.denied(request))),
+                                  ),
+                                ),
+                                Effect.onInterrupt(() =>
+                                  Effect.sync(() => {
+                                    lookup.stopped = time.now() - started
+                                  }),
+                                ),
+                              )
+                            }),
                         },
                         reader: {
-                          ...real,
+                          ...time.counted(real),
+                          // A hung read waits on nothing the clock knows of, so only its share's end stops it.
                           read: (file, resource, page) =>
                             hung.has(file)
                               ? Effect.never
                               : Effect.sleep(row.slow === "reads" ? SLOW : 0).pipe(
-                                  Effect.andThen(real.read(file, resource, page)),
+                                  Effect.andThen(time.work(real.read(file, resource, page))),
                                 ),
                         },
                       }),
@@ -2623,7 +2829,9 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
             Effect.gen(function* () {
               const reported = new Map<string, number>()
               for (let step = 0; step === 0 || (step < STEPS && !until.every((file) => reported.has(file))); step++)
-                for (const row of yield* h.changes(messages, { reminders })) {
+                for (const row of yield* h
+                  .changes(messages, { reminders })
+                  .pipe(Effect.provideService(Clock.Clock, time.clock))) {
                   const file = path.basename(row.label?.slice("Changed lines of ".length) ?? "")
                   // Each change is reported once.
                   expect(reported.has(file)).toBe(false)
@@ -2631,7 +2839,7 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
                 }
               return reported
             })
-          yield* row.check({ h, files, steps })
+          yield* row.check({ h, files, steps, lookups })
         }),
       60_000,
     )
@@ -2726,7 +2934,9 @@ describe("the context-window usage reminder", () => {
       const small = usageRows(
         yield* withEnv(USAGE_ENV, "1", h.collect(messages, { limit: { context: 100_000, output: 8_000 } })),
       )
-      expect(small.map((row) => row.harness)).toEqual([`Context window: ${used} of 92000 tokens used, ${92_000 - used} left.`])
+      expect(small.map((row) => row.harness)).toEqual([
+        `Context window: ${used} of 92000 tokens used, ${92_000 - used} left.`,
+      ])
       const first = usageRows(yield* withEnv(USAGE_ENV, "1", h.collect([])))
       expect(first.map((row) => row.harness)).toEqual(["Context window: 0 of 180000 tokens used, 180000 left."])
     }),
@@ -2748,7 +2958,7 @@ describe("the context-window usage reminder", () => {
 })
 
 describe("the production reminder node", () => {
-  it.live("collects the file-change, style, diagnostics and context-usage rows, in the reference's order", () =>
+  calm.live("collects the file-change, style, diagnostics and context-usage rows, in the reference's order", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("notes.txt")

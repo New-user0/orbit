@@ -5,6 +5,7 @@ import path from "node:path"
 import { headers, start, version } from "../src/endpoint"
 import { launch } from "../src/program"
 import { failing, standIn } from "./fixture/orb"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // `orb` from source behind a stand-in, isolated in a temporary home so it starts its own background service.
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-endpoint-"))
@@ -15,7 +16,7 @@ afterAll(async () => {
   // Stopped through the extension's own lookup, which finds the stand-in on every platform, and waited for, so the
   // service no longer holds files in the folder when it is removed.
   await launch(orb, ["service", "stop"], { timeout: 60_000 })
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("the stand-in orb runs in its own home, not the machine's", async () => {

@@ -65,7 +65,8 @@ jobs:
       fail-fast: false
       matrix:
         # sdk holds the contract-identity tests (SDK, Core, Server and Client must share one set of contracts);
-        # theme holds the theme resolution tests; compat holds the compatibility switch and root discovery tests.
+        # theme holds the theme resolution tests; compat holds the compatibility switch and root discovery tests;
+        # http-recorder holds the cassette store, whose append waits for a reader of the cassette on Windows.
         # cli runs as three jobs. `bun test --shard` splits a package's files by the Linux timings it keeps
         # (test/timings.json); `part` names the shard's coverage and timings artifacts. The sharded jobs are listed
         # first, because GitHub starts jobs in this order when the concurrency limit queues some.
@@ -88,12 +89,20 @@ jobs:
           - { package: sdk }
           - { package: theme }
           - { package: util }
+          - { package: http-recorder }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
       # Orbit does not download ripgrep; the search tools and their tests use the one on PATH.
       - name: Install ripgrep
-        run: sudo apt-get install -y ripgrep
+        # A mirror that answers an error is retried with a growing pause before the job fails.
+        run: |
+          for attempt in 1 2 3 4 5; do
+            sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y -o Acquire::Retries=3 ripgrep && exit 0
+            echo "ripgrep install attempt $attempt failed, retrying in $((attempt * 10)) s" >&2
+            sleep $((attempt * 10))
+          done
+          exit 1
       - name: Test
         working-directory: packages/${{ matrix.package }}
         # cli includes the egress test: an idle server must make no outbound connection for two minutes.
@@ -177,6 +186,7 @@ jobs:
           - { package: sdk }
           - { package: theme }
           - { package: util }
+          - { package: http-recorder }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
@@ -201,17 +211,45 @@ jobs:
           shell="$(cygpath -m "$(command -v bash)")"
           echo "SHELL=$shell" >> "$GITHUB_ENV"
           echo "$shell"
-      # The Windows image has no ripgrep, and the search tools and their tests use the one on PATH. Chocolatey's bin
-      # folder holds only a shim, which stops working once a test copies it into another folder, so the folder of the
-      # real rg.exe goes first on PATH. Printing the version fails the step when it is missing.
+      # The Windows image has no ripgrep, and the search tools and their tests use the one on PATH. The step downloads a
+      # pinned release from GitHub (Chocolatey's feed answered 503 and failed 18 jobs at once) and checks its SHA-256
+      # against the value pinned here, which is the release's published .sha256. The folder is cached between runs and
+      # the download retries with a growing pause. The folder holds the real rg.exe, not a shim, which a test may copy
+      # into another folder. Printing the version fails the step when the program is missing.
+      - name: Cache ripgrep
+        id: ripgrep-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/ripgrep
+          key: ripgrep-14.1.1-windows-x64-d0f53402
       - name: Install ripgrep
+        if: steps.ripgrep-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          RG_VERSION: "14.1.1"
+          RG_SHA256: d0f534024c42afd6cb4d38907c25cd2b249b79bbe6cc1dbee8e3e37c2b6e25a1
+        run: |
+          set -eu
+          name="ripgrep-$RG_VERSION-x86_64-pc-windows-msvc"
+          zip="$RUNNER_TEMP/$name.zip"
+          for attempt in 1 2 3 4 5 6; do
+            if curl --silent --show-error --fail --location --connect-timeout 20 --max-time 120 \
+              --output "$zip" "https://github.com/BurntSushi/ripgrep/releases/download/$RG_VERSION/$name.zip" \
+              && echo "$RG_SHA256 *$zip" | sha256sum --check --status; then
+              break
+            fi
+            test "$attempt" -lt 6 || { echo "ripgrep download failed after $attempt attempts" >&2; exit 1; }
+            echo "ripgrep download attempt $attempt failed, retrying in $((attempt * 10)) s" >&2
+            sleep $((attempt * 10))
+          done
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath '$(cygpath -w "$zip")' -DestinationPath '$(cygpath -w "$RUNNER_TEMP/ripgrep-unpacked")' -Force"
+          mkdir -p "$RUNNER_TEMP/ripgrep"
+          cp "$RUNNER_TEMP/ripgrep-unpacked/$name/rg.exe" "$RUNNER_TEMP/ripgrep/rg.exe"
+      - name: Put ripgrep on PATH
         shell: bash
         run: |
-          choco install ripgrep --yes --no-progress
-          real="$(find /c/ProgramData/chocolatey/lib/ripgrep -name rg.exe | head -n1)"
-          test -n "$real"
-          cygpath -w "$(dirname "$real")" >> "$GITHUB_PATH"
-          "$real" --version
+          cygpath -w "$RUNNER_TEMP/ripgrep" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/ripgrep/rg.exe" --version
       # The full suite, as on Linux: Windows semantics (path.win32, .exe heads, UNC paths, junctions, program lookup in
       # the working folder) are only exercised here. Git Bash runs it, as the core tests expect.
       - name: Test

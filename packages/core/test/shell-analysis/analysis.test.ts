@@ -89,6 +89,23 @@ describe("limits and empty input", () => {
     clearTimeout(timer)
     expect(JSON.parse(output)).toEqual({ class: "limit", reason: "parse:aborted" })
   }, 30_000)
+
+  // A nested script is read under the same deadline, and the shared parser is reset before the next script: tree-sitter
+  // resumes a cancelled parse on the next call otherwise, and the second script would be read from the first one's text.
+  test("a nested script that trips the deadline is opaque limit, and the next nested script is read whole", async () => {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "limits-child.ts"), "nested"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: path.join(import.meta.dir, "..", ".."),
+    })
+    const timer = setTimeout(() => child.kill(), 20_000)
+    const output = await new Response(child.stdout).text()
+    clearTimeout(timer)
+    expect(JSON.parse(output)).toEqual([
+      { opaque: { class: "limit", reason: "parse:aborted" }, commands: [] },
+      { opaque: null, commands: ["git push origin main", "echo done"] },
+    ])
+  }, 30_000)
 })
 
 describe("pre-checks", () => {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import type { SessionMessageInfo } from "@orbit/client"
@@ -10,7 +10,7 @@ import { tmpdir } from "./fixture/fixture"
 // after scrolling to the top) must still toggle when its disclosure is clicked.
 test("clicking a backfilled thought group toggles it", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 112, height: 34, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width: 112, height: 34, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const session = {
     id: "ses_backfill",

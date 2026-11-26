@@ -2254,6 +2254,104 @@ code block whose fence no line of them can close, so they keep their lines.
 on the call's `rawInput`. Something that reads a call's text content should allow for the fence around it, or read the
 call's `rawOutput`.
 
+### Trusting or untrusting a folder answers once its plugins have changed
+
+Trusting a folder (the TUI's trust dialog, `orb trust`, `--trust`, VS Code, or `location.trust.update`) read the
+folder's config before it answered, but the providers, agents and commands of the folder come from plugins that start
+again a moment later. A client that listed models right after the grant, as `orb doctor --probe --trust` does, could
+get the list of before the grant. The answer now comes once the plugins that are already on the machine have started.
+A plugin package the folder names that still has to be installed does not hold the answer: it starts when its install
+finishes, as at startup. A revoke, a second grant or a model list that comes while that install still runs is answered
+without waiting for it either, and an install that a revoke leaves with nothing to bring is stopped.
+
+The TUI's trust dialog closes on that answer. It used to close as soon as a read of the folder's status said trusted,
+which the server's `trust.updated` event brings before the grant answers, so it could close while the folder's plugins
+were still starting. Trusting the folder somewhere else, with `orb trust` or in another client, still closes it at once
+when no grant of its own is waiting.
+
+Ending trust works the same way. `location.trust.update` with `trust: false` and `orb trust --revoke` (the
+`trust.revoke` route) used to answer while the folder's provider, plugins and commands were still active. They now read
+the config again and stop the folder's plugins before they answer.
+
+The model list and the default model of a folder (`model.list`, `model.default`) also wait for the plugins that are on
+the machine to start now, as its agents and commands already did, so the first list after a folder is opened holds its
+providers. A package that still has to be installed does not hold the list. An editor's first ACP session in a busy
+machine no longer fails because the models were not listed yet.
+
+**Affects:** clients and scripts that trust or untrust a folder and then list or use its models, agents or commands.
+
+**What to do:** Nothing. A wait or a retry after a grant or a revoke is no longer needed.
+
+### A private server that stops before it is ready says why
+
+When `orb`, `orb acp`, `orb flow` or the TUI started a private server that exited before it was ready, the error said
+only "Standalone server exited before reporting readiness". It now names the server's exit code and the end of what it
+wrote to stderr, escaped. The server also waits up to five seconds for orbit.db when the previous command's server is
+still closing it, where it used to exit at once with "database is locked".
+
+**Affects:** anyone who runs Orbit commands one after another in a script or a test.
+
+**What to do:** Nothing.
+
+### A lock on Windows waits while its folder is still being removed
+
+Orbit serializes some work across processes (the TUI's tabs, config writes, plugin updates) with a lock
+folder. On Windows, making that folder could fail with "operation not permitted" right after the previous holder
+removed it, and removing it could fail with "resource busy" while another program had a file in it open. Both used to
+fail the work at once. A contender now waits for the lock as it would for one that is held, up to the lock's timeout
+(five minutes unless the caller sets another), and the holder's release waits up to five seconds for the other handle
+before it fails with the original error. Other systems still fail at once.
+
+**Affects:** Windows users who run more than one TUI or client at once.
+
+**What to do:** Nothing. Where a lock is denied for good (an access list), the error now comes at the lock's timeout,
+naming the lock, instead of at once.
+
+### Writes of state and config files wait for a reader on Windows
+
+On Windows, replacing a file that another program has open fails until that program lets go of it. The TUI's state
+files, the TUI and plugin config files, the background service's config and registration and the VS Code extension's
+IDE lock are written by replacing the file, so a write could fail while another TUI or a client was reading it. Such a
+write now tries again for up to five seconds, and then fails with the original error.
+
+**Affects:** Windows users who run more than one TUI or client at once.
+
+**What to do:** Nothing.
+
+### On Windows a server keeps watching a config folder after nothing uses it
+
+Orbit watches folders such as a project's `.orbit` and its skills folders for changes. On Windows, ending such a watch
+can crash the process in the native watcher Orbit uses (parcel-bundler/watcher#262), so a server on Windows no longer
+ends a watch when a folder is closed, its config is read again or its trust changes. It keeps the watch without
+reporting what it sees and uses it again the next time that folder is watched. The kept watches end when the server (or
+the program that embeds Orbit) shuts down, and a kept watch of a folder that was deleted or moved is dropped when that
+path is watched again. While a watch is kept, Windows does not let you rename a folder that contains the watched one,
+the same as while the folder is open in a session.
+
+**Affects:** Windows users who rename or move a project folder while the background server that opened it still runs.
+
+**What to do:** Stop the server first (`orb service stop`), or close the program that embeds Orbit, then rename the
+folder. Deleting the folder still works while the server runs.
+
+### A slow status line command is no longer cut off after 2 s
+
+The status line used to stop its command 2 s after starting it and keep the old line, so a script that took longer
+(for example a cold start on a busy machine) never showed its output until something else ran it again. A run may now
+last up to ten minutes, the default time limit of a hook command, and is then stopped with what it started; the next
+change or interval runs the command again. When the session, the selection, the vim mode or the command itself
+changes, the next run starts 300 ms later as before and first stops the command still running from the earlier change,
+together with what it started, and only the newest run's output is drawn. This also holds when the change leaves no
+command to run: the folder in view is no longer trusted, managed settings turn hooks off, or `status_line` is removed.
+The interval leaves a running command alone while it is still the configured one, and stops it once the command has
+been edited or removed. Closing the terminal UI stops it as before. Until it ends or is stopped, a slow command keeps
+the last good line. On Windows the stop ends the processes from the last one started back to `cmd.exe`, so on a busy
+machine a command line with several steps (`a & b`) can still start its next step while it is being stopped.
+
+**Affects:** people with a `status_line` command, in particular one that can take longer than 2 s.
+
+**What to do:** Nothing. A script that relied on being stopped after 2 s should end on its own; one that runs for more
+than ten minutes is stopped.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -2931,6 +3029,18 @@ an ACP client's `session/load` replay now show a slash command's prompt as the c
 terminal UI's rows and transcript do. The expansion is still what the model reads.
 
 **Affects:** people who copy or replay a command's prompt.
+
+**What to do:** Nothing.
+
+### A shell command over 10,000 characters is asked about as a whole
+
+The shell analysis already treated a command longer than 10,000 characters as one it cannot read, but the older
+command scan, the scan for redirections and the scan for paths read inputs of any length, and a very long one could stop
+the parser for the rest of the process, so later commands were misread. All of them now refuse such a command before
+reading it, and the command is asked about as a whole. Each read
+also starts from a fresh parser, so a slow earlier command no longer changes how the next one is read.
+
+**Affects:** people who approve very long shell commands.
 
 **What to do:** Nothing.
 
@@ -4706,6 +4816,21 @@ with one of them, asks are approved without being shown.
 root command without `-p` now gets the usual usage error.
 
 **What to do:** Nothing, unless you want to drive Orbit from a program. See `orb -p --help` for the line shapes.
+
+### A stream-json `end` stops work that was sent but has not started
+
+An `end` line stopped the work that was running, but a message sent just before it whose work had not yet started (its
+busy period had no event yet) was not stopped: the model was still called and the run reported success. `end` now also
+withdraws every message that was taken in and is still queued, and interrupts the session whenever any message sent on the
+stream has no result yet. A program that sends a `user` line and then `end` at once gets a stopped run, not an answer.
+A `SIGINT` while the stream to the server breaks also no longer leaves the process spinning: it ends, and a second
+`SIGINT` is still heard.
+
+**Affects:** programs that drive `orb -p` or `orb run` with `--input-format stream-json` and send `end` right after a
+message.
+
+**What to do:** To get an answer before finishing, wait for the message's `result` line before sending `end`, or close
+standard input instead, which lets queued work finish.
 
 ### The question tool has limits and option previews
 

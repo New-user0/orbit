@@ -12,7 +12,7 @@ import type { PermissionRequest } from "@orbit/client"
 import { SimulationSemantics } from "@orbit/simulation/frontend/semantics"
 import { IdeLock } from "@orbit/util/ide-lock"
 import { InputRenderable, type Renderable } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import { createSignal, onMount, Show } from "solid-js"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
@@ -254,7 +254,7 @@ async function mount(options: Options = {}) {
     )
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts
         directory={directory}

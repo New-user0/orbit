@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { InputRenderable } from "@opentui/core"
 import path from "node:path"
 import { directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
@@ -18,6 +19,8 @@ test("the status line follows the selection, the session's location and its step
 const input = JSON.parse(await Bun.stdin.text())
 appendFileSync(${JSON.stringify(counter)}, "x")
 const n = readFileSync(${JSON.stringify(counter)}, "utf8").length
+// The run after the agent changes takes 2.5 s, as a cold start on a loaded runner did: it must still reach the line.
+if (input.agent === "plan" && input.model?.id === "first" && !input.model?.variant) await Bun.sleep(2_500)
 console.log("n=" + n + " " + JSON.stringify({
   style: input.output_style,
   status: input.status,
@@ -53,6 +56,9 @@ console.log("n=" + n + " " + JSON.stringify({
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 0, updated: 0 },
   }
+  // The session's location is held back until the line has been read without it. A fixed delay ordered nothing: on a
+  // loaded Windows runner the line's first run came after a 1.5 s delay had already let the location in.
+  const located = Promise.withResolvers<void>()
   await using setup = await createAppFixture({
     state: state.path,
     width: 300,
@@ -73,7 +79,7 @@ console.log("n=" + n + " " + JSON.stringify({
       if (url.pathname === "/api/config") return json([{ type: "document", info: { output_style: "concise" } }])
       // The session's location arrives late: only the watch on it can bring the project directory into the line.
       if (url.pathname === "/api/location") {
-        if (forSession) await Bun.sleep(1_500)
+        if (forSession) await located.promise
         return json(here)
       }
       if (url.pathname === "/api/agent")
@@ -161,9 +167,10 @@ console.log("n=" + n + " " + JSON.stringify({
   expect(early).toContain('"usd":0.25')
 
   // The interval is a minute and nothing else happens, so only the watch on the location can put it in the line.
-  const located = await line((row) => row.includes(`"p":"session-project"`))
-  expect(located).toContain(`"c":true`)
-  expect(runs(located)).toBeGreaterThan(runs(early))
+  located.resolve()
+  const arrived = await line((row) => row.includes(`"p":"session-project"`))
+  expect(arrived).toContain(`"c":true`)
+  expect(runs(arrived)).toBeGreaterThan(runs(early))
   // The model list belongs to the same location, so the name and the context numbers come with it.
   const ready = await line((row) => row.includes('"name":"first model"'))
   expect(ready).toContain('"used":400,"limit":1000,"percent":40')
@@ -185,18 +192,20 @@ console.log("n=" + n + " " + JSON.stringify({
 
   // So does the model; its context numbers are all of the selected model, whose limit differs from the answer's model.
   const beforeModel = await count()
-  // A dialog that opens while the machine is busy can miss the typed filter, so a pick that changed nothing is repeated.
-  const pick = async () => {
-    setup.mockInput.pressKey("F8")
-    await setup.waitForFrame((frame) => frame.includes("Select model"))
-    await setup.mockInput.typeText("second")
-    // The filter has been applied once the list shows the model, so Enter picks it.
-    await setup.waitForFrame((frame) => frame.includes("second model"))
-    setup.mockInput.pressEnter()
-    await setup.waitForFrame((frame) => !frame.includes("Select model"))
+  // A dialog focuses its filter on a timer after it is first drawn, and keys sent before that reach no input, so the
+  // picker is typed into only once its filter holds focus, and Enter is pressed only once the filter holds the text
+  // (as command-selection.test.tsx does). A repeated pick once hid that race (FU-M4-370).
+  const filter = () => {
+    const focused = setup.renderer.currentFocusedRenderable
+    return focused instanceof InputRenderable && !focused.isDestroyed ? focused : undefined
   }
-  await pick()
-  if (!setup.captureCharFrame().includes('"model":"second"')) await pick()
+  setup.mockInput.pressKey("F8")
+  await setup.waitForFrame((frame) => frame.includes("Select model") && filter() !== undefined)
+  await setup.mockInput.typeText("second")
+  await setup.waitFor(() => filter()?.value === "second")
+  await setup.waitForFrame((frame) => frame.includes("second model"))
+  setup.mockInput.pressEnter()
+  await setup.waitForFrame((frame) => !frame.includes("Select model"))
   const selected = await line((row) => row.includes('"model":"second"'))
   expect(runs(selected)).toBeGreaterThan(beforeModel)
   expect(selected).toContain('"used":400,"limit":2000,"percent":20')
@@ -264,6 +273,7 @@ console.log("p=" + input.project_dir)
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 0, updated: 0 },
   }
+  const located = Promise.withResolvers<void>()
   await using setup = await createAppFixture({
     state: state.path,
     width: 300,
@@ -278,8 +288,9 @@ console.log("p=" + input.project_dir)
     fetch: async (url) => {
       const forSession = url.searchParams.get("location[directory]") === projectDirectory
       const here = forSession ? sessionLocation : location
+      // Held back until the line has been read without it, as in the row above.
       if (url.pathname === "/api/location") {
-        if (forSession) await Bun.sleep(1_500)
+        if (forSession) await located.promise
         return json(here)
       }
       if (url.pathname === "/api/agent")
@@ -302,6 +313,7 @@ console.log("p=" + input.project_dir)
     }
   }
   await until("p=null")
+  located.resolve()
   await until(`p=${projectDirectory}`)
 }, 20_000)
 

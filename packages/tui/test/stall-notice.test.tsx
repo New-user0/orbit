@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
@@ -8,7 +8,7 @@ import { tmpdir } from "./fixture/fixture"
 // The tail of a stalled command is script output. The row shows the command and the state, and nothing in it is raw.
 test.each([40, 120])("a waiting shell notice reads as waiting, never finished, at width %s", async (width) => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width, height: 36, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width, height: 36, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const session = {
     id: "ses_stall",

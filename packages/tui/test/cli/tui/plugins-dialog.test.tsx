@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { onCleanup } from "solid-js"
@@ -115,7 +115,7 @@ async function renderPlugins(
     )
   }
 
-  const app = await testRender(() => <Harness />, { width: 80, height: 20, kittyKeyboard: true })
+  const app = await testRenderTimed(() => <Harness />, { width: 80, height: 20, kittyKeyboard: true })
   app.renderer.start()
   const expected = tui?.list[0]?.id ?? inventory.list[0]?.id ?? "local.plugin"
   await app.waitForFrame((frame) => frame.includes(expected))

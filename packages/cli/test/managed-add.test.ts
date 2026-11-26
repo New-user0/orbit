@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-managed-add-"))
 const managed = path.join(root, "managed")
@@ -23,7 +24,7 @@ const registry = Bun.serve({
 
 afterAll(async () => {
   await registry.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 // A second organization whose allow list names one server, so an unlisted one is refused for not being on it.

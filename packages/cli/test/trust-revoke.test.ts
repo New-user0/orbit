@@ -7,6 +7,7 @@ import os from "node:os"
 import path from "node:path"
 import trust from "../src/commands/handlers/trust"
 import { ORBIT_VERSION } from "../src/version"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // `orb trust` in this process, against a server that answers with the status the trust store gives after the request.
 // A folder that a grant for a folder above covers stays trusted after its own revoke, and the answer names that folder
@@ -44,7 +45,7 @@ afterEach(() => written.mockClear())
 afterAll(async () => {
   written.mockRestore()
   await server.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 const run = async (input: { readonly revoke: boolean }) => {

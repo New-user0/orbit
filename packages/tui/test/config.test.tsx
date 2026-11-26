@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import { expect, test } from "bun:test"
 import { Schema } from "effect"
 import {
@@ -166,7 +166,7 @@ test("provides resolved config through Solid context", async () => {
     return <text>{`${value.theme} ${value.mouse} ${value.leader_timeout}`}</text>
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TuiConfigProvider config={config}>
       <Consumer />
     </TuiConfigProvider>

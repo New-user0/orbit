@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test"
 import { plain } from "@orbit/flow/plain"
 import { IdeLock } from "@orbit/util/ide-lock"
 import { createTwoFilesPatch } from "diff"
+import { readdirSync } from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -10,6 +11,7 @@ import { permissionItem } from "../src/controller"
 import { startBridge, type Bridge, type DiffService, type EditorSelection } from "../src/ide-bridge"
 import { contained, disk, Review, tooLargeNotice, type Disk, type Host, type Tab } from "../src/review"
 import { runProgram } from "../../core/test/fixture/run-program"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const cleanup: Array<() => Promise<unknown> | unknown> = []
 afterEach(async () => {
@@ -18,7 +20,7 @@ afterEach(async () => {
 
 async function folder() {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-ide-bridge-"))
-  cleanup.push(() => fs.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
+  cleanup.push(() => removeTree(directory))
   return directory
 }
 
@@ -310,7 +312,7 @@ test("rewrites the lock while a reader holds it open, and leaves no temporary fi
   const { bridge, logs } = await start(directory)
   const other = path.join(directory, "reader.ts")
   // The reader is another process, as the terminal UI is, and it holds the lock open for a while: on Windows the rename
-  // is refused until it lets go, and this process blocks while it retries, so the reader cannot be a timer here.
+  // is refused until it lets go.
   await Bun.write(
     other,
     `import fs from "node:fs"
@@ -323,7 +325,7 @@ setTimeout(() => { fs.closeSync(fd); process.exit(0) }, 120)`,
   const stream = reader.stdout.getReader()
   await stream.read()
 
-  bridge.folders(["/work/project", "/work/moved"])
+  await bridge.folders(["/work/project", "/work/moved"])
   await reader.exited
 
   expect(logs.filter((line) => line.includes("could not update"))).toEqual([])
@@ -331,20 +333,90 @@ setTimeout(() => { fs.closeSync(fd); process.exit(0) }, 120)`,
   expect((await fs.readdir(directory)).filter((name) => name.endsWith(".tmp"))).toEqual([])
 })
 
+// The bridge gave up after eight tries, about 360 ms in all, where every other writer that replaces a file waits for
+// readers up to the shared deadline (@orbit/util/replace-file-plain); a terminal UI that read the lock for longer on a
+// loaded machine made the rewrite fail. The wait does not hold the extension host, whose thread would freeze every
+// extension meanwhile. Windows only: elsewhere a rename does not wait for readers.
+test.skipIf(process.platform !== "win32")(
+  "rewrites the lock while a reader holds it open for longer than a moment",
+  async () => {
+    const directory = await folder()
+    const { bridge, logs } = await start(directory)
+    const reader = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `const fs = require("node:fs")
+const fd = fs.openSync(${JSON.stringify(bridge.lockFile)}, "r")
+console.log("held")
+setTimeout(() => { fs.closeSync(fd); process.exit(0) }, 1500)`,
+      ],
+      { stdout: "pipe" },
+    )
+    cleanup.push(() => reader.kill())
+    const stream = reader.stdout.getReader()
+    await stream.read()
+
+    // The editor calls this from its own event, and its thread keeps running while the rewrite waits for the reader: a
+    // timer that ticks every 20 ms is never held for the reader's 1.5 s.
+    const ticks = { last: performance.now(), gap: 0 }
+    const ticking = setInterval(() => {
+      const now = performance.now()
+      ticks.gap = Math.max(ticks.gap, now - ticks.last)
+      ticks.last = now
+    }, 20)
+    await bridge.folders(["/work/project", "/work/slow"])
+    clearInterval(ticking)
+    // The time since the last tick counts too: a tick that a held thread delayed may not have run yet.
+    ticks.gap = Math.max(ticks.gap, performance.now() - ticks.last)
+    await reader.exited
+
+    expect(ticks.gap).toBeLessThan(1_000)
+    expect(logs.filter((line) => line.includes("could not update"))).toEqual([])
+    expect((await lock(bridge)).workspaceFolders).toEqual(["/work/project", "/work/slow"])
+  },
+  30_000,
+)
+
+// A rewrite that waits for the lock is not overtaken by one that comes after it, which would land first and then be
+// overwritten with the older folders. A folder where the lock should be holds the first rewrite on Windows, as a reader
+// does; elsewhere the rename fails at once and there is nothing to wait for.
+test.skipIf(process.platform !== "win32")("a rewrite waits for the one before it, so the folders named last stay", async () => {
+  const directory = await folder()
+  const { bridge, logs } = await start(directory)
+  await fs.rm(bridge.lockFile)
+  await fs.mkdir(bridge.lockFile)
+  await fs.writeFile(path.join(bridge.lockFile, "keep"), "x")
+  const temporaries = () => readdirSync(directory).filter((name) => name.endsWith(".tmp"))
+
+  const first = bridge.folders(["/work/first"])
+  const second = bridge.folders(["/work/second"])
+  // The second has not begun while the first waits: once the first's temporary file is there, it is the only one.
+  await until(() => temporaries().length > 0, "the first rewrite's temporary file")
+  expect(temporaries()).toHaveLength(1)
+  await fs.rm(bridge.lockFile, { recursive: true, force: true })
+  await Promise.all([first, second])
+
+  expect(logs.filter((line) => line.includes("could not update"))).toEqual([])
+  expect((await lock(bridge)).workspaceFolders).toEqual(["/work/second"])
+  expect(temporaries()).toEqual([])
+})
+
 test("logs one line and leaves no temporary file when the lock cannot be rewritten", async () => {
   const directory = await folder()
   const { bridge, logs } = await start(directory)
-  // A folder where the lock should be: the rename fails for every attempt and with a code that is not retried.
+  // A folder where the lock should be: the rename fails for every attempt. Windows answers EPERM, the code a reader
+  // causes, so there the rewrite waits out the shared deadline (5 s) before it gives up; elsewhere it fails at once.
   await fs.rm(bridge.lockFile)
   await fs.mkdir(bridge.lockFile)
   cleanup.push(() => fs.rm(bridge.lockFile, { recursive: true, force: true }))
   await fs.writeFile(path.join(bridge.lockFile, "keep"), "x")
 
-  expect(() => bridge.folders(["/work/other"])).not.toThrow()
+  expect(await bridge.folders(["/work/other"])).toBeUndefined()
 
   expect(logs.filter((line) => line.includes("could not update the lock"))).toHaveLength(1)
   expect((await fs.readdir(directory)).filter((name) => name.endsWith(".tmp"))).toEqual([])
-})
+}, 20_000)
 
 test("closes its listener when the lock folder cannot be used", async () => {
   const directory = await folder()
@@ -386,7 +458,7 @@ test("rewrites the lock with the new folders, and a reader never sees half of it
     }
   })()
 
-  for (let index = 0; index < 40; index++) bridge.folders([`/work/project`, `/work/other${index}`])
+  await Promise.all(Array.from({ length: 40 }, (_, index) => bridge.folders([`/work/project`, `/work/other${index}`])))
   reading = false
   await reader
 
@@ -451,7 +523,7 @@ const world = await (async () => {
     marker: path.join(outside, "marker.txt"),
   }
 })()
-afterAll(() => fs.rm(world.root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(world.root))
 
 // The real disk, with every access written down.
 function recorded() {
@@ -1104,14 +1176,51 @@ test("the chat's open of a question a terminal UI reviews does not take that ter
 })
 
 // A disk whose first real path waits until the test lets it go, so a close can come while the review is read.
+// `reading` settles when the review's reader has been called, so a test acts while the read is under way without a wait.
 function held() {
   const gate = Promise.withResolvers<void>()
+  const called = Promise.withResolvers<void>()
   const reader: Disk = {
-    realpath: async (file) => (await gate.promise, disk.realpath(file)),
+    realpath: async (file) => (called.resolve(), await gate.promise, disk.realpath(file)),
     lstat: (file) => disk.lstat(file),
     readFile: (file) => disk.readFile(file),
   }
-  return { reader, release: gate.resolve }
+  return { reader, release: gate.resolve, reading: called.promise }
+}
+
+// A link delivers its frames in the order they were sent, so the answer to a question asked now (a patch that does not
+// apply, which answers and opens nothing) comes after every frame already sent: a test that expects no frame reads
+// the frames once this answer is in, and does not wait a while and look.
+async function afterSent(client: { socket: WebSocket; frames: Frame[] }) {
+  ask(client, { id: "per_z", patch: `${patch}${"+x\n".repeat(70_000)}` })
+  await until(() => answers(client).some((answer) => answer.id === "per_z"), "the answer that follows")
+}
+
+// The review's service as the bridge calls it, with what the bridge's calls did: `handled` settles when the bridge has
+// handed a close or a close-all to the review and the review has returned, `settled` when the review's open has ended
+// (it opened, answered or dropped).
+function watched(review: Review) {
+  const handled = Promise.withResolvers<void>()
+  const settled = Promise.withResolvers<void>()
+  const diff: DiffService = {
+    ...review.bridge,
+    open: async (owner, request, window) => {
+      try {
+        await review.bridge.open(owner, request, window)
+      } finally {
+        settled.resolve()
+      }
+    },
+    close: (owner, id) => {
+      review.bridge.close(owner, id)
+      handled.resolve()
+    },
+    closeAll: () => {
+      review.bridge.closeAll()
+      handled.resolve()
+    },
+  }
+  return { diff, handled: handled.promise, settled: settled.promise }
 }
 
 // A question is busy from the moment its open is taken, not only once its tab is shown: a second open while the file is
@@ -1127,7 +1236,7 @@ test("a second open of a question whose file is still being read answers busy", 
   const client = await connect(bridge, (await lock(bridge)).authToken, features)
   await until(() => client.frames.length >= 2, "the hello and the selection")
   ask(client)
-  await Bun.sleep(50)
+  await disk.reading
   ask(client)
   await until(() => answers(client).length === 1, "the answer")
   expect(answers(client)).toEqual([{ type: "diff.answer", id: "per_a1", answer: "unavailable", reason: "busy" }])
@@ -1169,7 +1278,7 @@ test("a question the chat hears answered while a terminal UI's review of it is r
   const client = await connect(bridge, (await lock(bridge)).authToken, features)
   await until(() => client.frames.length >= 2, "the hello and the selection")
   ask(client)
-  await Bun.sleep(50)
+  await disk.reading
   review.settled("per_a1")
   disk.release()
   await until(() => editor.shown.length === 1, "the tab")
@@ -1186,19 +1295,24 @@ describe("a review closed while its file is still being read opens nothing", () 
       const editor = tabs()
       const review = new Review(editor.host, disk.reader)
       editor.holder.review = review
-      const { bridge } = await start(await folder(), { folders: [world.root], diff: review.bridge })
+      const service = watched(review)
+      const { bridge } = await start(await folder(), { folders: [world.root], diff: service.diff })
       cleanup.push(() => review.dispose())
-      await Bun.sleep(60)
       const client = await connect(bridge, (await lock(bridge)).authToken, features)
       await until(() => client.frames.length >= 2, "the hello and the selection")
       ask(client)
-      await Bun.sleep(50)
+      // The close comes while the file is being read, and the read ends only after the review has handled the close.
+      await disk.reading
       client.socket.send(JSON.stringify(row.close({ type: "diff.closeAll" })))
-      await Bun.sleep(50)
+      await service.handled
       disk.release()
-      await Bun.sleep(100)
+      // The review's open ends when it has shown nothing and sent whatever it sends (the dismissal comes before it ends).
+      await service.settled
+      await afterSent(client)
       expect(editor.shown).toEqual([])
-      expect(answers(client)).toEqual(row.dismissed ? [{ type: "diff.answer", id: "per_a1", answer: "dismissed" }] : [])
+      expect(answers(client).filter((answer) => answer.id === "per_a1")).toEqual(
+        row.dismissed ? [{ type: "diff.answer", id: "per_a1", answer: "dismissed" }] : [],
+      )
     })
 })
 
@@ -1209,17 +1323,18 @@ test("a review the window closes while its file is still being read opens nothin
   const editor = tabs()
   const review = new Review(editor.host, disk.reader)
   editor.holder.review = review
-  const { bridge } = await start(await folder(), { folders: [world.root], diff: review.bridge })
-  await Bun.sleep(60)
+  const service = watched(review)
+  const { bridge } = await start(await folder(), { folders: [world.root], diff: service.diff })
   const client = await connect(bridge, (await lock(bridge)).authToken, features)
   await until(() => client.frames.length >= 2, "the hello and the selection")
   ask(client)
-  await Bun.sleep(50)
+  await disk.reading
   review.dispose()
   disk.release()
-  await Bun.sleep(100)
+  await service.settled
+  await afterSent(client)
   expect(editor.shown).toEqual([])
-  expect(answers(client)).toEqual([])
+  expect(answers(client).filter((answer) => answer.id === "per_a1")).toEqual([])
 })
 
 test("a client that goes away takes its reviews with it, and nothing is answered", async () => {

@@ -7,6 +7,7 @@ import path from "node:path"
 import { Git } from "../src/git"
 import { run } from "../src/runner"
 import { runProgram } from "../../core/test/fixture/run-program"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Classes 1 and 3: `orb flow run` in a trusted folder `sub`, inside a repository `clone` that nobody trusted and whose
 // config and hooks name a program that records each run. A `.git` in `sub` either leads git into `clone` (a `gitdir:`
@@ -23,7 +24,7 @@ afterAll(async () => {
   // A row makes a folder that cannot be searched; open it again so that it can be removed.
   for (const name of await fs.readdir(root))
     await fs.chmod(path.join(root, name, "clone", "sub", ".git", "objects"), 0o755).catch(() => undefined)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 const unix = (file: string) => file.replaceAll("\\", "/")
 

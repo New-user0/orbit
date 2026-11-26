@@ -8,7 +8,7 @@
 import os from "node:os"
 import path from "node:path"
 import { expect, test } from "bun:test"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import type { JsonValue } from "@orbit/client/promise"
 import { RunPermissionBody } from "../src/mini/footer.permission"
 import { permissionInfo } from "../src/mini/permission.shared"
@@ -175,7 +175,7 @@ for (const row of rows.filter(
 )) {
   test(`Mini draws the prompt for ${row.id} from the request`, async () => {
     for (const mono of [false, true]) {
-      const app = await testRender(
+      const app = await testRenderTimed(
         () => (
           <RunPermissionBody
             request={request(row)}
@@ -234,7 +234,7 @@ async function drawCompact(row: Row, editor = "Test Editor", focusAlways = false
   const { TestTuiContexts } = await import("./fixture/tui-environment")
   const { createTuiResolvedConfig } = await import("./fixture/tui-runtime")
   const transport = createFetch(() => undefined, createEventStream())
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts directory={world.project} paths={{ home: os.homedir() }}>
         <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
@@ -353,7 +353,7 @@ test("an MCP call's arguments are shown whole by the presentation and by Mini, w
   expect(text(present(longArguments))).toContain("#leak-HIDDEN")
   expect(text(present(longArguments))).not.toContain("more characters")
   expect(text(permissionInfo(request(longArguments), undefined, true))).toContain("#leak-HIDDEN")
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <RunPermissionBody
         request={request(longArguments)}

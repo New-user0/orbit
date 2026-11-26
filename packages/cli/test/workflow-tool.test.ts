@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // The main agent delegates through the workflow tool: a writer, then a reviewer and a bug hunter in parallel, then a
 // fixer that gets both reports. Only the program's return value may reach the main agent.
@@ -114,7 +115,7 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-workflow-tool-"))
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("the workflow tool delegates to subagents and returns only the program's result", async () => {

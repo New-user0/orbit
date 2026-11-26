@@ -7,6 +7,7 @@ import path from "node:path"
 import WebSocket from "ws"
 import { permissionItem } from "../src/controller"
 import type { FormRequest, FromView, Item } from "../src/protocol"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // The glue between the review (`src/review.ts`) and VS Code, which cannot run under Bun. As in `extension-trust.test.ts`
 // the extension gets a stand-in `vscode` in which every call answers with another stand-in, except the calls the review
@@ -279,7 +280,7 @@ function editing(target: Uri, text: string) {
   return document
 }
 
-afterAll(() => fs.rm(folder, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(folder))
 
 const chat = () => providers.get("orbit.chat") as Chat
 // The person closes a tab: it leaves its group, and VS Code reports it closed.

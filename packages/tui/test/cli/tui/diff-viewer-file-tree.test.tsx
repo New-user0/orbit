@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import type { JSX } from "solid-js"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { emptyThemeSource } from "../../fixture/fixture"
@@ -229,7 +229,7 @@ describe("DiffViewerFileTree", () => {
 })
 
 async function renderFrame(component: () => JSX.Element, mode: "dark" | "light" = "dark") {
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>

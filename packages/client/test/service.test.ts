@@ -187,14 +187,22 @@ test("signals an incompatible service before starting its replacement", async ()
   expect(endpoint.url).toBe(replacement.url)
 })
 
-test("waits for a slow winner while bounding lock probes", async () => {
+// What `ensure` promises while a winner is slow to register: at most one candidate and one lock probe alive at once,
+// the registered service is the winner, and every loser exited. How many probes it starts depends on how slow the
+// winner is next to the backed-off spawn delay: a loaded Windows runner saw a third start where the row once counted
+// exactly two (run 44986694512), so the rows check the bound and not a total. The second row holds the winner a second
+// past the delay, which starts more probes every time.
+test.each([
+  ["a slow winner", []],
+  ["a winner held a second past the spawn delay", ["1000"]],
+] as const)("waits for %s while bounding lock probes", async (_, extra) => {
   await using fixture = await serviceFixture()
   const registration = fixture.registration
   const endpoint = await run(
     ensure({
       file: registration,
       version: "test",
-      command: fixture.command("coordinated"),
+      command: fixture.command("coordinated", ...extra),
     }),
   )
   const info = await Bun.file(registration).json()
@@ -202,7 +210,23 @@ test("waits for a slow winner while bounding lock probes", async () => {
 
   expect(endpoint.url).toBe(info.url)
   expect(await status(endpoint.url)).toMatchObject({ version: "test", pid: info.pid })
-  expect((await Bun.file(registration + ".starts").text()).trim().split("\n")).toHaveLength(2)
+  const events = (await Bun.file(registration + ".events").text())
+    .trim()
+    .split("\n")
+    .map((line) => line.split(" "))
+  const alive = events.reduce(
+    (state, [kind]) => {
+      const now = state.now + (kind === "start" ? 1 : -1)
+      return { now, most: Math.max(state.most, now) }
+    },
+    { now: 0, most: 0 },
+  )
+  const started = events.flatMap(([kind, pid]) => (kind === "start" ? [Number(pid)] : []))
+  const exited = events.flatMap(([kind, pid]) => (kind === "exit" ? [Number(pid)] : []))
+  expect(alive.most).toBeLessThanOrEqual(2)
+  expect(started.length).toBeGreaterThanOrEqual(2)
+  expect(started).toContain(info.pid)
+  expect(exited.toSorted()).toEqual(started.filter((pid) => pid !== info.pid).toSorted())
 })
 
 test("waits for a live contender when another contender fails", async () => {

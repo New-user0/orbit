@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { DialogUpdate } from "../../src/component/dialog-update"
@@ -17,7 +17,7 @@ test("installation progress replaces checking while the update job is still pend
   await using temporary = await tmpdir()
   const [state, setState] = createSignal<UpdateState>()
   const pending = Promise.withResolvers<string | undefined>()
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts directory={temporary.path} paths={{ state: temporary.path }}>
         <ConfigProvider config={createTuiResolvedConfig()}>

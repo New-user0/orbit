@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
 import { scriptedModel } from "./fixture/scripted-model"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // What a session started in the home folder, or below a home folder that is a repository, reads of config that is linked
 // in (class 4, `ProjectTrust.supplies`). The person's own config is theirs wherever they start; a downloaded folder's
@@ -30,7 +31,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await model.stop()
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 async function run(home: string, directory: string, args: string[]) {
@@ -111,6 +112,6 @@ for (const homeIsRepo of [true, false])
       expect(result.stderr).toContain("--trust")
       expect(result.sent).toBe("[]")
     } finally {
-      await fs.rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+      await removeTree(home)
     }
   }, 600_000)

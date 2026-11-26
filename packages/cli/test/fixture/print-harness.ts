@@ -6,6 +6,7 @@ import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./environment"
 import { scriptedModel, type ScriptedReply } from "./scripted-model"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 export const model = scriptedModel(['{"answer":"ok"}'])
 export const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-print-")))
@@ -30,7 +31,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await model.stop()
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 export async function orb(args: string[], input?: string, home = root, extraEnv: Record<string, string> = {}) {
@@ -82,7 +83,7 @@ export async function scripted<T>(
     return await run(own, home)
   } finally {
     await own.stop()
-    await fs.rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    await removeTree(home)
   }
 }
 

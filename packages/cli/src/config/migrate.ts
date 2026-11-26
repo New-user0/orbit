@@ -4,6 +4,7 @@ import { TuiConfigV1 } from "@orbit/tui/config/v1"
 import { TuiKeybind } from "@orbit/tui/config/v1/keybind"
 import { Definitions } from "@orbit/tui/config/keybind"
 import { Effect, FileSystem, Option, Schema } from "effect"
+import { replaceFileEffect } from "@orbit/util/replace-file"
 import { randomUUID } from "crypto"
 import { applyEdits, createScanner, modify, parse, parseTree, type Node, type ParseError } from "jsonc-parser"
 import path from "path"
@@ -25,7 +26,7 @@ export const run = Effect.fn("cli.config.migrate")(function* (input: {
     const cause = yield* Effect.gen(function* () {
       yield* fs.makeDirectory(path.dirname(input.file), { recursive: true })
       yield* fs.writeFileString(temp, text, { mode: 0o600 })
-      yield* fs.rename(temp, input.file)
+      yield* replaceFileEffect(fs, temp, input.file)
     }).pipe(
       Effect.as(undefined),
       Effect.catchCause((cause) => Effect.succeed(cause)),

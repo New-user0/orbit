@@ -35,6 +35,7 @@ import {
 import { answeredLabel } from "../src/webview/approval"
 import { serve, until } from "./fixture/serve"
 import { runProgram } from "../../core/test/fixture/run-program"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 setDefaultTimeout(60_000)
 
@@ -152,7 +153,7 @@ afterEach(() => {
 afterAll(async () => {
   await server?.stop()
   await llm.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 async function git(cwd: string, ...args: string[]) {

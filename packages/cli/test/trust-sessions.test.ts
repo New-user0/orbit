@@ -26,6 +26,7 @@ import {
   spawned,
   succeeded
 } from "./fixture/trust-harness"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 test("a session is checked and trusted in the folder it lives in, wherever the command starts", async () => {
   const repository = await hooked("session-home")
@@ -236,7 +237,7 @@ test("orb run --format json reports a trust request that fails as the JSON error
 test("orb trust --revoke ends the grant of a folder that was deleted, by its name, and says plainly when there is none", async () => {
   const repository = await hooked("gone")
   succeeded(await orb(repository, ["trust", "--standalone"]))
-  await fs.rm(repository, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(repository)
   const listed = await orb(root, ["trust", "--standalone", "--list"])
   succeeded(listed)
   expect(listed.stdout).toContain(repository)

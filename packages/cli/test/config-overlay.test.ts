@@ -10,10 +10,11 @@ import { Effect } from "effect"
 import { ConfigOverlay } from "../src/config-overlay"
 import { ServiceConfig } from "../src/services/service-config"
 import { ORBIT_VERSION } from "../src/version"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "orbit-overlay-")))
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 // Where the CLI keeps its overlays: per user, and not the temporary folder that every agent may write to. The test
 // process has a state folder of its own (the test preload fixture/state-home.ts), so these tests never touch the real one.

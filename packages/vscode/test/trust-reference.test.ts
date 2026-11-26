@@ -5,6 +5,7 @@ import path from "node:path"
 import { Controller, type TrustAnswer, type Update } from "../src/controller"
 import type { TrustView } from "../src/protocol"
 import { serve, until } from "./fixture/serve"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // trust-first part 2, D8 (owner, 2026-10-21: "match refrence"): as the reference does, a folder that is trusted is never
 // asked about again. Its config loads as it is now, so a change after the grant neither asks the person nor holds the
@@ -63,7 +64,7 @@ afterEach(() => {
 afterAll(async () => {
   await main?.stop()
   await llm.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 setDefaultTimeout(60_000)

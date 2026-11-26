@@ -692,4 +692,20 @@ describe("ReadTool a file with very long lines", () => {
       }),
       60_000,
     )
+
+  it.effect("measures the child's own memory, not the peak of the process that started it", () =>
+    Effect.gen(function* () {
+      const { files, directory } = yield* fixture
+      const file = path.join(directory, "long-line.txt")
+      yield* files.writeFile(file, line(64 * mib))
+      // On Linux a child inherits its parent's peak memory in getrusage; a loaded test worker holds more than the limit.
+      const parentPeak = Buffer.alloc(600 * mib, 1)
+
+      const result = yield* readInChild(file)
+
+      expect(parentPeak.length).toBeGreaterThan(0)
+      expect(result.maxRssMb).toBeLessThan(450)
+    }),
+    60_000,
+  )
 })

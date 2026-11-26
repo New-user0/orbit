@@ -140,8 +140,14 @@ export const { use: useTrust, provider: TrustProvider, context: TrustContext } =
       return status.directory
     })
 
+    // While the dialog's own grant waits for its answer. The server sends trust.updated as soon as the folder is trusted,
+    // before the folder's plugins and providers have started again, and the grant answers only once they have; so a read
+    // that already says trusted does not close the dialog while its grant waits, and the answer does.
+    const [granting, setGranting] = createSignal(false)
+
     // A choice is for `target`, the folder the dialog was opened for.
     const grant = async (target: string, persist: boolean) => {
+      setGranting(true)
       await client.api.location.trust
         .update({ location: { directory: target }, trust: true, persist })
         .then(async (status) => {
@@ -155,6 +161,7 @@ export const { use: useTrust, provider: TrustProvider, context: TrustContext } =
             message: status.persistent ? `Trusted ${folder}` : `Trusted ${folder} until Orbit restarts`,
           })
         }, toast.error)
+        .finally(() => setGranting(false))
     }
 
     const open = () => {
@@ -190,10 +197,11 @@ export const { use: useTrust, provider: TrustProvider, context: TrustContext } =
         { key: DialogTrustKey },
       )
     }
-    // Whoever trusts the folder first, here or with `orb trust`, settles the question.
+    // Whoever trusts the folder first, here or with `orb trust`, settles the question; one granted here is settled by the
+    // grant's answer.
     createEffect(() => {
       const status = current.status()
-      if (status !== undefined && !asksTrust(status) && dialog.key === DialogTrustKey) dialog.clear()
+      if (status !== undefined && !asksTrust(status) && !granting() && dialog.key === DialogTrustKey) dialog.clear()
     })
     // Another folder coming into view ends the dialog, and `useTrustPrompt` asks about that folder once its status is
     // read.

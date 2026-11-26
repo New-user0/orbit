@@ -90,6 +90,9 @@ const nativeLayer = (config: Config) =>
         create: config.create ?? true,
       })
       yield* Effect.addFinalizer(() => Effect.sync(() => native.close()))
+      // Before any other statement: SQLite waits for no lock by default, so the first statement would fail at once while
+      // another process, such as the previous server, still holds the file's lock as it closes.
+      native.run("PRAGMA busy_timeout = 5000;")
       if (config.disableWAL !== true) native.run("PRAGMA journal_mode = WAL;")
       return native
     }),

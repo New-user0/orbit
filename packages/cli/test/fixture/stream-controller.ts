@@ -3,6 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./environment"
 import { scriptedModel, type ScriptedReply } from "./scripted-model"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 export type Line = Record<string, any>
 
@@ -129,7 +130,7 @@ export async function scripted<T>(
     return await run(own, home)
   } finally {
     await own.stop()
-    await fs.rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    await removeTree(home)
   }
 }
 

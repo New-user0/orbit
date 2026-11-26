@@ -28,6 +28,18 @@ const spellings = [
   },
 ]
 
+// The line comes from a program the status line starts, which a loaded runner can take seconds to start. waitForFrame
+// gives up after a count of render passes, or as soon as the renderer is idle while that program is still starting, so
+// it reported a slow start as a missing line (the bunfig row in the Windows tui run of PR #152). This waits for the line
+// itself, drawing again as it waits; the row's time limit bounds it.
+async function lineWhere(setup: { renderOnce: () => Promise<void>; captureCharFrame: () => string }, predicate: (frame: string) => boolean) {
+  while (!predicate(setup.captureCharFrame())) {
+    await Bun.sleep(50)
+    await setup.renderOnce()
+  }
+  return setup.captureCharFrame()
+}
+
 test.each(spellings)("no status line runs in an untrusted start folder: $name", async (spelling) => {
   await using clone = await tmpdir()
   await using state = await tmpdir()
@@ -74,7 +86,7 @@ test.each(spellings)("no status line runs in an untrusted start folder: $name", 
     // The control: the same setup, once trusted, runs the command and draws its line.
     trusted = true
     setup.events.emit({ id: "evt_trust", created: 2, type: "trust.updated", data: {} } as never)
-    await setup.waitForFrame((frame) => frame.includes("LINE-DRAWN"))
+    await lineWhere(setup, (frame) => frame.includes("LINE-DRAWN"))
     expect(await Bun.file(marker).exists()).toBe(true)
   } finally {
     process.chdir(before)
@@ -129,9 +141,9 @@ console.log("MODE-" + input.vim_mode)
     // The control: once trusted, the same mode change runs the command and the line shows the new mode.
     trusted = true
     setup.events.emit({ id: "evt_trust", created: 2, type: "trust.updated", data: {} } as never)
-    await setup.waitForFrame((frame) => !frame.includes("Trust this folder?") && frame.includes("MODE-insert"))
+    await lineWhere(setup, (frame) => !frame.includes("Trust this folder?") && frame.includes("MODE-insert"))
     setup.mockInput.pressEscape()
-    await setup.waitForFrame((frame) => frame.includes("MODE-normal"))
+    await lineWhere(setup, (frame) => frame.includes("MODE-normal"))
   } finally {
     process.chdir(before)
   }
@@ -223,12 +235,78 @@ test.each(handed)("no status line runs for a session in an untrusted folder: $na
   // The control: the same folder, once trusted, gets the command, so the marker above is not absent for another reason.
   trusted = true
   setup.events.emit({ id: "evt_trust", created: 2, type: "trust.updated", data: {} } as never)
-  const started = Date.now()
-  while (!setup.captureCharFrame().includes("LINE-DRAWN") && Date.now() - started < 15_000) {
-    await Bun.sleep(250)
-    await setup.renderOnce()
-  }
-  expect(setup.captureCharFrame()).toContain("LINE-DRAWN")
+  expect(await lineWhere(setup, (frame) => frame.includes("LINE-DRAWN"))).toContain("LINE-DRAWN")
   expect(await Bun.file(path.join(scripts.path, "cwd.txt")).text()).toBe(cloneDir)
   expect(await Bun.file(marker).exists()).toBe(true)
+}, 60_000)
+
+// Trust taken back while the command runs: the change asks for a run that has no command to start, and that run stops
+// the one still going with what it started, so the late marker is never written. The control leaves trust in place and
+// the same command writes it.
+test.each([
+  { name: "trust is taken back", revoke: true, late: false },
+  { name: "trust stays (control)", revoke: false, late: true },
+])("a status line command still running when $name", async (row) => {
+  await using state = await tmpdir()
+  await using scripts = await tmpdir()
+  await using clone = await tmpdir()
+  const started = path.join(scripts.path, "started.txt").replaceAll("\\", "/")
+  const late = path.join(scripts.path, "late.txt").replaceAll("\\", "/")
+  const script = path.join(scripts.path, "line.ts").replaceAll("\\", "/")
+  await Bun.write(
+    script,
+    [
+      `import { appendFileSync } from "node:fs"`,
+      `appendFileSync(${JSON.stringify(started)}, "x")`,
+      `await Bun.sleep(4_000)`,
+      `appendFileSync(${JSON.stringify(late)}, "x")`,
+      `console.log("LINE-DRAWN")`,
+    ].join("\n"),
+  )
+  const cloneDir = clone.path.replaceAll("\\", "/")
+  const session = {
+    id: `ses_${crypto.randomUUID()}`,
+    projectID: "clone",
+    title: "Clone session",
+    agent: "build",
+    model: { providerID: "demo", id: "first" },
+    location: { directory: cloneDir },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 0, updated: 0 },
+  }
+  let trusted = true
+  await using setup = await createAppFixture({
+    state: state.path,
+    width: 300,
+    config: { animations: false, status_line: { interval: 60_000, command: `${bun} ${script}` } },
+    args: { sessionID: session.id },
+    fetch: async (url) => {
+      const forClone = url.searchParams.get("location[directory]") === cloneDir
+      if (url.pathname === "/api/location/trust" && forClone)
+        return json({
+          directory: cloneDir,
+          trusted,
+          persistent: true,
+          ...(trusted ? { source: "saved" } : {}),
+          withheld: trusted ? [] : [{ path: path.join(cloneDir, "orbit.json"), kinds: ["hooks"] }],
+        })
+      if (url.pathname === "/api/location" && forClone)
+        return json({ directory: cloneDir, project: { id: "clone", directory: cloneDir, canonical: cloneDir } })
+      if (url.pathname === `/api/session/${session.id}`) return json({ data: session })
+      if (url.pathname === `/api/session/${session.id}/message`) return json({ data: [], cursor: {} })
+      if (/^\/api\/session\/[^/]+\/(inbox|permission)$/.test(url.pathname)) return json({ data: [], cursor: {} })
+    },
+  })
+  await setup.ready
+  // The row's time limit bounds both waits.
+  while (!(await Bun.file(started).exists())) await Bun.sleep(50)
+  if (row.revoke) {
+    trusted = false
+    setup.events.emit({ id: "evt_trust", created: 2, type: "trust.updated", data: {} } as never)
+  }
+  if (row.late) while (!(await Bun.file(late).exists())) await Bun.sleep(50)
+  // Well past the 4 s the command sleeps, and the 300 ms that gather a change into a run.
+  else await Bun.sleep(6_000)
+  expect(await Bun.file(late).exists()).toBe(row.late)
 }, 60_000)

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import type { CliRenderer } from "@opentui/core"
 import { createRuntimeLifecycle } from "../../src/mini/runtime.lifecycle"
 import type { MiniHost } from "../../src/mini/types"
@@ -29,7 +29,7 @@ async function start(
   sessionTitle?: string,
   attention?: NonNullable<Parameters<typeof createTuiResolvedConfig>[0]>["attention"],
 ) {
-  const app = await createTestRenderer({
+  const app = await createTestRendererTimed({
     width: 100,
     height: 24,
     screenMode: "split-footer",
@@ -269,7 +269,7 @@ describe("away summary in Mini", () => {
     // Mini reads the folder for its splash after the renderer exists and before the recap trigger does, so a blur sent
     // with that first read comes while Mini is still starting.
     let blurred = !blurWhileStarting
-    const app = await createTestRenderer({
+    const app = await createTestRendererTimed({
       width: 100,
       height: 24,
       screenMode: "split-footer",
