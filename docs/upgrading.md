@@ -2318,6 +2318,21 @@ write now tries again for up to five seconds, and then fails with the original e
 
 **What to do:** Nothing.
 
+### On Windows a server keeps watching a config folder after nothing uses it
+
+Orbit watches folders such as a project's `.orbit` and its skills folders for changes. On Windows, ending such a watch
+can crash the process in the native watcher Orbit uses (parcel-bundler/watcher#262), so a server on Windows no longer
+ends a watch when a folder is closed, its config is read again or its trust changes. It keeps the watch without
+reporting what it sees and uses it again the next time that folder is watched. The kept watches end when the server (or
+the program that embeds Orbit) shuts down, and a kept watch of a folder that was deleted or moved is dropped when that
+path is watched again. While a watch is kept, Windows does not let you rename a folder that contains the watched one,
+the same as while the folder is open in a session.
+
+**Affects:** Windows users who rename or move a project folder while the background server that opened it still runs.
+
+**What to do:** Stop the server first (`orb service stop`), or close the program that embeds Orbit, then rename the
+folder. Deleting the folder still works while the server runs.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
