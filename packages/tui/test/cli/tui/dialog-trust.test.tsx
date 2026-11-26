@@ -186,6 +186,31 @@ test("a grant the server refuses is reported and leaves the question open", asyn
   }
 })
 
+// While its own grant waits, a read that says trusted leaves the dialog to the grant's answer; once a refused grant has
+// answered, trusting the folder somewhere else settles the question again.
+test("after a grant the server refuses, trusting the folder somewhere else closes the question", async () => {
+  const fixture = await elsewhere({ refuse: true })
+
+  try {
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
+    fixture.app.mockInput.pressArrow("up")
+    fixture.app.mockInput.pressEnter()
+    await until(() => fixture.toast().currentToast !== null)
+    expect(fixture.app.captureCharFrame()).toContain(title)
+
+    fixture.trustElsewhere(away.directory)
+    fixture.events.emit({
+      id: "evt_trust",
+      created: 1,
+      type: "trust.updated",
+      data: { directory: away.directory, trusted: true },
+    })
+    await fixture.app.waitForFrame((frame) => !frame.includes(title))
+  } finally {
+    fixture.app.renderer.destroy()
+  }
+})
+
 test("the question can be asked again after not now", async () => {
   const fixture = await elsewhere()
 

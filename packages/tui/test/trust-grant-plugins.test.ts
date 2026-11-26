@@ -53,15 +53,34 @@ test("when the trust dialog closes on its grant, the folder's plugin runs and it
     expect(await read()).toEqual({ runs: false, lists: false })
 
     // The app's own folder is the scripted one; its trust reads and its grant are asked of the server for the repository.
+    let reads = 0
     const proxy: FetchHandler = async (url, request) => {
       if (url.pathname !== "/api/location/trust") return undefined
       const target = new URL(`${url.pathname}${url.search}`, server.base)
       target.searchParams.set("location[directory]", folders.repo)
-      const response = await fetch(target, {
+      const answer = fetch(target, {
         method: request.method,
         headers: { ...server.headers, "content-type": "application/json" },
         body: request.method === "POST" ? await request.text() : undefined,
       })
+      if (request.method !== "POST") reads++
+      if (request.method === "POST") {
+        // The server publishes trust.updated once the folder is trusted, before its plugins have started and so before
+        // the grant answers, and a client reads the trust status again on that event. The scripted event stream sends
+        // only what a row emits, so the row sends that event at that moment and lets the grant's answer through only
+        // once the terminal UI has read the status again: a dialog that closed on that read, and not on the grant's
+        // answer, would close while the folder's plugin is still starting.
+        while (!(await api.location.trust.get({ location })).trusted) await Bun.sleep(10)
+        const before = reads
+        setup.events.emit({
+          id: "evt_trust",
+          created: 1,
+          type: "trust.updated",
+          data: { directory: folders.repo, trusted: true },
+        })
+        while (reads === before) await Bun.sleep(10)
+      }
+      const response = await answer
       return json(await response.json(), { status: response.status })
     }
     await using setup = await createAppFixture({ state: state.path, fetch: proxy })

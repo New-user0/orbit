@@ -2264,6 +2264,11 @@ A plugin package the folder names that still has to be installed does not hold t
 finishes, as at startup. A revoke, a second grant or a model list that comes while that install still runs is answered
 without waiting for it either, and an install that a revoke leaves with nothing to bring is stopped.
 
+The TUI's trust dialog closes on that answer. It used to close as soon as a read of the folder's status said trusted,
+which the server's `trust.updated` event brings before the grant answers, so it could close while the folder's plugins
+were still starting. Trusting the folder somewhere else, with `orb trust` or in another client, still closes it at once
+when no grant of its own is waiting.
+
 Ending trust works the same way. `location.trust.update` with `trust: false` and `orb trust --revoke` (the
 `trust.revoke` route) used to answer while the folder's provider, plugins and commands were still active. They now read
 the config again and stop the folder's plugins before they answer.
