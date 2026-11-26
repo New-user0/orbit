@@ -1,5 +1,5 @@
 # TEMPORARY (ci-always-green, groups G0 and G8b): measures the Bun 1.4.5 upgrade and the baseline against the regular
-# Bun build. It runs only on the push that adds or changes this file and is removed by the next commit of its author.
+# Bun build. It runs only on a push that changes this file, and its author removes it when the measurement is done.
 name: side-ci-measure
 
 on:
@@ -27,7 +27,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Apply the Bun 1.4.5 upgrade
         shell: bash
-        run: git apply --cached .github/side-ci/bun-145.patch && git checkout -- bun.lock package.json packages/cli/script/build.ts tools/linux-test/Dockerfile && git diff --cached --stat
+        run: git show HEAD:.github/side-ci/bun-145.patch | git apply --cached && git checkout -- bun.lock package.json packages/cli/script/build.ts tools/linux-test/Dockerfile && git diff --cached --stat
       # As in check.yml: after the checkout.
       - name: Configure git
         run: git config --global core.autocrlf false
@@ -129,7 +129,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Apply the Bun 1.4.5 upgrade
-        run: git apply --cached .github/side-ci/bun-145.patch && git checkout -- bun.lock package.json packages/cli/script/build.ts tools/linux-test/Dockerfile && git diff --cached --stat
+        run: git show HEAD:.github/side-ci/bun-145.patch | git apply --cached && git checkout -- bun.lock package.json packages/cli/script/build.ts tools/linux-test/Dockerfile && git diff --cached --stat
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
@@ -201,7 +201,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Apply the Bun 1.4.5 upgrade
         shell: bash
-        run: git apply --cached .github/side-ci/bun-145.patch && git checkout -- bun.lock package.json packages/cli/script/build.ts tools/linux-test/Dockerfile && git diff --cached --stat
+        run: git show HEAD:.github/side-ci/bun-145.patch | git apply --cached && git checkout -- bun.lock package.json packages/cli/script/build.ts tools/linux-test/Dockerfile && git diff --cached --stat
       # As in check.yml: after the checkout.
       - name: Configure git
         run: git config --global core.autocrlf false
@@ -269,7 +269,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: Apply the Bun 1.4.5 upgrade
-        run: git apply --cached .github/side-ci/bun-145.patch && git checkout -- bun.lock package.json packages/cli/script/build.ts tools/linux-test/Dockerfile && git diff --cached --stat
+        run: git show HEAD:.github/side-ci/bun-145.patch | git apply --cached && git checkout -- bun.lock package.json packages/cli/script/build.ts tools/linux-test/Dockerfile && git diff --cached --stat
       - uses: ./.github/actions/setup-bun
       - name: Build single binary
         working-directory: packages/cli
