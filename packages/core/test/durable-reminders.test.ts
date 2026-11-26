@@ -2574,6 +2574,8 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
     readonly hung?: ReadonlyArray<number>
     /** What waits: each file's deny-rule lookup (the default), or each read of a file instead. */
     readonly slow?: "reads"
+    /** How long each wait takes, when not `SLOW`. */
+    readonly wait?: Duration.Input
     /** Real milliseconds each deny-rule lookup's own work takes on top of its wait. */
     readonly lag?: number
     readonly check: (c: BudgetContext) => Effect.Effect<void, unknown, Scope.Scope>
@@ -2602,6 +2604,20 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
         Effect.gen(function* () {
           expect((yield* c.steps(at(c, [99]))).get("f99.txt")).toBe(0)
           expect(c.lookups.map((lookup) => lookup.name).toSorted()).toEqual(at(c, range(60, 100)).toSorted())
+        }),
+    },
+    {
+      // A check whose turn comes when the budget has run out is not started. Each lookup here waits exactly a quarter of
+      // the budget, so each of the eight slots starts its checks at 0, 200, 400 and 600 ms; the fifth would start at
+      // 800 ms, when no time is left, and does not.
+      name: "a check whose turn comes just as the budget ends is not started",
+      written: 100,
+      changed: [],
+      wait: "200 millis",
+      check: (c) =>
+        Effect.gen(function* () {
+          yield* c.steps([])
+          expect(c.lookups.map((lookup) => lookup.name).toSorted()).toEqual(at(c, range(68, 100)).toSorted())
         }),
     },
     {
@@ -2776,7 +2792,7 @@ describe("a budget smaller than one pass over the files (class 7)", () => {
                               }
                               lookups.push(lookup)
                               const started = time.now()
-                              return Effect.sleep(row.slow === "reads" ? 0 : SLOW).pipe(
+                              return Effect.sleep(row.slow === "reads" ? 0 : (row.wait ?? SLOW)).pipe(
                                 Effect.andThen(
                                   time.work(
                                     Effect.sleep(row.lag ?? 0).pipe(Effect.andThen(permission.denied(request))),

@@ -39,9 +39,18 @@ const npm = {
   gate: undefined as Deferred.Deferred<void> | undefined,
   inflight: 0,
   peak: 0,
-  // When set, the package is not on the machine until `add` installs it, and `add` waits for `gate` to install it.
+  // When set, the package is not on the machine until `add` installs it, and `add` waits for `gate` to install it. A
+  // stopped `add` sets `ending` and, when `release` is set, takes until `release` to end, as a package manager's process
+  // takes a while to exit.
   install: undefined as
-    | { readonly gate: Deferred.Deferred<void>; adds: number; stopped: number; done: boolean }
+    | {
+        readonly gate: Deferred.Deferred<void>
+        readonly release?: Deferred.Deferred<void>
+        adds: number
+        stopped: number
+        ending?: boolean
+        done: boolean
+      }
     | undefined,
 }
 
@@ -55,7 +64,9 @@ const npmLayer = Layer.succeed(
           install.adds++
           yield* Deferred.await(install.gate).pipe(
             Effect.onInterrupt(() =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
+                install.ending = true
+                if (install.release) yield* Deferred.await(install.release)
                 install.stopped++
               }),
             ),
@@ -601,6 +612,48 @@ describe("PluginSupervisor under workspace trust", () => {
         expect(settled._tag).toBe("Some")
         expect(npm.install?.stopped).toBe(1)
       }).pipe(
+        Effect.scoped,
+        Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
+        Effect.ensuring(
+          Effect.sync(() => {
+            npm.install = undefined
+          }),
+        ),
+      )
+    }),
+  )
+
+  // A stopped install can take a while to end: a real one waits for its package manager's process to exit. What is
+  // available locally has applied before the activation stops it, so a caller waiting for the revoke's activation is
+  // answered while the install is still ending, and only readiness waits for its end.
+  untrusted.live("the activation after a revoke is applied while the install it stopped is still ending", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped()
+      yield* installable(directory.path, "ending-pkg", "greet-ending")
+      const release = yield* Deferred.make<void>()
+      npm.install = { gate: yield* Deferred.make<void>(), release, adds: 0, stopped: 0, done: false }
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.gen(function* () {
+        const plugins = yield* Plugin.Service
+        const project = yield* ProjectTrust.Service
+        yield* plugins.awaitActivation
+        yield* project.grant({ persist: false, via: "test" })
+        yield* plugins.refresh()
+        yield* settle(() => npm.install?.adds === 1)
+
+        yield* project.revoke()
+        // The revoke's activation is stopping the install, which does not end until `release`.
+        yield* settle(() => npm.install?.ending === true)
+        const applied = yield* plugins.awaitApplied.pipe(Effect.timeoutOption("5 seconds"))
+        expect(applied._tag).toBe("Some")
+        expect(npm.install?.stopped).toBe(0)
+
+        yield* Deferred.succeed(release, undefined)
+        const settled = yield* plugins.awaitActivation.pipe(Effect.timeoutOption("5 seconds"))
+        expect(settled._tag).toBe("Some")
+        expect(npm.install?.stopped).toBe(1)
+      }).pipe(
+        Effect.ensuring(Deferred.succeed(release, undefined)),
         Effect.scoped,
         Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
         Effect.ensuring(

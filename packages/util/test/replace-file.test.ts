@@ -5,6 +5,7 @@ import path from "node:path"
 import { Effect, FileSystem } from "effect"
 import { NodeFileSystem } from "@effect/platform-node"
 import { DEADLINE_MS, replaceFile, replaceFileEffect } from "../src/replace-file.js"
+import { held } from "../src/replace-file-plain.js"
 
 // On Windows a rename over a file that another handle has open fails until that handle closes, and every reader holds
 // one for a moment. tui/test/util/persistence.test.ts pins the session-tabs writer; these rows pin the helper itself and
@@ -112,6 +113,19 @@ describe("replacing a file by rename", () => {
     },
     30_000,
   )
+
+  // Which refusals a replace waits out. A reader on Windows makes the rename answer EPERM or EACCES, and a handle that
+  // is still closing EBUSY; any other error, and any refusal elsewhere, is the answer.
+  test.each([
+    ["EPERM", true],
+    ["EACCES", true],
+    ["EBUSY", true],
+    ["ENOENT", false],
+    ["EEXIST", false],
+    [undefined, false],
+  ] as const)("a rename refused with %s waits on Windows: %p", (refusal, waits) => {
+    expect(held(refusal)).toBe(process.platform === "win32" && waits)
+  })
 
   test.each(Object.keys(replacers) as Array<keyof typeof replacers>)(
     "%s fails at once on an error a reader does not cause",
