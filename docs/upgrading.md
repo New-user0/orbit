@@ -4778,6 +4778,21 @@ root command without `-p` now gets the usual usage error.
 
 **What to do:** Nothing, unless you want to drive Orbit from a program. See `orb -p --help` for the line shapes.
 
+### A stream-json `end` stops work that was sent but has not started
+
+An `end` line stopped the work that was running, but a message sent just before it whose work had not yet started (its
+busy period had no event yet) was not stopped: the model was still called and the run reported success. `end` now also
+withdraws every message that was taken in and is still queued, and interrupts the session whenever any message sent on the
+stream has no result yet. A program that sends a `user` line and then `end` at once gets a stopped run, not an answer.
+A `SIGINT` while the stream to the server breaks also no longer leaves the process spinning: it ends, and a second
+`SIGINT` is still heard.
+
+**Affects:** programs that drive `orb -p` or `orb run` with `--input-format stream-json` and send `end` right after a
+message.
+
+**What to do:** To get an answer before finishing, wait for the message's `result` line before sending `end`, or close
+standard input instead, which lets queued work finish.
+
 ### The question tool has limits and option previews
 
 The question tool now accepts 1 to 4 questions per call, with 2 to 4 options each. Question texts must differ within a call and option labels must differ within a question. A call outside those limits is refused with a readable error and the model can retry; before, any non-empty list of questions and any number of options was accepted. An option can also carry a `preview`, markdown that a client may show while the option is focused. SDK clients receive it on `Form.Option`; Orbit's own clients do not draw previews yet, so the tool description does not mention them to the model. Previews apply to single-select questions only and the answer is still the option label. The tool description was rewritten, and it now declares a 100,000-character `maxResultChars` limit.
