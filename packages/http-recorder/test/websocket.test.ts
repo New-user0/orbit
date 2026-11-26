@@ -95,19 +95,23 @@ describe("WebSocket", () => {
       ),
     )
 
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const constructor = yield* Socket.WebSocketConstructor
-        const options = { headers: { authorization: "Bearer fixture" } }
-        // oxlint-disable-next-line no-restricted-globals -- This test intentionally passes runtime constructor options absent from the public socket type.
-        const socket = Reflect.apply(constructor, undefined, ["wss://echo.example.test/options", options])
-        yield* Effect.callback<void>((resume) => {
-          socket.addEventListener("open", () => {
-            socket.close()
-            resume(Effect.void)
+    // The row records, and CI=true forces replay of a cassette that does not exist, so the socket never opened and the
+    // row waited out its limit on both CI runners (run 45752910034).
+    await withEnvironment("CI", undefined, () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const constructor = yield* Socket.WebSocketConstructor
+          const options = { headers: { authorization: "Bearer fixture" } }
+          // oxlint-disable-next-line no-restricted-globals -- This test intentionally passes runtime constructor options absent from the public socket type.
+          const socket = Reflect.apply(constructor, undefined, ["wss://echo.example.test/options", options])
+          yield* Effect.callback<void>((resume) => {
+            socket.addEventListener("open", () => {
+              socket.close()
+              resume(Effect.void)
+            })
           })
-        })
-      }).pipe(Effect.scoped, Effect.provide(recorder)),
+        }).pipe(Effect.scoped, Effect.provide(recorder)),
+      ),
     )
 
     expect(received).toEqual({ headers: { authorization: "Bearer fixture" } })
