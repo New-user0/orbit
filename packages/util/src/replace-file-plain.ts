@@ -3,38 +3,25 @@
 // another process loading the file, a reload, a client reading a registration. The rename is tried again with a short
 // backoff until the deadline, and then the last error is thrown, so a handle that is never let go still fails the write.
 //
-// This module is plain TypeScript with no Effect, so the VS Code extension can bundle it; replace-file.ts builds the
-// asynchronous and Effect forms on the same bound.
-import { renameSync } from "node:fs"
+// This module is plain TypeScript with no Effect, so the VS Code extension can bundle it; replace-file.ts adds the Effect
+// form on the same bound. There is no synchronous form: its waits would hold the calling thread, which in the extension
+// is the editor's extension host, for up to the whole deadline.
+import { rename } from "node:fs/promises"
 
 /** How long a replace waits for readers to let go of the target before it gives up. */
 export const DEADLINE_MS = 5_000
 export const FIRST_DELAY_MS = 10
 export const MAX_DELAY_MS = 200
 
-/**
- * Replaces a file for a writer that is called synchronously (the IDE bridge rewrites its lock from an editor event): the
- * thread waits between tries, with the same deadline as the asynchronous form.
- */
-export function replaceFileSync(from: string, to: string) {
+export async function replaceFile(from: string, to: string) {
   const stop = performance.now() + DEADLINE_MS
-  const attempt = (delay: number): void => {
-    const error = renamed(from, to)
-    if (error === undefined) return
-    if (!held(code(error)) || performance.now() + delay > stop) throw error
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay)
-    attempt(Math.min(delay * 2, MAX_DELAY_MS))
-  }
-  attempt(FIRST_DELAY_MS)
-}
-
-function renamed(from: string, to: string) {
-  try {
-    renameSync(from, to)
-    return undefined
-  } catch (error) {
-    return error
-  }
+  const attempt = async (delay: number): Promise<void> =>
+    rename(from, to).catch(async (error: unknown) => {
+      if (!held(code(error)) || performance.now() + delay > stop) throw error
+      await new Promise((resolve) => setTimeout(resolve, delay))
+      return attempt(Math.min(delay * 2, MAX_DELAY_MS))
+    })
+  return attempt(FIRST_DELAY_MS)
 }
 
 /** Whether a rename failed only because a reader still has the target open, which on Windows ends when it lets go. */

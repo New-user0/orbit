@@ -243,7 +243,7 @@ function ideBridge(context: vscode.ExtensionContext, editor: EditorState, log: v
   context.subscriptions.push(
     { dispose: () => bridge?.dispose() },
     editor.onDidChange(() => bridge?.select(editor.raw())),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => bridge?.folders(folders())),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => void bridge?.folders(folders())),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("orbit.ideBridge.enabled")) void apply()
     }),

@@ -6,7 +6,7 @@
 // import, so the tests load it as it is: the editor's lifecycle, logging and environment come in as arguments. It starts
 // no program and makes no outbound connection.
 import { IdeLock } from "@orbit/util/ide-lock"
-import { replaceFileSync } from "@orbit/util/replace-file-sync"
+import { replaceFile } from "@orbit/util/replace-file-plain"
 import crypto from "node:crypto"
 import fs from "node:fs"
 import http from "node:http"
@@ -94,7 +94,11 @@ export type Bridge = {
   select(selection: EditorSelection | undefined): void
   /** Sends the mention to the client whose pid is `preferredPid`, else to the one that connected last. */
   mention(mention: Mention, preferredPid?: number): boolean
-  folders(folders: readonly string[]): void
+  /**
+   * Rewrites the lock with the window's folders. It settles once the lock is written, or once a failure to write it has
+   * been logged; it never fails. The extension host is not held meanwhile, also while a reader keeps the lock open.
+   */
+  folders(folders: readonly string[]): Promise<void>
   clients(): number
   dispose(): void
 }
@@ -113,6 +117,8 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     response.writeHead(426).end()
   })
   let folders = [...options.folders]
+  // The lock's rewrites, one after another, so an older one that waited for a reader never lands over a newer one.
+  let rewrites = Promise.resolve()
   let current: EditorSelection | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let count = 0
@@ -208,7 +214,7 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
 
   try {
     prune(options.directory, port, options.log)
-    writeLock(options.directory, port, lockFile, { ideName: options.ideName, folders, token })
+    await writeLock(options.directory, port, lockFile, { ideName: options.ideName, folders, token })
   } catch (error) {
     // A lock folder that cannot be used must not leave a listener behind.
     sockets.close()
@@ -245,11 +251,13 @@ export async function startBridge(options: BridgeOptions): Promise<Bridge> {
     },
     folders(next) {
       folders = [...next]
-      try {
-        writeLock(options.directory, port, lockFile, { ideName: options.ideName, folders, token })
-      } catch (error) {
-        options.log(`IDE bridge: could not update the lock: ${error instanceof Error ? error.message : String(error)}`)
-      }
+      const input = { ideName: options.ideName, folders, token }
+      rewrites = rewrites.then(() =>
+        writeLock(options.directory, port, lockFile, input).catch((error: unknown) => {
+          options.log(`IDE bridge: could not update the lock: ${error instanceof Error ? error.message : String(error)}`)
+        }),
+      )
+      return rewrites
     },
     clients: () => [...clients].filter((client) => client.ready).length,
     dispose() {
@@ -335,7 +343,7 @@ function allowed(header: string | string[] | undefined, token: string) {
 }
 
 /** Writes the lock to a file of its own first and renames it, so that a reader never sees half of it. */
-function writeLock(
+async function writeLock(
   directory: string,
   port: number,
   lockFile: string,
@@ -353,13 +361,11 @@ function writeLock(
   const temporary = path.join(directory, `.${port}.${crypto.randomBytes(6).toString("hex")}.tmp`)
   fs.writeFileSync(temporary, JSON.stringify(lock), { mode: 0o600 })
   // On Windows the rename fails while a reader (a terminal UI looking for the bridge) holds the lock open, so it waits
-  // for the reader up to the shared deadline.
-  try {
-    replaceFileSync(temporary, lockFile)
-  } catch (error) {
+  // for the reader up to the shared deadline, without holding the extension host.
+  await replaceFile(temporary, lockFile).catch((error: unknown) => {
     fs.rmSync(temporary, { force: true })
     throw error
-  }
+  })
 }
 
 /**

@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { Effect, FileSystem } from "effect"
 import { NodeFileSystem } from "@effect/platform-node"
-import { DEADLINE_MS, replaceFile, replaceFileEffect, replaceFileSync } from "../src/replace-file.js"
+import { DEADLINE_MS, replaceFile, replaceFileEffect } from "../src/replace-file.js"
 
 // On Windows a rename over a file that another handle has open fails until that handle closes, and every reader holds
 // one for a moment. tui/test/util/persistence.test.ts pins the session-tabs writer; these rows pin the helper itself and
@@ -18,8 +18,6 @@ const replacers = {
         yield* replaceFileEffect(fs, from, to)
       }).pipe(Effect.provide(NodeFileSystem.layer)),
     ),
-  // The synchronous form blocks this thread while it waits, so a reader that is to let go meanwhile is another process.
-  replaceFileSync: async (from: string, to: string) => replaceFileSync(from, to),
 }
 
 // Another process that opens `file` for reading, says so, and closes it after `ms`.
@@ -141,7 +139,7 @@ const writers = [
   ["cli/src/config/migrate.ts", "replaceFileEffect("],
   ["cli/src/services/service-config.ts", "replaceFileEffect("],
   ["cli/src/services/service-registration.ts", "replaceFileEffect("],
-  ["vscode/src/ide-bridge.ts", "replaceFileSync("],
+  ["vscode/src/ide-bridge.ts", "replaceFile("],
 ] as const
 
 test.each(writers)("%s replaces its file through the helper", async (file, call) => {
