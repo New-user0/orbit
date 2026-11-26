@@ -8,6 +8,7 @@ import { EffectFlock } from "@orbit/util/effect-flock"
 import { Flock } from "@orbit/util/flock"
 import { Global } from "@orbit/util/global"
 import { Hash } from "@orbit/util/hash"
+import { removeTree } from "../fixture/remove-tree"
 
 // A contender creates the lock's folder with mkdir. On Windows that mkdir answers EPERM while the folder of the lock that
 // the last holder just released is still being deleted (another handle to it is open), and withLock then failed instead
@@ -29,8 +30,18 @@ async function icaclsRun(...args: string[]) {
 }
 
 // Holds a file open without sharing deletion, as a scanner or a contender reading the lock does, until `ms` have passed;
-// it answers once the handle is open. Windows PowerShell by its full path (class 10).
-const powershell = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+// it answers once the handle is open. Windows PowerShell by its full path (class 10). The test ends the hold by ending
+// the process, so the handle closes when this process's timer says and a PowerShell that a loaded runner starves cannot
+// keep it open longer. Each row removes its folder through removeTree, which waits for a holder that is still exiting:
+// in GitHub Windows core 3/3 of run 45746006492 the release row's own fs.rm met EBUSY after 29.7 s, which hid what
+// the row had found.
+const powershell = path.join(
+  process.env.SystemRoot ?? "C:\\Windows",
+  "System32",
+  "WindowsPowerShell",
+  "v1.0",
+  "powershell.exe",
+)
 
 async function hold(file: string, ms: number) {
   const child = Bun.spawn(
@@ -39,14 +50,16 @@ async function hold(file: string, ms: number) {
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      `$f = [System.IO.File]::Open('${file}', 'Open', 'Read', 'ReadWrite'); [Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); Start-Sleep -Milliseconds ${ms}; $f.Close()`,
+      `$f = [System.IO.File]::Open('${file}', 'Open', 'Read', 'ReadWrite'); [Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); Start-Sleep -Seconds 600`,
     ],
     { stdout: "pipe", stderr: "pipe" },
   )
   const reader = child.stdout.getReader()
   const first = await reader.read()
   reader.releaseLock()
-  if (first.done) throw new Error(`powershell exited before it held ${file}: ${await new Response(child.stderr).text()}`)
+  if (first.done)
+    throw new Error(`powershell exited before it held ${file}: ${await new Response(child.stderr).text()}`)
+  setTimeout(() => child.kill(), ms)
   return { exited: child.exited }
 }
 
@@ -104,7 +117,11 @@ async function staleLock(folder: string, files: number) {
   await fs.utimes(folder, old, old)
 }
 
-const exists = (file: string) => fs.stat(file).then(() => true, () => false)
+const exists = (file: string) =>
+  fs.stat(file).then(
+    () => true,
+    () => false,
+  )
 
 const deny = (dir: string) => icaclsRun(dir, "/deny", "*S-1-1-0:(AD)")
 const restore = (dir: string) => icaclsRun(dir, "/remove:d", "*S-1-1-0")
@@ -154,7 +171,7 @@ describe("Flock.withLock on Windows", () => {
         expect(ran).toBe("ran")
       } finally {
         await restore(dir).catch(() => {})
-        await fs.rm(dir, { recursive: true, force: true })
+        await removeTree(dir)
       }
     },
     30_000,
@@ -200,7 +217,7 @@ describe("Flock.withLock on Windows", () => {
         expect(ran).toBe("ran")
       } finally {
         await restore(dir).catch(() => {})
-        await fs.rm(dir, { recursive: true, force: true })
+        await removeTree(dir)
       }
     },
     30_000,
@@ -209,21 +226,25 @@ describe("Flock.withLock on Windows", () => {
   test.skipIf(!deniable).each([
     ["Flock", "Timed out waiting for lock: key"],
     ["EffectFlock", "LockTimeoutError"],
-  ] as const)("%s gives up on a denial that lasts with the lock's timeout error", async (lock, expected) => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flock-mkdir-"))
-    try {
-      await deny(dir)
-      // EffectFlock's error carries the key as a field rather than in its message.
-      const answer = await locks[lock](dir, 300).catch(
-        (error: Error) => `${error.name}: ${error.message} ${"key" in error ? `key=${error.key}` : ""}`,
-      )
-      expect(answer).toContain(expected)
-      expect(answer).toMatch(/[ =]key\b/)
-    } finally {
-      await restore(dir).catch(() => {})
-      await fs.rm(dir, { recursive: true, force: true })
-    }
-  }, 30_000)
+  ] as const)(
+    "%s gives up on a denial that lasts with the lock's timeout error",
+    async (lock, expected) => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flock-mkdir-"))
+      try {
+        await deny(dir)
+        // EffectFlock's error carries the key as a field rather than in its message.
+        const answer = await locks[lock](dir, 300).catch(
+          (error: Error) => `${error.name}: ${error.message} ${"key" in error ? `key=${error.key}` : ""}`,
+        )
+        expect(answer).toContain(expected)
+        expect(answer).toMatch(/[ =]key\b/)
+      } finally {
+        await restore(dir).catch(() => {})
+        await removeTree(dir)
+      }
+    },
+    30_000,
+  )
 
   // Only Windows answers EPERM for a folder whose deletion is pending. Elsewhere a mkdir that answers EPERM is refused for
   // good (a file system that holds no folders), and waiting out the lock's timeout, five minutes by default, would only
@@ -245,7 +266,7 @@ describe("Flock.withLock on Windows", () => {
       } finally {
         Object.defineProperty(process, "platform", platform)
         await restore(dir).catch(() => {})
-        await fs.rm(dir, { recursive: true, force: true })
+        await removeTree(dir)
       }
     },
     30_000,
@@ -281,7 +302,7 @@ describe("Flock.withLock on Windows", () => {
         expect(ran).toBe("ran")
       } finally {
         await restore(dir).catch(() => {})
-        await fs.rm(dir, { recursive: true, force: true })
+        await removeTree(dir)
       }
     },
     60_000,
@@ -305,13 +326,13 @@ describe("Flock.withLock on Windows", () => {
           { dir, timeoutMs: 10_000 },
         ).catch(failed)
         expect(ran).toBe("ran")
-        expect(await held?.exited).toBe(0)
+        await held?.exited
         expect(await exists(folder)).toBe(false)
       } finally {
-        await fs.rm(dir, { recursive: true, force: true })
+        await removeTree(dir)
       }
     },
-    30_000,
+    60_000,
   )
 
   test.skipIf(process.platform !== "win32")(
@@ -335,10 +356,10 @@ describe("Flock.withLock on Windows", () => {
         expect(performance.now() - released).toBeGreaterThanOrEqual(Flock.RELEASE_DEADLINE_MS - 500)
         await held?.exited
       } finally {
-        await fs.rm(dir, { recursive: true, force: true })
+        await removeTree(dir)
       }
     },
-    30_000,
+    60_000,
   )
 
   // EffectFlock's release removed the folder and ignored every error, so a lingering handle left the folder behind with a
@@ -362,14 +383,14 @@ describe("Flock.withLock on Windows", () => {
       const folder = path.join(dir, Hash.fast("key") + ".lock")
       try {
         const first = await effectHeld(dir, folder, 800)
-        expect(await first.held.exited).toBe(0)
+        await first.held.exited
         expect(await exists(folder)).toBe(false)
         expect(await locks.EffectFlock(dir, 3_000).catch(failed)).toBe("ran")
       } finally {
-        await fs.rm(dir, { recursive: true, force: true })
+        await removeTree(dir)
       }
     },
-    30_000,
+    60_000,
   )
 
   test.skipIf(process.platform !== "win32")(
@@ -393,10 +414,10 @@ describe("Flock.withLock on Windows", () => {
         expect(performance.now() - started).toBeGreaterThanOrEqual(Flock.RELEASE_DEADLINE_MS - 500)
       } finally {
         await held?.exited
-        await fs.rm(dir, { recursive: true, force: true })
+        await removeTree(dir)
       }
     },
-    30_000,
+    60_000,
   )
 
   test.skipIf(process.platform !== "win32")(
@@ -408,12 +429,12 @@ describe("Flock.withLock on Windows", () => {
         await staleLock(folder, 0)
         const held = await hold(path.join(folder, "meta.json"), 800)
         expect(await locks.Flock(dir, 10_000).catch(failed)).toBe("ran")
-        expect(await held.exited).toBe(0)
+        await held.exited
       } finally {
-        await fs.rm(dir, { recursive: true, force: true })
+        await removeTree(dir)
       }
     },
-    30_000,
+    60_000,
   )
 
   // Only Windows lets a handle delay a removal for a moment; elsewhere a removal that fails is refused for good, and
@@ -449,18 +470,21 @@ describe("Flock.withLock on Windows", () => {
       } finally {
         Object.defineProperty(process, "platform", platform)
         await Promise.all(holds.map((item) => item.exited))
-        await fs.rm(dir, { recursive: true, force: true })
+        await removeTree(dir)
       }
     },
-    30_000,
+    60_000,
   )
 
-  test.skipIf(process.platform !== "win32")("the lock is taken when mkdir works: the control for the row above", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flock-mkdir-"))
-    try {
-      expect(await Flock.withLock("key", async () => "ran", { dir, timeoutMs: 10_000 })).toBe("ran")
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true })
-    }
-  })
+  test.skipIf(process.platform !== "win32")(
+    "the lock is taken when mkdir works: the control for the row above",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flock-mkdir-"))
+      try {
+        expect(await Flock.withLock("key", async () => "ran", { dir, timeoutMs: 10_000 })).toBe("ran")
+      } finally {
+        await removeTree(dir)
+      }
+    },
+  )
 })
