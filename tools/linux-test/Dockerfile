@@ -1,5 +1,5 @@
 # The image tools/linux-test/linux-test.sh runs packages in: what CI's ubuntu test job has, as a user who is not root.
-FROM oven/bun:1.4.2
+FROM oven/bun:1.4.5
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ripgrep bubblewrap socat ca-certificates procps curl xz-utils fd-find zsh \
  && ln -s "$(command -v fdfind)" /usr/local/bin/fd \
