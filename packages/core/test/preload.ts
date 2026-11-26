@@ -21,7 +21,19 @@ if (root) {
     XDG_STATE_HOME: path.join(home, ".local", "state"),
     ORBIT_CONFIG_DIR: path.join(home, ".config", "orbit"),
     TMPDIR: temporary,
-    ...(process.platform === "win32" ? { USERPROFILE: home, TMP: temporary, TEMP: temporary } : {}),
+    // npm keeps its cache in %LOCALAPPDATA%\npm-cache on Windows and in the start-up home's ~/.npm elsewhere, which
+    // every worker and every job on the runner then share: CI's Git installs cloned into the runner's own cache. The
+    // cache and the per-user folders that Windows programs write to are the worker's own.
+    npm_config_cache: path.join(home, ".npm"),
+    ...(process.platform === "win32"
+      ? {
+          USERPROFILE: home,
+          TMP: temporary,
+          TEMP: temporary,
+          LOCALAPPDATA: path.join(home, "AppData", "Local"),
+          APPDATA: path.join(home, "AppData", "Roaming"),
+        }
+      : {}),
   })
 }
 
