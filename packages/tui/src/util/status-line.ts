@@ -150,7 +150,8 @@ function killTree(child: Child) {
     return
   }
   // taskkill finds the tree through the parent that is still running. Once cmd.exe has exited there is nothing to find,
-  // and its PID may belong to another process by now, so an exited shell leaves what it started alone.
+  // and its PID may belong to another process by now, so an exited shell leaves what it started alone. taskkill ends
+  // the tree from its leaves up, so on a busy machine cmd.exe can start the next step of its line in between.
   if (child.exitCode !== null) return
   Bun.spawn([path.join(system32(), "taskkill.exe"), "/T", "/F", "/PID", String(child.pid)], {
     stdout: "ignore",

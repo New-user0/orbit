@@ -2344,7 +2344,8 @@ together with what it started, and only the newest run's output is drawn. This a
 command to run: the folder in view is no longer trusted, managed settings turn hooks off, or `status_line` is removed.
 The interval leaves a running command alone while it is still the configured one, and stops it once the command has
 been edited or removed. Closing the terminal UI stops it as before. Until it ends or is stopped, a slow command keeps
-the last good line.
+the last good line. On Windows the stop ends the processes from the last one started back to `cmd.exe`, so on a busy
+machine a command line with several steps (`a & b`) can still start its next step while it is being stopped.
 
 **Affects:** people with a `status_line` command, in particular one that can take longer than 2 s.
 

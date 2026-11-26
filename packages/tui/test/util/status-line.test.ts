@@ -374,10 +374,14 @@ test("a command that a newer run replaces, that goes away, or that runs when the
   const dir = await mkdtemp(path.join(os.tmpdir(), "status-line-kill-"))
   try {
     const marker = (name: string) => path.join(dir, name + ".txt")
-    // The marker is written about 7 s after the start, by the shell itself: only a stopped tree never gets there.
+    const late = path.join(dir, "late.ts")
+    await Bun.write(late, "await Bun.sleep(Number(process.argv[2]) * 1000)\nawait Bun.write(process.argv[3], 'late')\n")
+    // The marker is written about 7 s after the start, on Linux by the shell itself, so only a stopped group never gets
+    // there. On Windows a process the shell started writes it: taskkill ends the tree from its leaves up, so under load
+    // cmd.exe can run the next step of its line between its child's end and its own, which a stop has to accept.
     const command = (pings: number, file: string) =>
       process.platform === "win32"
-        ? `ping -n ${pings} 127.0.0.1 >nul & echo late> ${file}`
+        ? `"${process.execPath}" "${late}" ${pings - 1} "${file}"`
         : `sleep ${pings - 1}; echo late > '${file}'`
     const replaced = { index: 0 }
     const commands = [command(8, marker("replaced")), "echo after"]
