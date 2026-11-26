@@ -337,6 +337,14 @@ async function compactApp(width: number, serverCommands: Array<{ name: string; d
   }
 }
 
+// The forced case of that run: a request that comes after 6 s is still waited for.
+test("the wait for a compaction request is not cut short before the row's own limit", async () => {
+  const arrived = { done: false }
+  setTimeout(() => (arrived.done = true), 6_000)
+  await waitUntil(() => arrived.done)
+  expect(arrived.done).toBe(true)
+})
+
 test.each([70, 120])("/compact with text sends its instructions and no prompt at %i columns", async (width) => {
   const app = await compactApp(width)
   try {
@@ -423,8 +431,12 @@ test("a location command named compact keeps its place when typed with text", as
   }
 })
 
+// The wait lasts as long as the row may run (the package's --timeout of 30 s). Its own 5 s deadline ran out first on a
+// loaded Windows runner, when the request came 5.9 s after the submit (run 45902385785), though the row had time left.
+const rowLimit = 30_000
+
 async function waitUntil(done: () => boolean) {
-  const deadline = Date.now() + 5_000
+  const deadline = Date.now() + rowLimit
   while (!done()) {
     if (Date.now() > deadline) throw new Error("Timed out waiting for the compaction request")
     await Bun.sleep(20)

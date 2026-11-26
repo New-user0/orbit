@@ -18,8 +18,12 @@ type TimedWaits = {
   ) => Promise<string>
 }
 
-/** How long one wait keeps looking, unless the call names its own. A test's own limit is 30 s. */
-const defaultTimeout = 10_000
+/**
+ * How long one wait keeps looking, unless the call names its own: the test's own limit (the package's --timeout of
+ * 30 s), so a wait never gives up while its row still has time. A 10 s default ran out first on loaded runners in rows
+ * that had time left ('server plugin failures are visible at width ...' at 10.5 s, run 45854983953).
+ */
+const defaultTimeout = 30_000
 
 /**
  * OpenTUI's `waitFor` and `waitForFrame` count frames and give up as soon as the renderer has nothing scheduled to draw.
