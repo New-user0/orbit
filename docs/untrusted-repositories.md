@@ -3410,9 +3410,10 @@ applied to gates, allowlists and platform skips.
   cli, tui, server, vscode) stop a test file that runs past its deadline and name it (`tools/test/watchdog.ts`,
   `test-runner-deadline.test.ts`). A serial run (`--serial` or `ORBIT_TEST_WORKERS=1`) preloads no heartbeat, so its
   watchdog never sees a file and a stuck file holds the run until the CI job's time limit.
-- A flaky test is fixed in the PR that meets it, or that PR names it and says why it stays: the repository has no list
-  of known failures to put it in yet (Known gaps). A test that the milestone plan names as a gate must pass, not be
-  "known".
+- CI must be green on every run (the owner, 2026-11-27: "No alone pass is fine but ci needs to be green always fix
+  this"). A flaky test is fixed at its cause in the PR that meets it; it is never named and kept, and passing when its
+  file is re-run alone is not a fix. `docs/known-failures.md` lists no load flake to put it in. A limit rises only as a
+  measured limit (AGENTS.md, Testing). A test that the milestone plan names as a gate must pass, not be "known".
 
 **How to test:** run each new test against the sources from before the fix (check out the old file) and record that it
 fails. Test an allowlist with the planted cases above. In M1 the gate suites are
@@ -3427,8 +3428,8 @@ fails. Test an allowlist with the planted cases above. In M1 the gate suites are
   well as a `.bat`? Without the delete, or with `.bat` decoys only, it passes whether or not the code is right.
 - Is this allowlist entry as narrow as its reason? What else does it hide?
 - Which tests skipped on this machine, and who ran them?
-- Is a flaky test fixed, or named in the PR with the reason it stays? There is no baseline list in the repository to hide
-  it in.
+- Is a flaky test fixed at its cause? CI must be green on every run, and a test that passes only when re-run alone is
+  not fixed.
 
 ### 15. Docs, comments and PR text that outrun the code
 
@@ -3518,8 +3519,8 @@ These come from how M1 and M2 were run, and they apply to any change in this are
 - **A switch ships with its way back.** A PR that turns a feature off ships with the PR that lets the person turn it
   back on, or the stack lands as one. #14 alone would have switched off project config for every background-service user
   with no way to trust a folder.
-- **Keep the baseline honest.** A flaky test is fixed in the PR that meets it, or that PR names it and says why it
-  stays. The repository keeps no list of known failures yet (Known gaps), so a new flake is easy to take for an old one.
+- **Keep the baseline honest.** CI must be green on every run: a flaky test is fixed at its cause in the PR that meets
+  it, never named and kept, and `docs/known-failures.md` lists no load flake, so a new flake cannot pass for an old one.
   A test that the milestone plan names as a gate must pass. Before a milestone closes, run the tests that skip on the
   developer's platform somewhere that runs them, or fix the CI that should.
 
@@ -3723,9 +3724,6 @@ The program-wide register of every follow-up, these gaps included, with each one
   of prompts-context-9b do not wire it; it stays unread and its guard waits for whichever task wires it.
 - **Tests that skip.** The hook-executing tests skip on win32 and the real-symlink tests skip without the privilege, and
   CI could not run in M1, so neither kind has run yet. Run them on Linux and in Git Bash before a milestone closes.
-- **No list of known failures.** The repository holds no list of the tests that are known to fail or to be flaky. M1's
-  baseline of them lived outside it, so a new flake looked like an old one. Put the list in the repository, one line per
-  test with its reason, before the next milestone starts.
 - **Lint noise.** `bun run lint:effect-patterns` carries 27 standing diagnostics, so a new violation of the AGENTS.md
   style rules (nested service yields, `else`, import aliases) hides among them. Bring it to zero or make it fail on the
   files that a change touches.
