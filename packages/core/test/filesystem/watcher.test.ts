@@ -527,6 +527,34 @@ describe("Watcher native directory watches", () => {
       }),
     )
   })
+
+  // The real binding: a parked watch still holds its folder open, so the folder that contains it cannot be renamed,
+  // and removing that folder with everything in it works all the same.
+  ;(process.platform === "win32" ? it.live : it.live.skip)(
+    "on Windows the folder around a parked watch can be removed while the watch is kept, though not renamed",
+    () =>
+      withTempDir((tmp) =>
+        Effect.gen(function* () {
+          const project = path.join(tmp.path, "a")
+          const target = path.join(project, ".orbit")
+          yield* Effect.promise(() => fs.mkdir(target, { recursive: true }))
+          const native = yield* Watcher.Native
+          const subscription = yield* native.subscribe({ type: "directory", target, ignore: [], publish: () => {} })
+          expect(subscription?.backend).toBe("windows")
+          yield* Effect.promise(() => subscription!.unsubscribe())
+          // Control: the released watch is parked, not ended, so Windows refuses to rename the folder that holds it.
+          const renamed = yield* Effect.promise(() =>
+            fs.rename(project, path.join(tmp.path, "b")).then(
+              () => "renamed",
+              (error: NodeJS.ErrnoException) => error.code,
+            ),
+          )
+          expect(renamed).toBe("EPERM")
+          yield* Effect.promise(() => fs.rm(project, { recursive: true }))
+          expect(yield* Effect.promise(() => fs.readdir(tmp.path))).toEqual([])
+        }).pipe(Effect.provide(Watcher.nativeLayer)),
+      ),
+  )
 })
 
 function provide(
