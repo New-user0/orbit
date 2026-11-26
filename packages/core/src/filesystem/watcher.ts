@@ -270,8 +270,9 @@ type Pool = { closed: boolean; readonly parked: Map<string, Parked[]> }
 // the deletion of its own folder has no read queued, so it is unsubscribed and a folder created again
 // gets a new native watch. A parked watch follows its folder when the folder is moved, and the binding
 // would join a new watch of the same path to it, so a watch parked on a folder that is no longer at
-// its path is unsubscribed too. That case, after a watched folder moved while nothing watched it, and
-// the close of the native layer (see makeNative) are the two that still meet #262.
+// its path, or whose folder cannot be read, is unsubscribed too. That case, after a watched folder
+// moved or became unreadable while nothing watched it, and the close of the native layer (see
+// makeNative) are the two that still meet #262.
 function subscribeDirectory(
   native: Pick<typeof ParcelWatcher, "subscribe"> | undefined,
   backend: ParcelWatcher.BackendType | undefined,

@@ -126,6 +126,44 @@ describe("runTests", () => {
   )
 
   test(
+    "stops a process that one in its own process group started in a group of its own, below the run's children",
+    async () => {
+      await using dir = await tmpdir()
+      const middleFile = path.join(dir.path, "middle")
+      const deepFile = path.join(dir.path, "deep")
+      // The deep process is not a child of the run, and neither process is in the run's group.
+      const middle = [
+        `const deep = require("node:child_process").spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"], { detached: true, stdio: "ignore" })`,
+        `require("node:fs").writeFileSync(${JSON.stringify(deepFile)}, String(deep.pid))`,
+        `setTimeout(() => {}, 30_000)`,
+      ].join("\n")
+      const code = await runTests(
+        [
+          "-e",
+          [
+            `const { spawn } = require("node:child_process")`,
+            `const fs = require("node:fs")`,
+            `const middle = spawn(process.execPath, ["-e", ${JSON.stringify(middle)}], { detached: true, stdio: "ignore" })`,
+            `fs.writeFileSync(${JSON.stringify(middleFile)}, String(middle.pid))`,
+            // The file is reported stuck only once the deep process is there, so the stop finds both.
+            `while (!fs.existsSync(${JSON.stringify(deepFile)})) Bun.sleepSync(20)`,
+            `const log = require("node:path").join(process.env.ORBIT_TEST_HEARTBEAT, String(process.pid))`,
+            `fs.appendFileSync(log, (Date.now() - 60_000) + " start " + ${JSON.stringify(path.join(dir.path, "test", "a.test.ts"))} + "\\n")`,
+            `setTimeout(() => {}, 30_000)`,
+          ].join("\n"),
+        ],
+        quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "1000" }),
+        dir.path,
+        captured().output,
+      )
+      expect(code).toBe(1)
+      const pids = await Promise.all([middleFile, deepFile].map(async (file) => Number(await Bun.file(file).text())))
+      pids.forEach((pid) => expect(() => process.kill(pid, 0)).toThrow())
+    },
+    60_000,
+  )
+
+  test(
     "looks at the folder every quarter of the deadline, so a file found stuck between two looks is stopped at the next",
     async () => {
       await using dir = await tmpdir()

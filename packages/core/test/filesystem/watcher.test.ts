@@ -418,6 +418,46 @@ describe("Watcher native directory watches", () => {
     )
   })
 
+  // A folder whose identity cannot be read might no longer be the folder the watch follows. A path
+  // with a NUL byte is one that every system refuses to stat, so the release and the next subscribe
+  // both fail to read it.
+  it.effect("on Windows a parked watch whose folder cannot be read is not reused", () => {
+    const parcel = fakeParcel()
+    return rooted((root) =>
+      Effect.gen(function* () {
+        const native = yield* Watcher.makeNative(() => parcel.binding, "windows")
+        const target = path.join(root.path, "un\0readable")
+        const subscription = yield* native.subscribe({ type: "directory", target, ignore: [], publish: () => {} })
+        yield* Effect.promise(() => subscription!.unsubscribe())
+        expect(parcel.counts.unsubscribes).toBe(0)
+        const seen: Watcher.Update[] = []
+        yield* native.subscribe({ type: "directory", target, ignore: [], publish: (update) => seen.push(update) })
+        parcel.emit(target, [root.file])
+        expect(seen).toEqual([root.file])
+        expect(parcel.counts).toEqual({ subscribes: 2, unsubscribes: 1, unsafe: 1 })
+      }),
+    )
+  })
+
+  // The binding applies the ignore list, so a watch parked with one list would hide or show other
+  // paths than a consumer with another list asked for.
+  it.effect("on Windows a parked watch is reused only by a watch with the same ignore list", () => {
+    const parcel = fakeParcel()
+    return rooted((root) =>
+      Effect.gen(function* () {
+        const native = yield* Watcher.makeNative(() => parcel.binding, "windows")
+        const watch = (ignore: string[]) =>
+          native.subscribe({ type: "directory", target: root.path, ignore, publish: () => {} })
+        const ignoring = yield* watch(["node_modules"])
+        yield* Effect.promise(() => ignoring!.unsubscribe())
+        yield* watch([])
+        expect(parcel.counts).toEqual({ subscribes: 2, unsubscribes: 0, unsafe: 0 })
+        yield* watch(["node_modules"])
+        expect(parcel.counts).toEqual({ subscribes: 2, unsubscribes: 0, unsafe: 0 })
+      }),
+    )
+  })
+
   it.effect("on Windows a parked watch is lent to one consumer at a time", () => {
     const parcel = fakeParcel()
     return rooted((root) =>
