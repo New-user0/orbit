@@ -2333,6 +2333,19 @@ the same as while the folder is open in a session.
 **What to do:** Stop the server first (`orb service stop`), or close the program that embeds Orbit, then rename the
 folder. Deleting the folder still works while the server runs.
 
+### A slow status line command is no longer cut off after 2 s
+
+The status line used to stop its command 2 s after starting it and keep the old line, so a script that took longer
+(for example a cold start on a busy machine) never showed its output until something else ran it again. A run now has
+no time limit. When the session, the selection or the vim mode changes, the next run starts 300 ms later as before and
+stops the command still running from the earlier change, together with what it started, and only the newest run's
+output is drawn. The interval does not stop a running command. Closing the terminal UI stops it as before. A command
+that never ends keeps the last good line until the next change replaces it.
+
+**Affects:** people with a `status_line` command, in particular one that can take longer than 2 s.
+
+**What to do:** Nothing. A script that relied on being stopped after 2 s should end on its own.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
