@@ -20,6 +20,7 @@ import { Global } from "@orbit/util/global"
 import { hostEnvironmentLayer } from "./fixture/environment"
 import { tempGlobalLayer } from "./fixture/global"
 import { tempLocationLayer } from "./fixture/location"
+import { canLinkFile } from "./fixture/symlink"
 import { tmpdir } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 
@@ -165,20 +166,10 @@ it.live(
   { timeout: 30_000 },
 )
 
-// Whether this process can make a file link: Windows refuses one unelevated without Developer Mode (`EPERM`).
-const canLink = await (async () => {
-  await using tmp = await tmpdir()
-  await fs.writeFile(path.join(tmp.path, "target"), "")
-  return fs.symlink(path.join(tmp.path, "target"), path.join(tmp.path, "link"), "file").then(
-    () => true,
-    () => false,
-  )
-})()
-
 // Class 4. Fails on the base, which reads through the link and shows the marker's text. On Linux the open refuses the
 // link (`O_NOFOLLOW`); Windows has no such flag, so there the `lstat` before the open refuses it. Runs where a file link
 // can be made: Linux, Windows CI (elevated) and Windows with Developer Mode.
-if (canLink)
+if (canLinkFile)
   it.live(
     "does not follow a link planted at the output file",
     () =>
