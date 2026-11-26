@@ -493,13 +493,13 @@ test("serializes migration and updates across processes", async () => {
   })
 
   try {
-    await waitForFile(started, migrate.exited)
+    await waitForFile(started, migrate)
     const update = Bun.spawn([process.execPath, worker, "update", directory.path, started, release, updateReady], {
       stdout: "ignore",
       stderr: "pipe",
     })
     try {
-      await waitForFile(updateReady, update.exited)
+      await waitForFile(updateReady, update)
       await Bun.write(release, "")
       const [migrateCode, updateCode] = await Promise.all([migrate.exited, update.exited])
       expect(await new Response(migrate.stderr).text()).toBe("")
@@ -630,14 +630,15 @@ test("updates a config draft while preserving JSONC comments", async () => {
   expect(await Bun.file(path.join(directory.path, "cli.json")).text()).toContain("// Keep this comment")
 })
 
-async function waitForFile(file: string, exited: Promise<number>) {
-  const found = await Promise.race([
-    (async () => {
-      while (!(await Bun.file(file).exists())) await Bun.sleep(10)
-      return true
-    })(),
-    exited.then(() => false),
-    Bun.sleep(5000).then(() => false),
-  ])
-  if (!found) throw new Error(`timed out waiting for ${file}`)
+// Waits for the file a child writes once it has got that far, for as long as the row's limit allows: a fixed five
+// seconds here was shorter than a loaded Windows runner took to start the child and load the config (Windows cli 3/6 of
+// run 45771612425). A child that exits first fails the row with its exit code and what it wrote to stderr.
+async function waitForFile(file: string, child: { exited: Promise<number>; stderr: ReadableStream<Uint8Array> }) {
+  const state = { exited: false }
+  const exited = child.exited.then(() => {
+    state.exited = true
+  })
+  while (!state.exited && !(await Bun.file(file).exists())) await Promise.race([Bun.sleep(10), exited])
+  if (await Bun.file(file).exists()) return
+  throw new Error(`the child exited with ${await child.exited} before it wrote ${file}: ${await new Response(child.stderr).text()}`)
 }
