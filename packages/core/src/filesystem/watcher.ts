@@ -15,7 +15,8 @@ import loadBinding from "./watcher-binding.js"
 const SUBSCRIBE_TIMEOUT_MS = 10_000
 export const Event = { Updated: FileSystem.Event.Changed }
 
-const watcher = lazy((): typeof ParcelWatcher | undefined => {
+/** The Parcel binding, loaded on first use; undefined where it cannot load. */
+export const binding = lazy((): typeof ParcelWatcher | undefined => {
   try {
     return createWrapper(loadBinding()) as typeof ParcelWatcher
   } catch {
@@ -23,13 +24,14 @@ const watcher = lazy((): typeof ParcelWatcher | undefined => {
   }
 })
 
-function getBackend() {
+/** The Parcel backend of this platform. */
+export function backend() {
   if (process.platform === "win32") return "windows"
   if (process.platform === "darwin") return "fs-events"
   if (process.platform === "linux") return "inotify"
 }
 
-export const hasNativeBinding = () => !!watcher()
+export const hasNativeBinding = () => !!binding()
 export type Update = ParcelWatcher.Event
 
 export type WatchInput =
@@ -215,6 +217,7 @@ export const makeNative = Effect.fnUntraced(function* (
     Effect.promise(() => {
       pool.closed = true
       const parked = [...pool.parked.values()].flat()
+`)
       pool.parked.clear()
       return Promise.all(parked.map((entry) => entry.subscription.unsubscribe().catch(() => {})))
     }),
@@ -244,7 +247,7 @@ export const makeNative = Effect.fnUntraced(function* (
   })
 })
 
-export const nativeLayer = Layer.effect(Native, makeNative(watcher, getBackend()))
+export const nativeLayer = Layer.effect(Native, makeNative(binding, backend()))
 
 export const nativeNode = makeGlobalNode({ service: Native, layer: nativeLayer, deps: [] })
 
