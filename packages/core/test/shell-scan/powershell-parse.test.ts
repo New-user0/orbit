@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { CrossSpawnSpawner } from "@orbit/util/cross-spawn-spawner"
 import { LayerNode } from "@orbit/util/effect/layer-node"
-import { Duration, Effect, Layer, PlatformError, Sink, Stream } from "effect"
+import { Cause, Duration, Effect, Layer, PlatformError, Sink, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner, ExitCode, make, makeHandle, ProcessId } from "effect/unstable/process/ChildProcessSpawner"
 import { PowerShellInspect } from "../../src/shell/powershell-inspect"
@@ -18,7 +18,35 @@ import { tmpdir } from "../fixture/tmpdir"
 // here, pwsh elsewhere) and pin every hiding spelling that the hand-written tokenizer lost in the reviews of #74, then
 // the fail-closed rows run an injected host so they need no PowerShell at all.
 
-const real = Layer.provide(PowerShellParse.layerWith(), LayerNode.compile(CrossSpawnSpawner.node))
+// What each failed run of a real host ended with. PowerShellParse reports a start that failed, an output that could not
+// be read and an end by a signal all as `spawn`, so the rows' preparation prints the cause beside it.
+const hostFailures: string[] = []
+const observed = Layer.effect(
+  ChildProcessSpawner,
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner
+    const note = <E>(cause: Cause.Cause<E>) =>
+      Effect.sync(() => {
+        if (!Cause.hasInterruptsOnly(cause)) hostFailures.push(Cause.pretty(cause))
+      })
+    return make((command) =>
+      spawner.spawn(command).pipe(
+        Effect.tapCause(note),
+        Effect.map((handle) =>
+          makeHandle({
+            ...handle,
+            exitCode: handle.exitCode.pipe(Effect.tapCause(note)),
+            stdout: handle.stdout.pipe(Stream.tapCause(note)),
+          }),
+        ),
+      ),
+    )
+  }),
+)
+const real = Layer.provide(
+  PowerShellParse.layerWith(),
+  Layer.provide(observed, LayerNode.compile(CrossSpawnSpawner.node)),
+)
 const hasHost = Boolean(which("pwsh") ?? (process.platform === "win32" ? which("powershell") : null))
 const noHost = "skipped: no pwsh or powershell on PATH"
 
@@ -253,18 +281,32 @@ function nested(depth: number) {
 
 // The first start of PowerShell on a runner is waited for here, under a deadline of its own, so the parser's five seconds
 // (ORBIT_PWSH_PARSE_TIMEOUT_MS) count parsing and not the host's cold start: Linux CI runs 45533775334 and 45696483614 met
-// `invalid (spawn)` and two timeouts for the first texts of a worker that had never started pwsh. A text whose run still
-// fails after that fails its rows, and the rows below pin how a failed run is reported.
+// `invalid (spawn)` and two timeouts for the first texts of a worker that had never started pwsh.
 beforeAll(async () => {
   if (!hasHost) return
   await pwshStarted(which("pwsh") ?? which("powershell")!)
   const queue = [...new Set(everything)]
   await Promise.all(
     Array.from({ length: 6 }, async () => {
-      for (let text = queue.shift(); text !== undefined; text = queue.shift()) rows.set(text, await parse(text))
+      for (let text = queue.shift(); text !== undefined; text = queue.shift()) rows.set(text, await prepare(text))
     }),
   )
 }, 180_000)
+
+// A started host still failed one run of 163 later: Linux CI run 45762896450 met `invalid (spawn)` for one text a minute
+// and a half into the preparation. Such a run says nothing about the text, and PowerShellParse keeps no such result, so
+// its next caller runs the parser again ('a spawner that dies is spawn ... and is not kept' below). The preparation is
+// that next caller, once, and prints what the failed run ended with. A second failure fails the text's rows, and the
+// rows below pin how a failed run is reported.
+async function prepare(text: string, layer: Layer.Layer<PowerShellParse.Service> = real) {
+  const first = await parse(text, layer)
+  if (first.valid || (first.reason !== "spawn" && first.reason !== "timeout")) return first
+  console.warn(
+    `PowerShellParse: the run for ${JSON.stringify(text)} ended with ${first.reason}; running it again\n` +
+      hostFailures.splice(0).join("\n"),
+  )
+  return parse(text, layer)
+}
 
 describe.skipIf(!hasHost)(`PowerShellParse real parser${hasHost ? "" : ` (${noHost})`}`, () => {
   test.each(hiddenCommand)("shows the command behind %s", (_label, text) => {
@@ -748,6 +790,33 @@ describe("PowerShellParse fails closed", () => {
     const host = fake(() => ({ fail: true }))
     expect(await parse("Get-Date", host.layer())).toEqual({ valid: false, reason: "spawn" })
     expect(host.calls).toHaveLength(1)
+  })
+
+  test("the real parser rows' preparation runs a text again after a failed run, once, and not after an answer", async () => {
+    const failedOnce = fake((attempt) => (attempt === 1 ? { fail: true } : { out: ok }))
+    expect((await prepare("Get-Date", failedOnce.layer())).valid).toBe(true)
+    expect(failedOnce.calls).toHaveLength(2)
+    const failing = fake(() => ({ fail: true }))
+    expect(await prepare("Get-Date", failing.layer())).toEqual({ valid: false, reason: "spawn" })
+    expect(failing.calls).toHaveLength(2)
+    const exiting = fake(() => ({ exit: 1, out: ok }))
+    expect(await prepare("Get-Date", exiting.layer())).toEqual({ valid: false, reason: "exit" })
+    expect(exiting.calls).toHaveLength(1)
+  })
+
+  test("the real parser rows note a failed run of the host with its cause", async () => {
+    hostFailures.splice(0)
+    const refusing = make(() =>
+      Effect.fail(
+        PlatformError.systemError({ _tag: "NotFound", module: "ChildProcess", method: "spawn", description: "no pwsh here" }),
+      ),
+    )
+    const layer = Layer.provide(
+      PowerShellParse.layerWith({ host: () => "/fake/pwsh" }),
+      Layer.provide(observed, Layer.succeed(ChildProcessSpawner, refusing)),
+    )
+    expect(await parse("Get-Date", layer)).toEqual({ valid: false, reason: "spawn" })
+    expect(hostFailures.splice(0).join("\n")).toContain("no pwsh here")
   })
 
   test("a timeout is retried once and then is timeout", async () => {
