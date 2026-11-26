@@ -1,0 +1,280 @@
+# TEMPORARY (ci-always-green, groups G0 and G8b): measures the Bun 1.4.5 upgrade and the baseline against the regular
+# Bun build. It runs only on the push that adds or changes this file and is removed by the next commit of its author.
+name: side-ci-measure
+
+on:
+  push:
+    branches: [ci-always-green]
+    paths: [".github/workflows/side-ci-measure.yml"]
+
+env:
+  BUN_VERSION: "1.4.5"
+
+jobs:
+  # G0: one Windows core shard and one cli shard, five times with each build of the same Bun.
+  g0:
+    name: g0 ${{ matrix.build }} ${{ matrix.target.package }} ${{ matrix.target.shard }} r${{ matrix.rep }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        build: [baseline, regular]
+        target: [{ package: core, shard: "1/3" }, { package: cli, shard: "4/6" }]
+        rep: [1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Apply the Bun 1.4.5 upgrade
+        shell: bash
+        run: git apply --cached .github/side-ci/bun-145.patch && git checkout -- bun.lock package.json packages/cli/script/build.ts tools/linux-test/Dockerfile && git diff --cached --stat
+      # As in check.yml: after the checkout.
+      - name: Configure git
+        run: git config --global core.autocrlf false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-download-url: https://github.com/oven-sh/bun/releases/download/bun-v${{ env.BUN_VERSION }}/bun-windows-x64${{ matrix.build == 'baseline' && '-baseline' || '' }}.zip
+      - name: Install dependencies
+        shell: bash
+        run: |
+          bun --revision
+          python3 -m pip install setuptools || pip install setuptools || true
+          bun install --frozen-lockfile --linker hoisted
+      - name: Use the long name of the temp folder
+        shell: bash
+        run: |
+          long="$(cygpath -w -l "$TEMP")"
+          echo "TEMP=$long" >> "$GITHUB_ENV"
+          echo "TMP=$long" >> "$GITHUB_ENV"
+      - name: Use Git Bash as the session shell
+        shell: bash
+        run: echo "SHELL=$(cygpath -m "$(command -v bash)")" >> "$GITHUB_ENV"
+      - name: Install ripgrep
+        shell: bash
+        env:
+          RG_VERSION: "14.1.1"
+          RG_SHA256: d0f534024c42afd6cb4d38907c25cd2b249b79bbe6cc1dbee8e3e37c2b6e25a1
+        run: |
+          set -eu
+          name="ripgrep-$RG_VERSION-x86_64-pc-windows-msvc"
+          zip="$RUNNER_TEMP/$name.zip"
+          for attempt in 1 2 3 4 5 6; do
+            if curl --silent --show-error --fail --location --connect-timeout 20 --max-time 120 \
+              --output "$zip" "https://github.com/BurntSushi/ripgrep/releases/download/$RG_VERSION/$name.zip" \
+              && echo "$RG_SHA256 *$zip" | sha256sum --check --status; then
+              break
+            fi
+            test "$attempt" -lt 6 || exit 1
+            sleep $((attempt * 10))
+          done
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath '$(cygpath -w "$zip")' -DestinationPath '$(cygpath -w "$RUNNER_TEMP/ripgrep-unpacked")' -Force"
+          mkdir -p "$RUNNER_TEMP/ripgrep"
+          cp "$RUNNER_TEMP/ripgrep-unpacked/$name/rg.exe" "$RUNNER_TEMP/ripgrep/rg.exe"
+          cygpath -w "$RUNNER_TEMP/ripgrep" >> "$GITHUB_PATH"
+      - name: Test
+        working-directory: packages/${{ matrix.target.package }}
+        env:
+          ORBIT_EGRESS_IDLE_MS: "120000"
+          SHARD: ${{ matrix.target.shard }}
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+            echo "::group::Failures"
+            grep -E '^\(fail\)|^error:|Unhandled error|^Test file stuck|worker crashed|panic' "$RUNNER_TEMP/test.log" | tail -60
+            echo "::endgroup::"
+            exit 1
+          }
+      - name: Upload timings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: g0-${{ matrix.build }}-${{ matrix.target.package }}-${{ strategy.job-index }}
+          path: packages/${{ matrix.target.package }}/test/timings.windows.json
+          if-no-files-found: ignore
+          retention-days: 5
+
+  # G8b: the whole suite with Bun 1.4.5 (the baseline build, as check.yml installs today), on Linux and Windows.
+  linux:
+    name: linux ${{ matrix.package }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - { package: cli, shard: "1/3" }
+          - { package: cli, shard: "2/3" }
+          - { package: cli, shard: "3/3" }
+          - { package: core }
+          - { package: tui }
+          - { package: server }
+          - { package: vscode }
+          - { package: flow }
+          - { package: ai }
+          - { package: client }
+          - { package: codemode }
+          - { package: compat }
+          - { package: plugin }
+          - { package: protocol }
+          - { package: schema }
+          - { package: sdk }
+          - { package: theme }
+          - { package: util }
+          - { package: http-recorder }
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Apply the Bun 1.4.5 upgrade
+        run: git apply --cached .github/side-ci/bun-145.patch && git checkout -- bun.lock package.json packages/cli/script/build.ts tools/linux-test/Dockerfile && git diff --cached --stat
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-download-url: https://github.com/oven-sh/bun/releases/download/bun-v${{ env.BUN_VERSION }}/bun-linux-x64-baseline.zip
+      - name: Install dependencies
+        run: |
+          bun --revision
+          python3 -m pip install setuptools || pip install setuptools || true
+          bun install --frozen-lockfile
+      - name: Install ripgrep
+        run: |
+          for attempt in 1 2 3 4 5; do
+            sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y -o Acquire::Retries=3 ripgrep && exit 0
+            sleep $((attempt * 10))
+          done
+          exit 1
+      - name: Test
+        working-directory: packages/${{ matrix.package }}
+        env:
+          ORBIT_EGRESS_IDLE_MS: "120000"
+          SHARD: ${{ matrix.shard }}
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+            echo "::group::Failures"
+            grep -E '^\(fail\)|^error:|Unhandled error|^Test file stuck|worker crashed|panic' "$RUNNER_TEMP/test.log" | tail -60
+            echo "::endgroup::"
+            exit 1
+          }
+
+  windows:
+    name: windows ${{ matrix.package }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - { package: cli, shard: "1/6" }
+          - { package: cli, shard: "2/6" }
+          - { package: cli, shard: "3/6" }
+          - { package: cli, shard: "4/6" }
+          - { package: cli, shard: "5/6" }
+          - { package: cli, shard: "6/6" }
+          - { package: core, shard: "1/3" }
+          - { package: core, shard: "2/3" }
+          - { package: core, shard: "3/3" }
+          - { package: tui, shard: "1/2" }
+          - { package: tui, shard: "2/2" }
+          - { package: server }
+          - { package: vscode }
+          - { package: flow }
+          - { package: ai }
+          - { package: client }
+          - { package: codemode }
+          - { package: compat }
+          - { package: plugin }
+          - { package: protocol }
+          - { package: schema }
+          - { package: sdk }
+          - { package: theme }
+          - { package: util }
+          - { package: http-recorder }
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Apply the Bun 1.4.5 upgrade
+        shell: bash
+        run: git apply --cached .github/side-ci/bun-145.patch && git checkout -- bun.lock package.json packages/cli/script/build.ts tools/linux-test/Dockerfile && git diff --cached --stat
+      # As in check.yml: after the checkout.
+      - name: Configure git
+        run: git config --global core.autocrlf false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-download-url: https://github.com/oven-sh/bun/releases/download/bun-v${{ env.BUN_VERSION }}/bun-windows-x64-baseline.zip
+      - name: Install dependencies
+        shell: bash
+        run: |
+          bun --revision
+          python3 -m pip install setuptools || pip install setuptools || true
+          bun install --frozen-lockfile --linker hoisted
+      - name: Use the long name of the temp folder
+        shell: bash
+        run: |
+          long="$(cygpath -w -l "$TEMP")"
+          echo "TEMP=$long" >> "$GITHUB_ENV"
+          echo "TMP=$long" >> "$GITHUB_ENV"
+      - name: Use Git Bash as the session shell
+        shell: bash
+        run: echo "SHELL=$(cygpath -m "$(command -v bash)")" >> "$GITHUB_ENV"
+      - name: Install ripgrep
+        shell: bash
+        env:
+          RG_VERSION: "14.1.1"
+          RG_SHA256: d0f534024c42afd6cb4d38907c25cd2b249b79bbe6cc1dbee8e3e37c2b6e25a1
+        run: |
+          set -eu
+          name="ripgrep-$RG_VERSION-x86_64-pc-windows-msvc"
+          zip="$RUNNER_TEMP/$name.zip"
+          for attempt in 1 2 3 4 5 6; do
+            if curl --silent --show-error --fail --location --connect-timeout 20 --max-time 120 \
+              --output "$zip" "https://github.com/BurntSushi/ripgrep/releases/download/$RG_VERSION/$name.zip" \
+              && echo "$RG_SHA256 *$zip" | sha256sum --check --status; then
+              break
+            fi
+            test "$attempt" -lt 6 || exit 1
+            sleep $((attempt * 10))
+          done
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath '$(cygpath -w "$zip")' -DestinationPath '$(cygpath -w "$RUNNER_TEMP/ripgrep-unpacked")' -Force"
+          mkdir -p "$RUNNER_TEMP/ripgrep"
+          cp "$RUNNER_TEMP/ripgrep-unpacked/$name/rg.exe" "$RUNNER_TEMP/ripgrep/rg.exe"
+          cygpath -w "$RUNNER_TEMP/ripgrep" >> "$GITHUB_PATH"
+      - name: Test
+        working-directory: packages/${{ matrix.package }}
+        env:
+          ORBIT_EGRESS_IDLE_MS: "120000"
+          SHARD: ${{ matrix.shard }}
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+            echo "::group::Failures"
+            grep -E '^\(fail\)|^error:|Unhandled error|^Test file stuck|worker crashed|panic' "$RUNNER_TEMP/test.log" | tail -60
+            echo "::endgroup::"
+            exit 1
+          }
+
+  artifact:
+    name: artifact with Bun 1.4.5
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Apply the Bun 1.4.5 upgrade
+        run: git apply --cached .github/side-ci/bun-145.patch && git checkout -- bun.lock package.json packages/cli/script/build.ts tools/linux-test/Dockerfile && git diff --cached --stat
+      - uses: ./.github/actions/setup-bun
+      - name: Build single binary
+        working-directory: packages/cli
+        run: |
+          bun --revision
+          bun run build --single
+      - name: Scan build output for upstream brand and the notice file
+        run: bun tools/rebrand/rebrand.ts --scan packages/cli/dist
