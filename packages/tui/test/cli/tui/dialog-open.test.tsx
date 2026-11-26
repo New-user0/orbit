@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { once } from "node:events"
-import { CliRenderEvents, TextAttributes } from "@opentui/core"
+import { CliRenderEvents, InputRenderable, TextAttributes } from "@opentui/core"
 import path from "path"
 import { testRenderTimed } from "../../fixture/render"
 import { createSignal, onMount } from "solid-js"
@@ -371,6 +371,9 @@ test("does not show the previous project's worktrees while loading another proje
     return pending.promise.then((response) => response.clone())
   })
   try {
+    // Text typed before the filter holds focus reaches no input: "Alpha" was lost, Escape then restored an empty filter,
+    // and ctrl+c on an empty filter closed the dialog, which left the blank frame CI saw while waiting for "Beta".
+    expect(fixture.app.renderer.currentFocusedRenderable).toBeInstanceOf(InputRenderable)
     await fixture.app.waitForFrame((frame) => frame.includes("Alpha") && frame.includes("Beta"))
     await fixture.app.mockInput.typeText("Alpha")
     fixture.app.mockInput.pressArrow("right")
@@ -917,6 +920,9 @@ async function renderOpen(
     { width: 100, height: 30, kittyKeyboard: true },
   )
   app.renderer.start()
+  // The filter takes focus on a timer after the dialog opens, and keys typed before that reach no input, so a test gets
+  // the dialog only once its filter holds focus.
+  await app.waitFor(() => app.renderer.currentFocusedRenderable instanceof InputRenderable)
 
   return {
     app,
