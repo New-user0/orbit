@@ -88,16 +88,19 @@ describe("waitingClock", () => {
     }),
   )
 
-  it.live("counts the effects of a wrapped service's methods and of its nested objects as work", () =>
+  it.live("counts the effects of a wrapped service's methods, effects and nested objects as work", () =>
     Effect.gen(function* () {
       const time = yield* waitingClock
-      const service = time.counted({ read: () => slow, files: { read: () => slow }, size: () => 3 })
+      const names = new Set(["a"])
+      const service = time.counted({ read: () => slow, ready: slow, files: { read: () => slow }, size: () => 3, names })
       const timed = (effect: Effect.Effect<string>) =>
         effect.pipe(Effect.timeoutOption("100 millis"), Effect.provideService(Clock.Clock, time.clock))
       expect(yield* timed(service.read())).toEqual(Option.some("done"))
+      expect(yield* timed(service.ready)).toEqual(Option.some("done"))
       expect(yield* timed(service.files.read())).toEqual(Option.some("done"))
-      // A method that returns no effect is left as it is.
+      // A method that returns no effect, and a value that is not a plain object, are left as they are.
       expect(service.size()).toBe(3)
+      expect(service.names).toBe(names)
     }),
   )
 })

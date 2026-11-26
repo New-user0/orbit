@@ -97,21 +97,24 @@ export const waitingClock = Effect.gen(function* () {
         ),
       )
     })
-  /** `service` with every effect its methods return run as `work`, those of nested objects included. */
+  /**
+   * A copy of the plain object `service` with every effect its methods return run as `work`, those of nested plain
+   * objects included. Its methods are called without a receiver, as a service's are.
+   */
   const counted = <S extends object>(service: S): S =>
-    new Proxy(service, {
-      get: (target, key) => {
-        const value: unknown = Reflect.get(target, key)
-        if (Effect.isEffect(value)) return work(value)
-        if (typeof value === "function")
-          return (...args: ReadonlyArray<unknown>) => {
-            const result: unknown = Reflect.apply(value, target, args)
-            return Effect.isEffect(result) ? work(result) : result
-          }
-        if (typeof value === "object" && value !== null) return counted(value)
-        return value
-      },
-    })
+    // The copy has the same keys, each with a value of the same shape.
+    Object.fromEntries(Object.entries(service).map(([key, value]) => [key, wrapped(value)])) as S
+  const wrapped = (value: unknown): unknown => {
+    if (Effect.isEffect(value)) return work(value)
+    if (typeof value === "function")
+      return (...args: ReadonlyArray<unknown>) => {
+        const result: unknown = value(...args)
+        return Effect.isEffect(result) ? work(result) : result
+      }
+    if (typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype)
+      return counted(value)
+    return value
+  }
   const quiet = Effect.promise(async () => {
     const seen = activity
     for (let round = 0; round < QUIET_TURNS; round++) {
