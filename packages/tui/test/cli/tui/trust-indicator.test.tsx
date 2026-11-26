@@ -9,7 +9,6 @@ import { ThemeProvider } from "../../../src/context/theme"
 import { emptyThemeSource } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
-import { waitForFrame } from "../../fixture/frame"
 
 const untrusted: TrustStatus = {
   directory: "/projects/app",
@@ -37,7 +36,7 @@ async function render(status: TrustStatus | undefined, width: number, onOpen = (
     { width, height: 3 },
   )
   app.renderer.start()
-  await waitForFrame(app, (frame) => frame.includes("footer"))
+  await app.waitForFrame((frame) => frame.includes("footer"))
   return app
 }
 

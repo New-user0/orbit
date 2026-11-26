@@ -2,7 +2,6 @@ import { InputRenderable } from "@opentui/core"
 import { expect, test } from "bun:test"
 import { createAppFixture } from "./fixture/app"
 import { directory, json } from "./fixture/tui-client"
-import { waitForFrame } from "./fixture/frame"
 
 const location = {
   directory,
@@ -55,9 +54,9 @@ async function palette(setup: Awaited<ReturnType<typeof open>>, title: string) {
     return focused instanceof InputRenderable && !focused.isDestroyed
   }
   setup.mockInput.pressKey("p", { ctrl: true })
-  await waitForFrame(setup, (frame) => frame.includes("Commands") && search())
+  await setup.waitForFrame((frame) => frame.includes("Commands") && search())
   for (const key of title) setup.mockInput.pressKey(key)
-  await waitForFrame(setup, (frame) => frame.includes(title))
+  await setup.waitForFrame((frame) => frame.includes(title))
   setup.mockInput.pressEnter()
 }
 
@@ -76,7 +75,7 @@ const views = [
     session: true,
     keys: async (setup: Awaited<ReturnType<typeof open>>) => {
       await palette(setup, "Clear session")
-      await waitForFrame(setup, (frame) => frame.includes("◦"))
+      await setup.waitForFrame((frame) => frame.includes("◦"))
     },
   },
   {
@@ -86,7 +85,7 @@ const views = [
     session: true,
     keys: async (setup: Awaited<ReturnType<typeof open>>) => {
       await palette(setup, "Agent map")
-      await waitForFrame(setup, (frame) => frame.includes("○ ") || frame.includes("● "))
+      await setup.waitForFrame((frame) => frame.includes("○ ") || frame.includes("● "))
     },
   },
   {
@@ -97,7 +96,7 @@ const views = [
     keys: async (setup: Awaited<ReturnType<typeof open>>) => {
       await palette(setup, "Rename session")
       // The palette is gone and the prompt, titled "Rename session", is up.
-      await waitForFrame(setup, (frame) => !frame.includes("Commands") && frame.includes("Rename session"))
+      await setup.waitForFrame((frame) => !frame.includes("Commands") && frame.includes("Rename session"))
     },
   },
 ]
@@ -109,9 +108,9 @@ test.each(views.flatMap((view) => [{ ...view, trusted: true }, { ...view, truste
     await setup.ready
     // Every view must have drawn the title (or its written-out form) before the frame is captured.
     const shown = row.trusted ? ordinary : "Fix\\x1b[2Kbuild\\u{202e}evil"
-    await waitForFrame(setup, (frame) => frame.includes(shown.slice(0, 8)))
+    await setup.waitForFrame((frame) => frame.includes(shown.slice(0, 8)))
     await row.keys(setup)
-    await waitForFrame(setup, (frame) => frame.includes(shown.slice(0, 8)))
+    await setup.waitForFrame((frame) => frame.includes(shown.slice(0, 8)))
     const frame = setup.captureCharFrame()
     expect(frame).not.toContain("\x1b")
     expect(frame).not.toContain(bidi)

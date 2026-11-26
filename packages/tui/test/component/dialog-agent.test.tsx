@@ -6,7 +6,6 @@ import { DialogAgent } from "../../src/component/dialog-agent"
 import { agent, renderLocal } from "../fixture/local"
 import { Toast } from "../../src/ui/toast"
 import { json } from "../fixture/tui-client"
-import { waitForFrame } from "../fixture/frame"
 
 // The real dialog, the real client and a recording server: what the dialog says to the server is what is asserted.
 
@@ -37,7 +36,7 @@ function recorder(dir: string) {
 }
 
 async function until(setup: Awaited<ReturnType<typeof renderLocal>>, text: string) {
-  const frame = await waitForFrame(setup, (frame) => frame.replace(/\s+/g, " ").includes(text))
+  const frame = await setup.waitForFrame((frame) => frame.replace(/\s+/g, " ").includes(text))
   await Bun.sleep(60)
   return frame
 }

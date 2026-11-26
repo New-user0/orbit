@@ -5,7 +5,6 @@ import { allThemes, setCustomThemes } from "../src/theme"
 import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
-import { waitForFrame } from "./fixture/frame"
 
 // trust-first part 2: the owner's two "match refrence" decisions of 2026-10-21, in the terminal UI, drawn against a
 // scripted server.
@@ -93,7 +92,7 @@ test("a trusted folder is not asked about again, even when an older server lists
   await using state = await tmpdir()
   await inside(folders.repo, async () => {
     await using setup = await createAppFixture({ state: state.path, fetch: trustRoute(() => changedSince(folders.repo)) })
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     // The question opens within a moment of the first answer when it opens at all.
     await Bun.sleep(1_000)
     const frame = setup.captureCharFrame()
@@ -109,7 +108,7 @@ test("a trusted project's own plugins load, even when an older server lists them
   await inside(folders.repo, async () => {
     await using setup = await createAppFixture({ state: state.path, fetch: trustRoute(() => changedSince(folders.repo)) })
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     await setup.waitFor(async () => (await folders.marks()).length > 0, { maxPasses: 200 }).catch(() => undefined)
     expect(await folders.marks()).toEqual(["loaded"])
   })
@@ -124,7 +123,7 @@ test("the start folder's themes wait for it to be trusted, and a folder above th
   await inside(folders.repo, async () => {
     await using setup = await createAppFixture({ state: state.path, fetch: trustRoute((folder) => status(folder, false)) })
     await setup.ready
-    await waitForFrame(setup, (frame) => frame.includes("Trust this folder?"))
+    await setup.waitForFrame((frame) => frame.includes("Trust this folder?"))
     await Bun.sleep(500)
     const names = Object.keys(allThemes())
     expect(names).not.toContain("clone-own-theme")
@@ -143,7 +142,7 @@ test("the start folder's themes stay out when its trust cannot be read", async (
       fetch: (url) => (url.pathname === "/api/location/trust" ? new Response("unavailable", { status: 503 }) : undefined),
     })
     await setup.ready
-    await waitForFrame(setup, (frame) => frame.includes("Trust this folder?"))
+    await setup.waitForFrame((frame) => frame.includes("Trust this folder?"))
     await Bun.sleep(500)
     const names = Object.keys(allThemes())
     expect(names).not.toContain("clone-own-theme")
@@ -158,7 +157,7 @@ test("a trusted start folder's own themes load, and a folder above the project s
   await inside(folders.repo, async () => {
     await using setup = await createAppFixture({ state: state.path, fetch: trustRoute((folder) => status(folder, true)) })
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     await setup
       .waitFor(() => Object.keys(allThemes()).includes("clone-own-theme"), { maxPasses: 200 })
       .catch(() => undefined)

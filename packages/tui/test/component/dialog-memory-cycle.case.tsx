@@ -4,7 +4,6 @@ import { DialogMemory } from "../../src/component/dialog-memory"
 import { tmpdir } from "../fixture/fixture"
 import { renderLocal } from "../fixture/local"
 import { json } from "../fixture/tui-client"
-import { waitForFrame } from "../fixture/frame"
 
 // Run by dialog-memory.test.tsx in a child process with a deadline, never collected on its own (its name is not a test
 // file's): a depth that followed a loop of imports would block the event loop, where no timeout of the runner fires.
@@ -31,6 +30,6 @@ test("draws a listing whose imports name each other", async () => {
   }
   await using setup = await renderLocal({ directory: tmp.path, url: "http://127.0.0.1:4096", fetch })
   setup.dialog.replace(() => <DialogMemory open={async () => {}} />, undefined, { size: "large" })
-  const frame = await waitForFrame(setup, (frame) => frame.includes(`.${path.sep}b.md`))
+  const frame = await setup.waitForFrame((frame) => frame.includes(`.${path.sep}b.md`))
   expect(frame).toContain(`.${path.sep}a.md`)
 })

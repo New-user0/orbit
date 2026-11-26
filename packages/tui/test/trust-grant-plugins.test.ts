@@ -7,7 +7,6 @@ import { startServer } from "../../server/test/fixture/server"
 import { createAppFixture } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { json, type FetchHandler } from "./fixture/tui-client"
-import { waitForFrame } from "./fixture/frame"
 
 // Class 3, the terminal UI's cell: the trust dialog grants, and the folder's providers and plugins start again after a
 // grant. The server's grant answers once they have (server/test/trust-grant-models.test.ts), and the dialog closes on
@@ -66,9 +65,9 @@ test("when the trust dialog closes on its grant, the folder's plugin runs and it
       return json(await response.json(), { status: response.status })
     }
     await using setup = await createAppFixture({ state: state.path, fetch: proxy })
-    await waitForFrame(setup, (frame) => frame.includes("Trust this folder?"))
+    await setup.waitForFrame((frame) => frame.includes("Trust this folder?"))
     setup.mockInput.pressEnter()
-    await waitForFrame(setup, (frame) => !frame.includes("Trust this folder?"))
+    await setup.waitForFrame((frame) => !frame.includes("Trust this folder?"))
 
     expect(await read()).toEqual({ runs: true, lists: true })
   } finally {

@@ -54,7 +54,6 @@ import { KeybindingsFile } from "../../src/config/keybindings-file"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 import { tmpdir } from "../fixture/fixture"
 import { diffImageFixture } from "../fixture/diff-image"
-import { waitForFrame } from "../fixture/frame"
 
 const tuiConfig = createTuiResolvedConfig()
 
@@ -274,7 +273,7 @@ test.skipIf(process.platform === "win32").each([
     try {
       await app.renderOnce()
       app.mockInput.pressKey("v", { ctrl: true })
-      await waitForFrame(app, (frame) => frame.includes("[Image 1]"))
+      await app.waitForFrame((frame) => frame.includes("[Image 1]"))
       const image = app.renderer.root.findDescendantById("mini-prompt-image-0")
       if (!options.mono && options.preview) {
         expect(image).toBeInstanceOf(ImageRenderable)
@@ -308,7 +307,7 @@ test.skipIf(process.platform === "win32").each([
       })
       await app.waitFor(() => app.renderer.currentFocusedEditor?.plainText === "")
       app.mockInput.pressKey("ARROW_UP")
-      await waitForFrame(app, (frame) => frame.includes("[Image 1]"))
+      await app.waitForFrame((frame) => frame.includes("[Image 1]"))
       app.mockInput.pressEnter()
       await app.waitFor(() => submitted.length === 2)
       expect(submitted[1].parts).toEqual(submitted[0].parts)
@@ -472,7 +471,7 @@ test("mini attaches dropped image paths and removes attachments with their label
     ])
     await app.waitFor(() => app.renderer.currentFocusedEditor?.plainText === "")
     app.mockInput.pressKey("ARROW_UP")
-    await waitForFrame(app, (frame) => frame.includes("[Image 2]"))
+    await app.waitForFrame((frame) => frame.includes("[Image 2]"))
     app.renderer.currentFocusedEditor?.setText("no attachments")
     app.mockInput.pressEnter()
     await app.waitFor(() => submitted.length === 2)

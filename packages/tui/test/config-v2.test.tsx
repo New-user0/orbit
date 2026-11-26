@@ -19,7 +19,6 @@ import { ToastProvider } from "../src/ui/toast"
 import { emptyThemeSource, tmpdir } from "./fixture/fixture"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
-import { waitForFrame } from "./fixture/frame"
 
 const decodeInfo = Schema.decodeUnknownSync(Info)
 
@@ -133,7 +132,7 @@ test("the /config dialog opened without a link state does not list Diff tool", a
   )
   app.renderer.start()
   try {
-    const frame = await waitForFrame(app, (frame) => frame.includes("Wrapping"))
+    const frame = await app.waitForFrame((frame) => frame.includes("Wrapping"))
     expect(frame).not.toContain("Diff tool")
   } finally {
     app.renderer.destroy()
@@ -689,7 +688,7 @@ test("prompt.suggestions is a boolean, off by default, with an Input row in sett
   )
   app.renderer.start()
   try {
-    const frame = await waitForFrame(app, (frame) => frame.includes("Prompt suggestions"))
+    const frame = await app.waitForFrame((frame) => frame.includes("Prompt suggestions"))
     expect(frame.split("\n").find((line) => line.includes("Prompt suggestions"))).toContain("off")
     app.mockInput.pressEnter()
     await app.waitFor(() => current.prompt?.suggestions === true)

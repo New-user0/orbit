@@ -13,7 +13,6 @@ import { diffImageFixture } from "../../fixture/diff-image"
 import { emptyThemeSource } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
-import { waitForFrame } from "../../fixture/frame"
 
 test("recognizes only supported image file extensions", () => {
   for (const extension of ["png", "jpg", "jpeg", "webp", "gif", "PNG", "JPEG"]) {
@@ -43,9 +42,9 @@ test.each([
     options,
   )
   try {
-    await waitForFrame(app, (frame) => frame.includes("Loading image…"))
+    await app.waitForFrame((frame) => frame.includes("Loading image…"))
     pending.resolve(diffImageFixture)
-    await waitForFrame(app, (frame) => frame.includes("96 x 48"))
+    await app.waitForFrame((frame) => frame.includes("96 x 48"))
     expect(requested).toEqual(["assets/landscape.png"])
     expect(app.captureCharFrame()).toContain("Working tree preview")
     const image = findImage(app.renderer.root)!
@@ -63,10 +62,10 @@ test.each([
 test("clicking a thumbnail opens the shared image modal and escape returns to the preview", async () => {
   const app = await renderImage(() => <DiffViewerImage file="landscape.png" load={async () => diffImageFixture} />)
   try {
-    await waitForFrame(app, (frame) => frame.includes("Click to enlarge"))
+    await app.waitForFrame((frame) => frame.includes("Click to enlarge"))
     const thumbnail = findImage(app.renderer.root)!
     await app.mockMouse.click(thumbnail.x + Math.floor(thumbnail.width / 2), thumbnail.y + 1)
-    await waitForFrame(app, (frame) => frame.includes("Image 1 of 1"))
+    await app.waitForFrame((frame) => frame.includes("Image 1 of 1"))
     const modal = app.renderer.root.findDescendantById("prompt-image-viewer-image")
     expect(modal).toBeInstanceOf(ImageRenderable)
     if (!(modal instanceof ImageRenderable)) throw new Error("Missing image modal")
@@ -76,7 +75,7 @@ test("clicking a thumbnail opens the shared image modal and escape returns to th
     expect(app.captureCharFrame()).toContain("landscape.png")
 
     app.mockInput.pressEscape()
-    await waitForFrame(app, (frame) => !frame.includes("Image 1 of 1"))
+    await app.waitForFrame((frame) => !frame.includes("Image 1 of 1"))
     expect(findImage(app.renderer.root)).toBe(thumbnail)
     expect(app.captureCharFrame()).toContain("Click to enlarge")
   } finally {
@@ -101,7 +100,7 @@ test("pending image reads are aborted when the source changes or the preview clo
     </Show>
   ))
   try {
-    await waitForFrame(app, (frame) => frame.includes("Loading image…"))
+    await app.waitForFrame((frame) => frame.includes("Loading image…"))
     expect(signals[0].aborted).toBe(false)
     setFile("b.png")
     await app.flush()
@@ -131,12 +130,12 @@ test.each(["fetch", "decode"])("recovers from a %s error when the file changes",
     />
   ))
   try {
-    await waitForFrame(app, (frame) =>
+    await app.waitForFrame((frame) =>
       frame.includes(failure === "fetch" ? "Could not load image" : "Could not decode image"),
     )
     expect(findImage(app.renderer.root)).toBeUndefined()
     setFile("landscape.png")
-    await waitForFrame(app, (frame) => frame.includes("96 x 48"))
+    await app.waitForFrame((frame) => frame.includes("96 x 48"))
     expect(app.captureCharFrame()).toContain("Story fixture preview")
     expect(app.captureCharFrame()).not.toContain("Could not")
     expect(findImage(app.renderer.root)?.image?.width).toBe(96)

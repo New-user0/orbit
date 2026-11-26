@@ -14,7 +14,6 @@ import { emptyThemeSource, tmpdir } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { createApi, createEventStream, createFetch, json } from "../../fixture/tui-client"
-import { waitForFrame } from "../../fixture/frame"
 
 async function mountForm(
   root: string,
@@ -121,7 +120,7 @@ async function mountForm(
 
   const app = await testRender(() => <Harness />, { width, height, kittyKeyboard: true })
   app.renderer.start()
-  await waitForFrame(app, (frame) => frame.includes("Authorization required"))
+  await app.waitForFrame((frame) => frame.includes("Authorization required"))
   return { app, cancellations, copied, replies }
 }
 
@@ -141,7 +140,7 @@ test("restores the composer when terminal-form revalidation fails", async () => 
   const prompt = await mountRecoveringForm(tmp.path, { reply: 404, syncFailure: true })
   try {
     prompt.app.mockInput.pressEnter()
-    await waitForFrame(prompt.app, (frame) => frame.includes("Composer ready"))
+    await prompt.app.waitForFrame((frame) => frame.includes("Composer ready"))
 
     expect(prompt.replies).toHaveLength(1)
   } finally {
@@ -155,7 +154,7 @@ for (const status of [404, 409] as const) {
     const prompt = await mountRecoveringForm(tmp.path, { reply: status })
     try {
       prompt.app.mockInput.pressEnter()
-      await waitForFrame(prompt.app, (frame) => frame.includes("Composer ready"))
+      await prompt.app.waitForFrame((frame) => frame.includes("Composer ready"))
 
       expect(prompt.replies).toHaveLength(1)
       expect(prompt.app.captureCharFrame()).not.toContain("Form not found")
@@ -170,7 +169,7 @@ for (const status of [404, 409] as const) {
     const prompt = await mountRecoveringForm(tmp.path, { cancel: status })
     try {
       prompt.app.mockInput.pressEscape()
-      await waitForFrame(prompt.app, (frame) => frame.includes("Composer ready"))
+      await prompt.app.waitForFrame((frame) => frame.includes("Composer ready"))
 
       expect(prompt.cancellations).toHaveLength(1)
       expect(prompt.app.captureCharFrame()).not.toContain("Form not found")
@@ -186,19 +185,19 @@ test("requires explicit acknowledgement before submitting an external field", as
   const prompt = await mountForm(tmp.path)
   try {
     prompt.app.mockInput.pressKey("right")
-    await waitForFrame(prompt.app, (frame) => frame.includes("(acknowledgement required)"))
+    await prompt.app.waitForFrame((frame) => frame.includes("(acknowledgement required)"))
     prompt.app.mockInput.pressEnter()
-    await waitForFrame(prompt.app, (frame) => frame.includes("External action must be acknowledged"))
+    await prompt.app.waitForFrame((frame) => frame.includes("External action must be acknowledged"))
     expect(prompt.replies).toEqual([])
 
     prompt.app.mockInput.pressKey("left")
     prompt.app.mockInput.pressKey("c")
-    await waitForFrame(prompt.app, (frame) => frame.includes("press enter to confirm"))
+    await prompt.app.waitForFrame((frame) => frame.includes("press enter to confirm"))
     expect(prompt.copied).toEqual(["https://example.com/authorize"])
     expect(prompt.replies).toEqual([])
 
     prompt.app.mockInput.pressEnter()
-    await waitForFrame(prompt.app, (frame) => frame.includes("Acknowledged"))
+    await prompt.app.waitForFrame((frame) => frame.includes("Acknowledged"))
     expect(prompt.replies).toEqual([])
 
     prompt.app.mockInput.pressEnter()
@@ -232,7 +231,7 @@ test("shows a compact confirmation summary", async () => {
   ])
   try {
     prompt.app.mockInput.pressArrow("right")
-    await waitForFrame(prompt.app, (frame) => frame.includes("enter submit"))
+    await prompt.app.waitForFrame((frame) => frame.includes("enter submit"))
 
     const frame = prompt.app.captureCharFrame()
     expect(frame).not.toContain("Review")
@@ -278,7 +277,7 @@ test("confirmation fits wrapped answers before offering scroll", async () => {
     expect(prompt.app.captureCharFrame()).toContain("Include  Priority  Submit")
     prompt.app.mockInput.pressArrow("right")
     prompt.app.mockInput.pressArrow("right")
-    await waitForFrame(prompt.app, (frame) => frame.includes("Priority: Now") && frame.includes("enter submit"))
+    await prompt.app.waitForFrame((frame) => frame.includes("Priority: Now") && frame.includes("enter submit"))
 
     const frame = prompt.app.captureCharFrame()
     expect(frame).not.toContain("↑↓ scroll")
@@ -303,7 +302,7 @@ test("pasting on a custom choice opens its editor without submitting", async () 
     await prompt.app.mockInput.pasteBracketedText("production\nwest")
     await prompt.app.waitFor(() => prompt.app.renderer.currentFocusedEditor?.plainText === "production\nwest")
 
-    await waitForFrame(prompt.app, (frame) => frame.includes("production"))
+    await prompt.app.waitForFrame((frame) => frame.includes("production"))
     expect(prompt.app.captureCharFrame()).not.toContain("Type your own answer")
     expect(prompt.replies).toEqual([])
   } finally {
@@ -360,7 +359,7 @@ test("clipboard shortcut opens a custom choice editor without submitting", async
     prompt.app.mockInput.pressKey("v", { ctrl: true })
     await prompt.app.waitFor(() => prompt.app.renderer.currentFocusedEditor?.plainText === "production\nwest")
 
-    await waitForFrame(prompt.app, (frame) => frame.includes("production"))
+    await prompt.app.waitForFrame((frame) => frame.includes("production"))
     expect(prompt.app.captureCharFrame()).not.toContain("Type your own answer")
     expect(prompt.replies).toEqual([])
   } finally {
@@ -384,7 +383,7 @@ test("typing a custom multiselect answer selects it before commit", async () => 
     prompt.app.mockInput.pressEnter()
     await prompt.app.waitFor(() => prompt.app.renderer.currentFocusedEditor !== null)
     await prompt.app.mockInput.typeText("production")
-    await waitForFrame(prompt.app, (frame) => frame.includes("[✓] production"))
+    await prompt.app.waitForFrame((frame) => frame.includes("[✓] production"))
 
     expect(prompt.replies).toEqual([])
   } finally {
@@ -418,7 +417,7 @@ test("up leaves a custom editor only from its first visual line", async () => {
     prompt.app.mockInput.pressArrow("up")
     await prompt.app.waitFor(() => prompt.app.renderer.currentFocusedEditor === null)
     prompt.app.mockInput.pressEnter()
-    await waitForFrame(prompt.app, (frame) => frame.includes("[✓] Staging"))
+    await prompt.app.waitForFrame((frame) => frame.includes("[✓] Staging"))
   } finally {
     prompt.app.renderer.destroy()
   }
@@ -438,7 +437,7 @@ test("typing on the highlighted custom option opens it without losing burst inpu
     prompt.app.mockInput.pressArrow("down")
     await prompt.app.mockInput.typeText("production target")
     await prompt.app.waitFor(() => prompt.app.renderer.currentFocusedEditor?.plainText === "production target")
-    await waitForFrame(prompt.app, (frame) => frame.includes("[✓] production target"))
+    await prompt.app.waitForFrame((frame) => frame.includes("[✓] production target"))
 
     expect(prompt.replies).toEqual([])
   } finally {
@@ -459,23 +458,23 @@ test("enter on an empty custom multiselect option clearly enters editing", async
   ])
   try {
     prompt.app.mockInput.pressArrow("down")
-    await waitForFrame(prompt.app, (frame) => frame.includes("enter edit"))
+    await prompt.app.waitForFrame((frame) => frame.includes("enter edit"))
 
     prompt.app.mockInput.pressEnter()
     await prompt.app.waitFor(() => prompt.app.renderer.currentFocusedEditor !== null)
-    await waitForFrame(prompt.app, (frame) => frame.includes("[✓] Type your own answer") && frame.includes("enter done"))
+    await prompt.app.waitForFrame((frame) => frame.includes("[✓] Type your own answer") && frame.includes("enter done"))
     expect(prompt.app.captureCharFrame()).toContain("esc close")
     expect(prompt.app.captureCharFrame()).not.toContain("↑↓ select")
 
     prompt.app.mockInput.pressEscape()
     await prompt.app.waitFor(() => prompt.app.renderer.currentFocusedEditor === null)
-    await waitForFrame(prompt.app, (frame) => frame.includes("[ ] Type your own answer"))
+    await prompt.app.waitForFrame((frame) => frame.includes("[ ] Type your own answer"))
 
     prompt.app.mockInput.pressEnter()
     await prompt.app.waitFor(() => prompt.app.renderer.currentFocusedEditor !== null)
     prompt.app.mockInput.pressEnter()
     await prompt.app.waitFor(() => prompt.app.renderer.currentFocusedEditor === null)
-    await waitForFrame(prompt.app, (frame) => frame.includes("[ ] Type your own answer"))
+    await prompt.app.waitForFrame((frame) => frame.includes("[ ] Type your own answer"))
     expect(prompt.app.captureCharFrame()).not.toContain("Select at least")
 
     expect(prompt.replies).toEqual([])
@@ -504,12 +503,12 @@ test("defers multiselect validation until submission", async () => {
     prompt.app.mockInput.pressEnter()
     prompt.app.mockInput.pressEnter()
     prompt.app.mockInput.pressArrow("right")
-    await waitForFrame(prompt.app, (frame) => frame.includes("[ ] Now"))
+    await prompt.app.waitForFrame((frame) => frame.includes("[ ] Now"))
     expect(prompt.app.captureCharFrame()).not.toContain("Select at least")
 
     prompt.app.mockInput.pressArrow("right")
     prompt.app.mockInput.pressEnter()
-    await waitForFrame(prompt.app, (frame) => frame.includes("Select at least"))
+    await prompt.app.waitForFrame((frame) => frame.includes("Select at least"))
     expect(prompt.replies).toEqual([])
   } finally {
     prompt.app.renderer.destroy()
@@ -561,7 +560,7 @@ test("typing a custom single-select answer selects it without submitting", async
     prompt.app.mockInput.pressEnter()
     await prompt.app.waitFor(() => prompt.app.renderer.currentFocusedEditor !== null)
     await prompt.app.mockInput.typeText("production")
-    await waitForFrame(prompt.app, (frame) => frame.includes("production"))
+    await prompt.app.waitForFrame((frame) => frame.includes("production"))
 
     expect(prompt.replies).toEqual([])
   } finally {
@@ -583,7 +582,7 @@ test("committing a custom multiselect answer keeps one editable custom row", asy
     await prompt.app.mockInput.pasteBracketedText("production")
     await prompt.app.waitFor(() => prompt.app.renderer.currentFocusedEditor?.plainText === "production")
     prompt.app.mockInput.pressEnter()
-    await waitForFrame(prompt.app, (frame) => frame.includes("2. [✓] production"))
+    await prompt.app.waitForFrame((frame) => frame.includes("2. [✓] production"))
 
     const frame = prompt.app.captureCharFrame()
     expect(frame).not.toContain("Type your own answer")
@@ -660,11 +659,11 @@ test("space toggles the selected multiselect option", async () => {
   ])
   try {
     prompt.app.mockInput.pressKey(" ")
-    await waitForFrame(prompt.app, (frame) => frame.includes("[✓] Staging"))
+    await prompt.app.waitForFrame((frame) => frame.includes("[✓] Staging"))
     expect(prompt.replies).toEqual([])
 
     prompt.app.mockInput.pressKey(" ")
-    await waitForFrame(prompt.app, (frame) => frame.includes("[ ] Staging"))
+    await prompt.app.waitForFrame((frame) => frame.includes("[ ] Staging"))
     expect(prompt.replies).toEqual([])
   } finally {
     prompt.app.renderer.destroy()
@@ -708,7 +707,7 @@ test("space activates the custom multiselect option", async () => {
     prompt.app.mockInput.pressKey(" ")
 
     await prompt.app.waitFor(() => prompt.app.renderer.currentFocusedEditor !== null)
-    await waitForFrame(prompt.app, (frame) => frame.includes("[✓] Type your own answer"))
+    await prompt.app.waitForFrame((frame) => frame.includes("[✓] Type your own answer"))
     expect(prompt.replies).toEqual([])
   } finally {
     prompt.app.renderer.destroy()
@@ -740,7 +739,7 @@ test("draws the control characters of an external URL and of a review row writte
     { key: "note", type: "string", title: "Note", default: "x\u001b[2Ky" },
   ])
   try {
-    const frame = await waitForFrame(prompt.app, (drawn) => drawn.includes("a\\x1b]0;pwn\\x07b"))
+    const frame = await prompt.app.waitForFrame((drawn) => drawn.includes("a\\x1b]0;pwn\\x07b"))
     expect(frame).not.toContain("\u001b")
     // The review page lists every answer, here the default the form arrived with.
     for (let step = 0; step < 3 && !prompt.app.captureCharFrame().includes("x\\x1b[2Ky"); step++) {

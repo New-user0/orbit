@@ -12,7 +12,6 @@ import { ToastProvider } from "../../../src/ui/toast"
 import { emptyThemeSource } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
-import { waitForFrame } from "../../fixture/frame"
 
 // The untrusted indicator's story activates the indicator the way the app does: the question opens for every folder the
 // indicator is shown for, which under trust-first is every folder that is not trusted, whatever it holds, and nothing
@@ -48,7 +47,7 @@ async function render() {
     { width: 100, height: 30, kittyKeyboard: true },
   )
   app.renderer.start()
-  await waitForFrame(app, (frame) => frame.includes("storybook / untrusted indicator"))
+  await app.waitForFrame((frame) => frame.includes("storybook / untrusted indicator"))
   return app
 }
 
@@ -56,17 +55,17 @@ test("the story opens the question for an untrusted folder, and not for a truste
   const app = await render()
   try {
     // The first state is a folder that is not trusted, which holds nothing back since nothing of it is read.
-    await waitForFrame(app, (frame) => frame.includes(" · untrusted · "))
+    await app.waitForFrame((frame) => frame.includes(" · untrusted · "))
     app.mockInput.pressEnter()
-    await waitForFrame(app, (frame) => frame.includes("question opened") && frame.includes("Trust this folder?"))
+    await app.waitForFrame((frame) => frame.includes("question opened") && frame.includes("Trust this folder?"))
     app.mockInput.pressEscape()
-    await waitForFrame(app, (frame) => !frame.includes("Trust this folder?"))
+    await app.waitForFrame((frame) => !frame.includes("Trust this folder?"))
 
     // The other state is a trusted folder: no indicator, so nothing to open.
     app.mockInput.pressKey("t")
-    await waitForFrame(app, (frame) => frame.includes(" · trusted · "))
+    await app.waitForFrame((frame) => frame.includes(" · trusted · "))
     app.mockInput.pressEnter()
-    await waitForFrame(app, (frame) => frame.includes("the indicator is not shown, so there is nothing to activate"))
+    await app.waitForFrame((frame) => frame.includes("the indicator is not shown, so there is nothing to activate"))
   } finally {
     app.renderer.destroy()
   }

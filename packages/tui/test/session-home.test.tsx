@@ -5,7 +5,6 @@ import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
-import { waitForFrame } from "./fixture/frame"
 
 test.each([
   "bottom",
@@ -111,7 +110,7 @@ test.each([
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
   try {
-    await waitForFrame(setup, (frame) => frame.includes("History message 0399"))
+    await setup.waitForFrame((frame) => frame.includes("History message 0399"))
     const findScrollBox = (root: Renderable): ScrollBoxRenderable | undefined =>
       root instanceof ScrollBoxRenderable && root.getRenderable("message-399")
         ? root
@@ -122,11 +121,11 @@ test.each([
     const maximum = () => Math.max(0, scroll.scrollHeight - scroll.viewport.height)
     if (mode === "scrolled" || mode === "cancel" || mode === "settling-scrolled") {
       setup.mockInput.pressKey("F6")
-      await waitForFrame(setup, (frame) => frame.includes("Jump to latest"))
+      await setup.waitForFrame((frame) => frame.includes("Jump to latest"))
     }
     if (mode === "page-cancel" || mode.startsWith("prepend")) {
       scroll.scrollTo(0)
-      await waitForFrame(setup, (frame) => frame.includes("History message 0380"))
+      await setup.waitForFrame((frame) => frame.includes("History message 0380"))
     }
     await setup.waitForVisualIdle()
     const visible = () =>
@@ -164,7 +163,7 @@ test.each([
       setup.mockInput.pressKey(mode === "prepend-navigation" ? "F9" : "F8")
       await setup.waitFor(() => pages.length === 2)
       setup.mockInput.pressKey("HOME")
-      await waitForFrame(setup, (frame) => frame.includes("Loading session history"))
+      await setup.waitForFrame((frame) => frame.includes("Loading session history"))
       prior.resolve()
       await setup.waitFor(() => pages.some((page) => page.end === 360 && page.limit === 200))
       await setup.waitForVisualIdle()
@@ -178,12 +177,12 @@ test.each([
       release.resolve()
       finish.resolve()
       if (mode === "prepend-failure") {
-        await waitForFrame(setup, (frame) => !frame.includes("Loading session history"))
+        await setup.waitForFrame((frame) => !frame.includes("Loading session history"))
         expect(visible()).toBe(before)
         expect(mounted()).toHaveLength(40)
         return
       }
-      await waitForFrame(setup,
+      await setup.waitForFrame(
         (frame) => frame.includes("History message 0000") && !frame.includes("Loading session history"),
       )
       expect(mounted()).toHaveLength(60)
@@ -191,7 +190,7 @@ test.each([
       return
     }
     setup.mockInput.pressKey("HOME")
-    await waitForFrame(setup, (frame) => frame.includes("Loading session history…"))
+    await setup.waitForFrame((frame) => frame.includes("Loading session history…"))
     setup.mockInput.pressKey("HOME")
     await setup.waitForVisualIdle()
     expect(pages).toEqual([
@@ -204,7 +203,7 @@ test.each([
       if (mode === "close") setup.renderer.destroy()
       if (mode === "resize-cancel") {
         setup.resize(60, 22)
-        await waitForFrame(setup,
+        await setup.waitForFrame(
           (frame) => frame.includes("History message 0399") && !frame.includes("Loading session history"),
         )
       }
@@ -219,7 +218,7 @@ test.each([
     if (mode === "mixed") {
       release.resolve()
       finish.resolve()
-      await waitForFrame(setup,
+      await setup.waitForFrame(
         (frame) => frame.includes("History message 0000") && !frame.includes("Loading session history"),
       )
       await setup.waitForVisualIdle()
@@ -238,11 +237,11 @@ test.each([
       expect(mounted().map((child) => child.id)).toEqual(messages.slice(0, 60).map((message) => message.id))
       expect(scroll.scrollTop).toBeGreaterThan(0)
       setup.mockInput.pressKey("END")
-      await waitForFrame(setup, (frame) => frame.includes("History message 0399") && !frame.includes("Jump to latest"))
+      await setup.waitForFrame((frame) => frame.includes("History message 0399") && !frame.includes("Jump to latest"))
       await setup.waitFor(() => scroll.scrollTop === maximum())
       if (mode === "settling-reveal") {
         scroll.scrollTo(0)
-        await waitForFrame(setup, (frame) => frame.includes("History message 0360"))
+        await setup.waitForFrame((frame) => frame.includes("History message 0360"))
         setup.mockInput.pressKey("F8")
       }
       navigated = false
@@ -258,7 +257,7 @@ test.each([
     }
     if (mode === "page-cancel") {
       setup.mockInput.pressKey("F8")
-      await waitForFrame(setup, (frame) => !frame.includes("Loading session history"))
+      await setup.waitForFrame((frame) => !frame.includes("Loading session history"))
       release.resolve()
       finish.resolve()
       await setup.waitFor(() => Boolean(scroll.getRenderable("message-360")))
@@ -275,7 +274,7 @@ test.each([
     if (mode === "failure") {
       release.resolve()
       finish.resolve()
-      await waitForFrame(setup, (frame) => !frame.includes("Loading session history"))
+      await setup.waitForFrame((frame) => !frame.includes("Loading session history"))
       events.emit({
         id: "evt_live",
         created: 400,
@@ -287,10 +286,10 @@ test.each([
           item: { type: "user", payload: { text: "Live message after failure" }, delivery: "steer" },
         },
       })
-      await waitForFrame(setup, (frame) => frame.includes("Live message after failure"))
+      await setup.waitForFrame((frame) => frame.includes("Live message after failure"))
       expect(mounted()).toHaveLength(21)
       setup.mockInput.pressKey("HOME")
-      await waitForFrame(setup,
+      await setup.waitForFrame(
         (frame) => frame.includes("History message 0000") && !frame.includes("Loading session history"),
       )
       expect(mounted()).toHaveLength(60)
@@ -299,7 +298,7 @@ test.each([
     if (mode === "up-cancel" || mode === "mouse-cancel") {
       if (mode === "up-cancel") setup.mockInput.pressKey("F6")
       if (mode === "mouse-cancel") await setup.mockMouse.scroll(scroll.viewport.x + 2, scroll.viewport.y + 2, "up")
-      await waitForFrame(setup,
+      await setup.waitForFrame(
         (frame) => frame.includes("Jump to latest") && !frame.includes("Loading session history"),
       )
       await setup.waitForVisualIdle()
@@ -314,7 +313,7 @@ test.each([
     }
     if (mode.endsWith("cancel")) {
       setup.mockInput.pressKey(mode === "cancel" ? "END" : "F7")
-      await waitForFrame(setup,
+      await setup.waitForFrame(
         (frame) =>
           frame.includes("History message 0399") &&
           !frame.includes("Loading session history") &&
@@ -339,7 +338,7 @@ test.each([
       expect(frames).toEqual([before])
       finish.resolve()
     }
-    await waitForFrame(setup,
+    await setup.waitForFrame(
       (frame) => frame.includes("History message 0000") && !frame.includes("Loading session history"),
     )
     await setup.waitForVisualIdle()
@@ -358,21 +357,21 @@ test.each([
 
     // Forward paging must reveal the cached middle, not stop at the bounded head.
     scroll.scrollTo(scroll.scrollHeight)
-    await waitForFrame(setup, (frame) => frame.includes("History message 0059"))
+    await setup.waitForFrame((frame) => frame.includes("History message 0059"))
     setup.mockInput.pressKey("F7")
-    await waitForFrame(setup, (frame) => frame.includes("History message 0060"))
+    await setup.waitForFrame((frame) => frame.includes("History message 0060"))
     expect(mounted().map((child) => child.id)).toEqual(messages.slice(0, 120).map((message) => message.id))
     setup.mockInput.pressKey("F8")
-    await waitForFrame(setup,
+    await setup.waitForFrame(
       (frame) => frame.includes("History message 0059") && !frame.includes("History message 0060"),
     )
 
     setup.mockInput.pressKey("END")
-    await waitForFrame(setup, (frame) => frame.includes("History message 0399") && !frame.includes("Jump to latest"))
+    await setup.waitForFrame((frame) => frame.includes("History message 0399") && !frame.includes("Jump to latest"))
     await setup.waitFor(() => scroll.scrollTop === maximum())
     expect(scroll.scrollTop).toBe(maximum())
     setup.mockInput.pressKey("HOME")
-    await waitForFrame(setup,
+    await setup.waitForFrame(
       (frame) => frame.includes("History message 0000") && !frame.includes("Loading session history"),
     )
     setup.mockInput.pressKey("HOME")

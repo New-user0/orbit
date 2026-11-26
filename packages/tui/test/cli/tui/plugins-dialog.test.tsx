@@ -24,7 +24,6 @@ import { emptyThemeSource, tmpdir } from "../../fixture/fixture"
 import { createApi, createFetch, json } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
-import { waitForFrame } from "../../fixture/frame"
 
 const target = "git+ssh://git@github.com/example/team-plugins.git"
 
@@ -119,7 +118,7 @@ async function renderPlugins(
   const app = await testRender(() => <Harness />, { width: 80, height: 20, kittyKeyboard: true })
   app.renderer.start()
   const expected = tui?.list[0]?.id ?? inventory.list[0]?.id ?? "local.plugin"
-  await waitForFrame(app, (frame) => frame.includes(expected))
+  await app.waitForFrame((frame) => frame.includes(expected))
   return { app, requests, toasts, activations }
 }
 
@@ -142,7 +141,7 @@ test("failed TUI plugins keep enter to enable and use space to show the error", 
   )
 
   try {
-    await waitForFrame(fixture.app, (frame) => frame.includes("broken.plugin") && frame.includes("view error"))
+    await fixture.app.waitForFrame((frame) => frame.includes("broken.plugin") && frame.includes("view error"))
     expect(fixture.app.captureCharFrame()).toContain("enable")
 
     fixture.app.mockInput.pressEnter()
@@ -150,7 +149,7 @@ test("failed TUI plugins keep enter to enable and use space to show the error", 
     expect(fixture.activations).toEqual(["broken.plugin"])
 
     fixture.app.mockInput.pressKey(" ")
-    await waitForFrame(fixture.app,
+    await fixture.app.waitForFrame(
       (frame) => frame.includes("TUI plugin error") && frame.includes("Plugin setup failed"),
     )
   } finally {

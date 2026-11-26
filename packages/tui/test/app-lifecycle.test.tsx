@@ -8,7 +8,6 @@ import { createEventStream, createFetch, directory, json } from "./fixture/tui-c
 import { tmpdir } from "./fixture/fixture"
 import { createAppFixture, promptReady } from "./fixture/app"
 import type { OrbitEvent, PluginInfo } from "@orbit/client"
-import { waitForFrame } from "./fixture/frame"
 
 test.each([100, 44])("Ctrl-O is immediate, dismissible, and prunes cached deletions at width %s", async (width) => {
   await using state = await tmpdir()
@@ -44,7 +43,7 @@ test.each([100, 44])("Ctrl-O is immediate, dismissible, and prunes cached deleti
   })
   try {
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     setup.mockInput.pressKey("o", { ctrl: true })
     await requested.promise
     await setup.renderOnce()
@@ -61,25 +60,25 @@ test.each([100, 44])("Ctrl-O is immediate, dismissible, and prunes cached deleti
         },
       ]),
     )
-    await waitForFrame(setup, (frame) => frame.includes("Fixture project"))
+    await setup.waitForFrame((frame) => frame.includes("Fixture project"))
     setup.mockInput.pressKey("o", { ctrl: true })
     expect(requests).toBe(1)
     setup.mockInput.pressEscape()
-    await waitForFrame(setup, (frame) => !frame.includes("Fixture project"))
+    await setup.waitForFrame((frame) => !frame.includes("Fixture project"))
     response.resolve(json({ data: [{ ...cachedSession, id: "ses_disposed", title: "Disposed response" }], cursor: {} }))
     await setup.renderOnce()
     expect(setup.captureCharFrame()).not.toContain("Fixture project")
     setup.mockInput.pressKey("o", { ctrl: true })
-    await waitForFrame(setup, (frame) => frame.includes("Refreshing"))
+    await setup.waitForFrame((frame) => frame.includes("Refreshing"))
     expect(setup.captureCharFrame()).not.toContain("Disposed")
     setup.mockInput.pressEscape()
-    await waitForFrame(setup, (frame) => !frame.includes("Fixture project"))
+    await setup.waitForFrame((frame) => !frame.includes("Fixture project"))
     setup.mockInput.pressKey("o", { ctrl: true })
-    await waitForFrame(setup, (frame) => frame.includes("Cached"))
+    await setup.waitForFrame((frame) => frame.includes("Cached"))
     setup.mockInput.pressEscape()
-    await waitForFrame(setup, (frame) => !frame.includes("Fixture project"))
+    await setup.waitForFrame((frame) => !frame.includes("Fixture project"))
     setup.mockInput.pressKey("o", { ctrl: true })
-    await waitForFrame(setup, (frame) => frame.includes("Cached") && frame.includes("Refreshing"))
+    await setup.waitForFrame((frame) => frame.includes("Cached") && frame.includes("Refreshing"))
     setup.events.emit({
       id: "evt_deleted",
       created: 1,
@@ -87,14 +86,14 @@ test.each([100, 44])("Ctrl-O is immediate, dismissible, and prunes cached deleti
       durable: { aggregateID: "ses_cached", seq: 1, version: 2 },
       data: { sessionID: "ses_cached" },
     })
-    await waitForFrame(setup, (frame) => !frame.includes("Cached"))
+    await setup.waitForFrame((frame) => !frame.includes("Cached"))
     refresh.resolve(json({ data: [cachedSession], cursor: {} }))
-    await waitForFrame(setup, (frame) => frame.includes("Fixture project") && !frame.includes("Refreshing"))
+    await setup.waitForFrame((frame) => frame.includes("Fixture project") && !frame.includes("Refreshing"))
     expect(setup.captureCharFrame()).not.toContain("Cached")
     setup.mockInput.pressEscape()
-    await waitForFrame(setup, (frame) => !frame.includes("Fixture project"))
+    await setup.waitForFrame((frame) => !frame.includes("Fixture project"))
     setup.mockInput.pressKey("o", { ctrl: true })
-    await waitForFrame(setup, (frame) => frame.includes("Could not refresh sessions"))
+    await setup.waitForFrame((frame) => frame.includes("Could not refresh sessions"))
     expect(setup.captureCharFrame()).not.toContain("Cached")
   } finally {
     response.resolve(json({ data: [], cursor: {} }))
@@ -167,14 +166,14 @@ test.each(["dismissed", "refreshing"])(
     })
     try {
       await setup.ready
-      await waitForFrame(setup, (frame) => promptReady(frame))
+      await setup.waitForFrame((frame) => promptReady(frame))
       setup.mockInput.pressKey("o", { ctrl: true })
-      await waitForFrame(setup, (frame) => frame.includes(cached.title) && !frame.includes("Refreshing"))
+      await setup.waitForFrame((frame) => frame.includes(cached.title) && !frame.includes("Refreshing"))
       setup.mockInput.pressEscape()
-      await waitForFrame(setup, (frame) => !frame.includes("Search sessions"))
+      await setup.waitForFrame((frame) => !frame.includes("Search sessions"))
       if (phase === "refreshing") {
         setup.mockInput.pressKey("o", { ctrl: true })
-        await waitForFrame(setup, (frame) => frame.includes(cached.title) && frame.includes("Refreshing"))
+        await setup.waitForFrame((frame) => frame.includes(cached.title) && frame.includes("Refreshing"))
       }
       setup.events.emit({
         id: "evt_cached_moved",
@@ -186,16 +185,16 @@ test.each(["dismissed", "refreshing"])(
       if (phase === "dismissed") {
         setup.mockInput.pressKey("o", { ctrl: true })
         refresh.resolve(new Response("Unavailable", { status: 503 }))
-        await waitForFrame(setup, (frame) => frame.includes("Could not refresh sessions"))
+        await setup.waitForFrame((frame) => frame.includes("Could not refresh sessions"))
       }
       if (phase === "refreshing") {
-        await waitForFrame(setup, (frame) =>
+        await setup.waitForFrame((frame) =>
           frame.split("\n").some((line) => line.includes(cached.title) && line.includes("New")),
         )
         refresh.resolve(json({ data: [cached], cursor: {} }))
-        await waitForFrame(setup, (frame) => frame.includes(cached.title) && !frame.includes("Refreshing"))
+        await setup.waitForFrame((frame) => frame.includes(cached.title) && !frame.includes("Refreshing"))
       }
-      await waitForFrame(setup, (frame) =>
+      await setup.waitForFrame((frame) =>
         frame.split("\n").some((line) => line.includes(cached.title) && line.includes("New")),
       )
       expect(
@@ -735,13 +734,13 @@ test("vertical session tabs switch to horizontal below readable content width", 
     },
   })
   await setup.ready
-  await waitForFrame(setup, (frame) => frame.split("\n")[1].slice(0, 42).includes(session.title))
+  await setup.waitForFrame((frame) => frame.split("\n")[1].slice(0, 42).includes(session.title))
 
   setup.resize(100, 30)
-  await waitForFrame(setup, (frame) => horizontalTabs(frame).includes(session.title))
+  await setup.waitForFrame((frame) => horizontalTabs(frame).includes(session.title))
   expect(setup.captureCharFrame()).not.toContain("⌕")
   setup.resize(120, 30)
-  await waitForFrame(setup, (frame) => frame.split("\n")[1].slice(0, 42).includes(session.title))
+  await setup.waitForFrame((frame) => frame.split("\n")[1].slice(0, 42).includes(session.title))
 })
 
 test("narrow vertical session tabs collapse to a compact rail with the terminal", async () => {
@@ -773,13 +772,13 @@ test("narrow vertical session tabs collapse to a compact rail with the terminal"
     },
   })
   await setup.ready
-  await waitForFrame(setup, (frame) => frame.split("\n")[1].slice(0, 5).trim() === "⌕")
+  await setup.waitForFrame((frame) => frame.split("\n")[1].slice(0, 5).trim() === "⌕")
 
   setup.resize(68, 30)
-  await waitForFrame(setup, (frame) => horizontalTabs(frame).includes(session.title))
+  await setup.waitForFrame((frame) => horizontalTabs(frame).includes(session.title))
   expect(setup.captureCharFrame()).not.toContain("⌕")
   setup.resize(80, 30)
-  await waitForFrame(setup, (frame) => frame.split("\n")[1].slice(0, 5).trim() === "⌕")
+  await setup.waitForFrame((frame) => frame.split("\n")[1].slice(0, 5).trim() === "⌕")
 })
 
 test("automatic rename refreshes the displayed title before settling, even without a renamed event", async () => {
@@ -824,7 +823,7 @@ test("automatic rename refreshes the displayed title before settling, even witho
   })
 
   try {
-    await waitForFrame(setup, (frame) => frame.includes(session.title) && frame.includes("Build · Model Provider"))
+    await setup.waitForFrame((frame) => frame.includes(session.title) && frame.includes("Build · Model Provider"))
     await setup.mockInput.typeText("/rename")
     setup.mockInput.pressEscape()
     setup.mockInput.pressEnter()
@@ -835,7 +834,7 @@ test("automatic rename refreshes the displayed title before settling, even witho
 
     session.title = "Simplify compiler parsing"
     response.resolve(new Response(null, { status: 204 }))
-    await waitForFrame(setup, (frame) => frame.includes(session.title), { maxPasses: 60 })
+    await setup.waitForFrame((frame) => frame.includes(session.title), { maxPasses: 60 })
     expect(setup.captureCharFrame()).not.toContain("Compiler cleanup")
   } finally {
     response.resolve(new Response(null, { status: 204 }))
@@ -896,7 +895,7 @@ test.each([80, 120])("completes custom Markdown and ordinary fences in a session
       return undefined
     },
   })
-  const streaming = await waitForFrame(setup,
+  const streaming = await setup.waitForFrame(
     (frame) =>
       frame.includes("initial") &&
       frame.includes("DiagramStart") &&
@@ -934,7 +933,7 @@ test.each([80, 120])("completes custom Markdown and ordinary fences in a session
       tokens: session.tokens,
     },
   })
-  const frame = await waitForFrame(setup,
+  const frame = await setup.waitForFrame(
     (frame) => frame.includes("MARKDOWN_END") && frame.includes("initial final") && frame.includes("2ms"),
   )
   expect(frame).toContain("DiagramStart")
@@ -1028,13 +1027,13 @@ test("keeps assistant footer metrics current after prepend, same-length refresh,
     },
   })
 
-  const initial = await waitForFrame(setup, (frame) => frame.includes("Original answer") && frame.includes("20.0 tok/s"))
+  const initial = await setup.waitForFrame((frame) => frame.includes("Original answer") && frame.includes("20.0 tok/s"))
   expect(initial).toContain("Current input")
   expect(initial).toContain("4.0s \u00b7 20.0 tok/s")
   expect(initial).not.toContain("Prepended input")
 
   setup.mockInput.pressKey("g", { ctrl: true })
-  const prepended = await waitForFrame(setup,
+  const prepended = await setup.waitForFrame(
     (frame) =>
       frame.includes("Prepended input") &&
       frame.includes("Prepended instructions") &&
@@ -1049,7 +1048,7 @@ test("keeps assistant footer metrics current after prepend, same-length refresh,
   // Refresh the latest page: length stays four, but the retained assistant moves from index three to one.
   refresh = true
   setup.events.disconnect()
-  const refreshed = await waitForFrame(setup,
+  const refreshed = await setup.waitForFrame(
     (frame) =>
       frame.includes("Later input") &&
       frame.includes("Later answer") &&
@@ -1069,7 +1068,7 @@ test("keeps assistant footer metrics current after prepend, same-length refresh,
     durable: { aggregateID: session.id, seq: 1, version: 1 },
     data: { sessionID: session.id, to: "msg_0004" },
   })
-  const reverted = await waitForFrame(setup,
+  const reverted = await setup.waitForFrame(
     (frame) => frame.includes("Original answer") && !frame.includes("Later input") && !frame.includes("Later answer"),
   )
   expect(reverted).toContain("Current input")
@@ -1255,11 +1254,11 @@ test.each([false, true])("uses the resolved launch directory for new prompts (fa
   })
 
   await setup.ready
-  await waitForFrame(setup, (frame) => frame.includes("Build · Remote Model Provider"))
+  await setup.waitForFrame((frame) => frame.includes("Build · Remote Model Provider"))
   setup.mockInput.pressKey("F6")
   await setup.renderOnce()
   await setup.mockInput.typeText("REMOTE_READY")
-  await waitForFrame(setup, (frame) => frame.includes("REMOTE_READY"))
+  await setup.waitForFrame((frame) => frame.includes("REMOTE_READY"))
   setup.mockInput.pressEnter()
   expect(
     await Promise.race([
@@ -1309,22 +1308,22 @@ test("error investigations repeatedly seed editable home drafts without creating
       return undefined
     },
   })
-  await waitForFrame(setup, (frame) => promptReady(frame))
+  await setup.waitForFrame((frame) => promptReady(frame))
 
   setup.mockInput.pressKey("F6")
-  await waitForFrame(setup, (frame) => frame.includes("MCP servers") && frame.includes("alpha"))
+  await setup.waitForFrame((frame) => frame.includes("MCP servers") && frame.includes("alpha"))
   setup.mockInput.pressEnter()
-  await waitForFrame(setup, (frame) => frame.includes("Alpha connection refused") && frame.includes("i investigate"))
+  await setup.waitForFrame((frame) => frame.includes("Alpha connection refused") && frame.includes("i investigate"))
   setup.mockInput.pressKey("i")
-  await waitForFrame(setup, (frame) => frame.includes("Alpha connection refused") && !frame.includes("i investigate"))
+  await setup.waitForFrame((frame) => frame.includes("Alpha connection refused") && !frame.includes("i investigate"))
 
   setup.mockInput.pressKey("F6")
-  await waitForFrame(setup, (frame) => frame.includes("MCP servers"))
+  await setup.waitForFrame((frame) => frame.includes("MCP servers"))
   setup.mockInput.pressArrow("down")
   setup.mockInput.pressEnter()
-  await waitForFrame(setup, (frame) => frame.includes("Beta initialization failed") && frame.includes("i investigate"))
+  await setup.waitForFrame((frame) => frame.includes("Beta initialization failed") && frame.includes("i investigate"))
   setup.mockInput.pressKey("i")
-  const draft = await waitForFrame(setup,
+  const draft = await setup.waitForFrame(
     (frame) => frame.includes("Beta initialization failed") && !frame.includes("i investigate"),
   )
 
@@ -1332,7 +1331,7 @@ test("error investigations repeatedly seed editable home drafts without creating
   expect(created).toBe(0)
 
   setup.mockInput.pressKey("c", { ctrl: true })
-  await waitForFrame(setup, (frame) => !frame.includes("Beta initialization failed"))
+  await setup.waitForFrame((frame) => !frame.includes("Beta initialization failed"))
 })
 
 test("completed user shell output replaces a partial live read when the final read fails", async () => {
@@ -1407,7 +1406,7 @@ test("completed user shell output replaces a partial live read when the final re
     },
   })
 
-  const running = await waitForFrame(setup, (frame) => frame.includes(partial.trim()))
+  const running = await setup.waitForFrame((frame) => frame.includes(partial.trim()))
   expect(running).toContain(shell.command)
   expect(running).not.toContain("Background")
 
@@ -1431,7 +1430,7 @@ test("completed user shell output replaces a partial live read when the final re
       output: { output: completed, cursor: completed.length, size: completed.length, truncated: false },
     },
   })
-  const terminal = await waitForFrame(setup, (frame) => frame.includes("last persisted output"))
+  const terminal = await setup.waitForFrame((frame) => frame.includes("last persisted output"))
   expect(terminal).toContain(partial.trim())
   expect(terminal).toContain(`$ ${shell.command}`)
   expect(terminal).not.toContain("Background")
@@ -1477,7 +1476,7 @@ test("new session inherits the active session model", async () => {
     },
   })
 
-  await waitForFrame(setup, (frame) => frame.includes("Session Model"))
+  await setup.waitForFrame((frame) => frame.includes("Session Model"))
   await setup.mockInput.typeText("/new")
   setup.mockInput.pressEnter()
   await Bun.sleep(50)
@@ -1546,7 +1545,7 @@ test("keeps the prompt display stable while a new location catalog loads", async
 
   try {
     await setup.ready
-    await waitForFrame(setup, (frame) => frame.includes("Build · Source Model Provider"))
+    await setup.waitForFrame((frame) => frame.includes("Build · Source Model Provider"))
     const agentSpan = () =>
       setup
         .captureSpans()
@@ -1581,11 +1580,11 @@ test("keeps the prompt display stable while a new location catalog loads", async
     expect(agentSpan()?.fg.toInts()).toEqual(sourceAgentColor)
 
     catalog.resolve()
-    const resolved = await waitForFrame(setup, (frame) => frame.includes("Build · Target Model provider"))
+    const resolved = await setup.waitForFrame((frame) => frame.includes("Build · Target Model provider"))
     expect(resolved).not.toContain("Source Model")
 
     providerCatalog.resolve()
-    await waitForFrame(setup, (frame) => frame.includes("Build · Target Model Provider"))
+    await setup.waitForFrame((frame) => frame.includes("Build · Target Model Provider"))
   } finally {
     locationCatalog.resolve()
     catalog.resolve()
@@ -1598,10 +1597,10 @@ test("configured app binding opens settings", async () => {
     config: { animations: false, keybinds: { "orbit.settings": "f6" } },
   })
   await setup.ready
-  await waitForFrame(setup, (frame) => promptReady(frame))
+  await setup.waitForFrame((frame) => promptReady(frame))
 
   setup.mockInput.pressKey("F6")
-  const settings = await waitForFrame(setup, (frame) => frame.includes("Settings"))
+  const settings = await setup.waitForFrame((frame) => frame.includes("Settings"))
   expect(settings).toContain("Color mode")
   expect(settings).toContain("Animations")
 })
@@ -1609,18 +1608,18 @@ test("configured app binding opens settings", async () => {
 test("ctrl+c dismisses autocomplete and shell mode before exiting", async () => {
   await using setup = await createAppFixture()
   await setup.ready
-  await waitForFrame(setup, (frame) => promptReady(frame))
+  await setup.waitForFrame((frame) => promptReady(frame))
   await setup.mockInput.typeText("/theme")
-  await waitForFrame(setup, (frame) => frame.includes("Switch theme"))
+  await setup.waitForFrame((frame) => frame.includes("Switch theme"))
 
   setup.mockInput.pressKey("c", { ctrl: true })
-  await waitForFrame(setup, (frame) => !frame.includes("Switch theme"))
+  await setup.waitForFrame((frame) => !frame.includes("Switch theme"))
   expect(setup.renderer.isDestroyed).toBe(false)
 
   await setup.mockInput.typeText("!")
-  await waitForFrame(setup, (frame) => frame.includes("Shell"))
+  await setup.waitForFrame((frame) => frame.includes("Shell"))
   setup.mockInput.pressKey("c", { ctrl: true })
-  await waitForFrame(setup, (frame) => !frame.includes("Shell"))
+  await setup.waitForFrame((frame) => !frame.includes("Shell"))
   expect(setup.renderer.isDestroyed).toBe(false)
 })
 
@@ -1715,7 +1714,7 @@ test.skipIf(process.platform === "win32").each(["manual", "select"] as const)(
 
       await ready.promise
       // The banner names the commands key before the prompt is ready; its footer appears with the prompt.
-      await waitForFrame(setup, (frame) => frame.includes("agents  ctrl+p commands"))
+      await setup.waitForFrame((frame) => frame.includes("agents  ctrl+p commands"))
       await setup.mockInput.typeText("selection audit draft")
       setup.mockInput.pressKey("a", { ctrl: true, shift: true })
       expect(setup.renderer.getSelection()?.getSelectedText()).toBe("selection audit draft")
@@ -1725,15 +1724,15 @@ test.skipIf(process.platform === "win32").each(["manual", "select"] as const)(
       expect(setup.renderer.currentFocusedEditor?.plainText).toBe("selection audit draft")
 
       setup.mockInput.pressKey("c", { ctrl: true })
-      await waitForFrame(setup, (frame) => !frame.includes("selection audit draft"))
+      await setup.waitForFrame((frame) => !frame.includes("selection audit draft"))
       expect(setup.renderer.currentFocusedEditor?.plainText).toBe("")
       expect(setup.renderer.hasSelection).toBeFalse()
       expect(setup.renderer.isDestroyed).toBeFalse()
 
       await setup.mockInput.typeText("/terminal")
-      await waitForFrame(setup, (frame) => frame.includes("New terminal"))
+      await setup.waitForFrame((frame) => frame.includes("New terminal"))
       setup.mockInput.pressEnter()
-      await waitForFrame(setup, (frame) => frame.includes("alpha beta gamma"))
+      await setup.waitForFrame((frame) => frame.includes("alpha beta gamma"))
       setup.mockInput.pressKey("x", { ctrl: true })
       setup.mockInput.pressArrow("right")
       const terminal = setup.renderer.currentFocusedRenderable
@@ -1763,11 +1762,11 @@ test.skipIf(process.platform === "win32").each(["manual", "select"] as const)(
       expect(setup.renderer.currentFocusedEditor?.plainText).toBe("")
       setup.mockInput.pressKey("x", { ctrl: true })
       setup.mockInput.pressKey("t")
-      await waitForFrame(setup, (frame) => frame.includes("alpha beta gamma"))
+      await setup.waitForFrame((frame) => frame.includes("alpha beta gamma"))
       expect(setup.renderer.currentFocusedRenderable).toBeInstanceOf(EmbeddedTerminalRenderable)
       setup.mockInput.pressKey("x", { ctrl: true })
       setup.mockInput.pressArrow("down")
-      await waitForFrame(setup, (frame) => frame.includes("Subagents") && frame.includes("Terminals"))
+      await setup.waitForFrame((frame) => frame.includes("Subagents") && frame.includes("Terminals"))
       expect(setup.renderer.currentFocusedRenderable).not.toBeInstanceOf(EmbeddedTerminalRenderable)
 
       setup.renderer.destroy()
@@ -1807,10 +1806,10 @@ test.each([100, 44])(
       },
     })
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     setup.mockInput.pressKey("u", { ctrl: true })
     await setup.mockInput.typeText("Keep this draft")
-    await waitForFrame(setup, (frame) => frame.includes("Keep this draft"))
+    await setup.waitForFrame((frame) => frame.includes("Keep this draft"))
     setup.events.emit({
       id: "evt_execution_failed",
       created: 2,
@@ -1821,13 +1820,13 @@ test.each([100, 44])(
         error: { type: "unknown", message: 'Plugin "broken-skills" failed during skill.transform.' },
       },
     })
-    await waitForFrame(setup, (frame) => frame.includes("Session failed"))
+    await setup.waitForFrame((frame) => frame.includes("Session failed"))
     expect(setup.captureCharFrame()).toContain("broken-skills")
     expect(setup.captureCharFrame()).toContain("skill.transform")
     expect(setup.captureCharFrame()).toContain("Keep this draft")
     expect(setup.captureCharFrame()).not.toContain("Select directory")
     await setup.mockInput.typeText(" intact")
-    await waitForFrame(setup, (frame) => frame.includes("Keep this draft intact"))
+    await setup.waitForFrame((frame) => frame.includes("Keep this draft intact"))
   },
 )
 
@@ -1866,13 +1865,13 @@ test.each([
     },
   })
   await setup.ready
-  await waitForFrame(setup, (frame) => promptReady(frame))
+  await setup.waitForFrame((frame) => promptReady(frame))
   if (!initial) {
     expect(setup.captureCharFrame()).not.toContain("Plugin failed")
     inventory = inventory.map((plugin) => (plugin.id === "broken" ? { ...plugin, state: failure } : plugin))
     setup.events.emit({ id: "evt_failure", created: 1, type: "plugin.updated", data: {} })
   }
-  await waitForFrame(setup, (frame) => frame.includes("Plugin failed:") && frame.includes("broken"))
+  await setup.waitForFrame((frame) => frame.includes("Plugin failed:") && frame.includes("broken"))
   expect(setup.captureCharFrame()).toContain("/plugins")
   expect(setup.captureCharFrame()).toContain("1 plugin failed")
 
@@ -1882,18 +1881,18 @@ test.each([
   const line = lines[row]
   if (!line) throw new Error("Open plugins action is missing")
   await setup.mockMouse.click(line.indexOf("Open plugins"), row)
-  await waitForFrame(setup, (frame) => frame.includes("ctrl+a") && frame.includes("broken"))
+  await setup.waitForFrame((frame) => frame.includes("ctrl+a") && frame.includes("broken"))
   expect(setup.captureCharFrame()).toContain("broken")
   expect(setup.captureCharFrame()).not.toContain("healthy")
   setup.mockInput.pressEnter()
-  await waitForFrame(setup, (frame) => frame.includes("Server plugin error") && frame.includes("transform failed"))
+  await setup.waitForFrame((frame) => frame.includes("Server plugin error") && frame.includes("transform failed"))
   expect(setup.captureCharFrame()).toContain("Plugin disabled")
   expect(setup.captureCharFrame()).toContain("transform failed")
   expect(setup.captureCharFrame()).toContain("err_fixture")
   setup.mockInput.pressEscape()
-  await waitForFrame(setup, (frame) => frame.includes("ctrl+a"))
+  await setup.waitForFrame((frame) => frame.includes("ctrl+a"))
   setup.mockInput.pressEscape()
-  await waitForFrame(setup, (frame) => !frame.includes("ctrl+a"))
+  await setup.waitForFrame((frame) => !frame.includes("ctrl+a"))
   expect(setup.captureCharFrame()).toContain("1 plugin failed")
 
   const seen = requests
@@ -1905,10 +1904,10 @@ test.each([
 
   inventory = inventory.map((plugin) => ({ ...plugin, state: { status: "active" } }))
   setup.events.emit({ id: "evt_recovered", created: 3, type: "plugin.updated", data: {} })
-  await waitForFrame(setup, (frame) => !frame.includes("1 plugin failed"))
+  await setup.waitForFrame((frame) => !frame.includes("1 plugin failed"))
   inventory = inventory.map((plugin) => (plugin.id === "broken" ? { ...plugin, state: failure } : plugin))
   setup.events.emit({ id: "evt_failed_again", created: 4, type: "plugin.updated", data: {} })
-  await waitForFrame(setup, (frame) => frame.includes("Plugin failed:") && frame.includes("broken"))
+  await setup.waitForFrame((frame) => frame.includes("Plugin failed:") && frame.includes("broken"))
 })
 
 test("server plugin failures share one notice and use source names before an ID is known", async () => {
@@ -1935,7 +1934,7 @@ test("server plugin failures share one notice and use source names before an ID 
         : undefined,
   })
   await setup.ready
-  await waitForFrame(setup, (frame) => frame.includes("2 plugins failed"))
+  await setup.waitForFrame((frame) => frame.includes("2 plugins failed"))
   expect(setup.captureCharFrame()).toContain("missing-package")
   expect(setup.captureCharFrame()).toContain("/fixture/broken.ts")
   expect(setup.captureCharFrame()).toContain("Open plugins")
@@ -1986,13 +1985,13 @@ test.each([44, 100])(
       },
     })
     await setup.ready
-    await waitForFrame(setup, (frame) => frame.includes("Retrying in 3s"))
+    await setup.waitForFrame((frame) => frame.includes("Retrying in 3s"))
     expect(setup.captureCharFrame()).toContain("attempt 2")
     expect(setup.captureCharFrame()).toContain("Provider unavailable")
     expect(setup.captureCharFrame()).not.toContain("Error:")
-    await waitForFrame(setup, (frame) => frame.includes("Retrying in 2s"), { maxPasses: 200 })
-    await waitForFrame(setup, (frame) => frame.includes("Retrying in 1s"), { maxPasses: 200 })
-    await waitForFrame(setup, (frame) => frame.includes("Retry due"), { maxPasses: 200 })
+    await setup.waitForFrame((frame) => frame.includes("Retrying in 2s"), { maxPasses: 200 })
+    await setup.waitForFrame((frame) => frame.includes("Retrying in 1s"), { maxPasses: 200 })
+    await setup.waitForFrame((frame) => frame.includes("Retry due"), { maxPasses: 200 })
     expect(setup.captureCharFrame()).not.toContain("in 0s")
 
     setup.events.emit({
@@ -2002,7 +2001,7 @@ test.each([44, 100])(
       durable: { aggregateID: session.id, seq: 1, version: 1 },
       data: { sessionID: session.id, assistantMessageID: "msg_countdown", attempt: 3, at: Date.now() + 10_500, error },
     })
-    await waitForFrame(setup, (frame) => frame.includes("Retrying in 11s") && frame.includes("attempt 3"))
+    await setup.waitForFrame((frame) => frame.includes("Retrying in 11s") && frame.includes("attempt 3"))
     setup.events.emit({
       id: "evt_countdown_started",
       created: 3,
@@ -2010,7 +2009,7 @@ test.each([44, 100])(
       durable: { aggregateID: session.id, seq: 2, version: 1 },
       data: { sessionID: session.id, assistantMessageID: "msg_countdown", agent: "build", model, started: 3 },
     })
-    await waitForFrame(setup, (frame) => !frame.includes("Retrying") && !frame.includes("Retry due"))
+    await setup.waitForFrame((frame) => !frame.includes("Retrying") && !frame.includes("Retry due"))
 
     setup.events.emit({
       id: "evt_countdown_expired",
@@ -2019,7 +2018,7 @@ test.each([44, 100])(
       durable: { aggregateID: session.id, seq: 3, version: 1 },
       data: { sessionID: session.id, assistantMessageID: "msg_countdown", attempt: 4, at: Date.now() - 1_000, error },
     })
-    await waitForFrame(setup, (frame) => frame.includes("Retry due") && frame.includes("attempt 4"))
+    await setup.waitForFrame((frame) => frame.includes("Retry due") && frame.includes("attempt 4"))
     expect(setup.captureCharFrame()).not.toContain("in -")
     setup.events.emit({
       id: "evt_countdown_interrupted",
@@ -2028,7 +2027,7 @@ test.each([44, 100])(
       durable: { aggregateID: session.id, seq: 4, version: 1 },
       data: { sessionID: session.id, reason: "shutdown" },
     })
-    await waitForFrame(setup, (frame) => !frame.includes("Retrying") && !frame.includes("Retry due"))
+    await setup.waitForFrame((frame) => !frame.includes("Retrying") && !frame.includes("Retry due"))
   },
   15_000,
 )

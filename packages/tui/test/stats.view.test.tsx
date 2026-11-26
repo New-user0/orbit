@@ -6,7 +6,6 @@ import { Effect, FileSystem } from "effect"
 import { createEventStream, createFetch, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
 import { takeDraft } from "../src/component/prompt/draft-stash"
-import { waitForFrame } from "./fixture/frame"
 
 test("stats shows only this year and returns after errors or success", async () => {
   // Other app tests can leave a home draft in the process-wide stash.
@@ -53,17 +52,17 @@ test("stats shows only this year and returns after errors or success", async () 
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
   try {
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     await setup.mockInput.typeText("/stats")
-    await waitForFrame(setup, (frame) => frame.includes("Usage statistics"))
+    await setup.waitForFrame((frame) => frame.includes("Usage statistics"))
     setup.mockInput.pressKey("RETURN")
-    await waitForFrame(setup, (frame) => frame.includes("Could not load stats"))
+    await setup.waitForFrame((frame) => frame.includes("Could not load stats"))
     setup.mockInput.pressKey("ESCAPE")
-    await waitForFrame(setup, (frame) => promptReady(frame) && !frame.includes("Could not load stats"))
+    await setup.waitForFrame((frame) => promptReady(frame) && !frame.includes("Could not load stats"))
     await setup.mockInput.typeText("/stats")
-    await waitForFrame(setup, (frame) => frame.includes("Usage statistics"))
+    await setup.waitForFrame((frame) => frame.includes("Usage statistics"))
     setup.mockInput.pressKey("RETURN")
-    await waitForFrame(setup, (frame) => frame.includes("TOKENS") && frame.includes("123"))
+    await setup.waitForFrame((frame) => frame.includes("TOKENS") && frame.includes("123"))
     expect(requests[1].searchParams.get("tools")).toBe("none")
     expect(Number(requests[1].searchParams.get("from"))).toBe(new Date(new Date().getFullYear(), 0, 1).getTime())
     expect(requests[1].searchParams.has("to")).toBe(false)
@@ -87,7 +86,7 @@ test("stats shows only this year and returns after errors or success", async () 
     expect(setup.captureCharFrame()).toContain("TOKENS")
     expect(setup.captureCharFrame()).not.toContain("headline")
     setup.mockInput.pressKey("ESCAPE")
-    await waitForFrame(setup, (frame) => promptReady(frame) && !frame.includes("orbit / stats"))
+    await setup.waitForFrame((frame) => promptReady(frame) && !frame.includes("orbit / stats"))
   } finally {
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
     await task.finally(() => server.stop(true))

@@ -13,7 +13,6 @@ import { SESSION_TABS_COMPACT_WIDTH } from "../../src/ui/layout"
 import { emptyThemeSource } from "../fixture/fixture"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
-import { waitForFrame } from "../fixture/frame"
 
 test("compact rail renders and controls session tabs", async () => {
   const [active, setActive] = createSignal("first")
@@ -64,7 +63,7 @@ test("compact rail renders and controls session tabs", async () => {
 
   try {
     app.renderer.start()
-    await waitForFrame(app, (frame) => frame.includes("  F  ") && frame.includes("  S  "))
+    await app.waitForFrame((frame) => frame.includes("  F  ") && frame.includes("  S  "))
     expect(
       app
         .captureCharFrame()
@@ -91,12 +90,12 @@ test("compact rail renders and controls session tabs", async () => {
     ).toBe(TextAttributes.BOLD)
 
     setStatus({ ...EMPTY_SESSION_TAB_STATUS, busy: true })
-    await waitForFrame(app, (frame) => frame.split("\n")[5].slice(0, 5).trim() === SPINNER_FRAMES[0])
+    await app.waitForFrame((frame) => frame.split("\n")[5].slice(0, 5).trim() === SPINNER_FRAMES[0])
     setStatus({ ...EMPTY_SESSION_TAB_STATUS, busy: true, attention: "question" })
-    await waitForFrame(app, (frame) => frame.split("\n")[5].slice(0, 5).trim() === "?")
+    await app.waitForFrame((frame) => frame.split("\n")[5].slice(0, 5).trim() === "?")
 
     setIndicators("numbers")
-    await waitForFrame(app, (frame) => frame.split("\n")[5].slice(0, 5).trim() === "2")
+    await app.waitForFrame((frame) => frame.split("\n")[5].slice(0, 5).trim() === "2")
     expect([3, 5, 7].map((row) => app.captureCharFrame().split("\n")[row].slice(0, 5).trim())).toEqual([
       "1",
       "2",
@@ -106,10 +105,10 @@ test("compact rail renders and controls session tabs", async () => {
     setStatus(EMPTY_SESSION_TAB_STATUS)
 
     await app.mockMouse.moveTo(2, 5)
-    await waitForFrame(app, (frame) => frame.includes("Second session") && frame.includes("project-alpha"))
+    await app.waitForFrame((frame) => frame.includes("Second session") && frame.includes("project-alpha"))
     expect(active()).toBe("first")
     await app.mockMouse.moveTo(10, 0)
-    await waitForFrame(app, (frame) => !frame.includes("Second session"))
+    await app.waitForFrame((frame) => !frame.includes("Second session"))
 
     await app.mockMouse.click(2, 1)
     expect(searches()).toBe(1)
@@ -119,7 +118,7 @@ test("compact rail renders and controls session tabs", async () => {
     setItems(Array.from({ length: 40 }, (_, index) => ({ sessionID: `tab-${index + 1}`, title: `Session ${index + 1}` })))
     setActive("tab-40")
     setIndicators("numbers")
-    await waitForFrame(app, (frame) => frame.split("\n").some((line) => line.slice(0, 5).trim() === "40"))
+    await app.waitForFrame((frame) => frame.split("\n").some((line) => line.slice(0, 5).trim() === "40"))
   } finally {
     app.renderer.destroy()
   }

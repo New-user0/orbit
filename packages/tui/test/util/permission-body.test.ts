@@ -3,7 +3,6 @@ import { TextRenderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { permissionAlwaysLines, permissionPresentation } from "../../src/util/permission"
 import { formLabel } from "../../src/util/form"
-import { waitForFrame } from "../fixture/frame"
 
 // ESC ] 52 writes the clipboard, CSI 2 K erases the line, and a BEL ends a sequence.
 const hostile = "rm x\u001b]52;c;QQ==\u0007\u001b[2K end"
@@ -27,7 +26,7 @@ async function drawn(content: string) {
   try {
     setup.renderer.root.add(new TextRenderable(setup.renderer, { content }))
     setup.renderer.start()
-    await waitForFrame(setup, (frame) => frame.includes("rm x"))
+    await setup.waitForFrame((frame) => frame.includes("rm x"))
     return setup.captureCharFrame()
   } finally {
     setup.renderer.destroy()

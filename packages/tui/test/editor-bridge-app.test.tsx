@@ -5,7 +5,6 @@ import { IdeLock } from "@orbit/util/ide-lock"
 import { createAppFixture, promptReady } from "./fixture/app"
 import { directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
-import { waitForFrame } from "./fixture/frame"
 
 // The real app, drawn, with an editor window's bridge behind ORBIT_EDITOR_SSE_PORT. Names that the editor sends reach
 // the footer of the prompt and the prompt itself, and a clone can name its files as it likes (class 9).
@@ -113,14 +112,14 @@ test("draws the open file in the footer, and drops a name that holds control cha
   const bridge = await editor(state.path)
   await using setup = await render(state.path)
   try {
-    await waitForFrame(setup, promptReady)
+    await setup.waitForFrame(promptReady)
     await Bun.sleep(200)
     while (!bridge.connected()) await Bun.sleep(20)
     await Bun.sleep(100)
 
     // The control: a plain name is drawn, with its lines.
     bridge.send({ type: "selection", filePath: "/work/plain.ts", text: "x", selection: range })
-    const plain = await waitForFrame(setup, (frame) => frame.includes("plain.ts#3-9"))
+    const plain = await setup.waitForFrame((frame) => frame.includes("plain.ts#3-9"))
     expect(plain).toContain("plain.ts#3-9")
 
     bridge.send({
@@ -148,17 +147,17 @@ test("a mention from the editor puts @path in the prompt, with the lines when th
   const bridge = await editor(state.path)
   await using setup = await render(state.path)
   try {
-    await waitForFrame(setup, promptReady)
+    await setup.waitForFrame(promptReady)
     while (!bridge.connected()) await Bun.sleep(20)
     await Bun.sleep(200)
 
     bridge.send({ type: "mention", filePath: "/work/plain.ts" })
-    const bare = await waitForFrame(setup, (frame) => frame.includes("@") && frame.includes("plain.ts"))
+    const bare = await setup.waitForFrame((frame) => frame.includes("@") && frame.includes("plain.ts"))
     expect(bare).toMatch(/@\S*plain\.ts(?!#)/)
     expect(bare).not.toMatch(/plain\.ts#/)
 
     bridge.send({ type: "mention", filePath: "/work/ranged.ts", lineStart: 3, lineEnd: 9 })
-    const ranged = await waitForFrame(setup, (frame) => frame.includes("ranged.ts#3-9"))
+    const ranged = await setup.waitForFrame((frame) => frame.includes("ranged.ts#3-9"))
     expect(ranged).toMatch(/@\S*ranged\.ts#3-9/)
 
     // A name with an escape sequence is refused before it reaches the prompt.
@@ -200,15 +199,15 @@ test.each([
   const sent: Sent = { prompts: [], admissions: [] }
   await using setup = await render(state.path, sent)
   try {
-    await waitForFrame(setup, promptReady)
+    await setup.waitForFrame(promptReady)
     while (!bridge.connected()) await Bun.sleep(20)
     await Bun.sleep(100)
     bridge.send({ type: "selection", filePath: "/work/open.ts", text: "SELECTED-TEXT", selection })
-    await waitForFrame(setup, (frame) => frame.includes("open.ts"))
+    await setup.waitForFrame((frame) => frame.includes("open.ts"))
 
     await setup.mockInput.typeText("What is this?")
     setup.mockInput.pressEnter()
-    await waitForFrame(setup, () => sent.prompts.length === 1)
+    await setup.waitForFrame(() => sent.prompts.length === 1)
 
     expect(sent.prompts[0]).toMatchObject({ text: "What is this?" })
     expect(sent.prompts[0]?.editor).toEqual(field)

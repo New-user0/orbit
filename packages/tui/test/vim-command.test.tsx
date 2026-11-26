@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test"
 import { createAppFixture, promptReady } from "./fixture/app"
-import { waitForFrame } from "./fixture/frame"
 
 // A cli.json that /vim writes to, as the host would: the draft is changed in place and the result comes back.
 function host(initial: { prompt?: { vim?: boolean } }) {
@@ -22,10 +21,10 @@ test.each([
   const cli = host({ prompt: before === undefined ? {} : { vim: before } })
   await using setup = await createAppFixture({ config: { animations: false }, update: cli.update })
   await setup.ready
-  await waitForFrame(setup, (frame) => promptReady(frame))
+  await setup.waitForFrame((frame) => promptReady(frame))
   await setup.mockInput.typeText("/vim")
   setup.mockInput.pressEnter()
-  await waitForFrame(setup, (frame) => frame.includes(said))
+  await setup.waitForFrame((frame) => frame.includes(said))
   expect(cli.state.prompt.vim).toBe(after)
 })
 
@@ -37,8 +36,8 @@ test("/vim says why when cli.json cannot be written", async () => {
     },
   })
   await setup.ready
-  await waitForFrame(setup, (frame) => promptReady(frame))
+  await setup.waitForFrame((frame) => promptReady(frame))
   await setup.mockInput.typeText("/vim")
   setup.mockInput.pressEnter()
-  await waitForFrame(setup, (frame) => frame.includes("cli.json is read-only"))
+  await setup.waitForFrame((frame) => frame.includes("cli.json is read-only"))
 })

@@ -4,7 +4,6 @@ import path from "node:path"
 import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
-import { waitForFrame } from "./fixture/frame"
 
 // A project of its own, with a plugin whose setup and cleanup leave a trace the test can read. The trace is kept in the
 // project unless a folder is named for it: a write into a folder the plugin loader watches reconciles the plugins by itself.
@@ -73,7 +72,7 @@ test("a project's plugins load once its folder is trusted and unload when the tr
       })
     }
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     expect(await fixture.marks()).toEqual([])
 
     trust(true)
@@ -108,7 +107,7 @@ test("nothing is imported before the first answer, and a trusted folder's plugin
 
     answer.resolve()
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     expect(await fixture.marks()).toEqual(["loaded"])
   })
 })
@@ -131,7 +130,7 @@ test("the project's plugins follow the trust of the folder they are found from, 
       },
     })
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     await setup.flush()
     expect(asked).toContain(cwd)
     expect(await fixture.marks()).toEqual([])
@@ -160,7 +159,7 @@ test("a server that takes the first read and never answers does not hold the ter
     })
     await setup.ready
     // The terminal UI gives up on the read after two seconds, which takes more passes than the default allows.
-    await waitForFrame(setup, (frame) => promptReady(frame), { maxPasses: 600 })
+    await setup.waitForFrame((frame) => promptReady(frame), { maxPasses: 600 })
     expect(await fixture.marks()).toEqual([])
 
     answering = true
@@ -195,7 +194,7 @@ test("a plugin in a folder above the folder the server calls its project never l
       },
     })
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     await setup.flush()
     // The folder in view is trusted, and no dialog asks about the one above it, but its plugin has not run.
     expect(await fixture.marks()).toEqual([])
@@ -231,7 +230,7 @@ test("a project's plugins are reconciled again when the folder the server decide
       },
     })
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     await setup.waitFor(async () => (await fixture.marks()).length > 0, { maxPasses: 200 })
     expect(await fixture.marks()).toEqual(["loaded"])
     // The start queues several reconciles, and each reads the status again. They finish first, so that none of them
@@ -267,7 +266,7 @@ test.each([
       },
     })
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     expect(await fixture.marks()).toEqual([])
   })
 })
@@ -286,7 +285,7 @@ test("a plugin planted while the server cannot answer is not imported on the ans
       },
     })
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     await setup.waitFor(async () => (await fixture.marks()).length > 0, { maxPasses: 200 })
     expect(await fixture.marks()).toEqual(["loaded"])
 
@@ -324,7 +323,7 @@ test("a project's tui-only plugin is imported even while an older server reports
       },
     })
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     await setup.waitFor(async () => (await fixture.marks()).length > 0, { maxPasses: 200 })
     expect(await fixture.marks()).toEqual(["loaded"])
   })
@@ -354,7 +353,7 @@ test("a project's tui entry that links out of its folder is not imported", async
       },
     })
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     await Bun.sleep(500)
     expect(await fixture.marks()).toEqual([])
   })

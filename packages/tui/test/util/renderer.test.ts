@@ -2,7 +2,6 @@ import { expect, test } from "bun:test"
 import { MarkdownRenderable, SyntaxStyle, TextRenderable, type CliRenderer } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { bodyText, createMiniTitle, destroyRenderer, outputText, terminalTitle } from "../../src/util/renderer"
-import { waitForFrame } from "../fixture/frame"
 
 // A set-title sequence, one that erases the line, a C1 control sequence introducer and a right-to-left override: what
 // a model, a tool or a stored prompt can put into a message body.
@@ -21,7 +20,7 @@ async function frame(draw: (renderer: CliRenderer) => void, ready = " d") {
   try {
     draw(setup.renderer)
     setup.renderer.start()
-    await waitForFrame(setup, (drawn) => drawn.includes(ready))
+    await setup.waitForFrame((drawn) => drawn.includes(ready))
     return setup.captureCharFrame()
   } finally {
     setup.renderer.destroy()

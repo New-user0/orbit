@@ -4,7 +4,6 @@ import type { OrbitEvent } from "@orbit/client"
 import { createAppFixture } from "./fixture/app"
 import { directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
-import { waitForFrame } from "./fixture/frame"
 
 // context-memory-1 part 2: the real terminal UI draws the latest `session.context.updated` of the session in view in the
 // prompt's footer row, as the reference draws its context warning in the prompt's footer, at narrow and wide widths.
@@ -135,7 +134,7 @@ test.each([
   await using state = await tmpdir()
   await using setup = await render(state.path, row.width)
   // The measured response is loaded, so the footer has its context bar when the report arrives.
-  await waitForFrame(setup, measured)
+  await setup.waitForFrame(measured)
 
   setup.events.emit({
     id: "evt_context",
@@ -144,7 +143,7 @@ test.each([
     location: { directory },
     data: row.report,
   })
-  const frame = await waitForFrame(setup, (frame) => footerRow(frame).includes(row.text))
+  const frame = await setup.waitForFrame((frame) => footerRow(frame).includes(row.text))
 
   expect(footerRow(frame)).toContain(row.text)
   // The model label keeps its place at the start of the row.
@@ -158,7 +157,7 @@ test.each([
 test.each([40, 120])("nothing is drawn at %s columns before a report arrives", async (width) => {
   await using state = await tmpdir()
   await using setup = await render(state.path, width)
-  const frame = await waitForFrame(setup, ready)
+  const frame = await setup.waitForFrame(ready)
 
   expect(frame).not.toContain("Context almost full")
   expect(frame).not.toContain("before auto-compaction")
@@ -167,13 +166,13 @@ test.each([40, 120])("nothing is drawn at %s columns before a report arrives", a
 test("the command palette lists /context under the dialog's title", async () => {
   await using state = await tmpdir()
   await using setup = await render(state.path, 120)
-  await waitForFrame(setup, measured)
+  await setup.waitForFrame(measured)
   setup.mockInput.pressKey("p", { ctrl: true })
   // The palette draws its field before it focuses it, and keys typed in between go nowhere.
   await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof InputRenderable)
   await setup.mockInput.typeText("context")
 
-  const palette = await waitForFrame(setup, (frame) => frame.includes("Context window"))
+  const palette = await setup.waitForFrame((frame) => frame.includes("Context window"))
   expect(palette).toMatch(/ Context window +Session *$/m)
 })
 
@@ -189,7 +188,7 @@ test("the context figure is input plus cache read and cache write, without outpu
     reasoning: 20_000,
     cache: { read: 20_000, write: 10_000 },
   })
-  const frame = await waitForFrame(setup, (frame) => ready(frame) && /\d+%/.test(footerRow(frame)))
+  const frame = await setup.waitForFrame((frame) => ready(frame) && /\d+%/.test(footerRow(frame)))
 
   expect(footerRow(frame)).toContain("65%")
   expect(footerRow(frame)).not.toContain("100%")

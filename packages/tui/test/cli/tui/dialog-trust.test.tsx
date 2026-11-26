@@ -19,7 +19,6 @@ import { emptyThemeSource } from "../../fixture/fixture"
 import { createApi, createEventStream, createFetch, directory, json } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
-import { waitForFrame } from "../../fixture/frame"
 
 // trust-first: nothing of an untrusted folder is read, so its question lists nothing, and the folder the terminal UI
 // started in is answered with Trust or Exit (`trust-first.test.ts`). A trusted folder is never asked about again (D8), so
@@ -60,7 +59,7 @@ test("the folder the terminal UI started in offers trust or exit, lists nothing,
   const fixture = await renderTrust(untrusted)
 
   try {
-    await waitForFrame(fixture.app, (frame) => frame.includes("Trust this folder?"))
+    await fixture.app.waitForFrame((frame) => frame.includes("Trust this folder?"))
     const frame = fixture.app.captureCharFrame()
     expect(frame).toContain("⊙ Untrusted")
     expect(frame).not.toContain("orbit.json")
@@ -72,7 +71,7 @@ test("the folder the terminal UI started in offers trust or exit, lists nothing,
     expect(frame).toMatch(/orb\s+trust\s+--\s*revoke/)
 
     fixture.app.mockInput.pressEnter()
-    await waitForFrame(fixture.app, (frame) => !frame.includes("Trust this folder?"))
+    await fixture.app.waitForFrame((frame) => !frame.includes("Trust this folder?"))
 
     // For the folder the question was about, which is the one in view.
     expect(fixture.updates).toEqual([{ directory, trust: true, persist: true }])
@@ -87,7 +86,7 @@ test("another folder that is not trusted offers Not now, and trusting it says on
   const fixture = await elsewhere()
 
   try {
-    await waitForFrame(fixture.app, (frame) => asksAbout(frame, away.directory))
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, away.directory))
     const frame = fixture.app.captureCharFrame()
     expect(frame).toContain("Not now")
     expect(frame).not.toContain("Exit")
@@ -106,9 +105,9 @@ test("enter on its own is not now, so a keystroke typed ahead of the dialog neve
   const fixture = await elsewhere()
 
   try {
-    await waitForFrame(fixture.app, (frame) => frame.includes(title))
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
     fixture.app.mockInput.pressEnter()
-    await waitForFrame(fixture.app, (frame) => !frame.includes(title))
+    await fixture.app.waitForFrame((frame) => !frame.includes(title))
 
     expect(fixture.updates).toEqual([])
   } finally {
@@ -121,7 +120,7 @@ test("a home directory offers only trust until restart, which never sends persis
   const fixture = await renderTrust({ ...untrusted, directory: "/tmp/orbit/home", persistent: false })
 
   try {
-    await waitForFrame(fixture.app, (frame) => frame.includes("Trust this folder?"))
+    await fixture.app.waitForFrame((frame) => frame.includes("Trust this folder?"))
     const frame = fixture.app.captureCharFrame()
     expect(frame).toContain("Trust until Orbit restarts")
     expect(frame).not.toMatch(/Trust this folder(?!\?)/)
@@ -131,7 +130,7 @@ test("a home directory offers only trust until restart, which never sends persis
     expect(frame).toMatch(/orb\s+trust\s+--\s*revoke/)
 
     fixture.app.mockInput.pressEnter()
-    await waitForFrame(fixture.app, (frame) => !frame.includes("Trust this folder?"))
+    await fixture.app.waitForFrame((frame) => !frame.includes("Trust this folder?"))
 
     expect(fixture.updates).toEqual([{ directory, trust: true, persist: false }])
   } finally {
@@ -146,9 +145,9 @@ test.each([
   const fixture = await elsewhere()
 
   try {
-    await waitForFrame(fixture.app, (frame) => frame.includes(title))
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
     answer(fixture)
-    await waitForFrame(fixture.app, (frame) => !frame.includes(title))
+    await fixture.app.waitForFrame((frame) => !frame.includes(title))
 
     // Both events that make the status be read again, one after the other.
     const before = fixture.reads()
@@ -174,7 +173,7 @@ test("a grant the server refuses is reported and leaves the question open", asyn
   const fixture = await elsewhere({ refuse: true })
 
   try {
-    await waitForFrame(fixture.app, (frame) => frame.includes(title))
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
     fixture.app.mockInput.pressArrow("up")
     fixture.app.mockInput.pressEnter()
     await until(() => fixture.toast().currentToast !== null)
@@ -191,13 +190,13 @@ test("the question can be asked again after not now", async () => {
   const fixture = await elsewhere()
 
   try {
-    await waitForFrame(fixture.app, (frame) => frame.includes(title))
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
     fixture.app.mockInput.pressEnter()
-    await waitForFrame(fixture.app, (frame) => !frame.includes(title))
+    await fixture.app.waitForFrame((frame) => !frame.includes(title))
 
     expect(fixture.trust().held()).toBe(true)
     fixture.trust().open()
-    await waitForFrame(fixture.app, (frame) => frame.includes(title))
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
   } finally {
     fixture.app.renderer.destroy()
   }
@@ -231,13 +230,13 @@ test("the question waits for the dialog a person is already in", async () => {
   const fixture = await elsewhere({ busy: true })
 
   try {
-    await waitForFrame(fixture.app, (frame) => frame.includes("Busy"))
+    await fixture.app.waitForFrame((frame) => frame.includes("Busy"))
     await until(() => fixture.trust().pending() !== undefined)
     await fixture.app.renderOnce()
     expect(fixture.app.captureCharFrame()).not.toContain(title)
 
     fixture.app.mockInput.pressEscape()
-    await waitForFrame(fixture.app, (frame) => frame.includes(title))
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
   } finally {
     fixture.app.renderer.destroy()
   }
@@ -247,7 +246,7 @@ test("trusting the folder somewhere else closes the question", async () => {
   const fixture = await elsewhere()
 
   try {
-    await waitForFrame(fixture.app, (frame) => frame.includes(title))
+    await fixture.app.waitForFrame((frame) => frame.includes(title))
     fixture.trustElsewhere(away.directory)
     fixture.events.emit({
       id: "evt_trust",
@@ -255,7 +254,7 @@ test("trusting the folder somewhere else closes the question", async () => {
       type: "trust.updated",
       data: { directory: away.directory, trusted: true },
     })
-    await waitForFrame(fixture.app, (frame) => !frame.includes(title))
+    await fixture.app.waitForFrame((frame) => !frame.includes(title))
 
     expect(fixture.updates).toEqual([])
   } finally {
@@ -268,11 +267,11 @@ test("the question closes when another folder comes into view, so no choice is m
   const fixture = await renderTrust(untrusted, { away: { status: away, held: held.promise } })
 
   try {
-    await waitForFrame(fixture.app, (frame) => asksAbout(frame, untrusted.directory))
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, untrusted.directory))
 
     // What is known of the other folder is not in yet.
     fixture.view(away.directory)
-    await waitForFrame(fixture.app, (frame) => !frame.includes(title))
+    await fixture.app.waitForFrame((frame) => !frame.includes(title))
     fixture.app.mockInput.pressArrow("up")
     fixture.app.mockInput.pressEnter()
     await fixture.app.renderOnce()
@@ -282,10 +281,10 @@ test("the question closes when another folder comes into view, so no choice is m
 
     // The question comes back for the folder now in view once it is known, and a choice is for that folder.
     held.resolve()
-    await waitForFrame(fixture.app, (frame) => asksAbout(frame, away.directory))
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, away.directory))
     fixture.app.mockInput.pressArrow("up")
     fixture.app.mockInput.pressEnter()
-    await waitForFrame(fixture.app, (frame) => !frame.includes(title))
+    await fixture.app.waitForFrame((frame) => !frame.includes(title))
 
     expect(fixture.updates).toEqual([{ directory: away.directory, trust: true, persist: true }])
   } finally {
@@ -297,19 +296,19 @@ test("not now holds for the folder it was said for, and the folder that was left
   const fixture = await renderTrust(untrusted, { away: { status: away } })
 
   try {
-    await waitForFrame(fixture.app, (frame) => asksAbout(frame, untrusted.directory))
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, untrusted.directory))
     fixture.view(away.directory)
-    await waitForFrame(fixture.app, (frame) => asksAbout(frame, away.directory))
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, away.directory))
 
     fixture.app.mockInput.pressEnter()
-    await waitForFrame(fixture.app, (frame) => !frame.includes(title))
+    await fixture.app.waitForFrame((frame) => !frame.includes(title))
     await fixture.app.renderOnce()
     // The folder that was just declined is not asked about again.
     expect(fixture.app.captureCharFrame()).not.toContain(title)
 
     // Leaving the first folder was not an answer about it.
     fixture.view(directory)
-    await waitForFrame(fixture.app, (frame) => asksAbout(frame, untrusted.directory))
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, untrusted.directory))
     expect(fixture.updates).toEqual([])
   } finally {
     fixture.app.renderer.destroy()
@@ -321,14 +320,14 @@ test("a grant that is answered once another folder is in view leaves the questio
   const fixture = await renderTrust(untrusted, { away: { status: away }, granting: answer.promise })
 
   try {
-    await waitForFrame(fixture.app, (frame) => asksAbout(frame, untrusted.directory))
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, untrusted.directory))
     // The question about the folder the terminal UI started in starts on Trust.
     fixture.app.mockInput.pressEnter()
     await until(() => fixture.updates.length > 0)
 
     // The server is slow, and the person has moved on.
     fixture.view(away.directory)
-    await waitForFrame(fixture.app, (frame) => asksAbout(frame, away.directory))
+    await fixture.app.waitForFrame((frame) => asksAbout(frame, away.directory))
     answer.resolve()
     await until(() => fixture.toast().currentToast !== null)
     await fixture.app.renderOnce()

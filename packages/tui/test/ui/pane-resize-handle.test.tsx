@@ -10,7 +10,6 @@ import { PaneResizeHandle } from "../../src/ui/pane-resize-handle"
 import { emptyThemeSource } from "../fixture/fixture"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
-import { waitForFrame } from "../fixture/frame"
 
 for (const mode of ["dark", "light"] as const) {
   test(`${mode} pane resize handle renders themed hover and keeps parent-owned dragging and reset`, async () => {
@@ -64,7 +63,7 @@ for (const mode of ["dark", "light"] as const) {
 
     try {
       app.renderer.start()
-      await waitForFrame(app, () => parent?.height === 5)
+      await app.waitForFrame(() => parent?.height === 5)
       const handle = parent.getChildren()[0] as BoxRenderable
       const line = handle.getChildren()[0] as BoxRenderable
       expect(handle).toMatchObject({ x: 19, y: 0, width: 2, height: 5, zIndex: 10 })

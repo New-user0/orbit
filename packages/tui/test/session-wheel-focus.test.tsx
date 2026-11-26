@@ -5,7 +5,6 @@ import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
-import { waitForFrame } from "./fixture/frame"
 
 test
   .skipIf(process.platform === "win32")
@@ -89,11 +88,11 @@ test
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
   try {
-    await waitForFrame(setup, (frame) => frame.includes("History message 0019"))
+    await setup.waitForFrame((frame) => frame.includes("History message 0019"))
     await setup.mockInput.typeText("/terminal")
-    await waitForFrame(setup, (frame) => frame.includes("New terminal"))
+    await setup.waitForFrame((frame) => frame.includes("New terminal"))
     setup.mockInput.pressEnter()
-    await waitForFrame(setup, (frame) => frame.includes("Terminal line 99"))
+    await setup.waitForFrame((frame) => frame.includes("Terminal line 99"))
     setup.mockInput.pressKey("x", { ctrl: true })
     setup.mockInput.pressArrow("left")
     await setup.waitForVisualIdle()

@@ -7,7 +7,6 @@ import { DialogAgentCreate, type AgentCreateEnvironment } from "../../src/compon
 import { DialogAgentEdit } from "../../src/component/dialog-agent-edit"
 import { Toast } from "../../src/ui/toast"
 import { renderLocal } from "../fixture/local"
-import { waitForFrame } from "../fixture/frame"
 
 async function project() {
   const dir = await mkdtemp(path.join(os.tmpdir(), "orbit-agent-create-"))
@@ -35,7 +34,7 @@ const prompt = "You review a change and report what could break, in order of ris
 
 // A dialog paints before its deferred focus is ready for keys, so the frame is not enough to start typing.
 async function until(setup: Awaited<ReturnType<typeof renderLocal>>, text: string) {
-  const frame = await waitForFrame(setup, (frame) => frame.replace(/\s+/g, " ").includes(text))
+  const frame = await setup.waitForFrame((frame) => frame.replace(/\s+/g, " ").includes(text))
   await Bun.sleep(60)
   return frame
 }
@@ -209,7 +208,7 @@ test.each([
   await until(setup, "Create agent: name")
   await setup.mockInput.typeText(name)
   setup.mockInput.pressEnter()
-  const frame = await waitForFrame(setup, (frame) => frame.replace(/\s+/g, " ").includes(why))
+  const frame = await setup.waitForFrame((frame) => frame.replace(/\s+/g, " ").includes(why))
   expect(frame).toContain("Create agent: name")
   expect(await readdir(tmp.dir)).toEqual([])
 })

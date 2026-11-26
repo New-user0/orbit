@@ -5,7 +5,6 @@ import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
 import { runProgram } from "../../core/test/fixture/run-program"
-import { waitForFrame } from "./fixture/frame"
 
 // The status line command runs in the folder the terminal UI was started in, whose contents a clone chooses (a
 // bunfig.toml preload, a git config). Nothing runs, and no line is drawn, until that folder is trusted.
@@ -70,7 +69,7 @@ test.each(spellings)("no status line runs in an untrusted start folder: $name", 
       },
     })
     await setup.ready
-    await waitForFrame(setup, (frame) => promptReady(frame))
+    await setup.waitForFrame((frame) => promptReady(frame))
     // Past the interval, and a trigger that would run the command if it were allowed to.
     await Bun.sleep(2_500)
     setup.events.emit({
@@ -133,7 +132,7 @@ console.log("MODE-" + input.vim_mode)
       },
     })
     await setup.ready
-    await waitForFrame(setup, (frame) => frame.includes("Trust this folder?"))
+    await setup.waitForFrame((frame) => frame.includes("Trust this folder?"))
     await Bun.sleep(2_000)
     await setup.renderOnce()
     expect(await Bun.file(marker).exists()).toBe(false)

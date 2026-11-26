@@ -3,7 +3,6 @@ import path from "node:path"
 import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
-import { waitForFrame } from "./fixture/frame"
 
 // The status line command is the person's own and stands in for a hook, so it follows the organization's hook switches
 // as the hook runners do (class 7: an answer that is missing, old or failed does not run it). The real app draws it; the
@@ -58,10 +57,10 @@ test.each(rows)("the status line, with $name", async (row) => {
     fetch: (url) => (url.pathname === "/api/config/effective" ? row.answer() : undefined),
   })
   await setup.ready
-  await waitForFrame(setup, (frame) => promptReady(frame))
+  await setup.waitForFrame((frame) => promptReady(frame))
   // Past the interval, so a command that is allowed to run has run and been drawn.
   await Bun.sleep(row.ran ? 1_500 : 2_500)
-  if (row.ran) await waitForFrame(setup, (frame) => frame.includes("LINE-DRAWN"))
+  if (row.ran) await setup.waitForFrame((frame) => frame.includes("LINE-DRAWN"))
   await setup.renderOnce()
   const frame = setup.captureCharFrame()
   expect(await Bun.file(marker).exists()).toBe(row.ran)
@@ -85,7 +84,7 @@ test("the status line draws every non-empty line, below one another, and skips a
   // the command runs `bun <script>` at mount; give the first run room before the bounded frame wait
   await Bun.sleep(2_500)
   await setup.renderOnce()
-  await waitForFrame(setup, (frame) => frame.includes("LINE-THREE"))
+  await setup.waitForFrame((frame) => frame.includes("LINE-THREE"))
   const rows = setup.captureCharFrame().split("\n")
   const at = (text: string) => rows.findIndex((row) => row.includes(text))
   expect([at("LINE-ONE"), at("LINE-TWO"), at("LINE-THREE")]).toEqual([at("LINE-ONE"), at("LINE-ONE") + 1, at("LINE-ONE") + 2])

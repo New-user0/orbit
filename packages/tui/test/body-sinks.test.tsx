@@ -5,7 +5,6 @@ import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
 import { normalizePath } from "../src/util/path"
-import { waitForFrame } from "./fixture/frame"
 
 setDefaultTimeout(30_000)
 
@@ -196,7 +195,7 @@ const rows: {
     messages: [user, assistant([{ type: "reasoning", text: hostile, time: { created: 1, completed: 2 } }])],
     act: async (app) => {
       await click(app, "Thought")
-      await waitForFrame(app, (frame) => /enign|pwn/.test(frame))
+      await app.waitForFrame((frame) => /enign|pwn/.test(frame))
       await app.waitForVisualIdle()
     },
     show: [written],
@@ -386,7 +385,7 @@ const rows: {
         durable: { aggregateID: session.id, seq: 1, version: 1 },
         data: { sessionID: session.id, error: { type: "unknown", message: text } },
       })
-      await waitForFrame(app, (frame) => frame.includes("Session failed"))
+      await app.waitForFrame((frame) => frame.includes("Session failed"))
     },
     show: [written],
   },
@@ -396,7 +395,7 @@ const rows: {
     inbox: [{ id: "queued-0", type: "user", delivery: "queue", payload: { text: hostile }, time: { created: 5 } }],
     act: async (app, text) => {
       await click(app, "1 queued")
-      await waitForFrame(app, (frame) => frame.includes("Queued prompts"))
+      await app.waitForFrame((frame) => frame.includes("Queued prompts"))
     },
     show: [written, "Queued prompts"],
   },
@@ -432,10 +431,10 @@ async function screen(messages: unknown[], inbox: unknown[] = [], act?: (app: Ap
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
   try {
-    await waitForFrame(setup, (frame) => frame.includes("Run it"))
+    await setup.waitForFrame((frame) => frame.includes("Run it"))
     await setup.waitForVisualIdle()
     await act?.(Object.assign(setup, { events }), text)
-    if (until) await waitForFrame(setup, (frame) => frame.includes(until), { maxPasses: 100 })
+    if (until) await setup.waitForFrame((frame) => frame.includes(until), { maxPasses: 100 })
     await setup.waitForVisualIdle()
     return setup.captureCharFrame()
   } finally {

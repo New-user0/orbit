@@ -16,7 +16,6 @@ import { emptyThemeSource, tmpdir } from "../fixture/fixture"
 import { createApi, createEventStream, createFetch } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
-import { waitForFrame } from "../fixture/frame"
 
 for (const width of [40, 100]) {
   test(`error details stay compact at ${width} columns and investigate only prepares a draft`, async () => {
@@ -83,7 +82,7 @@ for (const width of [40, 100]) {
 
     try {
       app.renderer.start()
-      await waitForFrame(app, (frame) => frame.includes("Reference: err_a1b2c3d4"))
+      await app.waitForFrame((frame) => frame.includes("Reference: err_a1b2c3d4"))
       const lines = app.captureCharFrame().split("\n")
       const heading = lines.find((line) => line.includes("Server plugin error"))
       expect(heading).toContain("esc")
@@ -155,7 +154,7 @@ test.each([
     { width: 100, height: 24, kittyKeyboard: true },
   )
   try {
-    await waitForFrame(app, (frame) => frame.includes("Server plugin error"))
+    await app.waitForFrame((frame) => frame.includes("Server plugin error"))
     const frame = app.captureCharFrame()
     expect(frame).toContain(shown)
     expect(frame).not.toContain("\u001b")
