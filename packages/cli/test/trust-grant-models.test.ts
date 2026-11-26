@@ -54,7 +54,14 @@ test("when orb trust says Trusted, the folder's plugin runs and its models are l
 
     const run = await startSlot(async () => {
       const child = Bun.spawn(
-        [process.execPath, path.join(import.meta.dir, "../src/index.ts"), "trust", folders.repo, "--server", server.base],
+        [
+          process.execPath,
+          path.join(import.meta.dir, "../src/index.ts"),
+          "trust",
+          folders.repo,
+          "--server",
+          server.base,
+        ],
         {
           // The CLI's own folder, whose bunfig and tsconfig run src/index.ts; the folder to trust is the argument.
           cwd: path.join(import.meta.dir, ".."),
