@@ -1,7 +1,7 @@
 export * as FileChangeReminder from "./file-change-reminder.js"
 
 import { structuredPatch } from "diff"
-import { Context, DateTime, Duration, Effect, Cause, Option, Result } from "effect"
+import { Clock, Context, DateTime, Duration, Effect, Cause, Option, Result } from "effect"
 import type { Agent } from "@orbit/schema/agent"
 import type { Session } from "@orbit/schema/session"
 import { FSUtil } from "@orbit/util/fs-util"
@@ -56,10 +56,11 @@ const MAX_SNIPPET = 8_192
 /** How long new checks and reads of the files may start, and those of the rebuild; a file not started by then waits. */
 const FILE_BUDGET_MS = 750
 /**
- * The budget of a producer built with none, read when it runs: `FILE_BUDGET_MS` unless a caller sets another. The budget
- * is wall-clock time, so how many files fit in it depends on the machine's speed. A test whose claim is about what is
- * reported, not about how the budget is spent, sets one that load cannot use up, so its answer does not depend on how
- * busy the machine is.
+ * The budget of a producer built with none, read when it runs: `FILE_BUDGET_MS` unless a caller sets another. The budget,
+ * each file's share and the producer's deadline are measured on Effect's `Clock`, which is the wall clock in production,
+ * so there how many files fit in a budget depends on the machine's speed. A test whose claim is about what is reported,
+ * not about how the budget is spent, sets one that load cannot use up; one whose claim is how the budget is spent
+ * provides a clock that moves only while the checks wait, so its answer does not depend on how busy the machine is.
  */
 export const Budget = Context.Reference<number>("@orbit/FileChangeReminder/Budget", {
   defaultValue: () => FILE_BUDGET_MS,
@@ -106,7 +107,7 @@ export const durable = (services: Services): Durable => ({
       const budget = services.budget ?? (yield* Budget)
       // The rows keep the ledger's order, the least recently used first, whatever order the files are checked in.
       const rank = new Map((yield* services.ledger.watched(input.session.id)).map((file, index) => [file.path, index]))
-      const deadline = Date.now() + budget
+      const deadline = (yield* Clock.currentTimeMillis) + budget
       const checked = yield* Effect.forEach(
         yield* services.ledger.toCheck(input.session.id),
         (file) =>
@@ -139,7 +140,8 @@ export const durable = (services: Services): Durable => ({
         input.session.id,
         checked.flatMap((result) => (result.found === undefined ? [] : [result.path])),
       )
-      // The smallest comparisons first, so one large rewrite cannot use up the others' time.
+      // The smallest comparisons first, so one large rewrite cannot use up the others' time. The comparisons are work on
+      // the processor, which `structuredPatch` times by the wall clock, so their limit is wall-clock time too.
       const end = Date.now() + DIFF_TIMEOUT_MS
       return checked
         .flatMap((result) => result.found ?? [])
@@ -162,8 +164,8 @@ const inTime = <A>(
   share: number,
   effect: Effect.Effect<ReadonlyArray<A>>,
 ): Effect.Effect<ReadonlyArray<A> | undefined> =>
-  Effect.suspend(() => {
-    if (deadline <= Date.now()) return Effect.succeed(undefined)
+  Effect.flatMap(Clock.currentTimeMillis, (now) => {
+    if (deadline <= now) return Effect.succeed(undefined)
     return effect.pipe(
       Effect.timeoutOption(share),
       Effect.flatMap((found) =>
@@ -347,7 +349,7 @@ const shown = (text: string) =>
  */
 const rebuild = Effect.fnUntraced(function* (services: Services, input: Input) {
   const budget = services.budget ?? (yield* Budget)
-  const start = Date.now()
+  const start = yield* Clock.currentTimeMillis
   // The newest call for each spelling; then the newest for each file, whatever spelling named it.
   const bySpelling = new Map(fromHistory(input.messages).map((found) => [found.path, found] as const))
   const resolved = yield* Effect.forEach(
