@@ -117,18 +117,19 @@ export function make(
       const discover = Effect.fn("OllamaPlugin.discover")(function* () {
         const current = source.current
         if (!current.tagsEndpoint || !current.showEndpoint) return undefined
-        // Nothing is cached until the server has answered: a read that fails, runs out of time or is interrupted leaves
-        // the entry as it was, so the next discovery of this endpoint (this plugin's retry, or another Location's
-        // plugin) asks again instead of taking "no models" as a fresh answer.
+        const marks: { prior?: Discovery; written?: Discovery } = {}
         return yield* discoveryLock.withPermit(
           Effect.gen(function* () {
             const cached = discovery.get(current.tagsEndpoint)
+            marks.prior = cached
             if (cached && cached.apiKey === current.apiKey && Date.now() - cached.checked < Duration.toMillis(interval))
               return { source: current, models: cached.models }
             const previous: Discovery =
               cached && cached.apiKey === current.apiKey
                 ? cached
                 : { checked: 0, apiKey: current.apiKey, shows: new Map() }
+            marks.written = { ...previous, checked: Date.now(), apiKey: current.apiKey }
+            discovery.set(current.tagsEndpoint, marks.written)
             const tagsRequest = current.apiKey
               ? HttpClientRequest.get(current.tagsEndpoint).pipe(
                   HttpClientRequest.acceptJson,
@@ -174,7 +175,17 @@ export function make(
               shows,
             })
             return { source: current, models: filtered }
-          }),
+          }).pipe(
+            // A discovery that was interrupted, timed out or failed leaves the cache as it was before it began, so the
+            // next one asks again instead of answering "no models" until the interval ends (FU-M3-385).
+            Effect.onError(() =>
+              Effect.sync(() => {
+                if (!marks.written || discovery.get(current.tagsEndpoint) !== marks.written) return
+                if (marks.prior) discovery.set(current.tagsEndpoint, marks.prior)
+                else discovery.delete(current.tagsEndpoint)
+              }),
+            ),
+          ),
         )
       })
 
@@ -189,23 +200,19 @@ export function make(
         yield* ctx.provider.reload()
       })
 
-      // The next discovery comes after the interval, except while the plugin has no models and the last one failed: a
-      // server that is slow to start or busy (each request has a 1 second limit) is then asked again after 1 s, then
-      // 2 s, 4 s and so on up to the interval. A failure keeps the last inventory, so models do not flicker.
-      const every = Duration.toMillis(interval)
-      const retry = (wait: number) => (loaded.models.length === 0 ? Math.min(wait, every) : every)
-      const poll = (wait: number): Effect.Effect<void> =>
-        Effect.sleep(wait).pipe(
-          Effect.andThen(refresh()),
-          Effect.matchEffect({ onSuccess: () => poll(every), onFailure: () => poll(retry(wait * 2)) }),
-        )
       // The first run is awaited, so a session that starts right after the location resolves its default model from
-      // the discovered catalog instead of finding it empty.
-      const first = yield* refresh().pipe(
-        Effect.as(every),
-        Effect.orElseSucceed(() => retry(1_000)),
-      )
-      yield* poll(first).pipe(Effect.forkScoped)
+      // the discovered catalog instead of finding it empty. Each request has its own 1 second limit.
+      const first = yield* refresh().pipe(Effect.as(true), Effect.orElseSucceed(() => false))
+      // Keep the last successful inventory through transient outages instead of flickering model availability. While
+      // nothing was discovered yet, a failed discovery is tried again after 1 second, doubling up to the interval.
+      const keep = (answered: boolean, backoff: number): Effect.Effect<void> => {
+        const wait = answered || loaded.models.length > 0 ? Duration.toMillis(interval) : backoff
+        return Effect.sleep(wait).pipe(
+          Effect.andThen(refresh().pipe(Effect.as(true), Effect.orElseSucceed(() => false))),
+          Effect.flatMap((ok) => keep(ok, Math.min(backoff * 2, Duration.toMillis(interval)))),
+        )
+      }
+      yield* keep(first, Math.min(1_000, Duration.toMillis(interval))).pipe(Effect.forkScoped)
       const reload = Effect.fn("OllamaPlugin.reload")(function* () {
         const next = configured(yield* config.entries(), origin)
         if (
