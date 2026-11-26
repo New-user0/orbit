@@ -167,13 +167,13 @@ describe("ShellParse", () => {
   })
 
   // A much longer input can abort the shared WebAssembly module (shell-parse-state.test.ts), so the readers parse up to
-  // ShellParse.MAX_LENGTH characters and refuse a longer input, which is then asked about as a whole.
+  // 10,000 characters, the limit docs/upgrading.md names, and refuse a longer input, which is then asked about as a whole.
   test.each([
     ["the limit", 0, true],
     ["one past the limit", 1, false],
   ] as const)("reads an input of %s", async (_, over, read) => {
-    const command = `echo hi > out && ${"a".repeat(ShellParse.MAX_LENGTH - 17 + over)}`
-    expect(command.length).toBe(ShellParse.MAX_LENGTH + over)
+    const command = `echo hi > out && ${"a".repeat(10_000 - 17 + over)}`
+    expect(command.length).toBe(10_000 + over)
     const scan = await Effect.runPromise(Effect.exit(ShellParse.scan(command, "/bin/bash", "/workspace")))
     expect(scan._tag).toBe(read ? "Success" : "Failure")
     expect(await Effect.runPromise(ShellParse.operands(command, "/bin/bash"))).toEqual(read ? ["hi", "out"] : [])

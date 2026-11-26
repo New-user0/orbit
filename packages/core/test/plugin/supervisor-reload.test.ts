@@ -21,6 +21,7 @@ import { Plugin } from "@orbit/core/plugin"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { Rpc } from "@orbit/core/rpc"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
+import { PluginUpdate } from "@orbit/core/plugin/update"
 import { AbsolutePath } from "@orbit/core/schema"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { tempGlobalLayer } from "../fixture/global"
@@ -133,6 +134,21 @@ const failing = app(
 )
 // Locations whose folder nothing trusts until a test grants it.
 const untrusted = app(instancesWith([WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false }))]))
+// Locations whose update checks find a newer version of every package and announce nothing.
+const updatable = app(
+  instancesWith([
+    PluginUpdate.node.replace(
+      Layer.succeed(
+        PluginUpdate.Service,
+        PluginUpdate.Service.of({
+          check: () => Effect.succeed(true),
+          update: () => Effect.void,
+          changes: () => Stream.never,
+        }),
+      ),
+    ),
+  ]),
+)
 
 const greeter = (command: string) => `export default {
   id: "greeter",
@@ -430,6 +446,33 @@ describe("PluginSupervisor reload", () => {
       )
     }),
   )
+
+  // The update check runs after the activation applied, so what it finds shows on the package's entry once it ends.
+  updatable.live("marks a package plugin outdated once its update check finds a newer version", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped()
+      yield* installable(directory.path, "outdated-pkg", "greet-outdated")
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.gen(function* () {
+        const plugins = yield* Plugin.Service
+        const commands = yield* Command.Service
+        yield* plugins.awaitApplied
+        expect(yield* commands.get("greet-outdated")).toBeDefined()
+        const entry = plugins.list().pipe(
+          Effect.map((inventory) => inventory.find((plugin) => plugin.source.type === "package")?.source),
+          Effect.filterOrFail(
+            (source) => source !== undefined && "outdated" in source,
+            () => "update check pending",
+          ),
+          Effect.retry({ times: 200, schedule: Schedule.spaced("25 millis") }),
+        )
+        expect(yield* entry).toMatchObject({ type: "package", outdated: true })
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
+      )
+    }),
+  )
 })
 
 // A package plugin in `<root>/package` that adds the command `command`, named by the folder's own config.
@@ -492,7 +535,9 @@ describe("PluginSupervisor under workspace trust", () => {
   it.live("refresh activates again and returns once that activation settled", () =>
     Effect.gen(function* () {
       const directory = yield* tmpdirScoped()
-      yield* Effect.promise(() => Bun.write(path.join(directory.path, ".orbit/plugins/greeter.ts"), greeter("greet-first")))
+      yield* Effect.promise(() =>
+        Bun.write(path.join(directory.path, ".orbit/plugins/greeter.ts"), greeter("greet-first")),
+      )
       const locations = yield* LocationServiceMap.Service
       yield* Effect.gen(function* () {
         const plugins = yield* Plugin.Service
