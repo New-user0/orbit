@@ -65,7 +65,8 @@ jobs:
       fail-fast: false
       matrix:
         # sdk holds the contract-identity tests (SDK, Core, Server and Client must share one set of contracts);
-        # theme holds the theme resolution tests; compat holds the compatibility switch and root discovery tests.
+        # theme holds the theme resolution tests; compat holds the compatibility switch and root discovery tests;
+        # http-recorder holds the cassette store, whose append waits for a reader of the cassette on Windows.
         # cli runs as three jobs. `bun test --shard` splits a package's files by the Linux timings it keeps
         # (test/timings.json); `part` names the shard's coverage and timings artifacts. The sharded jobs are listed
         # first, because GitHub starts jobs in this order when the concurrency limit queues some.
@@ -88,6 +89,7 @@ jobs:
           - { package: sdk }
           - { package: theme }
           - { package: util }
+          - { package: http-recorder }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
@@ -184,6 +186,7 @@ jobs:
           - { package: sdk }
           - { package: theme }
           - { package: util }
+          - { package: http-recorder }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
