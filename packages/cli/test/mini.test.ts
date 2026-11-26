@@ -1,23 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { ClientError, Orbit } from "@orbit/client/promise"
 import { ORBIT_VERSION } from "../src/version"
-import path from "node:path"
 import { createMiniConnection, mergeInput as mergeInteractiveInput, resolveMiniTarget } from "../src/mini"
 import { mergeInput as mergeNonInteractiveInput, parseRunModel } from "../src/run/run"
 import { parseSessionTargetModel } from "../src/session-target"
+import { runOrb } from "./fixture/orb"
 
-async function cli(args: string[]) {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
-    cwd: path.join(import.meta.dir, ".."),
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  return { stdout, stderr, exitCode }
+function cli(args: string[]) {
+  return runOrb(args)
 }
 
 describe("mini command", () => {

@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { ORBIT_VERSION } from "../src/version"
+import { runOrb } from "./fixture/orb"
 
 const info = {
   id: "ses_export_test",
@@ -54,14 +55,9 @@ const trusted = (url: URL) =>
     changed: [],
   })
 
-function run(args: string[], stdin?: string) {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
-    cwd: path.join(import.meta.dir, ".."),
-    stdin: stdin === undefined ? undefined : new Blob([stdin]),
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  return Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+async function run(args: string[], stdin?: string) {
+  const result = await runOrb(args, { stdin })
+  return [result.stdout, result.stderr, result.exitCode] as const
 }
 
 test("export is raw by default and supports explicit sanitization", async () => {

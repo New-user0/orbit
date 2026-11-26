@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
-import path from "node:path"
 import { classify } from "../src/framework/argv"
+import { runOrb } from "./fixture/orb"
 import { PrintBooleanFlags, RootValueFlags, Subcommands } from "../src/commands/commands"
 
 // The words of the message are exactly the tokens that follow the flags: the parser sees each boolean flag in its inline
@@ -67,13 +67,7 @@ test("a subcommand name is any command the root dispatches on", () => {
 })
 
 async function helpFlags(args: string[]) {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
-    cwd: path.join(import.meta.dir, ".."),
-    stdout: "pipe",
-    stderr: "pipe",
-    stdin: "ignore",
-  })
-  const [, help] = await Promise.all([child.exited, new Response(child.stdout).text()])
+  const help = (await runOrb(args)).stdout
   return help.split(/\r?\n/).flatMap((line) => {
     // A flag can list a second long name as its alias, such as `--max-steps, --max-turns`.
     const match = line.match(
