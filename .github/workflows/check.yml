@@ -115,7 +115,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage --reporter=junit --reporter-outfile=junit.xml 2>&1 | tee "$RUNNER_TEMP/test.log" || {
             echo "::group::Failures"
             grep -E '^\(fail\)|^error:|Unhandled error|^Test file stuck' "$RUNNER_TEMP/test.log" | tail -60
             echo "::endgroup::"
@@ -128,6 +128,16 @@ jobs:
         with:
           name: lcov-linux-${{ matrix.package }}${{ matrix.part }}
           path: packages/${{ matrix.package }}/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
+      # Each test's own time (bun's JUnit report), from which a measured limit is set: at least twice the worst time the
+      # row took on a loaded runner (AGENTS.md, Testing).
+      - name: Upload test durations
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: junit-linux-${{ matrix.package }}${{ matrix.part }}
+          path: packages/${{ matrix.package }}/junit.xml
           if-no-files-found: warn
           retention-days: 14
       # What each job measured (`--update-timings`). `bun tools/test/timings.ts --run <id>` merges a run's artifacts into
@@ -260,7 +270,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage --reporter=junit --reporter-outfile=junit.xml 2>&1 | tee "$RUNNER_TEMP/test.log" || {
             echo "::group::Failures"
             grep -E '^\(fail\)|^error:|Unhandled error|^Test file stuck' "$RUNNER_TEMP/test.log" | tail -60
             echo "::endgroup::"
@@ -272,6 +282,16 @@ jobs:
         with:
           name: lcov-windows-${{ matrix.package }}${{ matrix.part }}
           path: packages/${{ matrix.package }}/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
+      # Each test's own time (bun's JUnit report), from which a measured limit is set: at least twice the worst time the
+      # row took on a loaded runner (AGENTS.md, Testing).
+      - name: Upload test durations
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: junit-windows-${{ matrix.package }}${{ matrix.part }}
+          path: packages/${{ matrix.package }}/junit.xml
           if-no-files-found: warn
           retention-days: 14
       - name: Check timings
