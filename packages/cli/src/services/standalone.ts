@@ -2,7 +2,7 @@ import { Service } from "@orbit/client/effect/service"
 import { CrossSpawnSpawner } from "@orbit/util/cross-spawn-spawner"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { plain } from "@orbit/util/plain"
-import { Deferred, Effect, Fiber, Option, Schema, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Schema, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { randomBytes } from "node:crypto"
 import { selfCommand } from "../util/process"
@@ -54,12 +54,17 @@ const makeEndpoint = Effect.fn("cli.standalone.endpoint")(
       Stream.decodeText(),
       Stream.splitLines,
       Stream.runForEach((line) => Deferred.succeed(readyLine, line)),
-      Effect.ensuring(
-        Effect.gen(function* () {
-          const code = yield* proc.exitCode.pipe(Effect.timeoutOption("5 seconds"), Effect.option)
-          yield* Fiber.join(drained).pipe(Effect.timeoutOption("1 second"))
-          yield* Deferred.fail(readyLine, new Error(notReady(Option.flatten(code), stderr.tail)))
-        }),
+      // A server whose output ended by itself is asked why. The end of the command interrupts this first and stops the
+      // server only after it, so a server stopped that way is not asked: it is still running, and waiting for its exit
+      // there would hold the end of the command for the whole wait.
+      Effect.onExit((exit) =>
+        Exit.hasInterrupts(exit)
+          ? Deferred.fail(readyLine, new Error(notReady(Option.none(), "")))
+          : Effect.gen(function* () {
+              const code = yield* proc.exitCode.pipe(Effect.timeoutOption("5 seconds"), Effect.option)
+              yield* Fiber.join(drained).pipe(Effect.timeoutOption("1 second"))
+              yield* Deferred.fail(readyLine, new Error(notReady(Option.flatten(code), stderr.tail)))
+            }),
       ),
       Effect.forkScoped,
     )

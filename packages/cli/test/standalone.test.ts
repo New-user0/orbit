@@ -54,15 +54,46 @@ test.each([
     "with code 6",
     "database is locked",
   ],
-])("the error of a standalone server that exits before it is ready and %s names its exit and output", async (_, script, exit, output) => {
-  const error = await Effect.runPromise(
-    Standalone.start({ command: [process.execPath, "-e", script] }).pipe(Effect.scoped, Effect.flip),
-  )
-  expect(error.message).toStartWith(`Standalone server exited ${exit} before reporting readiness`)
-  expect(error.message).toEndWith(output)
-  expect(error.message).not.toContain("\x1b")
-  expect(error.message.length).toBeLessThan(2_100)
-}, 30_000)
+])(
+  "the error of a standalone server that exits before it is ready and %s names its exit and output",
+  async (_, script, exit, output) => {
+    const error = await Effect.runPromise(
+      Standalone.start({ command: [process.execPath, "-e", script] }).pipe(Effect.scoped, Effect.flip),
+    )
+    expect(error.message).toStartWith(`Standalone server exited ${exit} before reporting readiness`)
+    expect(error.message).toEndWith(output)
+    expect(error.message).not.toContain("\x1b")
+    expect(error.message.length).toBeLessThan(2_100)
+  },
+  30_000,
+)
+
+// The end of a command stops its private server, which keeps running until then, so the reason a server gives for an
+// early exit is neither needed nor waited for. That wait held the end of every `orb` command that starts a private server
+// for six seconds, and Windows CI run 45762896450 stopped cli 5/6 when trust-doors.test.ts ran past three times its
+// usual length. The servers here run until they are stopped, so the wait would last its whole five seconds.
+const forever = "setInterval(() => {}, 1_000_000)"
+test.each([
+  [
+    "once it is ready",
+    `console.log(JSON.stringify({ url: "http://127.0.0.1:9" })); ${forever}`,
+    (start: ReturnType<typeof Standalone.start>) => start.pipe(Effect.scoped, Effect.asVoid),
+  ],
+  [
+    "before it is ready",
+    forever,
+    (start: ReturnType<typeof Standalone.start>) =>
+      start.pipe(Effect.scoped, Effect.timeoutOption("300 millis"), Effect.asVoid),
+  ],
+])(
+  "a command that stops its private server %s ends without waiting for the server's exit",
+  async (_, script, run) => {
+    const started = Date.now()
+    await Effect.runPromise(run(Standalone.start({ command: [process.execPath, "-e", script] })))
+    expect(Date.now() - started).toBeLessThan(5_000)
+  },
+  30_000,
+)
 
 async function readLine(stream: ReadableStream<Uint8Array>, prefix: string) {
   const reader = stream.getReader()
