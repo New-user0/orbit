@@ -41,3 +41,24 @@ test("a write with no reader lands at once: the control for the row above", asyn
     await fs.rm(dir, { recursive: true, force: true })
   }
 })
+
+// A replace that cannot land (here the target is a folder, which no rename of a file can take the place of) fails the
+// write with the rename's error and removes the temporary file it wrote. On Windows the rename answers EPERM, which the
+// replace waits out until its deadline first.
+test("a write whose replace fails reports the error and leaves no temporary file", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-tui-persistence-"))
+  try {
+    const file = path.join(dir, "tabs.json")
+    await fs.mkdir(file)
+    await Bun.write(path.join(file, "kept"), "")
+    const written = await writeJsonAtomic(file, { tabs: ["new"] }).then(
+      () => "written",
+      (error: NodeJS.ErrnoException) => `failed: ${error.code ?? error.message}`,
+    )
+    expect(written).toStartWith("failed: E")
+    expect(await fs.readdir(dir)).toEqual(["tabs.json"])
+    expect(await fs.readdir(file)).toEqual(["kept"])
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+}, 15_000)
