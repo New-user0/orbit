@@ -215,6 +215,50 @@ test.each(["dismissed", "refreshing"])(
   },
 )
 
+// FU-M3-070: a plugin route names the window after the route, and the name is the plugin's own string, so the title is
+// cleaned of control characters as a session title is (class 9): an escape in the name cannot reach the terminal.
+test("a plugin route titles the window with its name, without the control characters in it", async () => {
+  await using state = await tmpdir()
+  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const titles: string[] = []
+  const named = Promise.withResolvers<void>()
+  const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
+  setup.renderer.setTerminalTitle = (title) => {
+    titles.push(title)
+    if (title !== "" && title !== "Orbit") named.resolve()
+    setTitle(title)
+  }
+  const route = process.env.ORBIT_ROUTE
+  process.env.ORBIT_ROUTE = JSON.stringify({ type: "plugin", id: "orbit.test", name: "diff\u001b]0;owned\u0007" })
+  const events = createEventStream()
+  const calls = createFetch(undefined, events)
+  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        app: { name: "test", version: "test", channel: "test" },
+        server: { endpoint: { url: server.url.toString() } },
+        config: { get: async () => ({}), update: async () => ({}) },
+        packages: { prepare: async () => ({ directory: "" }) },
+        terminalHandoff: async () => ({ renderer: setup.renderer, mode: "dark", complete: () => {} }),
+        args: {},
+        log: () => {},
+      }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
+    )
+    await named.promise
+    setup.renderer.destroy()
+    await task
+
+    expect(titles.filter((title) => title !== "" && title !== "Orbit")).toEqual(["Orbit · diff]0;owned"])
+  } finally {
+    if (route === undefined) delete process.env.ORBIT_ROUTE
+    if (route !== undefined) process.env.ORBIT_ROUTE = route
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    await server.stop()
+  }
+})
+
 test("SIGHUP clears title and disposes scoped resources once", async () => {
   await using state = await tmpdir()
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
