@@ -2,7 +2,7 @@
   "version": 1,
   "files": {
     "src/commands/handlers/api.test.ts": 100,
-    "src/ssh-askpass.test.ts": 923,
+    "test/ssh-askpass.test.ts": 923,
     "test/acp/additional-directories.subprocess.test.ts": 4455,
     "test/acp/additional-directories.test.ts": 319,
     "test/acp/approval-link.test.ts": 2836,

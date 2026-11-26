@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
 import { createServer } from "node:net"
 import path from "node:path"
-import { sharedTranspilerCache } from "../test/fixture/environment"
-import { startSlot } from "../test/fixture/start-gate"
+import { sharedTranspilerCache } from "./fixture/environment"
+import { startSlot } from "./fixture/start-gate"
 
 // The child runs src/index.ts from source, whose imports load the whole CLI before the askpass branch answers. On a loaded
 // runner with no transpiler cache that start alone took longer than the test's 30 s. It now shares the run's transpiler
@@ -22,18 +22,21 @@ test("the executable askpass branch returns only the response, without CLI outpu
   if (!address || typeof address === "string") throw new Error("missing listener")
   try {
     const run = await startSlot(async () => {
-      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "index.ts"), "Enter passphrase:"], {
-        env: {
-          ...process.env,
-          ...sharedTranspilerCache(),
-          ORBIT_SSH_ASKPASS_PORT: String(address.port),
-          ORBIT_SSH_ASKPASS_TOKEN: "fixture",
-          SSH_ASKPASS_PROMPT: "confirm",
+      const child = Bun.spawn(
+        [process.execPath, path.join(import.meta.dir, "..", "src", "index.ts"), "Enter passphrase:"],
+        {
+          env: {
+            ...process.env,
+            ...sharedTranspilerCache(),
+            ORBIT_SSH_ASKPASS_PORT: String(address.port),
+            ORBIT_SSH_ASKPASS_TOKEN: "fixture",
+            SSH_ASKPASS_PROMPT: "confirm",
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: START_DEADLINE,
         },
-        stdout: "pipe",
-        stderr: "pipe",
-        timeout: START_DEADLINE,
-      })
+      )
       const [stdout, stderr, code] = await Promise.all([
         new Response(child.stdout).text(),
         new Response(child.stderr).text(),
