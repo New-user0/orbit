@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test"
 import os from "os"
 import path from "path"
 import { Global } from "@orbit/util/global"
+import { NpmConfig } from "@orbit/util/npm-config"
+import { Effect } from "effect"
 
 // Bun reads HOME once at startup on Linux and macOS, so a worker that sets HOME afterwards still sees the shared root
 // from os.homedir(); on Windows os.homedir() follows USERPROFILE as it changes. Either way it is never the real home.
@@ -25,6 +27,27 @@ describe("Core test environment", () => {
     expect(process.env.ORBIT_TEST_HOME).toBe(path.join(root, `worker-${process.pid}`))
     expect(os.homedir()).toBe(osHomedir(process.env.ORBIT_TEST_HOME!, root))
     expect(os.tmpdir().startsWith(process.env.ORBIT_TEST_HOME!)).toBe(true)
+  })
+
+  // npm keeps its cache in %LOCALAPPDATA%\npm-cache on Windows and in ~/.npm elsewhere, and Npm.add reads npm's own
+  // config. Neither was a worker's: CI's Git installs cloned into the runner's C:\Users\runneradmin\AppData\Local\npm-cache
+  // (run 45898058796), which every worker and job on the machine shares, and on Linux HOME stays the shared root.
+  test("gives each worker an npm cache of its own", async () => {
+    const home = process.env.ORBIT_TEST_HOME
+    expect(home).toBeDefined()
+    if (!home) return
+    // Inside the worker's home: a relative path that does not climb out of it (another drive gives an absolute one).
+    const within = (folder: unknown) => {
+      if (typeof folder !== "string" || folder === "") return `not a folder: ${String(folder)}`
+      const relative = path.relative(home, folder)
+      return relative.startsWith("..") || path.isAbsolute(relative) ? `outside ${home}: ${folder}` : "inside"
+    }
+    const config = await Effect.runPromise(NpmConfig.load(home))
+    expect(within(config.cache)).toBe("inside")
+    if (process.platform === "win32") {
+      expect(within(process.env.LOCALAPPDATA)).toBe("inside")
+      expect(within(process.env.APPDATA)).toBe("inside")
+    }
   })
 
   test("isolates global home and XDG roots", () => {

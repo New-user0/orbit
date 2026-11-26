@@ -508,6 +508,32 @@ describe("Watcher native directory watches", () => {
     )
   })
 
+  // The close above meets parcel-bundler/watcher#262, which crashed core test workers on Windows (FU-M5-022), because
+  // each test builds and closes a runtime of its own. A test process does not need the close: bun ends its workers with
+  // live watches still open. So the tests take their native watches from one set that lives as long as the process
+  // (test/fixture/native-watcher.ts), and a runtime that closes ends none of them.
+  it.effect(
+    "in a test process the native watches outlive each runtime: a closed one ends none, the next reuses it",
+    () => {
+      const parcel = fakeParcel()
+      const binding = () => parcel.binding
+      return rooted((root) =>
+        Effect.gen(function* () {
+          const { processNative } = yield* Effect.promise(() => import("../fixture/native-watcher"))
+          for (const _ of [1, 2]) {
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                const subscription = yield* root.subscribe(processNative(binding, "windows"))
+                yield* Effect.promise(() => subscription!.unsubscribe())
+              }),
+            )
+          }
+          expect(parcel.counts).toEqual({ subscribes: 1, unsubscribes: 0, unsafe: 0 })
+        }),
+      )
+    },
+  )
+
   it.effect("on Windows a subscribe that resolves after the native watches closed is unsubscribed", () => {
     const held = Promise.withResolvers<void>()
     const parcel = fakeParcel({ held: held.promise })

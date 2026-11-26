@@ -37,6 +37,19 @@ function eventually<A>(
   })
 }
 
+// Like eventually, but bounded by the clock: Windows timers make a count of 1 ms sleeps a poor measure of time.
+function within<A>(effect: Effect.Effect<A>, predicate: (value: A) => boolean, ms: number): Effect.Effect<A, Error> {
+  const deadline = Date.now() + ms
+  const attempt: Effect.Effect<A, Error> = Effect.gen(function* () {
+    const value = yield* effect
+    if (predicate(value)) return value
+    if (Date.now() > deadline) return yield* Effect.fail(new Error(`Timed out after ${ms} ms waiting for value`))
+    yield* Effect.promise(() => Bun.sleep(20))
+    return yield* attempt
+  })
+  return attempt
+}
+
 describe("OllamaPlugin", () => {
   it.live("discovers local completion models and native metadata", () =>
     Effect.acquireUseRelease(
@@ -232,6 +245,87 @@ describe("OllamaPlugin", () => {
         }),
       ({ server }) => Effect.promise(() => server.stop(true)),
     ),
+  )
+
+  // A server under load can answer /api/tags after its 1 second limit. Discovery then has no models, and until it is
+  // tried again every node and prompt that names an Ollama model fails with "has no models here" (FU-M3-385: the cli
+  // trust-doors control and the YAML `permissions:auto` row of flow.test.ts on a loaded runner).
+  const slowFirstTags = (delay: number) => {
+    const requests = { tags: 0 }
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        if (request.method === "GET") {
+          requests.tags++
+          if (requests.tags === 1) await Bun.sleep(delay)
+          return Response.json({ models: [summary("late:1b", "late-digest")] })
+        }
+        decodeShowRequest(await request.json())
+        return Response.json(show({ capabilities: ["completion", "tools"], context: 8192 }))
+      },
+    })
+    return { requests, server }
+  }
+
+  it.live(
+    "a first discovery that runs out of time is tried again soon, not after the interval",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => slowFirstTags(1_500)),
+        ({ requests, server }) =>
+          Effect.gen(function* () {
+            const modelState = yield* Model.Service
+            yield* addPlugin(server.url.origin, "1 hour")
+            const model = yield* within(
+              modelState.get(Provider.ID.make("ollama"), Model.ID.make("late:1b")),
+              (item) => item !== undefined,
+              8_000,
+            )
+            expect(model).toBeDefined()
+            expect(requests.tags).toBeGreaterThanOrEqual(2)
+          }),
+        ({ server }) => Effect.promise(() => server.stop(true)),
+      ),
+    15_000,
+  )
+
+  it.live(
+    "a discovery that ran out of time is not kept as a fresh answer for the next plugin of the same server",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => slowFirstTags(1_500)),
+        ({ requests, server }) =>
+          Effect.gen(function* () {
+            const modelState = yield* Model.Service
+            yield* addPlugin(server.url.origin, "30 seconds")
+            // A second Location of the same server starts its plugin; its first discovery asks the server again.
+            yield* addPlugin(server.url.origin, "30 seconds")
+            expect(requests.tags).toBeGreaterThanOrEqual(2)
+            expect(yield* modelState.get(Provider.ID.make("ollama"), Model.ID.make("late:1b"))).toBeDefined()
+          }),
+        ({ server }) => Effect.promise(() => server.stop(true)),
+      ),
+    15_000,
+  )
+
+  // Control: a discovery that answered in time is not asked again before its interval, so a retry after a failure
+  // never becomes polling.
+  it.live(
+    "a discovery that answered in time is not asked again before its interval",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => slowFirstTags(0)),
+        ({ requests, server }) =>
+          Effect.gen(function* () {
+            const modelState = yield* Model.Service
+            yield* addPlugin(server.url.origin, "1 hour")
+            expect(yield* modelState.get(Provider.ID.make("ollama"), Model.ID.make("late:1b"))).toBeDefined()
+            yield* Effect.promise(() => Bun.sleep(2_500))
+            expect(requests.tags).toBe(1)
+          }),
+        ({ server }) => Effect.promise(() => server.stop(true)),
+      ),
+    15_000,
   )
 
   it.live("replaces and restores the same-ID Models.dev provider", () =>
