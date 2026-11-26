@@ -232,6 +232,11 @@ describe("Watcher lifecycle", () => {
 // Windows: an unsubscribe while the watch still has its directory read queued. A watch loses its
 // queued read only when it reports an error or the deletion of its own folder, as the real backend
 // stops it then.
+type ProcessNative = (
+  binding: () => Pick<typeof ParcelWatcher, "subscribe"> | undefined,
+  backend: ParcelWatcher.BackendType | undefined,
+) => Watcher.NativeInterface
+
 function fakeParcel(options?: { held?: Promise<void> }) {
   const watches: { dir: string; fn: ParcelWatcher.SubscribeCallback; queued: boolean }[] = []
   const counts = { subscribes: 0, unsubscribes: 0, unsafe: 0 }
@@ -519,7 +524,11 @@ describe("Watcher native directory watches", () => {
       const binding = () => parcel.binding
       return rooted((root) =>
         Effect.gen(function* () {
-          const { processNative } = yield* Effect.promise(() => import("../fixture/native-watcher"))
+          // ci-always-green adds the fixture; the specifier is a value until then so that the package typechecks, and the
+          // builder replaces this with a plain import of `processNative`.
+          const fixture = "../fixture/native-watcher"
+          const loaded: unknown = yield* Effect.promise(() => import(fixture))
+          const processNative = (loaded as { processNative: ProcessNative }).processNative
           for (const _ of [1, 2]) {
             yield* Effect.scoped(
               Effect.gen(function* () {
