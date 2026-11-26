@@ -10,6 +10,7 @@ import { createTestRenderer } from "@opentui/core/testing"
 import { render } from "@opentui/solid"
 import { createRoot, createSignal } from "solid-js"
 import { createMarkdownRenderer } from "../src/plugin/markdown"
+import { waitForFrame } from "./fixture/frame"
 
 test("unrelated plugin toggles preserve mounted Markdown blocks", async () => {
   const output = await createTestRenderer({ width: 80, height: 12, remote: true, useThread: false })
@@ -33,7 +34,7 @@ test("unrelated plugin toggles preserve mounted Markdown blocks", async () => {
   }, output.renderer)
   try {
     output.renderer.start()
-    await output.waitForFrame((frame) => frame.includes("Custom fence"))
+    await waitForFrame(output, (frame) => frame.includes("Custom fence"))
     const markdown = output.renderer.root.getChildren()[0]
     if (!(markdown instanceof MarkdownRenderable)) throw new Error("Expected Markdown")
     const initial = markdown.getChildren()
@@ -102,20 +103,20 @@ test("changing and removing a Markdown handler refreshes existing messages", asy
   }, output.renderer)
   try {
     output.renderer.start()
-    await output.waitForFrame((frame) => frame.includes("First renderer"))
+    await waitForFrame(output, (frame) => frame.includes("First renderer"))
 
     setSources([{ example: first }, { example: second }])
-    await output.waitForFrame((frame) => frame.includes("Second renderer"))
+    await waitForFrame(output, (frame) => frame.includes("Second renderer"))
 
     setSources([{ example: first }])
-    await output.waitForFrame((frame) => frame.includes("First renderer"))
+    await waitForFrame(output, (frame) => frame.includes("First renderer"))
 
     setSources([])
-    await output.waitForFrame((frame) => frame.includes("Fence content"))
+    await waitForFrame(output, (frame) => frame.includes("Fence content"))
     expect(output.renderer.root.getChildren()[0]?.getChildren()[0]).toBeInstanceOf(CodeRenderable)
 
     setSources([{ example: second }])
-    await output.waitForFrame((frame) => frame.includes("Second renderer"))
+    await waitForFrame(output, (frame) => frame.includes("Second renderer"))
   } finally {
     output.renderer.destroy()
   }

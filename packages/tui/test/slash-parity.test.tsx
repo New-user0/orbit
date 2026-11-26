@@ -6,6 +6,7 @@ import { builtins } from "../src/plugin/builtins"
 import { createAppFixture, promptReady } from "./fixture/app"
 import { listedNames, problems, slashParity, type Registered } from "./fixture/slash-parity"
 import { directory, json } from "./fixture/tui-client"
+import { waitForFrame } from "./fixture/frame"
 
 // Every slash command that the TUI registers is on the list of built-ins, and every built-in the list says is present is
 // registered. The commands come from two places: the keymap of the running app at a session route, which holds what is
@@ -66,7 +67,7 @@ async function reachable() {
           })
       },
     })
-    await setup.waitForFrame((frame) => promptReady(frame))
+    await waitForFrame(setup, (frame) => promptReady(frame))
     for (let attempt = 0; attempt < 100 && found.length === 0; attempt++) await Bun.sleep(20)
     await Bun.sleep(200)
     return found.slice()

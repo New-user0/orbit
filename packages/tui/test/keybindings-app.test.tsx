@@ -7,6 +7,7 @@ import { KeybindingsFile } from "../src/config/keybindings-file"
 import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { directory, json } from "./fixture/tui-client"
+import { waitForFrame } from "./fixture/frame"
 
 // The whole path from a keybindings file in the config folder to a key press in the running app.
 
@@ -24,9 +25,9 @@ test("a key from the keybindings file opens the command in its context", async (
   })
 
   await setup.ready
-  await setup.waitForFrame((frame) => promptReady(frame))
+  await waitForFrame(setup, (frame) => promptReady(frame))
   setup.mockInput.pressKey("h", { ctrl: true, meta: true })
-  await setup.waitForFrame((frame) => frame.includes("esc/enter"))
+  await waitForFrame(setup, (frame) => frame.includes("esc/enter"))
 })
 
 test("the same key does nothing without the file", async () => {
@@ -39,7 +40,7 @@ test("the same key does nothing without the file", async () => {
   })
 
   await setup.ready
-  await setup.waitForFrame((frame) => promptReady(frame))
+  await waitForFrame(setup, (frame) => promptReady(frame))
   setup.mockInput.pressKey("h", { ctrl: true, meta: true })
   await setup.renderOnce()
   await Bun.sleep(100)
@@ -60,11 +61,11 @@ test("says once what it left out of the file, and uses the rest", async () => {
   })
 
   await setup.ready
-  const frame = await setup.waitForFrame((frame) => frame.includes("Keybindings file: 1 note"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("Keybindings file: 1 note"))
   expect(frame).toContain('"no.such.command" is not a command')
   expect(frame).toContain("Edit keybindings")
   setup.mockInput.pressKey("h", { ctrl: true, meta: true })
-  await setup.waitForFrame((frame) => frame.includes("esc/enter"))
+  await waitForFrame(setup, (frame) => frame.includes("esc/enter"))
 })
 
 test.each([
@@ -82,9 +83,9 @@ test.each([
   })
 
   await setup.ready
-  await setup.waitForFrame((frame) => promptReady(frame))
+  await waitForFrame(setup, (frame) => promptReady(frame))
   await setup.mockInput.typeText("hello")
-  await setup.waitForFrame((frame) => frame.includes("› hello"))
+  await waitForFrame(setup, (frame) => frame.includes("› hello"))
   setup.mockInput.pressKey("a", { ctrl: true })
   setup.mockInput.pressKey("k", { ctrl: true })
   await setup.renderOnce()
@@ -114,9 +115,9 @@ test.each([
     })
 
     await setup.ready
-    await setup.waitForFrame((frame) => promptReady(frame))
+    await waitForFrame(setup, (frame) => promptReady(frame))
     await setup.mockInput.typeText("hello")
-    await setup.waitForFrame((frame) => frame.includes("› hello"))
+    await waitForFrame(setup, (frame) => frame.includes("› hello"))
     setup.mockInput.pressKey("x", { ctrl: true, meta: true })
     await setup.renderOnce()
     await Bun.sleep(100)
@@ -170,16 +171,16 @@ test.each([
       },
     })
     await setup.ready
-    await setup.waitForFrame((frame) => promptReady(frame))
+    await waitForFrame(setup, (frame) => promptReady(frame))
 
     // The command list names the command by what it would do and shows the key the keymap holds for it.
     const listed = async () => {
       setup.mockInput.pressKey("p", { ctrl: true })
       await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof InputRenderable)
       await setup.mockInput.typeText("sidebar")
-      const frame = await setup.waitForFrame((frame) => /(Show|Hide) sidebar/.test(frame))
+      const frame = await waitForFrame(setup, (frame) => /(Show|Hide) sidebar/.test(frame))
       setup.mockInput.pressEscape()
-      await setup.waitForFrame((frame) => !frame.includes("Commands"))
+      await waitForFrame(setup, (frame) => !frame.includes("Commands"))
       return frame.split("\n").find((line) => /(Show|Hide) sidebar/.test(line))
     }
 
@@ -205,9 +206,9 @@ test("a change to the file while the app runs reaches the keys of the text area 
   })
 
   await setup.ready
-  await setup.waitForFrame((frame) => promptReady(frame))
+  await waitForFrame(setup, (frame) => promptReady(frame))
   await setup.mockInput.typeText("hello")
-  await setup.waitForFrame((frame) => frame.includes("› hello"))
+  await waitForFrame(setup, (frame) => frame.includes("› hello"))
   setup.mockInput.pressKey("a", { ctrl: true })
   setup.mockInput.pressKey("g", { ctrl: true })
   await setup.renderOnce()
@@ -339,19 +340,19 @@ test("the keybindings command writes the template where none exists and opens th
     })
 
     await setup.ready
-    await setup.waitForFrame((frame) => promptReady(frame))
+    await waitForFrame(setup, (frame) => promptReady(frame))
     expect(await Bun.file(file).exists()).toBe(false)
     setup.mockInput.pressKey("p", { ctrl: true })
     await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof InputRenderable)
     await setup.mockInput.typeText("Edit keybindings")
-    await setup.waitForFrame((frame) => /Edit keybindings\s+System/.test(frame))
+    await waitForFrame(setup, (frame) => /Edit keybindings\s+System/.test(frame))
     setup.mockInput.pressEnter()
     await setup.waitFor(() => Bun.file(marker).exists())
 
     expect(JSON.parse(await readFile(marker, "utf8"))).toEqual([file])
     expect(await readFile(file, "utf8")).toBe(KeybindingsFile.template())
     // The terminal is the app's again.
-    await setup.waitForFrame((frame) => promptReady(frame))
+    await waitForFrame(setup, (frame) => promptReady(frame))
   } finally {
     if (before.visual === undefined) delete process.env.VISUAL
     else process.env.VISUAL = before.visual

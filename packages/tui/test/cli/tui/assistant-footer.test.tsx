@@ -12,6 +12,7 @@ import { errorMessage } from "../../../src/util/error"
 import { emptyThemeSource } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { waitForFrame } from "../../fixture/frame"
 
 async function draw(label: string) {
   const fixture = assistantFooterFixtures().find((item) => item.label === label)!
@@ -46,7 +47,7 @@ async function draw(label: string) {
     { width: 100, height: 6 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Build"))
+  await waitForFrame(app, (frame) => frame.includes("Build"))
   const frame = app.captureCharFrame()
   app.renderer.destroy()
   return frame

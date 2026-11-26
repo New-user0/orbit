@@ -17,6 +17,7 @@ import { stringWidth } from "../../../src/util/string-width"
 import { emptyThemeSource, tmpdir } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { waitForFrame } from "../../fixture/frame"
 
 async function renderSelect(
   root: string,
@@ -84,7 +85,7 @@ async function renderSelect(
 
   const app = await testRender(() => <Harness />, { width: 80, height: 20, kittyKeyboard: true })
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Items"))
+  await waitForFrame(app, (frame) => frame.includes("Items"))
   await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
   return app
 }
@@ -163,7 +164,7 @@ async function mountSelect<T>(
 
   const app = await testRender(() => <Harness />, { width: 80, height: 24, kittyKeyboard: true })
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Mutable options"))
+  await waitForFrame(app, (frame) => frame.includes("Mutable options"))
   if (select?.renderFilter !== false)
     await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
   return { app, moved, replaceOptions, replaceCurrent, selected }
@@ -232,7 +233,7 @@ test("reveals a focus target that arrives below the viewport", async () => {
       { title: "Root", value: "root" },
       ...Array.from({ length: 30 }, (_, index) => ({ title: `Checkout ${index}`, value: `checkout-${index}` })),
     ])
-    await select.app.waitForFrame((frame) => frame.includes("Checkout 29"))
+    await waitForFrame(select.app, (frame) => frame.includes("Checkout 29"))
     select.app.mockInput.pressEnter()
     await select.app.waitFor(() => select.selected.length === 1)
     expect(select.selected).toEqual(["checkout-29"])
@@ -259,7 +260,7 @@ test("ctrl+c clears a dialog filter before closing the dialog", async () => {
     expect(select.app.captureCharFrame()).toContain("Mutable options")
 
     select.app.mockInput.pressKey("c", { ctrl: true })
-    await select.app.waitForFrame((frame) => !frame.includes("Mutable options"))
+    await waitForFrame(select.app, (frame) => !frame.includes("Mutable options"))
   } finally {
     select.app.renderer.destroy()
   }
@@ -282,7 +283,7 @@ test("ctrl+c clears a dialog text selection before closing the dialog", async ()
     expect(select.app.captureCharFrame()).toContain("Mutable options")
 
     select.app.mockInput.pressKey("c", { ctrl: true })
-    await select.app.waitForFrame((frame) => !frame.includes("Mutable options"))
+    await waitForFrame(select.app, (frame) => !frame.includes("Mutable options"))
   } finally {
     select.app.renderer.destroy()
   }
@@ -298,7 +299,7 @@ test("renders the complete truncated footer within the option row", async () => 
   const select = await mountSelect(tmp.path, [{ title, footer, value: "project" }])
 
   try {
-    await select.app.waitForFrame((frame) => frame.includes(footer))
+    await waitForFrame(select.app, (frame) => frame.includes(footer))
     expect(select.app.captureCharFrame()).toContain(footer)
   } finally {
     select.app.renderer.destroy()
@@ -316,7 +317,7 @@ test("renders actions with a current selection", async () => {
   )
 
   try {
-    await app.waitForFrame((frame) => frame.includes("delete"))
+    await waitForFrame(app, (frame) => frame.includes("delete"))
   } finally {
     app.renderer.destroy()
   }
@@ -427,7 +428,7 @@ test("renders one gap before an empty state", async () => {
   )
 
   try {
-    await app.waitForFrame((frame) => frame.includes("No items available"))
+    await waitForFrame(app, (frame) => frame.includes("No items available"))
     const lines = app
       .captureCharFrame()
       .split("\n")
@@ -451,7 +452,7 @@ test("footer actions run when filtering leaves no selected row", async () => {
 
   try {
     for (const key of "missing") app.mockInput.pressKey(key)
-    await app.waitForFrame((frame) => frame.includes("No results found"))
+    await waitForFrame(app, (frame) => frame.includes("No results found"))
 
     app.mockInput.pressKey("d", { ctrl: true })
     app.mockInput.pressTab()
@@ -494,7 +495,7 @@ test("selects the new final option immediately after removing the selected final
     select.app.mockInput.pressArrow("down")
     await select.app.waitFor(() => select.moved.at(-1) === "third")
     select.replaceOptions(options.slice(0, -1))
-    await select.app.waitForFrame((frame) => !frame.includes("third"))
+    await waitForFrame(select.app, (frame) => !frame.includes("third"))
 
     select.app.mockInput.pressEnter()
     await select.app.waitFor(() => select.selected.length === 1)
@@ -511,12 +512,12 @@ test("selects a repopulated option after removing the only option", async () => 
 
   try {
     select.replaceOptions([])
-    await select.app.waitForFrame((frame) => frame.includes("No items available"))
+    await waitForFrame(select.app, (frame) => frame.includes("No items available"))
     select.app.mockInput.pressEnter()
     expect(select.selected).toEqual([])
 
     select.replaceOptions([{ title: "replacement", value: "replacement" }])
-    await select.app.waitForFrame((frame) => frame.includes("replacement"))
+    await waitForFrame(select.app, (frame) => frame.includes("replacement"))
     select.app.mockInput.pressEnter()
     await select.app.waitFor(() => select.selected.length === 1)
 
@@ -537,10 +538,10 @@ test("keeps the cursor index while options are temporarily empty", async () => {
     select.app.mockInput.pressArrow("down")
     await select.app.waitFor(() => select.moved.at(-1) === "third")
     select.replaceOptions([])
-    await select.app.waitForFrame((frame) => frame.includes("No items available"))
+    await waitForFrame(select.app, (frame) => frame.includes("No items available"))
 
     select.replaceOptions(options)
-    await select.app.waitForFrame((frame) => frame.includes("third"))
+    await waitForFrame(select.app, (frame) => frame.includes("third"))
     select.app.mockInput.pressEnter()
     await select.app.waitFor(() => select.selected.length === 1)
 
@@ -557,7 +558,7 @@ test("keeps the current option selected when options reorder", async () => {
 
   try {
     select.replaceOptions([options[1], options[2], options[0]])
-    await select.app.waitForFrame((frame) => frame.indexOf("current") < frame.indexOf("third"))
+    await waitForFrame(select.app, (frame) => frame.indexOf("current") < frame.indexOf("third"))
     select.app.mockInput.pressEnter()
     await select.app.waitFor(() => select.selected.length === 1)
 
@@ -605,7 +606,7 @@ test.each([false, 0, "", null, "current", undefined])(
 
     try {
       await select.app.mockInput.typeText("Item-0")
-      await select.app.waitForFrame((frame) => frame.includes("Item-0") && !frame.includes("Item-1"))
+      await waitForFrame(select.app, (frame) => frame.includes("Item-0") && !frame.includes("Item-1"))
       select.app.mockInput.pressKey("c", { ctrl: true })
       await select.app.waitForVisualIdle()
       select.app.mockInput.pressEnter()
@@ -633,15 +634,15 @@ test("shows no-match and still closes after a flat filter goes empty", async () 
   )
 
   try {
-    await select.app.waitForFrame((frame) => frame.includes("models.dev"))
+    await waitForFrame(select.app, (frame) => frame.includes("models.dev"))
     await select.app.mockInput.typeText("models")
-    await select.app.waitForFrame((frame) => frame.includes("models.dev") && !frame.includes("orbit2"))
+    await waitForFrame(select.app, (frame) => frame.includes("models.dev") && !frame.includes("orbit2"))
     await select.app.mockInput.typeText(" missing")
-    await select.app.waitForFrame((frame) => frame.includes("No results found"))
+    await waitForFrame(select.app, (frame) => frame.includes("No results found"))
     expect(select.app.captureCharFrame()).not.toContain("models.dev")
 
     select.app.mockInput.pressEscape()
-    await select.app.waitForFrame((frame) => !frame.includes("Mutable options") && !frame.includes("No results found"))
+    await waitForFrame(select.app, (frame) => !frame.includes("Mutable options") && !frame.includes("No results found"))
   } finally {
     select.app.renderer.destroy()
   }
@@ -658,7 +659,7 @@ test("keeps the first row selected when current is only a marker", async () => {
       project,
       { title: "current session", value: "current" },
     ])
-    await select.app.waitForFrame((frame) => frame.includes("recent session"))
+    await waitForFrame(select.app, (frame) => frame.includes("recent session"))
     select.app.mockInput.pressEnter()
     await select.app.waitFor(() => select.selected.length === 1)
 

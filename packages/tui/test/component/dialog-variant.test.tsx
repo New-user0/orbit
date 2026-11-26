@@ -3,6 +3,7 @@ import { CliRenderEvents, InputRenderable } from "@opentui/core"
 import { once } from "node:events"
 import { DialogVariant } from "../../src/component/dialog-variant"
 import { agent, model, renderLocal } from "../fixture/local"
+import { waitForFrame } from "../fixture/frame"
 
 test("variant picker can explicitly reset an agent variant", async () => {
   await using setup = await renderLocal({
@@ -11,7 +12,7 @@ test("variant picker can explicitly reset an agent variant", async () => {
   })
   expect(setup.local.model.variant.current()).toBe("high")
   setup.dialog.replace(() => <DialogVariant />)
-  await setup.waitForFrame((frame) => frame.includes("Select variant") && frame.includes("Default"))
+  await waitForFrame(setup, (frame) => frame.includes("Select variant") && frame.includes("Default"))
   // The dialog paints before its deferred filter focus is ready for typing.
   if (!(setup.renderer.currentFocusedRenderable instanceof InputRenderable))
     await once(setup.renderer, CliRenderEvents.FOCUSED_RENDERABLE)

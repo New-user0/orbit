@@ -5,6 +5,7 @@ import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
+import { waitForFrame } from "./fixture/frame"
 
 test.each(["success", "failure", "home"])("Copy session ID from Ctrl+P (%s)", async (mode) => {
   await using state = await tmpdir()
@@ -56,9 +57,9 @@ test.each(["success", "failure", "home"])("Copy session ID from Ctrl+P (%s)", as
       expect(copy).not.toHaveBeenCalled()
       return
     }
-    await setup.waitForFrame((frame) => /Copy session ID\s+Session/.test(frame))
+    await waitForFrame(setup, (frame) => /Copy session ID\s+Session/.test(frame))
     setup.mockInput.pressEnter()
-    const frame = await setup.waitForFrame((frame) =>
+    const frame = await waitForFrame(setup, (frame) =>
       frame.includes(mode === "success" ? "Session ID copied to clipboard!" : "Failed to copy session ID"),
     )
     expect(copy).toHaveBeenCalledTimes(1)

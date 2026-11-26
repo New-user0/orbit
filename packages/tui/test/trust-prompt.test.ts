@@ -3,6 +3,7 @@ import { expect, test } from "bun:test"
 import { createAppFixture } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { directory, json, type FetchHandler } from "./fixture/tui-client"
+import { waitForFrame } from "./fixture/frame"
 
 const title = "Trust this folder?"
 // Whether the question is on screen and asks about the folder, which is what its first line names.
@@ -38,7 +39,7 @@ test.each([
   })
 
   await setup.waitFor(() => reads > 0)
-  await setup.waitForFrame((frame) => frame.includes("Ask anything"))
+  await waitForFrame(setup, (frame) => frame.includes("Ask anything"))
   await setup.flush()
 
   expect(setup.captureCharFrame()).not.toContain(title)
@@ -98,7 +99,7 @@ test("a session is asked about for its own folder, which is not the one the term
     },
   })
 
-  const frame = await setup.waitForFrame((frame) => frame.includes(title))
+  const frame = await waitForFrame(setup, (frame) => frame.includes(title))
 
   expect(frame).toContain(elsewhere)
   expect(asked).toContain(directory)
@@ -136,22 +137,22 @@ test("the question about the folder the terminal UI started in is not answered f
   })
 
   // The folder the terminal UI started in is asked about while the session is still being fetched.
-  await setup.waitForFrame((frame) => asksAbout(frame, directory))
+  await waitForFrame(setup, (frame) => asksAbout(frame, directory))
   opened.resolve()
 
   // Once the session's folder is in view the question about the first one is no longer the one on screen, so nothing
   // chosen now can be taken for an answer about the folder that is.
-  await setup.waitForFrame((frame) => !frame.includes(title))
+  await waitForFrame(setup, (frame) => !frame.includes(title))
   setup.mockInput.pressArrow("up")
   setup.mockInput.pressEnter()
   await setup.renderOnce()
   expect(grants).toEqual([])
 
   answered.resolve()
-  await setup.waitForFrame((frame) => asksAbout(frame, elsewhere))
+  await waitForFrame(setup, (frame) => asksAbout(frame, elsewhere))
   setup.mockInput.pressArrow("up")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => !frame.includes(title))
+  await waitForFrame(setup, (frame) => !frame.includes(title))
   expect(grants).toEqual([{ directory: elsewhere, trust: true, persist: true }])
 })
 
@@ -171,5 +172,5 @@ test("Home asks about a folder whose only held-back config is agent text", async
       } satisfies TrustStatus)
     },
   })
-  await setup.waitForFrame((frame) => asksAbout(frame, "/tmp/orbit"))
+  await waitForFrame(setup, (frame) => asksAbout(frame, "/tmp/orbit"))
 })

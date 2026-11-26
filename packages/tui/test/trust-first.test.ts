@@ -3,6 +3,7 @@ import { expect, test } from "bun:test"
 import { createAppFixture } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { directory, json, type FetchHandler } from "./fixture/tui-client"
+import { waitForFrame } from "./fixture/frame"
 
 // trust-first: as the reference does, the terminal UI asks about the folder it starts in whenever that folder is not
 // trusted, whatever the folder holds, before the person can work there, and offers two answers: trust it, or leave. The
@@ -48,7 +49,7 @@ test("the folder the terminal UI starts in is asked about when it holds nothing 
   const server = trustServer(() => clean(root))
   await using setup = await createAppFixture({ state: state.path, fetch: server.fetch })
 
-  const frame = await setup.waitForFrame((frame) => frame.includes(title))
+  const frame = await waitForFrame(setup, (frame) => frame.includes(title))
 
   expect(frame).toContain(root)
   // It asks whether the person knows where the folder came from, and says what trusting it lets Orbit do there.
@@ -67,7 +68,7 @@ test("choosing Exit ends the terminal UI and grants nothing", async () => {
   const server = trustServer(() => clean(root))
   await using setup = await createAppFixture({ state: state.path, fetch: server.fetch })
 
-  await setup.waitForFrame((frame) => frame.includes(title))
+  await waitForFrame(setup, (frame) => frame.includes(title))
   setup.mockInput.pressArrow("down")
   setup.mockInput.pressEnter()
 
@@ -83,7 +84,7 @@ test("Escape on the question ends the terminal UI as well", async () => {
   const server = trustServer(() => clean(root))
   await using setup = await createAppFixture({ state: state.path, fetch: server.fetch })
 
-  await setup.waitForFrame((frame) => frame.includes(title))
+  await waitForFrame(setup, (frame) => frame.includes(title))
   setup.mockInput.pressEscape()
 
   await setup.waitFor(() => setup.renderer.isDestroyed)
@@ -97,10 +98,10 @@ test("choosing Trust this folder trusts it for good, and the question does not c
   const server = trustServer(() => clean(root))
   await using setup = await createAppFixture({ state: state.path, fetch: server.fetch })
 
-  await setup.waitForFrame((frame) => frame.includes(title))
+  await waitForFrame(setup, (frame) => frame.includes(title))
   setup.mockInput.pressEnter()
 
-  await setup.waitForFrame((frame) => !frame.includes(title) && frame.includes("Ask anything"))
+  await waitForFrame(setup, (frame) => !frame.includes(title) && frame.includes("Ask anything"))
   expect(server.grants).toEqual([{ trust: true, persist: true }])
   expect(setup.renderer.isDestroyed).toBe(false)
 })
@@ -110,7 +111,7 @@ test("a home directory is offered trust until Orbit restarts, or exit", async ()
   const server = trustServer(() => ({ ...clean(root), persistent: false }))
   await using setup = await createAppFixture({ state: state.path, fetch: server.fetch })
 
-  const frame = await setup.waitForFrame((frame) => frame.includes(title))
+  const frame = await waitForFrame(setup, (frame) => frame.includes(title))
 
   expect(frame).toContain("Trust until Orbit restarts")
   expect(frame).toContain("Exit")
@@ -164,12 +165,12 @@ test("a session in another folder that holds nothing back is asked about, and de
     },
   })
 
-  const frame = await setup.waitForFrame((frame) => frame.includes(title) && frame.includes(elsewhere))
+  const frame = await waitForFrame(setup, (frame) => frame.includes(title) && frame.includes(elsewhere))
   expect(frame).toContain("Not now")
   expect(frame).not.toContain("Exit")
 
   setup.mockInput.pressEscape()
-  await setup.waitForFrame((frame) => !frame.includes(title))
+  await waitForFrame(setup, (frame) => !frame.includes(title))
   expect(setup.renderer.isDestroyed).toBe(false)
   expect(grants).toEqual([])
 })
@@ -184,7 +185,7 @@ test("when the trust read fails, the question opens anyway and names the folder 
       url.pathname === "/api/location/trust" ? new Response("unavailable", { status: 503 }) : undefined,
   })
 
-  const frame = await setup.waitForFrame((frame) => frame.includes(title))
+  const frame = await waitForFrame(setup, (frame) => frame.includes(title))
 
   expect(frame).toContain(directory)
   expect(frame).toContain("Exit")
@@ -196,7 +197,7 @@ test("the n key on the question ends the terminal UI and grants nothing", async 
   const server = trustServer(() => clean(root))
   await using setup = await createAppFixture({ state: state.path, fetch: server.fetch })
 
-  await setup.waitForFrame((frame) => frame.includes(title))
+  await waitForFrame(setup, (frame) => frame.includes(title))
   // A status other than the one the n key leaves, so that the 0 below is the terminal UI's own.
   process.exitCode = 1
   setup.mockInput.pressKey("n")

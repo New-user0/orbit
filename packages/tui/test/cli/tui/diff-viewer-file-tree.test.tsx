@@ -12,6 +12,7 @@ import {
   allExpandedFileTreeDirectories,
   buildFileTree,
 } from "../../../src/feature-plugins/system/diff-viewer-file-tree-utils"
+import { waitForFrame } from "../../fixture/frame"
 
 describe("DiffViewerFileTree", () => {
   test("defaults to text-line file icons and triangle folders with straight rails", async () => {
@@ -242,7 +243,7 @@ async function renderFrame(component: () => JSX.Element, mode: "dark" | "light" 
     { width: 40, height: 20 },
   )
   try {
-    return await app.waitForFrame((frame) => frame.includes("Files"))
+    return await waitForFrame(app, (frame) => frame.includes("Files"))
   } finally {
     app.renderer.destroy()
   }

@@ -14,6 +14,7 @@ import { emptyThemeSource } from "../../fixture/fixture"
 import { controlFree } from "../../fixture/rewind"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { waitForFrame } from "../../fixture/frame"
 
 // clients-ux-23: the `/context` view's story draws the real view from fixtures and asks no server. Its fixtures cover a
 // usual session, one near full with suggestions, automatic compaction off, a million-token window, an unknown window
@@ -62,7 +63,7 @@ async function render(width: number) {
     { width, height: 80, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("storybook / context"))
+  await waitForFrame(app, (frame) => frame.includes("storybook / context"))
   return app
 }
 
@@ -75,7 +76,7 @@ test("the story is listed under the dialog's title", () => {
 test.each([64, 120])("the story draws the real view for each fixture and resets, at %i columns", async (width) => {
   const app = await render(width)
   try {
-    const first = await app.waitForFrame((frame) => frame.includes("Estimated breakdown") && fixture(frame) === "typical")
+    const first = await waitForFrame(app, (frame) => frame.includes("Estimated breakdown") && fixture(frame) === "typical")
     for (const control of ["ctrl+g", "ctrl+x"]) expect(first).toContain(control)
     expect(first).toContain("ORBIT.md")
 
@@ -84,7 +85,7 @@ test.each([64, 120])("the story draws the real view for each fixture and resets,
     let last = "typical"
     for (let press = 0; press < 8 && !seen.has("hostile names"); press++) {
       app.mockInput.pressKey("g", { ctrl: true })
-      const frame = await app.waitForFrame((frame) => fixture(frame) !== undefined && fixture(frame) !== last)
+      const frame = await waitForFrame(app, (frame) => fixture(frame) !== undefined && fixture(frame) !== last)
       last = fixture(frame)!
       seen.add(last)
       if (last === "near full") expect(frame).toContain("Ways to free room")
@@ -96,7 +97,7 @@ test.each([64, 120])("the story draws the real view for each fixture and resets,
     expect([...seen]).toEqual(["typical", "near full", "auto compaction off", "1M window", "unknown window", "hostile names"])
 
     app.mockInput.pressKey("x", { ctrl: true })
-    await app.waitForFrame((frame) => fixture(frame) === "typical")
+    await waitForFrame(app, (frame) => fixture(frame) === "typical")
   } finally {
     app.renderer.destroy()
   }

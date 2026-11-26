@@ -13,6 +13,7 @@ import { emptyThemeSource } from "../../fixture/fixture"
 import { until } from "../../fixture/rewind"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { waitForFrame } from "../../fixture/frame"
 
 // m5-quality: the storybook's index opens each story with a key of its own. It bound the digits 1 to 14 in one layer,
 // where "10" to "14" are two strokes that start with "1", so the keymap refused those bindings with a
@@ -68,7 +69,7 @@ async function render() {
     { width: 100, height: 34, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("fixture-driven simulations"))
+  await waitForFrame(app, (frame) => frame.includes("fixture-driven simulations"))
   return { app, opened }
 }
 
@@ -86,7 +87,7 @@ test("each story has a key of its own, drawn on its row, that opens it, and the 
   try {
     const { app, opened } = await render()
     try {
-      const frame = await app.waitForFrame((frame) => frame.includes("storybook"))
+      const frame = await waitForFrame(app, (frame) => frame.includes("storybook"))
       // Fourteen stories, each drawn behind its key.
       expect(rows(frame).map((row) => row.key)).toEqual(KEYS)
 

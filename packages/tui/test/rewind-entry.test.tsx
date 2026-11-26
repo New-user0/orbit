@@ -12,6 +12,7 @@ import {
   until,
   withShell,
 } from "./fixture/rewind"
+import { waitForFrame } from "./fixture/frame"
 
 // clients-ux-5 part 2: every way into the rewind picker (class 12). `/rewind` and its alias `/checkpoint`, Esc pressed
 // twice on an empty prompt of an idle session, and the message dialog's Rewind, which opens step 2 for that prompt or,
@@ -36,10 +37,10 @@ const loaded = (frame: string) => frame.includes("Renamed it.")
 test("/checkpoint opens the same picker as /rewind", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path })
-  await setup.waitForFrame(loaded)
+  await waitForFrame(setup, loaded)
   await setup.mockInput.typeText("/checkpoint")
   setup.mockInput.pressEnter()
-  const frame = await setup.waitForFrame((frame) => frame.includes(listHeading))
+  const frame = await waitForFrame(setup, (frame) => frame.includes(listHeading))
   expect(frame).toContain("Rename the helper")
   expect(frame).toContain("(current)")
 })
@@ -47,10 +48,10 @@ test("/checkpoint opens the same picker as /rewind", async () => {
 test("Esc twice on an empty prompt of an idle session opens the picker", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path })
-  await setup.waitForFrame(loaded)
+  await waitForFrame(setup, loaded)
   setup.mockInput.pressEscape()
   setup.mockInput.pressEscape()
-  const frame = await setup.waitForFrame((frame) => frame.includes(listHeading), { maxPasses: 100 })
+  const frame = await waitForFrame(setup, (frame) => frame.includes(listHeading), { maxPasses: 100 })
   expect(frame).toContain("(current)")
   expect(setup.actions()).toEqual([])
 })
@@ -59,11 +60,11 @@ test("Esc twice on an empty prompt of an idle session opens the picker", async (
 test("Esc twice 400 ms apart on an empty prompt of an idle session opens the picker", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path })
-  await setup.waitForFrame(loaded)
+  await waitForFrame(setup, loaded)
   setup.mockInput.pressEscape()
   await Bun.sleep(400)
   setup.mockInput.pressEscape()
-  const frame = await setup.waitForFrame((frame) => frame.includes(listHeading), { maxPasses: 100 })
+  const frame = await waitForFrame(setup, (frame) => frame.includes(listHeading), { maxPasses: 100 })
   expect(frame).toContain("(current)")
   expect(setup.actions()).toEqual([])
 })
@@ -73,7 +74,7 @@ test("Esc twice 400 ms apart on an empty prompt of an idle session opens the pic
 test("Esc once, Esc twice slowly, or Esc twice over a typed prompt does not open the picker", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path })
-  await setup.waitForFrame(loaded)
+  await waitForFrame(setup, loaded)
   setup.mockInput.pressEscape()
   await Bun.sleep(300)
   await setup.renderOnce()
@@ -85,7 +86,7 @@ test("Esc once, Esc twice slowly, or Esc twice over a typed prompt does not open
   expect(setup.captureCharFrame()).not.toContain(listHeading)
 
   await setup.mockInput.typeText("draft")
-  await setup.waitForFrame((frame) => frame.includes("draft"))
+  await waitForFrame(setup, (frame) => frame.includes("draft"))
   setup.mockInput.pressEscape()
   setup.mockInput.pressEscape()
   await Bun.sleep(300)
@@ -132,10 +133,10 @@ test.each([
     revert: row.revert || undefined,
     answer: (request) => (request.path.endsWith("/inbox") ? json({ data: row.inbox }) : undefined),
   })
-  await setup.waitForFrame((frame) => frame.includes(row.ready))
+  await waitForFrame(setup, (frame) => frame.includes(row.ready))
   if (row.typed) {
     await setup.mockInput.typeText(row.typed)
-    await setup.waitForFrame((frame) => frame.includes(row.typed))
+    await waitForFrame(setup, (frame) => frame.includes(row.typed))
   }
   setup.mockInput.pressEscape()
   setup.mockInput.pressEscape()
@@ -150,31 +151,31 @@ test.each([
 const openFromTimeline = async (setup: Awaited<ReturnType<typeof rewindApp>>, prompt: string) => {
   await setup.mockInput.typeText("/timeline")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => frame.includes("Timeline"))
+  await waitForFrame(setup, (frame) => frame.includes("Timeline"))
   await Bun.sleep(50)
   await setup.mockInput.typeText(prompt)
-  await setup.waitForFrame((frame) => frame.includes(prompt))
+  await waitForFrame(setup, (frame) => frame.includes(prompt))
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => frame.includes("Message Actions"))
+  await waitForFrame(setup, (frame) => frame.includes("Message Actions"))
   await Bun.sleep(50)
   await setup.mockInput.typeText("Rewind")
-  await setup.waitForFrame((frame) => frame.includes("Rewind"))
+  await waitForFrame(setup, (frame) => frame.includes("Rewind"))
   setup.mockInput.pressEnter()
 }
 
 test("the message dialog's Rewind opens step 2 for that prompt, and Esc closes the picker instead of going back", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path })
-  await setup.waitForFrame(loaded)
+  await waitForFrame(setup, loaded)
   await openFromTimeline(setup, "Rename the helper")
 
-  const frame = await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("Code and conversation"))
   expect(frame).toContain("Rewind to just before this prompt:")
   expect(frame).not.toContain(listHeading)
   expect(setup.dryRunsSent()).toEqual(["msg_0003"])
 
   setup.mockInput.pressEscape()
-  const closed = await setup.waitForFrame((frame) => !frame.includes("Code and conversation"))
+  const closed = await waitForFrame(setup, (frame) => !frame.includes("Code and conversation"))
   expect(closed).not.toContain(listHeading)
   expect(setup.actions()).toEqual([])
 })
@@ -188,9 +189,9 @@ test("n does nothing while a picker opened from the message dialog checks files,
     state: state.path,
     answer: (request) => (request.path.endsWith("/revert/files") && request.body?.dryRun ? held.promise : undefined),
   })
-  await setup.waitForFrame(loaded)
+  await waitForFrame(setup, loaded)
   await openFromTimeline(setup, "Rename the helper")
-  await setup.waitForFrame((frame) => frame.includes("Checking files…"))
+  await waitForFrame(setup, (frame) => frame.includes("Checking files…"))
   setup.mockInput.pressKey("n")
   await Bun.sleep(150)
   await setup.renderOnce()
@@ -201,13 +202,13 @@ test("n does nothing while a picker opened from the message dialog checks files,
       data: { canRewind: true, filesChanged: ["/tmp/orbit/src/a.ts"], insertions: 3, deletions: 5 },
     }),
   )
-  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  await waitForFrame(setup, (frame) => frame.includes("Code and conversation"))
   setup.mockInput.pressKey("n")
   await Bun.sleep(150)
   await setup.renderOnce()
   expect(setup.captureCharFrame()).toContain("Code and conversation")
   setup.mockInput.pressEscape()
-  await setup.waitForFrame((frame) => !frame.includes("Code and conversation"))
+  await waitForFrame(setup, (frame) => !frame.includes("Code and conversation"))
   expect(setup.actions()).toEqual([])
 })
 
@@ -267,12 +268,12 @@ test.each([
         ? json({ data: { canRewind: row.canRewind, filesChanged: row.filesChanged, insertions: 0, deletions: 1 } })
         : undefined,
   })
-  await setup.waitForFrame(loaded)
-  await setup.waitForFrame((frame) => frame.includes("Quick question"))
+  await waitForFrame(setup, loaded)
+  await waitForFrame(setup, (frame) => frame.includes("Quick question"))
   await openFromTimeline(setup, "Quick question")
 
   if (!row.shortcut) {
-    const frame = await setup.waitForFrame((frame) => frame.includes("Do nothing"))
+    const frame = await waitForFrame(setup, (frame) => frame.includes("Do nothing"))
     expect(frame).toContain(row.filesChanged.length ? "Code and conversation" : "Conversation only")
     expect(frame).toContain("Quick question")
     expect(setup.actions()).toEqual([])
@@ -282,7 +283,7 @@ test.each([
   expect(setup.actions().filter((action) => action !== "interrupt" && action !== "wait")).toEqual([
     `stage ${JSON.stringify({ messageID: "msg_0007", files: false })}`,
   ])
-  const frame = await setup.waitForFrame(
+  const frame = await waitForFrame(setup,
     (frame) => !frame.includes("Message Actions") && linesWith(frame, "Quick question") === 2,
     { maxPasses: 200 },
   )
@@ -303,7 +304,7 @@ test.each([
     messages: [...conversation, quick, reply(row.content, false)],
   })
   // Esc interrupts only once the app knows the session runs, which its interrupt hint shows.
-  await setup.waitForFrame((frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
+  await waitForFrame(setup, (frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
     maxPasses: 200,
   })
   setup.mockInput.pressEscape()
@@ -319,7 +320,7 @@ test.each([
   expect(setup.actions().filter((action) => action.startsWith("stage") || action.startsWith("files"))).toEqual([
     `stage ${JSON.stringify({ messageID: "msg_0007", files: false })}`,
   ])
-  await setup.waitForFrame((frame) => linesWith(frame, "Quick question") === 2, { maxPasses: 200 })
+  await waitForFrame(setup, (frame) => linesWith(frame, "Quick question") === 2, { maxPasses: 200 })
 })
 
 // Opened from the message dialog, the picker has no list to go back to: Do nothing closes it, as Esc does. The newest
@@ -327,13 +328,13 @@ test.each([
 test("Do nothing on a picker opened from the message dialog closes it", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path })
-  await setup.waitForFrame(loaded)
+  await waitForFrame(setup, loaded)
   await openFromTimeline(setup, "Fix the")
-  await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  await waitForFrame(setup, (frame) => frame.includes("Code and conversation"))
   expect(setup.dryRunsSent()).toEqual(["msg_0005"])
   for (let index = 0; index < 3; index++) setup.mockInput.pressArrow("down")
   setup.mockInput.pressEnter()
-  const closed = await setup.waitForFrame((frame) => !frame.includes("Do nothing"))
+  const closed = await waitForFrame(setup, (frame) => !frame.includes("Do nothing"))
   expect(closed).not.toContain(listHeading)
   expect(closed).not.toContain("Checking files")
   expect(setup.actions()).toEqual([])
@@ -361,7 +362,7 @@ const recalledAgent = {
 type Composer = Awaited<ReturnType<typeof rewindApp>>
 const recall = async (setup: Composer, text: string) => {
   setup.mockInput.pressArrow("up")
-  await setup.waitForFrame((frame) => frame.includes(`› ${text}`), { maxPasses: 200 })
+  await waitForFrame(setup, (frame) => frame.includes(`› ${text}`), { maxPasses: 200 })
 }
 
 test.each([
@@ -378,7 +379,7 @@ test.each([
     compose: async (setup: Composer) => {
       await setup.mockInput.typeText("Look ")
       await setup.mockInput.pasteBracketedText("one\ntwo\nthree")
-      await setup.waitForFrame((frame) => frame.includes("[Pasted ~3 lines]"), { maxPasses: 200 })
+      await waitForFrame(setup, (frame) => frame.includes("[Pasted ~3 lines]"), { maxPasses: 200 })
     },
     route: "/prompt",
     shown: "Look one",
@@ -407,7 +408,7 @@ test.each([
     label: "a `!` command before it",
     compose: async (setup: Composer) => {
       await setup.mockInput.typeText("!")
-      await setup.waitForFrame((frame) => frame.includes("Shell"))
+      await waitForFrame(setup, (frame) => frame.includes("Shell"))
       await setup.mockInput.typeText("git status")
       setup.mockInput.pressEnter()
       await until(() => setup.requests.some((request) => request.path.endsWith("/shell")), "the shell request")
@@ -452,7 +453,7 @@ test.each([
       return json({ data: { id: request.body.id, sessionID, time: { created: Date.now() }, ...item } })
     },
   })
-  await setup.waitForFrame(loaded)
+  await waitForFrame(setup, loaded)
   await row.compose(setup)
   setup.mockInput.pressEnter()
   await until(() => setup.requests.some((request) => request.path.endsWith(row.route)), "the submit")
@@ -487,7 +488,7 @@ test.each([
     durable: { aggregateID: sessionID, seq: delivered + 1, version: 1 },
     data: { sessionID },
   })
-  await setup.waitForFrame((frame) => frame.includes(row.shown) && frame.includes("esc interrupt"), {
+  await waitForFrame(setup, (frame) => frame.includes(row.shown) && frame.includes("esc interrupt"), {
     maxPasses: 200,
   })
   const texts = async () =>
@@ -508,7 +509,7 @@ test.each([
     `stage ${JSON.stringify({ messageID, files: false })}`,
   ])
   // The prompt is back in the input, below its own row in the transcript.
-  await setup.waitForFrame((frame) => linesWith(frame, row.shown) === 2, { maxPasses: 200 })
+  await waitForFrame(setup, (frame) => linesWith(frame, row.shown) === 2, { maxPasses: 200 })
   // The file is rewritten in the background, so it is read until it holds the result, after a pause that lets a wrong
   // drop of an entry that stays reach the file first.
   await Bun.sleep(300)
@@ -526,17 +527,17 @@ test.each([
 test("a click on a prompt opens the message dialog, whose Rewind opens step 2 for that prompt", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path })
-  const frame = await setup.waitForFrame(loaded)
+  const frame = await waitForFrame(setup, loaded)
   const lines = frame.split("\n")
   const row = lines.findIndex((line) => line.includes("Rename the helper"))
   await setup.mockMouse.click(lines[row].indexOf("Rename the helper") + 1, row)
-  await setup.waitForFrame((frame) => frame.includes("Message Actions"))
+  await waitForFrame(setup, (frame) => frame.includes("Message Actions"))
   await Bun.sleep(50)
   await setup.mockInput.typeText("Rewind")
-  const actions = await setup.waitForFrame((frame) => frame.includes("roll back to just before this prompt"))
+  const actions = await waitForFrame(setup, (frame) => frame.includes("roll back to just before this prompt"))
   expect(actions).toMatch(/Rewind +roll back to just before this prompt *$/m)
   setup.mockInput.pressEnter()
-  const confirm = await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  const confirm = await waitForFrame(setup, (frame) => frame.includes("Code and conversation"))
   expect(confirm).toContain("Rewind to just before this prompt:")
   expect(setup.dryRunsSent()).toEqual(["msg_0003"])
   expect(setup.actions()).toEqual([])
@@ -547,9 +548,9 @@ test("a click on a prompt opens the message dialog, whose Rewind opens step 2 fo
 test("the message dialog's Rewind on a running session stops it first and offers the code options", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path, running: true })
-  await setup.waitForFrame(loaded)
+  await waitForFrame(setup, loaded)
   await openFromTimeline(setup, "Rename the helper")
-  const confirm = await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+  const confirm = await waitForFrame(setup, (frame) => frame.includes("Code and conversation"))
   expect(confirm).toContain("Rewind to just before this prompt:")
   expect(setup.sequence()).toEqual(["interrupt", "wait", "dry run msg_0003"])
 })
@@ -577,10 +578,10 @@ test.each([
         return undefined
       },
     })
-    await setup.waitForFrame((frame) => frame.includes("Quick question"))
+    await waitForFrame(setup, (frame) => frame.includes("Quick question"))
     await openFromTimeline(setup, "Quick question")
     await until(() => setup.actions().includes("wait"), "the wait for the stop")
-    const checking = await setup.waitForFrame((frame) => frame.includes("Checking files…"))
+    const checking = await waitForFrame(setup, (frame) => frame.includes("Checking files…"))
     expect(checking).not.toContain("Message Actions")
     setup.mockInput.pressEnter()
     await Bun.sleep(200)
@@ -588,7 +589,7 @@ test.each([
 
     if (row.escape) {
       setup.mockInput.pressEscape()
-      await setup.waitForFrame((frame) => !frame.includes("Checking files…"))
+      await waitForFrame(setup, (frame) => !frame.includes("Checking files…"))
       held.resolve()
       await until(() => setup.dryRunsSent().length === 1, "the dry run")
       await Bun.sleep(300)
@@ -605,7 +606,7 @@ test.each([
       "wait",
       `stage ${JSON.stringify({ messageID: "msg_0007", files: false })}`,
     ])
-    const frame = await setup.waitForFrame(
+    const frame = await waitForFrame(setup,
       (frame) => !frame.includes("Checking files…") && linesWith(frame, "Quick question") === 2,
       { maxPasses: 200 },
     )
@@ -618,9 +619,9 @@ test.each([
 test("the message dialog's Rewind on a prompt a staged revert already took back closes without a dry run", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path, revert: "msg_0005" })
-  await setup.waitForFrame(loaded)
+  await waitForFrame(setup, loaded)
   await openFromTimeline(setup, "Fix the")
-  await setup.waitForFrame((frame) => !frame.includes("Message Actions"))
+  await waitForFrame(setup, (frame) => !frame.includes("Message Actions"))
   await Bun.sleep(300)
   await setup.renderOnce()
   const frame = setup.captureCharFrame()
@@ -635,15 +636,15 @@ test("the message dialog's Rewind on a prompt a staged revert already took back 
 test("the message dialog's Rewind on a prompt that left the conversation while the dialog was open does nothing", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path })
-  await setup.waitForFrame(loaded)
+  await waitForFrame(setup, loaded)
   await setup.mockInput.typeText("/timeline")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => frame.includes("Timeline"))
+  await waitForFrame(setup, (frame) => frame.includes("Timeline"))
   await Bun.sleep(50)
   await setup.mockInput.typeText("Fix the")
-  await setup.waitForFrame((frame) => frame.includes("Fix the"))
+  await waitForFrame(setup, (frame) => frame.includes("Fix the"))
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => frame.includes("Message Actions") && frame.includes("Fixed the title."))
+  await waitForFrame(setup, (frame) => frame.includes("Message Actions") && frame.includes("Fixed the title."))
   setup.events.emit({
     id: "evt_committed_elsewhere",
     created: Date.now(),
@@ -651,10 +652,10 @@ test("the message dialog's Rewind on a prompt that left the conversation while t
     durable: { aggregateID: sessionID, seq: 1, version: 1 },
     data: { sessionID, to: "msg_0005" },
   })
-  await setup.waitForFrame((frame) => !frame.includes("Fixed the title."), { maxPasses: 200 })
+  await waitForFrame(setup, (frame) => !frame.includes("Fixed the title."), { maxPasses: 200 })
   await Bun.sleep(50)
   await setup.mockInput.typeText("Rewind")
-  await setup.waitForFrame((frame) => frame.includes("roll back to just before this prompt"))
+  await waitForFrame(setup, (frame) => frame.includes("roll back to just before this prompt"))
   setup.mockInput.pressEnter()
   await Bun.sleep(300)
   await setup.renderOnce()
@@ -684,10 +685,10 @@ test.each([{ running: false }, { running: true }])(
         )
       },
     })
-    await setup.waitForFrame((frame) => frame.includes("Quick question"))
+    await waitForFrame(setup, (frame) => frame.includes("Quick question"))
     await openFromTimeline(setup, "Quick question")
     await until(() => setup.dryRunsSent().length === 1, "the dry run")
-    await setup.waitForFrame((frame) => frame.includes("Checking files…"))
+    await waitForFrame(setup, (frame) => frame.includes("Checking files…"))
     const before = setup.actions()
     setup.events.emit({
       id: "evt_staged_elsewhere",
@@ -701,7 +702,7 @@ test.each([{ running: false }, { running: true }])(
     held.resolve()
 
     // The refusal is a toast, which wraps the sentence after "in the".
-    const frame = await setup.waitForFrame(
+    const frame = await waitForFrame(setup,
       (frame) => frame.includes("Could not rewind: that prompt is no longer in the") && frame.includes("conversation."),
       { maxPasses: 200 },
     )
@@ -726,7 +727,7 @@ test("the message dialog's shortcut opens step 2 when the reply gained text befo
       return held.promise.then(() => json({ data: { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 } }))
     },
   })
-  await setup.waitForFrame((frame) => frame.includes("Quick question"))
+  await waitForFrame(setup, (frame) => frame.includes("Quick question"))
   await openFromTimeline(setup, "Quick question")
   await until(() => setup.dryRunsSent().length === 1, "the dry run")
   const event = (type: string, data: Record<string, unknown>, seq: number) =>
@@ -743,7 +744,7 @@ test("the message dialog's shortcut opens step 2 when the reply gained text befo
   await Bun.sleep(300)
   held.resolve()
 
-  const frame = await setup.waitForFrame((frame) => frame.includes("Conversation only"), { maxPasses: 200 })
+  const frame = await waitForFrame(setup, (frame) => frame.includes("Conversation only"), { maxPasses: 200 })
   expect(frame).toContain("Rewind the conversation to just before this prompt:")
   await Bun.sleep(200)
   expect(setup.actions()).toEqual(["interrupt", "wait"])
@@ -768,18 +769,18 @@ test.each([
     },
   })
   if (row.running) {
-    await setup.waitForFrame((frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
+    await waitForFrame(setup, (frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
       maxPasses: 200,
     })
     setup.mockInput.pressEscape()
     setup.mockInput.pressEscape()
   }
   if (!row.running) {
-    await setup.waitForFrame((frame) => frame.includes("Quick question"))
+    await waitForFrame(setup, (frame) => frame.includes("Quick question"))
     await openFromTimeline(setup, "Quick question")
   }
   await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
-  await setup.waitForFrame((frame) => frame.includes("Session is busy"), { maxPasses: 200 })
+  await waitForFrame(setup, (frame) => frame.includes("Session is busy"), { maxPasses: 200 })
 })
 
 // The interrupt path rewinds nothing when the person has typed something since, or a prompt waits in the inbox: the
@@ -795,12 +796,12 @@ test.each([
     messages: [...conversation, quick, reply([], false)],
     answer: (request) => (request.path.endsWith("/inbox") ? json({ data: row.inbox }) : undefined),
   })
-  await setup.waitForFrame((frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
+  await waitForFrame(setup, (frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
     maxPasses: 200,
   })
   if (row.typed) {
     await setup.mockInput.typeText(row.typed)
-    await setup.waitForFrame((frame) => frame.includes(row.typed))
+    await waitForFrame(setup, (frame) => frame.includes(row.typed))
   }
   setup.mockInput.pressEscape()
   setup.mockInput.pressEscape()
@@ -819,13 +820,13 @@ test("a prompt still waiting in the inbox is not a row", async () => {
     answer: (request) => (request.method === "POST" && request.path.endsWith("/prompt") ? held.promise : undefined),
   })
   try {
-    await setup.waitForFrame(loaded)
+    await waitForFrame(setup, loaded)
     await setup.mockInput.typeText("Waiting prompt")
     setup.mockInput.pressEnter()
     await until(() => setup.requests.some((request) => request.path.endsWith("/prompt")), "the prompt request")
     await setup.mockInput.typeText("/rewind")
     setup.mockInput.pressEnter()
-    await setup.waitForFrame((frame) => frame.includes(listHeading))
+    await waitForFrame(setup, (frame) => frame.includes(listHeading))
     await until(() => setup.statsSent().length >= 3, "the rows' stats")
     await Bun.sleep(200)
     expect(setup.statsSent().sort()).toEqual(["prompt msg_0001", "prompt msg_0003", "prompt msg_0005"])
@@ -858,9 +859,9 @@ test.each([
         ? json({ data: { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 } })
         : undefined,
   })
-  await setup.waitForFrame((frame) => frame.includes(row.prompt))
+  await waitForFrame(setup, (frame) => frame.includes(row.prompt))
   await openFromTimeline(setup, row.prompt)
-  const frame = await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("Conversation only"))
   expect(frame).toContain("Rewind the conversation to just before this prompt:")
   expect(setup.actions()).toEqual([])
 })
@@ -888,7 +889,7 @@ test.each([
     running: true,
     messages: [...conversation, quick, reply(row.content, false)],
   })
-  await setup.waitForFrame((frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
+  await waitForFrame(setup, (frame) => frame.includes("Quick question") && frame.includes("interrupt"), {
     maxPasses: 200,
   })
   setup.mockInput.pressEscape()
@@ -1365,7 +1366,7 @@ test.each(matrix)("$entry on $row", async (cell) => {
   })
   // A running session is ready once its interrupt hint shows (an interrupted reply's footer also says "interrupted"); a
   // waiting prompt once the transcript draws it.
-  await setup.waitForFrame(
+  await waitForFrame(setup,
     (frame) =>
       frame.includes("Rewind fixture") &&
       (!cell.running || frame.includes("esc interrupt")) &&
@@ -1376,10 +1377,10 @@ test.each(matrix)("$entry on $row", async (cell) => {
   if (cell.expect === "no timeline row") {
     await setup.mockInput.typeText("/timeline")
     setup.mockInput.pressEnter()
-    await setup.waitForFrame((frame) => frame.includes("Timeline"))
+    await waitForFrame(setup, (frame) => frame.includes("Timeline"))
     await Bun.sleep(50)
     await setup.mockInput.typeText(cell.target!)
-    await setup.waitForFrame((frame) => frame.includes("No results found"))
+    await waitForFrame(setup, (frame) => frame.includes("No results found"))
     expect(setup.actions()).toEqual([])
     return
   }
@@ -1393,24 +1394,24 @@ test.each(matrix)("$entry on $row", async (cell) => {
   }
   if (cell.entry === "the message dialog" || cell.entry === "the skip-picker shortcut") {
     await openFromTimeline(setup, cell.target!)
-    await setup.waitForFrame((frame) => !frame.includes("Message Actions"))
+    await waitForFrame(setup, (frame) => !frame.includes("Message Actions"))
   }
   if (cell.entry === "an interrupt") await until(() => setup.actions().includes("wait"), "the wait after the interrupt")
 
   if (cell.expect === "list") {
-    const block = listBlock(await setup.waitForFrame((frame) => frame.includes(listHeading), { maxPasses: 100 }))
+    const block = listBlock(await waitForFrame(setup, (frame) => frame.includes(listHeading), { maxPasses: 100 }))
     for (const text of cell.shows ?? []) expect(block).toContain(text)
     for (const text of cell.hides ?? []) expect(block).not.toContain(text)
     expect(setup.actions()).toEqual([])
     return
   }
   if (cell.expect === "nothing") {
-    await setup.waitForFrame((frame) => frame.includes("This conversation has no prompt to return to."))
+    await waitForFrame(setup, (frame) => frame.includes("This conversation has no prompt to return to."))
     expect(setup.actions()).toEqual([])
     return
   }
   if (cell.expect === "step 2") {
-    const frame = await setup.waitForFrame((frame) => frame.includes("Do nothing"))
+    const frame = await waitForFrame(setup, (frame) => frame.includes("Do nothing"))
     expect(frame).toContain("just before this prompt:")
     expect(frame).toContain("Conversation only")
     expect(frame).toContain(cell.target!)
@@ -1422,7 +1423,7 @@ test.each(matrix)("$entry on $row", async (cell) => {
     expect(setup.actions().filter((action) => action.startsWith("stage") || action.startsWith("files"))).toEqual([
       `stage ${JSON.stringify({ messageID: "msg_0007", files: false })}`,
     ])
-    const frame = await setup.waitForFrame((frame) => linesWith(frame, "Quick question") === 2, { maxPasses: 200 })
+    const frame = await waitForFrame(setup, (frame) => linesWith(frame, "Quick question") === 2, { maxPasses: 200 })
     expect(frame).not.toContain("Do nothing")
     return
   }

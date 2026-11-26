@@ -23,6 +23,7 @@ import { createApi, createEventStream, createFetch, json } from "../../fixture/t
 import { emptyThemeSource, tmpdir } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { waitForFrame } from "../../fixture/frame"
 
 // Renders the real session list over a server that holds one session, with the keybindings file `file` applied.
 async function mountList(file: object, options: { initialSearch?: string; title?: string } = {}) {
@@ -103,7 +104,7 @@ async function mountList(file: object, options: { initialSearch?: string; title?
     { width: 100, height: 30, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes(options.title ? "Sessions" : "Only session"))
+  await waitForFrame(app, (frame) => frame.includes(options.title ? "Sessions" : "Only session"))
   return {
     app,
     searches,
@@ -118,7 +119,7 @@ async function mountList(file: object, options: { initialSearch?: string; title?
 test("opens with the initial search typed into the filter, and the first search request carries it", async () => {
   await using list = await mountList({}, { initialSearch: "fix the build" })
 
-  await list.app.waitForFrame((frame) => frame.includes("fix the build"))
+  await waitForFrame(list.app, (frame) => frame.includes("fix the build"))
   expect(list.searches[0]).toBe("fix the build")
   expect(new Set(list.searches)).toEqual(new Set(["fix the build"]))
 })
@@ -133,7 +134,7 @@ test("draws a session title without its control and format characters", async ()
   // An erase-line, a right-to-left override and a line break, as a repository can name a session.
   await using list = await mountList({}, { title: "Fix\u001b[2Kbuild‮evil\nnext" })
 
-  await list.app.waitForFrame((frame) => frame.includes("Fix"))
+  await waitForFrame(list.app, (frame) => frame.includes("Fix"))
   const frame = list.app.captureCharFrame()
   expect(frame).not.toContain("‮")
   expect(frame).not.toContain("\u001b")
@@ -143,7 +144,7 @@ test("renames from ctrl+r in the session list, which the prompt's history search
   await using list = await mountList({})
 
   list.app.mockInput.pressKey("r", { ctrl: true })
-  await list.app.waitForFrame((frame) => frame.includes("Rename session"))
+  await waitForFrame(list.app, (frame) => frame.includes("Rename session"))
 })
 
 test("renames from the key that the session-list context of the keybindings file gives it", async () => {
@@ -155,7 +156,7 @@ test("renames from the key that the session-list context of the keybindings file
   await Bun.sleep(100)
   expect(list.app.captureCharFrame()).not.toContain("Rename session")
   list.app.mockInput.pressKey("r", { ctrl: true, meta: true })
-  await list.app.waitForFrame((frame) => frame.includes("Rename session"))
+  await waitForFrame(list.app, (frame) => frame.includes("Rename session"))
 })
 
 test("renames from the stock key when the keybindings file names another context", async () => {
@@ -166,7 +167,7 @@ test("renames from the stock key when the keybindings file names another context
   await Bun.sleep(100)
   expect(list.app.captureCharFrame()).not.toContain("Rename session")
   list.app.mockInput.pressKey("r", { ctrl: true })
-  await list.app.waitForFrame((frame) => frame.includes("Rename session"))
+  await waitForFrame(list.app, (frame) => frame.includes("Rename session"))
 })
 
 test("scopes sessions to the active session location", async () => {
@@ -265,7 +266,7 @@ test("scopes sessions to the active session location", async () => {
   app.renderer.start()
 
   try {
-    const frame = await app.waitForFrame((value) => value.includes("Project B session"))
+    const frame = await waitForFrame(app, (value) => value.includes("Project B session"))
     expect(frame).not.toContain("Project A session")
     expect(requestedProjects.at(-1)).toBe("proj_b")
   } finally {

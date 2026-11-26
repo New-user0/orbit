@@ -14,6 +14,7 @@ import type { SessionEntry, SessionGroup } from "../../../src/routes/session/gro
 import { emptyThemeSource } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { waitForFrame } from "../../fixture/frame"
 
 test("retains nested expansion state and registers exact headers and parts", async () => {
   addDefaultParsers(parsers.parsers)
@@ -86,7 +87,7 @@ test("retains nested expansion state and registers exact headers and parts", asy
   const a: AnchorTarget = { type: "part", ref: { messageID: "a", partID: "read-a" } }
   const b: AnchorTarget = { type: "part", ref: { messageID: "b", partID: "read-b" } }
   try {
-    await app.waitForFrame((frame) => frame.includes("Explored"))
+    await waitForFrame(app, (frame) => frame.includes("Explored"))
     expect(app.captureCharFrame()).not.toContain("Target B")
     expect(anchors.get(b)).toBeUndefined()
     expect(anchors.get(nested)).toBeUndefined()
@@ -145,7 +146,7 @@ test("retains nested expansion state and registers exact headers and parts", asy
     const thinkingID = groupID(row, 0)
     if (!thinkingID) throw new Error("Missing thinking group ID")
     setExpanded(thinkingID, true)
-    await app.waitForFrame((frame) => frame.includes("Reset thought body"))
+    await waitForFrame(app, (frame) => frame.includes("Reset thought body"))
     expect(app.captureCharFrame()).toContain("Reset thought body")
   } finally {
     app.renderer.destroy()
@@ -186,7 +187,7 @@ test("expanded instructions stay adjacent to their summary and each other", asyn
   })
   try {
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("Instructions: 2 files"))
+    await waitForFrame(app, (frame) => frame.includes("Instructions: 2 files"))
     expect(app.captureCharFrame()).not.toContain("Loaded AGENTS.md")
     await app.mockMouse.click(4, anchors.get({ type: "group", groupID: groupID(row, 0)! })?.node.y ?? -1)
     await app.renderOnce()
@@ -241,7 +242,7 @@ test("a low activity group with nothing finished stays collapsed behind a status
   })
   try {
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("Running command…"))
+    await waitForFrame(app, (frame) => frame.includes("Running command…"))
     expect(app.captureCharFrame()).not.toContain("Shell one")
     expect(app.captureCharFrame()).not.toContain("Shell two")
   } finally {
@@ -288,7 +289,7 @@ test("failed low activity uses a disclosure icon and keeps details expandable", 
   })
   try {
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("1 command"))
+    await waitForFrame(app, (frame) => frame.includes("1 command"))
     expect(app.captureCharFrame()).toContain("+ 1 command")
     expect(app.captureCharFrame()).not.toContain("command failed")
     await app.mockMouse.click(4, anchors.get({ type: "group", groupID: groupID(row, 0)! })?.node.y ?? -1)

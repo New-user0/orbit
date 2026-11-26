@@ -5,6 +5,7 @@ import { testRender, useRenderer } from "@opentui/solid"
 import { useClipboard } from "../../src/context/clipboard"
 import { copyOnSelectRelease } from "../../src/util/selection"
 import { TestTuiContexts } from "../fixture/tui-environment"
+import { waitForFrame } from "../fixture/frame"
 
 function CopyOnSelectText() {
   const renderer = useRenderer()
@@ -45,7 +46,7 @@ test.each([
 
   try {
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("beta"))
+    await waitForFrame(app, (frame) => frame.includes("beta"))
 
     await app.mockMouse.click(input.column, 0)
     expect(app.renderer.getSelection()?.getSelectedText() ?? "").toBe("")

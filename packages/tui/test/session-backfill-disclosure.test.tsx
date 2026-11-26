@@ -5,6 +5,7 @@ import { Global } from "@orbit/util/global"
 import type { SessionMessageInfo } from "@orbit/client"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
+import { waitForFrame } from "./fixture/frame"
 
 // Regression: a thought group mounted by tail-first backfill (older rows revealed
 // after scrolling to the top) must still toggle when its disclosure is clicked.
@@ -67,9 +68,9 @@ test("clicking a backfilled thought group toggles it", async () => {
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
   try {
-    await setup.waitForFrame((frame) => frame.includes("Turn 13 answer"))
+    await waitForFrame(setup, (frame) => frame.includes("Turn 13 answer"))
     setup.mockInput.pressKey("g", { ctrl: true })
-    await setup.waitForFrame((frame) => frame.includes("Turn 00 prompt"))
+    await waitForFrame(setup, (frame) => frame.includes("Turn 00 prompt"))
     await setup.waitForVisualIdle({ quietFrames: 3 })
     const lines = setup.captureCharFrame().split("\n")
     const row = lines.findIndex((line) => line.includes("◌ Thought: Turn 0"))

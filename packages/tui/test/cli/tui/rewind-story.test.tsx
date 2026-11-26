@@ -13,6 +13,7 @@ import { emptyThemeSource } from "../../fixture/fixture"
 import { controlFree, listHeading } from "../../fixture/rewind"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { waitForFrame } from "../../fixture/frame"
 
 // clients-ux-5 part 2: the rewind picker's story draws the real picker from fixtures, with every request answered and
 // every option acted on inside the story, so exploring it changes nothing. Its fixtures cover a session with edits, one
@@ -62,14 +63,14 @@ async function render(width: number) {
     { width, height: 34, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("storybook / rewind"))
+  await waitForFrame(app, (frame) => frame.includes("storybook / rewind"))
   return app
 }
 
 test.each([64, 120])("the story draws the real picker for each fixture and resets, at %i columns", async (width) => {
   const app = await render(width)
   try {
-    const first = await app.waitForFrame((frame) => frame.includes(listHeading) && frame.includes("(current)"))
+    const first = await waitForFrame(app, (frame) => frame.includes(listHeading) && frame.includes("(current)"))
     for (const control of ["ctrl+g", "ctrl+r"]) expect(first).toContain(control)
 
     // Each fixture is reached with the next-fixture key; the hostile one draws its names written out (class 9).
@@ -80,7 +81,7 @@ test.each([64, 120])("the story draws the real picker for each fixture and reset
     let last = fixture(first)
     for (let press = 0; press < 8 && !seen.has("hostile names"); press++) {
       app.mockInput.pressKey("g", { ctrl: true })
-      const frame = await app.waitForFrame((frame) => fixture(frame) !== undefined && fixture(frame) !== last)
+      const frame = await waitForFrame(app, (frame) => fixture(frame) !== undefined && fixture(frame) !== last)
       const label = fixture(frame)
       last = label
       if (label) seen.add(label)
@@ -94,7 +95,7 @@ test.each([64, 120])("the story draws the real picker for each fixture and reset
     expect(seen).toContain("nothing to rewind")
 
     app.mockInput.pressKey("r", { ctrl: true })
-    await app.waitForFrame((frame) => frame.includes(listHeading) && frame.includes("(current)"))
+    await waitForFrame(app, (frame) => frame.includes(listHeading) && frame.includes("(current)"))
   } finally {
     app.renderer.destroy()
   }
@@ -104,12 +105,12 @@ test.each([64, 120])("the story draws the real picker for each fixture and reset
 test("an option chosen in the story is named in its footer", async () => {
   const app = await render(120)
   try {
-    await app.waitForFrame((frame) => frame.includes(listHeading) && frame.includes("(current)"))
+    await waitForFrame(app, (frame) => frame.includes(listHeading) && frame.includes("(current)"))
     app.mockInput.pressArrow("up")
     app.mockInput.pressEnter()
-    await app.waitForFrame((frame) => frame.includes("Conversation only"))
+    await waitForFrame(app, (frame) => frame.includes("Conversation only"))
     app.mockInput.pressEnter()
-    const frame = await app.waitForFrame((frame) => frame.includes("conversation chosen for p3"))
+    const frame = await waitForFrame(app, (frame) => frame.includes("conversation chosen for p3"))
     expect(frame).not.toContain("Do nothing")
   } finally {
     app.renderer.destroy()

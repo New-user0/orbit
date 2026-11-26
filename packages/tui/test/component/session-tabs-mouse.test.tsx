@@ -9,6 +9,7 @@ import { ThemeProvider } from "../../src/context/theme"
 import { emptyThemeSource } from "../fixture/fixture"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
+import { waitForFrame } from "../fixture/frame"
 
 test("releasing a transcript selection over tab controls does not activate them", async () => {
   const [active, setActive] = createSignal("first")
@@ -43,7 +44,7 @@ test("releasing a transcript selection over tab controls does not activate them"
 
   try {
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("Second"))
+    await waitForFrame(app, (frame) => frame.includes("Second"))
     await app.mockMouse.pressDown(5, 1)
     await app.mockMouse.release(40, 0)
     expect(active()).toBe("first")
@@ -91,7 +92,7 @@ test("middle-click closes a session tab without selecting it", async () => {
 
   try {
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("Second"))
+    await waitForFrame(app, (frame) => frame.includes("Second"))
     await app.mockMouse.click(40, 0, MouseButton.MIDDLE)
     expect(closed).toEqual(["second"])
     expect(active()).toBe("first")
@@ -139,12 +140,12 @@ test("keeps consecutive close controls fixed across overflow window changes", as
 
   try {
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("Third"))
+    await waitForFrame(app, (frame) => frame.includes("Third"))
     await app.mockMouse.moveTo(11, 0)
-    await app.waitForFrame((frame) => Array.from(frame.split("\n")[0] ?? "")[11] === "✕")
+    await waitForFrame(app, (frame) => Array.from(frame.split("\n")[0] ?? "")[11] === "✕")
 
     await app.mockMouse.click(11, 0)
-    await app.waitForFrame((frame) => items().length === 4 && Array.from(frame.split("\n")[0] ?? "")[11] === "✕")
+    await waitForFrame(app, (frame) => items().length === 4 && Array.from(frame.split("\n")[0] ?? "")[11] === "✕")
     await app.mockMouse.click(11, 0)
 
     expect(closed).toEqual(["third", "fourth"])
@@ -193,20 +194,20 @@ test("reflows held tabs when the pointer leaves the strip", async () => {
 
   try {
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("Fourth"))
+    await waitForFrame(app, (frame) => frame.includes("Fourth"))
     await app.mockMouse.moveTo(22, 0)
-    await app.waitForFrame((frame) => Array.from(frame.split("\n")[0] ?? "")[22] === "✕")
+    await waitForFrame(app, (frame) => Array.from(frame.split("\n")[0] ?? "")[22] === "✕")
     await app.mockMouse.click(22, 0)
-    await app.waitForFrame(
+    await waitForFrame(app,
       (frame) => !frame.includes("First") && items().length === 3 && Array.from(frame.split("\n")[0] ?? "")[22] === "✕",
     )
 
     await app.renderOnce()
     const held = app.captureCharFrame().split("\n")[0] ?? ""
     await app.mockMouse.moveTo(0, 1)
-    await app.waitForFrame((frame) => (frame.split("\n")[0] ?? "").indexOf("Third") < held.indexOf("Third"))
+    await waitForFrame(app, (frame) => (frame.split("\n")[0] ?? "").indexOf("Third") < held.indexOf("Third"))
     await app.mockMouse.moveTo(20, 0)
-    await app.waitForFrame((frame) => Array.from(frame.split("\n")[0] ?? "")[20] === "✕")
+    await waitForFrame(app, (frame) => Array.from(frame.split("\n")[0] ?? "")[20] === "✕")
     expect(Array.from(app.captureCharFrame().split("\n")[0] ?? "")[22]).not.toBe("✕")
   } finally {
     app.renderer.destroy()

@@ -4,6 +4,7 @@ import { clearDrafts, takeDraft } from "../../src/component/prompt/draft-stash"
 import { createAppFixture, promptReady } from "../fixture/app"
 import { tmpdir } from "../fixture/fixture"
 import { directory, json, type FetchHandler } from "../fixture/tui-client"
+import { waitForFrame } from "../fixture/frame"
 
 // The prompt with prompt.vim on, drawn in the whole app.
 const sessionID = "ses_vim"
@@ -91,7 +92,7 @@ async function mount(
   })
   await setup.ready
   // A narrow terminal drops the commands hint that promptReady looks for.
-  await setup.waitForFrame((frame) => (input.width && input.width < 60 ? frame.includes("›") : promptReady(frame)))
+  await waitForFrame(setup, (frame) => (input.width && input.width < 60 ? frame.includes("›") : promptReady(frame)))
   const textarea = () => {
     const find = (node: Renderable): TextareaRenderable | undefined =>
       node instanceof TextareaRenderable
@@ -157,13 +158,13 @@ test("the label never shows with prompt.vim off", async () => {
 test("the label is hidden in shell mode", async () => {
   await using app = await mount()
   await app.press("!")
-  await app.setup.waitForFrame((frame) => frame.includes("exit shell mode"))
+  await waitForFrame(app.setup, (frame) => frame.includes("exit shell mode"))
   expect(app.setup.captureCharFrame()).not.toContain(label)
 })
 
 test.each([40, 120])("the label stays whole at %d columns and the model name truncates instead", async (width) => {
   await using app = await mount({ width })
-  await app.setup.waitForFrame((frame) => frame.includes(label) && frame.includes("an-extremely"))
+  await waitForFrame(app.setup, (frame) => frame.includes(label) && frame.includes("an-extremely"))
   const frame = app.setup.captureCharFrame()
   const row = frame.split("\n").find((line) => line.includes(label)) ?? ""
   // The row stays inside the terminal and the model is cut with an ellipsis, not the label.
@@ -323,14 +324,14 @@ test("Escape in normal mode reaches the interrupt of a running session; in inser
     durable: { aggregateID: sessionID, seq: 1, version: 1 },
     data: { sessionID },
   } as never)
-  await app.setup.waitForFrame((frame) => frame.includes("interrupt"))
+  await waitForFrame(app.setup, (frame) => frame.includes("interrupt"))
   // Insert mode: Escape switches to normal mode and does not arm the interrupt.
   await app.normal()
   expect(app.setup.captureCharFrame()).not.toContain("again to interrupt")
   expect(app.setup.captureCharFrame()).not.toContain(label)
   // Normal mode: the same key arms it.
   await app.normal()
-  await app.setup.waitForFrame((frame) => frame.includes("again to interrupt"))
+  await waitForFrame(app.setup, (frame) => frame.includes("again to interrupt"))
 })
 
 test("a half-typed count is cleared by Escape", async () => {
@@ -362,7 +363,7 @@ test("Enter submits from normal mode and normal mode stays for the next prompt",
     config: { animations: false, prompt: { vim: true } },
   })
   await setup.ready
-  await setup.waitForFrame((frame) => frame.includes("›"))
+  await waitForFrame(setup, (frame) => frame.includes("›"))
   takeDraft(undefined)
   await setup.mockInput.typeText("ship it")
   setup.mockInput.pressEscape()
@@ -488,7 +489,7 @@ test("Escape in visual mode does not interrupt a running session; the next Escap
     durable: { aggregateID: sessionID, seq: 1, version: 1 },
     data: { sessionID },
   } as never)
-  await app.setup.waitForFrame((frame) => frame.includes("interrupt"))
+  await waitForFrame(app.setup, (frame) => frame.includes("interrupt"))
   await app.type("abc")
   await app.normal()
   await app.press("v")
@@ -497,7 +498,7 @@ test("Escape in visual mode does not interrupt a running session; the next Escap
   expect(app.setup.captureCharFrame()).not.toContain("-- VISUAL")
   expect(app.textarea().hasSelection()).toBe(false)
   await app.normal()
-  await app.setup.waitForFrame((frame) => frame.includes("again to interrupt"))
+  await waitForFrame(app.setup, (frame) => frame.includes("again to interrupt"))
 })
 
 test("Enter in visual mode submits and leaves no selection", async () => {
@@ -733,12 +734,12 @@ test("recalling a history entry restarts the typed record, so . does not re-type
   })
   await app.type("qq")
   app.setup.mockInput.pressKey("r", { ctrl: true })
-  await app.setup.waitForFrame((frame) => frame.includes("Search prompt history"))
+  await waitForFrame(app.setup, (frame) => frame.includes("Search prompt history"))
   await Bun.sleep(50)
   await app.setup.mockInput.typeText("deploy")
-  await app.setup.waitForFrame((frame) => frame.includes("deploy it"))
+  await waitForFrame(app.setup, (frame) => frame.includes("deploy it"))
   app.setup.mockInput.pressEnter()
-  await app.setup.waitForFrame((frame) => frame.includes("› deploy it"))
+  await waitForFrame(app.setup, (frame) => frame.includes("› deploy it"))
   await app.normal()
   await app.press(".")
   expect(app.textarea().plainText).toBe("deploy it")

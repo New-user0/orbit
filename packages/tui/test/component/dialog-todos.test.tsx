@@ -3,6 +3,7 @@ import { DialogTodos, TodosView } from "../../src/component/dialog-todos"
 import { PlanDock } from "../../src/routes/session/plan-dock"
 import { json } from "../fixture/tui-client"
 import { renderLocal, session as sessionFixture } from "../fixture/local"
+import { waitForFrame } from "../fixture/frame"
 
 const todos = [
   { content: "write the parser", status: "completed" },
@@ -33,9 +34,9 @@ test.each([
   await setup.data.session.message.sync("plan")
 
   setup.dialog.replace(() => <PlanDock sessionID="plan" />)
-  const dock = rows(await setup.waitForFrame((frame) => frame.includes("write the parser")))
+  const dock = rows(await waitForFrame(setup, (frame) => frame.includes("write the parser")))
   setup.dialog.replace(() => <DialogTodos sessionID="plan" />)
-  const dialog = await setup.waitForFrame((frame) => frame.includes("Plan") && frame.includes("3 steps"))
+  const dialog = await waitForFrame(setup, (frame) => frame.includes("Plan") && frame.includes("3 steps"))
 
   expect(rows(dialog)).toEqual(dock)
   expect(dock).toHaveLength(3)
@@ -47,15 +48,15 @@ test.each([
 test("a session without a plan, and no session, each say so", async () => {
   await using setup = await renderLocal()
   setup.dialog.replace(() => <DialogTodos sessionID="none" />)
-  expect(await setup.waitForFrame((frame) => frame.includes("no plan yet"))).toContain("This session has no plan yet.")
+  expect(await waitForFrame(setup, (frame) => frame.includes("no plan yet"))).toContain("This session has no plan yet.")
   setup.dialog.replace(() => <DialogTodos />)
-  expect(await setup.waitForFrame((frame) => frame.includes("No session is open."))).toContain("No session is open.")
+  expect(await waitForFrame(setup, (frame) => frame.includes("No session is open."))).toContain("No session is open.")
 })
 
 test("the count leaves out in progress when nothing is", async () => {
   await using setup = await renderLocal()
   setup.dialog.replace(() => <TodosView session items={[{ content: "one", status: "pending" }]} />)
-  const frame = await setup.waitForFrame((frame) => frame.includes("1 step"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("1 step"))
   expect(frame).toContain("1 step · 0 done · 1 open")
 })
 
@@ -66,14 +67,14 @@ test("a plan longer than the screen scrolls inside the dialog and says so", asyn
     status: index === 0 ? ("in_progress" as const) : ("pending" as const),
   }))
   setup.dialog.replace(() => <TodosView items={items} session />)
-  const first = await setup.waitForFrame((frame) => frame.includes("40 steps"))
+  const first = await waitForFrame(setup, (frame) => frame.includes("40 steps"))
   expect(first).toContain("Step 1")
   expect(first).not.toContain("Step 40")
   expect(first).toContain("scroll")
 
   await Bun.sleep(60)
   for (let index = 0; index < 40; index++) setup.mockInput.pressArrow("down")
-  const last = await setup.waitForFrame((frame) => frame.includes("Step 40"))
+  const last = await waitForFrame(setup, (frame) => frame.includes("Step 40"))
   // Rows are padded to the terminal width, so compare trimmed rows.
   const trimmed = last.split("\n").map((line) => line.trimEnd())
   expect(trimmed.some((line) => line.endsWith("Step 1"))).toBe(false)

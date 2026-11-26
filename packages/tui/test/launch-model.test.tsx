@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { createAppFixture } from "./fixture/app"
 import { json } from "./fixture/tui-client"
+import { waitForFrame } from "./fixture/frame"
 
 const location = {
   directory: "/tmp/orbit/packages/tui",
@@ -86,8 +87,8 @@ test.each([
   const run = await launch({ model: row.model })
   await using setup = run.setup
   await setup.ready
-  await setup.waitForFrame((frame) => frame.includes("Demo second"))
-  if (row.variant) await setup.waitForFrame((frame) => frame.includes(`· ${row.variant}`))
+  await waitForFrame(setup, (frame) => frame.includes("Demo second"))
+  if (row.variant) await waitForFrame(setup, (frame) => frame.includes(`· ${row.variant}`))
   await setup.mockInput.typeText("hello")
   setup.mockInput.pressEnter()
   await setup.waitFor(() => run.sent.some((item) => item.path.endsWith("/prompt")))
@@ -114,8 +115,8 @@ test.each([
   await using setup = run.setup
   await setup.ready
   // A resumed session draws its title in the tab rail; wait for it so the footer is the session's, not home's.
-  if (row.args.sessionID || row.args.continue) await setup.waitForFrame((frame) => frame.includes("Resumed"))
-  await setup.waitForFrame((frame) => frame.includes(row.shown))
+  if (row.args.sessionID || row.args.continue) await waitForFrame(setup, (frame) => frame.includes("Resumed"))
+  await waitForFrame(setup, (frame) => frame.includes(row.shown))
   await setup.mockInput.typeText("hello")
   setup.mockInput.pressEnter()
   await setup.waitFor(() => run.sent.some((item) => item.path.endsWith("/prompt")))

@@ -17,6 +17,7 @@ import { emptyThemeSource, tmpdir } from "../fixture/fixture"
 import { createApi, createEventStream, createFetch, json } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
+import { waitForFrame } from "../fixture/frame"
 
 async function setup(width: number, output = "", command = "render-scene --quality high") {
   const temporary = await tmpdir()
@@ -88,7 +89,7 @@ async function setup(width: number, output = "", command = "render-scene --quali
     { width, height: 30, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes(shell.command.split("\u001b")[0]))
+  await waitForFrame(app, (frame) => frame.includes(shell.command.split("\u001b")[0]))
   return {
     ...app,
     state,
@@ -107,13 +108,13 @@ test.each([40, 100])("shell output opens, follows, scrolls, and survives exit at
   await using app = await setup(width, Array.from({ length: 50 }, (_, i) => `Frame ${i + 1}\n`).join(""))
   expect(app.captureCharFrame()).toContain("output")
   app.mockInput.pressEnter()
-  await app.waitForFrame((frame) => frame.includes("Shell output") && frame.includes("Frame 50"))
+  await waitForFrame(app, (frame) => frame.includes("Shell output") && frame.includes("Frame 50"))
   const scroll = app.renderer.root.findDescendantById("shell-output-scroll")
   if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Output scrollbox missing")
   expect(scroll.scrollTop).toBeGreaterThan(0)
 
   app.mockInput.pressKey("HOME")
-  await app.waitForFrame((frame) => frame.includes("Frame 1\n") || /Frame 1\s/.test(frame))
+  await waitForFrame(app, (frame) => frame.includes("Frame 1\n") || /Frame 1\s/.test(frame))
   expect(scroll.scrollTop).toBe(0)
   app.state.output += "Frame 51\n"
   await app.waitFor(
@@ -125,7 +126,7 @@ test.each([40, 100])("shell output opens, follows, scrolls, and survives exit at
   )
   expect(scroll.scrollTop).toBe(0)
   app.mockInput.pressKey("END")
-  await app.waitForFrame((frame) => frame.includes("Frame 51"))
+  await waitForFrame(app, (frame) => frame.includes("Frame 51"))
   app.shell.status = "exited"
   app.shell.exit = 0
   app.events.emit({
@@ -135,11 +136,11 @@ test.each([40, 100])("shell output opens, follows, scrolls, and survives exit at
     location: app.location,
     data: { id: app.shell.id, exit: 0, status: "exited" },
   })
-  await app.waitForFrame((frame) => frame.includes("code 0"), { maxPasses: 100 })
+  await waitForFrame(app, (frame) => frame.includes("code 0"), { maxPasses: 100 })
   const metadataReads = app.requests.filter((request) => request.url.pathname === `/api/shell/${app.shell.id}`).length
   // Terminal metadata can arrive before the capture's final flush.
   app.state.output += "\u001b[32mRender complete\u001b[0m\r\n"
-  await app.waitForFrame((frame) => frame.includes("Render complete") && frame.includes("code 0"), { maxPasses: 100 })
+  await waitForFrame(app, (frame) => frame.includes("Render complete") && frame.includes("code 0"), { maxPasses: 100 })
   expect(app.requests.filter((request) => request.url.pathname === `/api/shell/${app.shell.id}`)).toHaveLength(
     metadataReads,
   )
@@ -152,7 +153,7 @@ test.each([40, 100])("shell output opens, follows, scrolls, and survives exit at
   expect(reads.every((request) => request.url.searchParams.has("location[workspace]") === false)).toBe(true)
 
   app.mockInput.pressEscape()
-  await app.waitForFrame((frame) => !frame.includes("Shell output") && frame.includes("No shell commands"))
+  await waitForFrame(app, (frame) => !frame.includes("Shell output") && frame.includes("No shell commands"))
   const count = app.requests.length
   await Bun.sleep(1100)
   expect(app.requests).toHaveLength(count)
@@ -161,16 +162,16 @@ test.each([40, 100])("shell output opens, follows, scrolls, and survives exit at
 test("empty output explains redirection, retries errors, and preserves output after removal", async () => {
   await using app = await setup(100)
   app.mockInput.pressEnter()
-  await app.waitForFrame((frame) => frame.includes("No captured output") && frame.includes("redirected"))
+  await waitForFrame(app, (frame) => frame.includes("No captured output") && frame.includes("redirected"))
   app.state.failure = true
-  await app.waitForFrame((frame) => frame.includes("Retrying"), { maxPasses: 100 })
+  await waitForFrame(app, (frame) => frame.includes("Retrying"), { maxPasses: 100 })
   app.state.failure = false
   app.state.output = "Recovered output\n"
-  await app.waitForFrame((frame) => frame.includes("Recovered output") && !frame.includes("Retrying"), {
+  await waitForFrame(app, (frame) => frame.includes("Recovered output") && !frame.includes("Retrying"), {
     maxPasses: 100,
   })
   app.state.missing = true
-  await app.waitForFrame((frame) => frame.includes("no longer available"), { maxPasses: 100 })
+  await waitForFrame(app, (frame) => frame.includes("no longer available"), { maxPasses: 100 })
   expect(app.captureCharFrame()).toContain("Recovered output")
   const count = app.requests.length
   await Bun.sleep(1100)
@@ -180,7 +181,7 @@ test("empty output explains redirection, retries errors, and preserves output af
 test.each([40, 100])("mouse-wheel scrolling pauses and resumes output following at %s columns", async (width) => {
   await using app = await setup(width, Array.from({ length: 50 }, (_, i) => `Frame ${i + 1}\n`).join(""))
   app.mockInput.pressEnter()
-  await app.waitForFrame((frame) => frame.includes("Shell output") && frame.includes("Frame 50"))
+  await waitForFrame(app, (frame) => frame.includes("Shell output") && frame.includes("Frame 50"))
   const scroll = app.renderer.root.findDescendantById("shell-output-scroll")
   if (!(scroll instanceof ScrollBoxRenderable)) throw new Error("Output scrollbox missing")
   const bottom = scroll.scrollTop
@@ -199,7 +200,7 @@ test.each([40, 100])("mouse-wheel scrolling pauses and resumes output following 
   await app.waitFor(() => scroll.scrollTop === scroll.scrollHeight - scroll.viewport.height)
   const followed = scroll.scrollTop
   app.state.output += "Frame 52\n"
-  await app.waitForFrame((frame) => frame.includes("Frame 52"), { maxPasses: 100 })
+  await waitForFrame(app, (frame) => frame.includes("Frame 52"), { maxPasses: 100 })
   expect(scroll.scrollTop).toBeGreaterThan(followed)
   expect(scroll.scrollTop).toBe(scroll.scrollHeight - scroll.viewport.height)
 })
@@ -211,7 +212,7 @@ test("large captures open at a bounded tail and clicking a shell opens the viewe
     .split("\n")
     .findIndex((line) => line.includes(app.shell.command))
   await app.mockMouse.click(6, row)
-  await app.waitForFrame((frame) => frame.includes("Latest frame") && frame.includes("Earlier output omitted"))
+  await waitForFrame(app, (frame) => frame.includes("Latest frame") && frame.includes("Earlier output omitted"))
   const reads = app.requests.filter((request) => request.url.pathname.endsWith("/output"))
   expect(reads[0]?.url.searchParams.get("cursor")).toBe(String(Number.MAX_SAFE_INTEGER))
   expect(reads[1]?.url.searchParams.get("cursor")).toBe(String(Buffer.byteLength(app.state.output) - 65536))
@@ -233,7 +234,7 @@ test("draws a background command and its output written out in the shell tab and
   const tab = app.captureCharFrame()
   expect(tab).toContain(shown.command)
   app.mockInput.pressEnter()
-  await app.waitForFrame((frame) => frame.includes("Shell output") && frame.includes("out a"))
+  await waitForFrame(app, (frame) => frame.includes("Shell output") && frame.includes("out a"))
   const dialog = app.captureCharFrame()
   // The dialog header and the body each draw their own text.
   expect(dialog.split(shown.command).length).toBeGreaterThan(2)
@@ -249,7 +250,7 @@ test("draws a background command and its output written out in the shell tab and
 test("draws an ordinary background command and its output unchanged", async () => {
   await using app = await setup(100, "out plain text\r\nand a second line\r", "sleep 30 && echo done")
   app.mockInput.pressEnter()
-  await app.waitForFrame((frame) => frame.includes("Shell output") && frame.includes("and a second line"))
+  await waitForFrame(app, (frame) => frame.includes("Shell output") && frame.includes("and a second line"))
   const frame = app.captureCharFrame()
   expect(frame).toContain("out plain text")
   expect(frame).not.toContain("\\x")

@@ -5,6 +5,7 @@ import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
+import { waitForFrame } from "./fixture/frame"
 
 test.each([70, 120])(
   "/compact renders before model setup, suppresses repeat gestures, and toasts rollback at %i columns",
@@ -67,22 +68,22 @@ test.each([70, 120])(
     )
     try {
       await ready.promise
-      await setup.waitForFrame((frame) => frame.includes("Demo Model"))
+      await waitForFrame(setup, (frame) => frame.includes("Demo Model"))
       await setup.mockInput.typeText("/compact")
       setup.mockInput.pressEnter()
-      const frame = await setup.waitForFrame((frame) => frame.includes("Compaction queued"))
+      const frame = await waitForFrame(setup, (frame) => frame.includes("Compaction queued"))
       expect(frame).not.toContain("/compact")
       await setup.mockInput.typeText("/compact")
-      await setup.waitForFrame((frame) => frame.includes("/compact"))
+      await waitForFrame(setup, (frame) => frame.includes("/compact"))
       setup.mockInput.pressEnter()
       // The line is cleared just before the command runs, so the repeat has been handled once it is gone.
-      await setup.waitForFrame((frame) => !frame.includes("/compact"))
+      await waitForFrame(setup, (frame) => !frame.includes("/compact"))
       expect(setup.captureCharFrame().match(/Compaction queued/g)).toHaveLength(1)
       await modelRequested.promise
       expect(mutations).toEqual(["model"])
 
       model.resolve(json({ message: "Model setup failed" }, { status: 400 }))
-      const rejected = await setup.waitForFrame((frame) => frame.includes("Model setup failed"))
+      const rejected = await waitForFrame(setup, (frame) => frame.includes("Model setup failed"))
       expect(rejected).not.toContain("Compaction queued")
       expect(mutations).toEqual(["model"])
     } finally {
@@ -195,17 +196,17 @@ test.each(["first", "second"])(
     const selectModel = async (id: string) => {
       await setup.mockInput.typeText("/models")
       setup.mockInput.pressEnter()
-      await setup.waitForFrame(
+      await waitForFrame(setup,
         (frame) => frame.includes("Select model") && setup.renderer.currentFocusedRenderable instanceof InputRenderable,
       )
       await setup.mockInput.typeText(id)
       await setup.renderOnce()
       setup.mockInput.pressEnter()
-      await setup.waitForFrame((frame) => frame.includes(`${id} model`) && !frame.includes("Select model"))
+      await waitForFrame(setup, (frame) => frame.includes(`${id} model`) && !frame.includes("Select model"))
     }
     try {
       await ready.promise
-      await setup.waitForFrame((frame) => frame.includes(`${initial} model`))
+      await waitForFrame(setup, (frame) => frame.includes(`${initial} model`))
       await setup.mockInput.typeText("First prompt")
       setup.mockInput.pressEnter()
       await firstRequested.promise
@@ -213,11 +214,11 @@ test.each(["first", "second"])(
       if (initial !== "first") await selectModel("first")
       await setup.mockInput.typeText("/compact")
       setup.mockInput.pressEnter()
-      await setup.waitForFrame((frame) => frame.includes("Compaction queued"))
+      await waitForFrame(setup, (frame) => frame.includes("Compaction queued"))
       await selectModel("second")
       await setup.mockInput.typeText("Second prompt")
       setup.mockInput.pressEnter()
-      await setup.waitForFrame((frame) => frame.split("\n").slice(0, 20).join("\n").includes("Second prompt"))
+      await waitForFrame(setup, (frame) => frame.split("\n").slice(0, 20).join("\n").includes("Second prompt"))
       expect(mutations).toHaveLength(submitted)
       first.resolve()
       expect(await secondRequested.promise).toBe("second")
@@ -313,7 +314,7 @@ async function compactApp(width: number, serverCommands: Array<{ name: string; d
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
   await ready.promise
-  await setup.waitForFrame((frame) => frame.includes("Demo Model"))
+  await waitForFrame(setup, (frame) => frame.includes("Demo Model"))
   return {
     setup,
     compacts,
@@ -322,10 +323,10 @@ async function compactApp(width: number, serverCommands: Array<{ name: string; d
     hold,
     async submit(text: string) {
       await setup.mockInput.typeText(text)
-      await setup.waitForFrame((frame) => frame.includes(text))
+      await waitForFrame(setup, (frame) => frame.includes(text))
       setup.mockInput.pressEnter()
       // The line is cleared just before the command runs, so the command has been handled once it is gone.
-      await setup.waitForFrame((frame) => !frame.includes(text))
+      await waitForFrame(setup, (frame) => !frame.includes(text))
     },
     async close() {
       hold.first?.resolve()
@@ -345,7 +346,7 @@ test.each([70, 120])("/compact with text sends its instructions and no prompt at
     await waitUntil(() => app.compacts.length === 1)
     expect(app.compacts[0]).toMatchObject({ instructions: "focus on tests" })
     expect(app.prompts).toEqual([])
-    const frame = await app.setup.waitForFrame((frame) => frame.includes("Compaction queued"))
+    const frame = await waitForFrame(app.setup, (frame) => frame.includes("Compaction queued"))
     // The text is not left in the prompt, and the command is not sent as a message.
     expect(frame).not.toContain("focus on tests")
 
@@ -381,10 +382,10 @@ test("Tab at the command list fills in /compact for text, and the text then goes
   const app = await compactApp(100)
   try {
     await app.setup.mockInput.typeText("/compact")
-    await app.setup.waitForFrame((frame) => frame.includes("Compact session"))
+    await waitForFrame(app.setup, (frame) => frame.includes("Compact session"))
     app.setup.mockInput.pressTab()
     // Nothing ran: Tab only filled in the name.
-    await app.setup.waitForFrame((frame) => frame.includes("/compact "))
+    await waitForFrame(app.setup, (frame) => frame.includes("/compact "))
     expect(app.compacts).toEqual([])
     await app.submit("keep the schema notes")
     await waitUntil(() => app.compacts.length === 1)
@@ -399,11 +400,11 @@ test("/compact with text cannot be queued: it warns and sends nothing", async ()
   const app = await compactApp(100)
   try {
     await app.setup.mockInput.typeText("/compact focus on tests")
-    await app.setup.waitForFrame((frame) => frame.includes("focus on tests"))
+    await waitForFrame(app.setup, (frame) => frame.includes("focus on tests"))
     // The queue gesture is the leader key, then Enter.
     app.setup.mockInput.pressKey("x", { ctrl: true })
     app.setup.mockInput.pressEnter()
-    await app.setup.waitForFrame((frame) => frame.includes("This prompt cannot be queued"))
+    await waitForFrame(app.setup, (frame) => frame.includes("This prompt cannot be queued"))
     expect(app.compacts).toEqual([])
     expect(app.prompts).toEqual([])
   } finally {

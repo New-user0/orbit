@@ -6,6 +6,7 @@ import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
 import type { Config } from "../src/config"
 import { runProgram } from "../../core/test/fixture/run-program"
+import { waitForFrame } from "./fixture/frame"
 
 // The other doors a plugin reaches the TUI by: a package named in cli.json, one the server lists for the TUI, and a
 // folder reached through a link. Each is checked in this process, before the package is prepared or the folder read.
@@ -53,7 +54,7 @@ async function run(input: {
       },
     })
     await setup.ready
-    await setup.waitForFrame((frame) => promptReady(frame))
+    await waitForFrame(setup, (frame) => promptReady(frame))
     await setup.flush()
     await input.check(setup, prepared)
   })

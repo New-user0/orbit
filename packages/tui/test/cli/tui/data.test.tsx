@@ -27,6 +27,7 @@ import { createApi, createEventStream, createFetch, directory, json, worktree } 
 import { emptyThemeSource } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { waitForFrame } from "../../fixture/frame"
 
 const formFields = [{ key: "authorization", type: "external", url: "https://example.com" }] satisfies [
   {
@@ -2309,7 +2310,7 @@ test("keeps shell state scoped to location", async () => {
       ["sh_other", other],
     ])
 
-    await app.waitForFrame((frame) => frame.includes("pnpm dev"))
+    await waitForFrame(app, (frame) => frame.includes("pnpm dev"))
     app.mockInput.pressArrow("down")
     app.mockInput.pressKey("d", { ctrl: true })
     await wait(() => removed !== undefined)
@@ -3826,7 +3827,7 @@ describe("context report", () => {
           type: "session.usage.updated",
           data: { sessionID: id, cost, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } },
         })
-        return app.waitForFrame((frame) => frame.includes(`$${cost}.00`))
+        return waitForFrame(app, (frame) => frame.includes(`$${cost}.00`))
       },
       async [Symbol.asyncDispose]() {
         app.renderer.destroy()
@@ -3856,10 +3857,10 @@ describe("context report", () => {
   test("draws the newest report of the session in view", async () => {
     await using setup = await renderFooter()
     setup.emit(report({ percentLeft: 9, used: 164_000 }))
-    await setup.app.waitForFrame((frame) => frame.includes(full(9)))
+    await waitForFrame(setup.app, (frame) => frame.includes(full(9)))
 
     setup.emit(report())
-    const frame = await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+    const frame = await waitForFrame(setup.app, (frame) => frame.includes(full(3)))
 
     expect(frame).not.toContain(full(9))
   })
@@ -3874,7 +3875,7 @@ describe("context report", () => {
   ])("draws nothing for $name", async (row) => {
     await using setup = await renderFooter()
     setup.emit(report())
-    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+    await waitForFrame(setup.app, (frame) => frame.includes(full(3)))
 
     setup.emit(row.next)
     const frame = await setup.settle()
@@ -3891,7 +3892,7 @@ describe("context report", () => {
     expect(frame).not.toContain("Context almost full")
     // Control: the other session's report is kept and drawn when that session is in view.
     setup.view("ses_other")
-    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+    await waitForFrame(setup.app, (frame) => frame.includes(full(3)))
   })
 
   test("keeps no report for a session it has not loaded", async () => {
@@ -3905,7 +3906,7 @@ describe("context report", () => {
     expect(frame).not.toContain("Context almost full")
     // Control: a report that arrives once the session is known is drawn.
     setup.emit(report({ sessionID: "ses_late", percentLeft: 2 }))
-    await setup.app.waitForFrame((frame) => frame.includes(full(2)))
+    await waitForFrame(setup.app, (frame) => frame.includes(full(2)))
   })
 
   test.each([
@@ -3982,7 +3983,7 @@ describe("context report", () => {
   ])("forgets the report when $name", async (row) => {
     await using setup = await renderFooter()
     setup.emit(report())
-    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+    await waitForFrame(setup.app, (frame) => frame.includes(full(3)))
 
     await row.run(setup)
     const frame = await setup.settle()
@@ -3993,7 +3994,7 @@ describe("context report", () => {
   test("keeps the report when another location's configuration changes", async () => {
     await using setup = await renderFooter()
     setup.emit(report())
-    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+    await waitForFrame(setup.app, (frame) => frame.includes(full(3)))
 
     // emitEvent stamps the default location; this event belongs to another one.
     setup.events.emit({
@@ -4010,7 +4011,7 @@ describe("context report", () => {
   test("hides the line while a revert is staged, draws it when the revert is cleared and forgets it when committed", async () => {
     await using setup = await renderFooter()
     setup.emit(report())
-    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+    await waitForFrame(setup.app, (frame) => frame.includes(full(3)))
 
     emitEvent(setup.events, {
       id: "evt_context_staged",
@@ -4029,7 +4030,7 @@ describe("context report", () => {
       durable: durable(sessionID, 4),
       data: { sessionID },
     })
-    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+    await waitForFrame(setup.app, (frame) => frame.includes(full(3)))
 
     emitEvent(setup.events, {
       id: "evt_context_committed",
@@ -4048,7 +4049,7 @@ describe("context report", () => {
   ])("draws a muted line with automatic compaction $name", async (row) => {
     await using setup = await renderFooter()
     setup.emit(auto({ paused: row.paused }))
-    await setup.app.waitForFrame((frame) => frame.includes(before(4)))
+    await waitForFrame(setup.app, (frame) => frame.includes(before(4)))
 
     const colors = colorsOf(setup.app, before(4))
     expect(colors.length).toBeGreaterThan(0)
@@ -4061,7 +4062,7 @@ describe("context report", () => {
   ])("draws the $state feedback color with automatic compaction off", async (row) => {
     await using setup = await renderFooter()
     setup.emit(report({ state: row.state }))
-    await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+    await waitForFrame(setup.app, (frame) => frame.includes(full(3)))
 
     const colors = colorsOf(setup.app, full(3))
     expect(colors.length).toBeGreaterThan(0)
@@ -4071,7 +4072,7 @@ describe("context report", () => {
   test("draws the line in shell mode too", async () => {
     await using setup = await renderFooter({ mode: "shell" })
     setup.emit(report())
-    const frame = await setup.app.waitForFrame((frame) => frame.includes(full(3)))
+    const frame = await waitForFrame(setup.app, (frame) => frame.includes(full(3)))
 
     expect(frame).toContain("esc")
   })
@@ -4080,14 +4081,14 @@ describe("context report", () => {
     const [details, setDetails] = createSignal(true)
     await using setup = await renderFooter({ width: 60, showDetails: details })
     setup.emit(report())
-    await setup.app.waitForFrame((frame) => frame.includes("Context almost full (3% left)"))
+    await waitForFrame(setup.app, (frame) => frame.includes("Context almost full (3% left)"))
 
     setDetails(false)
-    const frame = await setup.app.waitForFrame((frame) => !frame.includes("Context almost full"))
+    const frame = await waitForFrame(setup.app, (frame) => !frame.includes("Context almost full"))
 
     expect(frame).not.toContain("Context almost full")
     setDetails(true)
-    await setup.app.waitForFrame((frame) => frame.includes("Context almost full (3% left)"))
+    await waitForFrame(setup.app, (frame) => frame.includes("Context almost full (3% left)"))
   })
 })
 

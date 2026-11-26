@@ -16,16 +16,17 @@ import { createApi, createEventStream, createFetch, json } from "../../fixture/t
 import { emptyThemeSource } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { waitForFrame } from "../../fixture/frame"
 
 test.each(["enter", "space"])("starts OAuth with %s for an MCP server requiring authentication", async (key) => {
   const fixture = await renderMcp()
 
   try {
-    await fixture.app.waitForFrame((frame) => frame.includes("Sign in required"))
+    await waitForFrame(fixture.app, (frame) => frame.includes("Sign in required"))
     expect(fixture.app.captureCharFrame()).not.toContain("enter to view error")
     if (key === "enter") fixture.app.mockInput.pressEnter()
     else fixture.app.mockInput.pressKey(" ")
-    await fixture.app.waitForFrame((frame) => frame.includes("Waiting for authorization"))
+    await waitForFrame(fixture.app, (frame) => frame.includes("Waiting for authorization"))
 
     expect(fixture.oauth).toBe(1)
     expect(fixture.connect).toBe(0)
@@ -39,11 +40,11 @@ test("opens an investigation draft for a failed MCP server at its originating lo
   const fixture = await renderMcp({ failed: true, location })
 
   try {
-    await fixture.app.waitForFrame((frame) => frame.includes("Failed !"))
+    await waitForFrame(fixture.app, (frame) => frame.includes("Failed !"))
     fixture.app.mockInput.pressEnter()
-    await fixture.app.waitForFrame((frame) => frame.includes("i investigate"))
+    await waitForFrame(fixture.app, (frame) => frame.includes("i investigate"))
     fixture.app.mockInput.pressKey("i")
-    await fixture.app.waitForFrame((frame) => !frame.includes("MCP server: linear"))
+    await waitForFrame(fixture.app, (frame) => !frame.includes("MCP server: linear"))
 
     expect(fixture.route.data.type).toBe("home")
     if (fixture.route.data.type !== "home") throw new Error("Expected investigation to open a new session")

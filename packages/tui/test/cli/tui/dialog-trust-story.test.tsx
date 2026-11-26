@@ -12,6 +12,7 @@ import { ToastProvider } from "../../../src/ui/toast"
 import { emptyThemeSource } from "../../fixture/fixture"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { waitForFrame } from "../../fixture/frame"
 
 // The trust dialog's story draws the real dialog for a folder that is not trusted, for each kind of root: a project,
 // which a grant is kept for, and a home directory or filesystem root, which are trusted only until Orbit restarts. The
@@ -47,7 +48,7 @@ async function render() {
     { width: 110, height: 34, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("storybook / trust dialog"))
+  await waitForFrame(app, (frame) => frame.includes("storybook / trust dialog"))
   return app
 }
 
@@ -55,28 +56,28 @@ test("the story asks about each kind of root as the real dialog does, and its re
   const app = await render()
   try {
     // A project: the dialog opens at once, and its grant is kept.
-    const project = await app.waitForFrame(
+    const project = await waitForFrame(app,
       (frame) => frame.includes("Trust this folder?") && frame.includes("project · untrusted"),
     )
     expect(project).toContain("/Users/kit/code/orbit-app")
     expect(project).toContain("Trust this folder")
     expect(project).not.toContain("Trust until Orbit restarts")
     app.mockInput.pressEscape()
-    await app.waitForFrame((frame) => !frame.includes("Trust this folder?") && frame.includes("dialog dismissed"))
+    await waitForFrame(app, (frame) => !frame.includes("Trust this folder?") && frame.includes("dialog dismissed"))
 
     // A home directory: trusted only until Orbit restarts.
     app.mockInput.pressKey("r")
-    await app.waitForFrame((frame) => frame.includes("home directory · untrusted"))
+    await waitForFrame(app, (frame) => frame.includes("home directory · untrusted"))
     app.mockInput.pressKey("o")
-    const home = await app.waitForFrame((frame) => frame.includes("Trust until Orbit restarts"))
+    const home = await waitForFrame(app, (frame) => frame.includes("Trust until Orbit restarts"))
     expect(home).toContain("/Users/kit")
     expect(home).not.toContain("orbit-app")
     app.mockInput.pressEscape()
-    await app.waitForFrame((frame) => !frame.includes("Trust this folder?"))
+    await waitForFrame(app, (frame) => !frame.includes("Trust this folder?"))
 
     // The reset goes back to the project and opens its question again.
     app.mockInput.pressKey("x")
-    const reset = await app.waitForFrame(
+    const reset = await waitForFrame(app,
       (frame) => frame.includes("project · untrusted") && frame.includes("Trust this folder?"),
     )
     expect(reset).toContain("/Users/kit/code/orbit-app")

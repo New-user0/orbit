@@ -4,6 +4,7 @@ import path from "node:path"
 import { directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
 import { createAppFixture } from "./fixture/app"
+import { waitForFrame } from "./fixture/frame"
 
 // The whole app, with a real status line command: what the Prompt hands to the line (the agent, the selected model and
 // variant, the session's location, the context of the selected model) and what refreshes it (the selections, the
@@ -198,12 +199,12 @@ console.log("n=" + n + " " + JSON.stringify({
     return focused instanceof InputRenderable && !focused.isDestroyed ? focused : undefined
   }
   setup.mockInput.pressKey("F8")
-  await setup.waitForFrame((frame) => frame.includes("Select model") && filter() !== undefined)
+  await waitForFrame(setup, (frame) => frame.includes("Select model") && filter() !== undefined)
   await setup.mockInput.typeText("second")
   await setup.waitFor(() => filter()?.value === "second")
-  await setup.waitForFrame((frame) => frame.includes("second model"))
+  await waitForFrame(setup, (frame) => frame.includes("second model"))
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => !frame.includes("Select model"))
+  await waitForFrame(setup, (frame) => !frame.includes("Select model"))
   const selected = await line((row) => row.includes('"model":"second"'))
   expect(runs(selected)).toBeGreaterThan(beforeModel)
   expect(selected).toContain('"used":400,"limit":2000,"percent":20')

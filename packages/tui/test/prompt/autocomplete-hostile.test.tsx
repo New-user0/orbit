@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { createAppFixture, promptReady } from "../fixture/app"
 import { directory, json } from "../fixture/tui-client"
+import { waitForFrame } from "../fixture/frame"
 
 // Skill and command text comes from repository files, so the @ and / pickers draw it through `plain`.
 const hostile = "line\u001b]0;pwned\u0007 one‮\r\ntwo three"
@@ -29,9 +30,9 @@ async function draw(prefix: string, trusted: string) {
     },
   })
   await setup.ready
-  await setup.waitForFrame((frame) => promptReady(frame))
+  await waitForFrame(setup, (frame) => promptReady(frame))
   await setup.mockInput.typeText(prefix + "zz")
-  return await setup.waitForFrame((frame) => frame.includes(trusted))
+  return await waitForFrame(setup, (frame) => frame.includes(trusted))
 }
 
 test.each([

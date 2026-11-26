@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { createAppFixture } from "./fixture/app"
 import { json } from "./fixture/tui-client"
+import { waitForFrame } from "./fixture/frame"
 
 type SessionInput = { id?: string; location?: { directory: string } }
 
@@ -67,10 +68,10 @@ test("the first new session uses the launch session ID and later ones mint their
   await using setup = run.setup
 
   await setup.ready
-  await setup.waitForFrame((frame) => frame.includes("Demo Model"))
+  await waitForFrame(setup, (frame) => frame.includes("Demo Model"))
   await setup.mockInput.typeText("hello")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame(() => run.prompts.length === 1)
+  await waitForFrame(setup, () => run.prompts.length === 1)
   expect(run.prompts[0]).toBe("ses_chosen")
   expect(run.created.map((item) => item.id)).toEqual(["ses_chosen"])
 
@@ -78,7 +79,7 @@ test("the first new session uses the launch session ID and later ones mint their
   await setup.renderOnce()
   await setup.mockInput.typeText("again")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame(() => run.created.length === 2)
+  await waitForFrame(setup, () => run.created.length === 2)
   expect(run.created[1]?.id).toMatch(/^ses/)
   expect(run.created[1]?.id).not.toBe("ses_chosen")
 })
@@ -88,13 +89,13 @@ test("a failed first create keeps the launch session ID for the retry", async ()
   await using setup = run.setup
 
   await setup.ready
-  await setup.waitForFrame((frame) => frame.includes("Demo Model"))
+  await waitForFrame(setup, (frame) => frame.includes("Demo Model"))
   await setup.mockInput.typeText("hello")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => frame.includes("Creating a session failed") && frame.includes("hello"))
+  await waitForFrame(setup, (frame) => frame.includes("Creating a session failed") && frame.includes("hello"))
   expect(run.attempts).toEqual(["ses_chosen"])
 
   setup.mockInput.pressEnter()
-  await setup.waitForFrame(() => run.created.length === 1)
+  await waitForFrame(setup, () => run.created.length === 1)
   expect(run.attempts).toEqual(["ses_chosen", "ses_chosen"])
 })

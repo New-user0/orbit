@@ -5,6 +5,7 @@ import { IdeLock } from "@orbit/util/ide-lock"
 import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { directory, json } from "./fixture/tui-client"
+import { waitForFrame } from "./fixture/frame"
 
 // The built-in commands that this task registers, run from the prompt of the real app.
 
@@ -41,7 +42,7 @@ function render(state: string, config: Record<string, unknown> = {}) {
 }
 
 async function command(setup: Awaited<ReturnType<typeof render>>, text: string, enters = 1) {
-  await setup.waitForFrame((frame) => promptReady(frame))
+  await waitForFrame(setup, (frame) => promptReady(frame))
   await Bun.sleep(150)
   await setup.mockInput.typeText(text)
   // A command that takes arguments is first completed by Enter, and run by the next.
@@ -59,21 +60,21 @@ test.each([
   await using state = await tmpdir()
   await using setup = await render(state.path)
   await command(setup, slash)
-  await setup.waitForFrame((frame) => frame.includes(title))
+  await waitForFrame(setup, (frame) => frame.includes(title))
 })
 
 test("/memory opens the memory dialog with what the server lists", async () => {
   await using state = await tmpdir()
   await using setup = await render(state.path)
   await command(setup, "/memory")
-  await setup.waitForFrame((frame) => frame.includes("Memory across sessions: off"))
+  await waitForFrame(setup, (frame) => frame.includes("Memory across sessions: off"))
 })
 
 test("/todos on the home route says there is no session", async () => {
   await using state = await tmpdir()
   await using setup = await render(state.path)
   await command(setup, "/todos")
-  await setup.waitForFrame((frame) => frame.includes("No session is open."))
+  await waitForFrame(setup, (frame) => frame.includes("No session is open."))
 })
 
 test("/terminal-setup in a terminal it does not know lists the newline keys that already work", async () => {
@@ -81,7 +82,7 @@ test("/terminal-setup in a terminal it does not know lists the newline keys that
   await using setup = await render(state.path)
   await command(setup, "/terminal-setup")
   // The test renderer reports no capabilities and the environment names no terminal.
-  await setup.waitForFrame((frame) => frame.replace(/\s+/g, " ").includes("already insert a newline"))
+  await waitForFrame(setup, (frame) => frame.replace(/\s+/g, " ").includes("already insert a newline"))
 })
 
 test("/ide lists the window that holds the folder, connects to it, and disconnects again", async () => {
@@ -120,7 +121,7 @@ test("/ide lists the window that holds the folder, connects to it, and disconnec
     )
     await using setup = await render(state.path)
     await command(setup, "/ide", 2)
-    const listed = await setup.waitForFrame((frame) => frame.includes("Select an editor") && frame.includes("Test Editor"))
+    const listed = await waitForFrame(setup, (frame) => frame.includes("Select an editor") && frame.includes("Test Editor"))
     expect(listed).toContain("No editor")
     // Outside an editor nothing connected by itself.
     expect(sockets.size).toBe(0)
@@ -132,7 +133,7 @@ test("/ide lists the window that holds the folder, connects to it, and disconnec
     expect(sockets.size).toBe(1)
 
     await command(setup, "/ide", 2)
-    await setup.waitForFrame((frame) => frame.includes("Select an editor"))
+    await waitForFrame(setup, (frame) => frame.includes("Select an editor"))
     await Bun.sleep(100)
     // The window just connected to is focused, and "No editor" is the row below it.
     setup.mockInput.pressArrow("down")
@@ -148,7 +149,7 @@ test("/ide with an argument other than open says how it is used", async () => {
   await using state = await tmpdir()
   await using setup = await render(state.path)
   await command(setup, "/ide nonsense")
-  await setup.waitForFrame((frame) => frame.replace(/\s+/g, " ").includes("or /ide open"))
+  await waitForFrame(setup, (frame) => frame.replace(/\s+/g, " ").includes("or /ide open"))
 })
 
 // Class 9: the folder of the session and the name an editor gave its lock reach the toasts of /ide, and each can hold an
@@ -190,7 +191,7 @@ test("the toasts of /ide open write out the control characters of a folder and a
     },
   })
   await command(setup, "/ide open", 2)
-  const frame = await setup.waitForFrame((frame) => frame.includes("cannot start"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("cannot start"))
   // The toast names the editor and the folder with their escape characters written out, not acted on.
   const toast = frame.replace(/\s+/g, "")
   expect(toast).toContain("Nope\\x1b[31m\\x1b]0;x\\x07Editor")

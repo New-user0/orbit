@@ -34,6 +34,7 @@ import { emptyThemeSource, tmpdir } from "./fixture/fixture"
 import { createApi, createEventStream, createFetch, directory, json, worktree } from "./fixture/tui-client"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+import { waitForFrame } from "./fixture/frame"
 
 const environment = { port: process.env.ORBIT_EDITOR_SSE_PORT, program: process.env.TERM_PROGRAM }
 afterEach(() => {
@@ -928,23 +929,23 @@ test("the app's settings and palette list Diff tool while an editor is linked", 
   })
   try {
     await setup.ready
-    await setup.waitForFrame(promptReady)
+    await waitForFrame(setup, promptReady)
     while (peer.of("hello").length === 0) await Bun.sleep(20)
     await Bun.sleep(200)
 
     setup.mockInput.pressKey("F6")
-    await setup.waitForFrame((frame) => frame.includes("Settings") && frame.includes("Color mode"))
+    await waitForFrame(setup, (frame) => frame.includes("Settings") && frame.includes("Color mode"))
     await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof InputRenderable)
     await setup.mockInput.typeText("diff tool")
-    await setup.waitForFrame((frame) => frame.includes("Diff tool"))
+    await waitForFrame(setup, (frame) => frame.includes("Diff tool"))
     setup.mockInput.pressEscape()
-    await setup.waitForFrame((frame) => !frame.includes("Diff tool"))
+    await waitForFrame(setup, (frame) => !frame.includes("Diff tool"))
 
     setup.mockInput.pressKey("p", { ctrl: true })
-    await setup.waitForFrame((frame) => frame.includes("Commands"))
+    await waitForFrame(setup, (frame) => frame.includes("Commands"))
     await setup.waitFor(() => setup.renderer.currentFocusedEditor instanceof InputRenderable)
     await setup.mockInput.typeText("diff tool")
-    await setup.waitForFrame((frame) => frame.includes("Diff tool"))
+    await waitForFrame(setup, (frame) => frame.includes("Diff tool"))
   } finally {
     await peer.stop()
   }
@@ -982,7 +983,7 @@ test("a prompt sent to the model closes every diff tab; a shell command does not
     },
   })
   try {
-    await setup.waitForFrame(promptReady)
+    await waitForFrame(setup, promptReady)
     while (peer.of("hello").length === 0) await Bun.sleep(20)
     await Bun.sleep(200)
 

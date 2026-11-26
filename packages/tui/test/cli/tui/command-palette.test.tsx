@@ -11,6 +11,7 @@ import { DialogProvider, useDialog } from "../../../src/ui/dialog"
 import { ToastProvider } from "../../../src/ui/toast"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { emptyThemeSource } from "../../fixture/fixture"
+import { waitForFrame } from "../../fixture/frame"
 
 // The real palette over a config held in memory. `linked` says whether an editor is linked, as the app passes it.
 async function palette(linked?: () => boolean) {
@@ -69,7 +70,7 @@ async function palette(linked?: () => boolean) {
     { width: 80, height: 24, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("New session"))
+  await waitForFrame(app, (frame) => frame.includes("New session"))
   await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
   return { app, state }
 }
@@ -82,7 +83,7 @@ test("searches settings globally and opens the matching setting", async () => {
     app.mockInput.pressArrow("down")
     for (const key of "image preview") app.mockInput.pressKey(key)
     app.mockInput.pressEnter()
-    await app.waitForFrame((frame) => frame.includes("Settings") && frame.includes("Image previews"))
+    await waitForFrame(app, (frame) => frame.includes("Settings") && frame.includes("Image previews"))
     app.mockInput.pressEnter()
     await app.waitFor(() => state.current.prompt?.image_preview === true)
   } finally {
@@ -99,12 +100,12 @@ test("the palette finds Diff tool only while linked to an editor, and the settin
     try {
       for (const key of "diff tool") app.mockInput.pressKey(key)
       // Typing narrows the list to what matches; "Diff tool" is among it only while linked.
-      await app.waitForFrame((frame) => !frame.includes("New session"))
+      await waitForFrame(app, (frame) => !frame.includes("New session"))
       await Bun.sleep(100)
       expect([linked, app.captureCharFrame().includes("Diff tool")]).toEqual([linked, linked === true])
       if (!linked) continue
       app.mockInput.pressEnter()
-      await app.waitForFrame((frame) => frame.includes("Settings") && frame.includes("Diff tool"))
+      await waitForFrame(app, (frame) => frame.includes("Settings") && frame.includes("Diff tool"))
       app.mockInput.pressEnter()
       await app.waitFor(() => state.current.diffs?.tool === "terminal")
     } finally {

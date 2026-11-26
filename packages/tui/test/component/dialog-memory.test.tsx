@@ -8,6 +8,7 @@ import type { JSX } from "solid-js"
 import { tmpdir } from "../fixture/fixture"
 import { renderLocal } from "../fixture/local"
 import { json } from "../fixture/tui-client"
+import { waitForFrame } from "../fixture/frame"
 
 // The real dialog, the real client and a recording server: what the dialog asks the server for, what it starts and what it
 // draws are what is asserted. `/memory` posts a target and opens only the path the server answered (class 3); every
@@ -122,7 +123,7 @@ function server(dir: string, input: { listing: () => Listing; answer?: (target: 
 const flat = (frame: string) => frame.replace(/\s+/g, " ")
 
 async function until(setup: Awaited<ReturnType<typeof renderLocal>>, text: string) {
-  const frame = await setup.waitForFrame((frame) => flat(frame).includes(text))
+  const frame = await waitForFrame(setup, (frame) => flat(frame).includes(text))
   await Bun.sleep(60)
   return frame
 }

@@ -3,6 +3,7 @@ import { InputRenderable, TextareaRenderable } from "@opentui/core"
 import { directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
 import { createAppFixture } from "./fixture/app"
+import { waitForFrame } from "./fixture/frame"
 
 test("custom commands commit the captured agent, model and variant before execution", async () => {
   await using state = await tmpdir()
@@ -61,9 +62,9 @@ test("custom commands commit the captured agent, model and variant before execut
   })
   try {
     await setup.ready
-    await setup.waitForFrame((frame) => frame.includes("Build · first model"))
+    await waitForFrame(setup, (frame) => frame.includes("Build · first model"))
     setup.mockInput.pressKey("F6")
-    await setup.waitForFrame((frame) => frame.includes("Plan ·"))
+    await waitForFrame(setup, (frame) => frame.includes("Plan ·"))
     // A dialog focuses its filter on a timer after it is first drawn, and keys sent before that reach no input: Enter
     // then picks the dialog's current entry (Default for the variant). Each step waits for the live filter to hold focus,
     // types, and waits for the filter to hold the text before it presses Enter.
@@ -72,17 +73,17 @@ test("custom commands commit the captured agent, model and variant before execut
       return focused instanceof InputRenderable && !focused.isDestroyed ? focused : undefined
     }
     setup.mockInput.pressKey("F8")
-    await setup.waitForFrame((frame) => frame.includes("Select model") && filter() !== undefined)
+    await waitForFrame(setup, (frame) => frame.includes("Select model") && filter() !== undefined)
     await setup.mockInput.typeText("second")
     await setup.waitFor(() => filter()?.value === "second")
     await setup.renderOnce()
     setup.mockInput.pressEnter()
-    await setup.waitForFrame((frame) => frame.includes("Select variant") && frame.includes("low") && filter() !== undefined)
+    await waitForFrame(setup, (frame) => frame.includes("Select variant") && frame.includes("low") && filter() !== undefined)
     await setup.mockInput.typeText("low")
     await setup.waitFor(() => filter()?.value === "low")
     await setup.renderOnce()
     setup.mockInput.pressEnter()
-    await setup.waitForFrame(
+    await waitForFrame(setup,
       (frame) =>
         frame.includes("Plan · second model Demo · low") &&
         setup.renderer.currentFocusedRenderable instanceof TextareaRenderable,
@@ -114,11 +115,3 @@ test("custom commands commit the captured agent, model and variant before execut
     model.resolve(new Response(null, { status: 204 }))
   }
 })
-
-async function waitForFrame(setup: Awaited<ReturnType<typeof createAppFixture>>, matches: (frame: string) => boolean) {
-  const started = Date.now()
-  while (!matches(setup.captureCharFrame())) {
-    if (Date.now() - started > 2_000) throw new Error("Timed out waiting for command selection frame")
-    await Bun.sleep(10)
-  }
-}

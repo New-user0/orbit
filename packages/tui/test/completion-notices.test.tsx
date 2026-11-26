@@ -5,6 +5,7 @@ import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
+import { waitForFrame } from "./fixture/frame"
 
 test.each([40, 120])("shell completion notices do not navigate at width %s", async (width) => {
   await using state = await tmpdir()
@@ -99,7 +100,7 @@ test.each([40, 120])("shell completion notices do not navigate at width %s", asy
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
   try {
-    await setup.waitForFrame((frame) => frame.includes("Shell cancelled"))
+    await waitForFrame(setup, (frame) => frame.includes("Shell cancelled"))
     await setup.waitForVisualIdle()
     const find = (root: Renderable): ScrollBoxRenderable | undefined =>
       root instanceof ScrollBoxRenderable && root.getRenderable("history-19")
@@ -180,13 +181,13 @@ test.each([40, 120])("subagent completion notices navigate to the child session 
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
   try {
-    await setup.waitForFrame((frame) => frame.includes("General finished"))
+    await waitForFrame(setup, (frame) => frame.includes("General finished"))
     await setup.waitForVisualIdle()
     const lines = setup.captureCharFrame().split("\n")
     const y = lines.findIndex((line) => line.includes("General finished"))
     const x = lines[y].indexOf("General finished")
     await setup.mockMouse.click(x + 1, y)
-    await setup.waitForFrame((frame) => frame.includes("Investigate authentication"))
+    await waitForFrame(setup, (frame) => frame.includes("Investigate authentication"))
   } finally {
     setup.renderer.destroy()
     await task

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { createAppFixture } from "./fixture/app"
 import { directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
+import { waitForFrame } from "./fixture/frame"
 
 const location = { directory, project: { id: "project", directory, canonical: directory } }
 const session = {
@@ -48,10 +49,10 @@ test("/clear replaces the active session tab", async () => {
   await using state = await tmpdir()
   await using setup = await render(state.path)
 
-  await setup.waitForFrame((frame) => frame.includes("Session to clear"))
+  await waitForFrame(setup, (frame) => frame.includes("Session to clear"))
   await setup.mockInput.typeText("/clear")
   setup.mockInput.pressEnter()
-  const frame = await setup.waitForFrame((frame) => !open(frame))
+  const frame = await waitForFrame(setup, (frame) => !open(frame))
 
   expect(open(frame)).toBe(false)
 })
@@ -60,10 +61,10 @@ test("/new keeps the active session tab", async () => {
   await using state = await tmpdir()
   await using setup = await render(state.path)
 
-  await setup.waitForFrame((frame) => frame.includes("Session to clear"))
+  await waitForFrame(setup, (frame) => frame.includes("Session to clear"))
   await setup.mockInput.typeText("/new")
   setup.mockInput.pressEnter()
-  const frame = await setup.waitForFrame((frame) => frame.includes("New session") && frame.includes("Session to clear"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("New session") && frame.includes("Session to clear"))
 
   expect(frame).toContain("Session to clear")
 })

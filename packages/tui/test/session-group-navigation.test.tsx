@@ -7,6 +7,7 @@ import type { SessionMessageInfo } from "@orbit/client"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
 import { mkdir } from "node:fs/promises"
+import { waitForFrame } from "./fixture/frame"
 
 test.each([
   [48, 30],
@@ -107,10 +108,10 @@ test.each([
       }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
     )
     try {
-      await setup.waitForFrame((frame) => frame.includes("Final marker"))
+      await waitForFrame(setup, (frame) => frame.includes("Final marker"))
       expect(setup.captureCharFrame()).not.toContain("Second thought body")
       setup.mockInput.pressKey("u", { ctrl: true, shift: true })
-      await setup.waitForFrame((frame) => frame.includes("Thought:"))
+      await waitForFrame(setup, (frame) => frame.includes("Thought:"))
       await setup.waitForVisualIdle({ quietFrames: 3 })
       const find = (node: Renderable): ScrollBoxRenderable | undefined =>
         node instanceof ScrollBoxRenderable && node.getRenderable("msg_b")
@@ -131,9 +132,9 @@ test.each([
           .findIndex((line) => line.includes("Thought:")) - initial.viewport.y
       if (lines > 0) expect(summaryOffset).toBe(0)
       setup.mockInput.pressKey("2", { ctrl: true })
-      await setup.waitForFrame((frame) => frame.includes("Other session content"))
+      await waitForFrame(setup, (frame) => frame.includes("Other session content"))
       setup.mockInput.pressKey("1", { ctrl: true })
-      await setup.waitForFrame((frame) => {
+      await waitForFrame(setup, (frame) => {
         const viewport = find(setup.renderer.root)
         return (
           !!viewport &&
@@ -155,24 +156,24 @@ test.each([
       setup.mockInput.pressKey("n", { ctrl: true, shift: true })
       await setup.waitForVisualIdle({ quietFrames: 3 })
       setup.mockInput.pressKey("n", { ctrl: true, shift: true })
-      await setup.waitForFrame((frame) => frame.includes("Second response"))
+      await waitForFrame(setup, (frame) => frame.includes("Second response"))
       await setup.waitForVisualIdle({ quietFrames: 3 })
       expect(setup.captureCharFrame()).not.toContain("Second thought body")
       setup.mockInput.pressKey("u", { ctrl: true, shift: true })
-      await setup.waitForFrame((frame) => frame.includes("Thought:"))
+      await waitForFrame(setup, (frame) => frame.includes("Thought:"))
       await setup.waitForVisualIdle({ quietFrames: 3 })
       const header = setup
         .captureCharFrame()
         .split("\n")
         .findIndex((line) => line.includes("Thought:"))
       await setup.mockMouse.click(8, header)
-      await setup.waitForFrame((frame) => frame.includes("First thought body"))
+      await waitForFrame(setup, (frame) => frame.includes("First thought body"))
       setup.mockInput.pressKey("u", { ctrl: true, shift: true })
       await setup.waitForVisualIdle({ quietFrames: 3 })
       setup.mockInput.pressKey("n", { ctrl: true, shift: true })
       await setup.waitForVisualIdle({ quietFrames: 3 })
       setup.mockInput.pressKey("n", { ctrl: true, shift: true })
-      await setup.waitForFrame((frame) => frame.includes("Second thought body"))
+      await waitForFrame(setup, (frame) => frame.includes("Second thought body"))
       await setup.waitForVisualIdle({ quietFrames: 3 })
       const scroll = find(setup.renderer.root)
       if (!scroll) throw new Error("Missing transcript scrollbox")
@@ -183,9 +184,9 @@ test.each([
       expect(titleLine - scroll.viewport.y).toBe(1)
       expect(scroll.scrollTop).toBeGreaterThan(0)
       setup.mockInput.pressKey("2", { ctrl: true })
-      await setup.waitForFrame((frame) => frame.includes("Other session content"))
+      await waitForFrame(setup, (frame) => frame.includes("Other session content"))
       setup.mockInput.pressKey("1", { ctrl: true })
-      await setup.waitForFrame((frame) => {
+      await waitForFrame(setup, (frame) => {
         const viewport = find(setup.renderer.root)
         return (
           !!viewport && frame.split("\n").findIndex((line) => line.includes("Second title")) - viewport.viewport.y === 1
@@ -203,7 +204,7 @@ test.each([
 
       // Save inside A's second part, not relative to A's earlier text part.
       setup.mockInput.pressKey("u", { ctrl: true, shift: true })
-      await setup.waitForFrame((frame) => frame.includes("First title"))
+      await waitForFrame(setup, (frame) => frame.includes("First title"))
       await setup.waitForVisualIdle({ quietFrames: 3 })
       const reading = find(setup.renderer.root)
       if (!reading) throw new Error("Missing reading viewport")
@@ -220,9 +221,9 @@ test.each([
           .findIndex((line) => line.includes("First thought body")) - reading.viewport.y
       expect(bodyOffset).toBe(0)
       setup.mockInput.pressKey("2", { ctrl: true })
-      await setup.waitForFrame((frame) => frame.includes("Other session content"))
+      await waitForFrame(setup, (frame) => frame.includes("Other session content"))
       setup.mockInput.pressKey("1", { ctrl: true })
-      await setup.waitForFrame((frame) => {
+      await waitForFrame(setup, (frame) => {
         const viewport = find(setup.renderer.root)
         return (
           !!viewport &&

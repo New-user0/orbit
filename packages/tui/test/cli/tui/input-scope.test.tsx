@@ -19,6 +19,7 @@ import { emptyThemeSource, tmpdir } from "../../fixture/fixture"
 import { createApi, createEventStream, createFetch, json } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { waitForFrame } from "../../fixture/frame"
 
 async function mountPanes(
   root: string,
@@ -326,7 +327,7 @@ test.each([
     try {
       panes.setActive(true)
       // The hint beside the prompt names whichever key the keymap holds for the command.
-      const hint = await panes.app.waitForFrame((frame) => /\S+ fullscreen/.test(frame))
+      const hint = await waitForFrame(panes.app, (frame) => /\S+ fullscreen/.test(frame))
       expect(hint.includes("ctrl+alt+f fullscreen")).toBe(toggles)
       expect(hint.includes("ctrl+f fullscreen")).toBe(!toggles)
 
@@ -348,7 +349,7 @@ test("permission rejection text keeps its draft and regains focus when its scope
   try {
     panes.setActive(true)
     panes.app.mockInput.pressEscape()
-    await panes.app.waitForFrame((frame) => frame.includes("Reject permission"))
+    await waitForFrame(panes.app, (frame) => frame.includes("Reject permission"))
     const input = panes.app.renderer.currentFocusedEditor
     expect(input).not.toBeNull()
     await panes.app.mockInput.typeText("choose another command")

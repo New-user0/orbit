@@ -5,6 +5,7 @@ import type { TuiInput } from "../../src/app"
 import type { Config } from "../../src/config"
 import { clearDrafts } from "../../src/component/prompt/draft-stash"
 import { tmpdir } from "./fixture"
+import { waitForFrame } from "./frame"
 import { createEventStream, createFetch, type FetchHandler } from "./tui-client"
 
 export async function createAppFixture(
@@ -67,23 +68,8 @@ export async function createAppFixture(
   )
   return {
     ...setup,
-    /**
-     * opentui's wait counts frames and gives up as soon as nothing is scheduled to draw, which a loaded runner reaches
-     * while the app still waits on a request it made (a frame timeout of `server plugin failures are visible`, Windows
-     * CI). This one keeps looking until the predicate holds or 10 s have passed, and then fails as opentui's does.
-     */
-    async waitForFrame(...args: Parameters<typeof setup.waitForFrame>) {
-      const deadline = Date.now() + 10_000
-      for (;;) {
-        const result = await setup.waitForFrame(...args).then(
-          (frame) => ({ frame }),
-          (error: unknown) => ({ error }),
-        )
-        if ("frame" in result) return result.frame
-        if (Date.now() >= deadline) throw result.error
-        await Bun.sleep(25)
-      }
-    },
+    /** The shared time-bounded wait (fixture/frame.ts), which also failed `server plugin failures are visible` once. */
+    waitForFrame: (...args: Parameters<typeof setup.waitForFrame>) => waitForFrame(setup, ...args),
     events,
     ready: ready.promise,
     /** Settles when the terminal UI has ended and done what it does at the end. */

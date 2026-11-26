@@ -3,6 +3,7 @@ import { projectedPromptInput } from "../src/prompt/codec"
 import { tmpdir } from "./fixture/fixture"
 import { conversation, linesWith, listHeading, rewindApp, session, sessionID, until } from "./fixture/rewind"
 import { json } from "./fixture/tui-client"
+import { waitForFrame } from "./fixture/frame"
 
 // m5-quality, FU-M5-002: a prompt the person gave as a slash command is shown and given back as they typed it,
 // `/name args`, as the reference shows it, while the model got the command's expansion. The server records the command
@@ -32,10 +33,10 @@ test.each([64, 120])(
   async (width) => {
     await using state = await tmpdir()
     await using setup = await rewindApp({ state: state.path, width, messages: withCommand })
-    await setup.waitForFrame((frame) => frame.includes("Renamed it."))
+    await waitForFrame(setup, (frame) => frame.includes("Renamed it."))
     await setup.mockInput.typeText("/rewind")
     setup.mockInput.pressEnter()
-    const list = await setup.waitForFrame((frame) => frame.includes(listHeading) && frame.includes("(current)"))
+    const list = await waitForFrame(setup, (frame) => frame.includes(listHeading) && frame.includes("(current)"))
     // The row and the transcript behind the picker draw the command; the expansion is drawn nowhere.
     expect(list).toContain(SHOWN)
     expect(list).not.toContain("EXPANDED-BODY")
@@ -46,7 +47,7 @@ test.each([64, 120])(
     setup.mockInput.pressArrow("up")
     setup.mockInput.pressArrow("up")
     setup.mockInput.pressEnter()
-    const confirm = await setup.waitForFrame((frame) => frame.includes("Code and conversation"))
+    const confirm = await waitForFrame(setup, (frame) => frame.includes("Code and conversation"))
     expect(linesWith(confirm, SHOWN)).toBeGreaterThan(0)
     expect(confirm).not.toContain("EXPANDED-BODY")
   },
@@ -55,19 +56,19 @@ test.each([64, 120])(
 test("a conversation rewind to a slash command's prompt puts the command back in the input", async () => {
   await using state = await tmpdir()
   await using setup = await rewindApp({ state: state.path, messages: withCommand })
-  await setup.waitForFrame((frame) => frame.includes("Renamed it."))
+  await waitForFrame(setup, (frame) => frame.includes("Renamed it."))
   await setup.mockInput.typeText("/rewind")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => frame.includes(listHeading))
+  await waitForFrame(setup, (frame) => frame.includes(listHeading))
   setup.mockInput.pressArrow("up")
   setup.mockInput.pressArrow("up")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  await waitForFrame(setup, (frame) => frame.includes("Conversation only"))
   setup.mockInput.pressArrow("down")
   setup.mockInput.pressEnter()
   await until(() => setup.actions().some((action) => action.startsWith("stage")), "the stage request")
   // The transcript keeps the prompt (the fake server sends no revert event) and the input holds it again: two lines.
-  const frame = await setup.waitForFrame(
+  const frame = await waitForFrame(setup,
     (frame) => !frame.includes("Do nothing") && !frame.includes(listHeading) && linesWith(frame, SHOWN) === 2,
     { maxPasses: 200 },
   )
@@ -117,7 +118,7 @@ test("a queued slash command, the timeline and the fork list draw the command, n
     messages: withCommand,
     answer: (request) => (request.path.endsWith("/inbox") ? json({ data: [queued] }) : undefined),
   })
-  const first = await setup.waitForFrame((frame) => frame.includes("Renamed it.") && frame.includes("/check src/later.ts"), {
+  const first = await waitForFrame(setup, (frame) => frame.includes("Renamed it.") && frame.includes("/check src/later.ts"), {
     maxPasses: 200,
   })
   expect(first).not.toContain("QUEUED-BODY")
@@ -129,12 +130,12 @@ test("a queued slash command, the timeline and the fork list draw the command, n
   ]) {
     await setup.mockInput.typeText(command)
     setup.mockInput.pressEnter()
-    const list = await setup.waitForFrame((frame) => frame.includes(title) && frame.includes(SHOWN), {
+    const list = await waitForFrame(setup, (frame) => frame.includes(title) && frame.includes(SHOWN), {
       maxPasses: 200,
     })
     expect(list).not.toContain("EXPANDED-BODY")
     setup.mockInput.pressEscape()
-    await setup.waitForFrame((frame) => !frame.includes(title))
+    await waitForFrame(setup, (frame) => !frame.includes(title))
   }
 })
 
@@ -156,10 +157,10 @@ test("a skill message is a row drawn by its name, whose conversation rewind puts
     ...conversation.slice(4),
   ]
   await using setup = await rewindApp({ state: state.path, messages })
-  await setup.waitForFrame((frame) => frame.includes("Renamed it."))
+  await waitForFrame(setup, (frame) => frame.includes("Renamed it."))
   await setup.mockInput.typeText("/rewind")
   setup.mockInput.pressEnter()
-  const list = await setup.waitForFrame((frame) => frame.includes(listHeading) && frame.includes("(current)"))
+  const list = await waitForFrame(setup, (frame) => frame.includes(listHeading) && frame.includes("(current)"))
   expect(linesWith(list, "/deploy")).toBeGreaterThan(0)
   expect(list).not.toContain("SKILL-INSTRUCTIONS")
 
@@ -167,7 +168,7 @@ test("a skill message is a row drawn by its name, whose conversation rewind puts
   setup.mockInput.pressArrow("up")
   setup.mockInput.pressArrow("up")
   setup.mockInput.pressEnter()
-  const confirm = await setup.waitForFrame((frame) => frame.includes("Conversation only"))
+  const confirm = await waitForFrame(setup, (frame) => frame.includes("Conversation only"))
   expect(confirm).toContain("/deploy")
   expect(confirm).not.toContain("Code only")
   setup.mockInput.pressEnter()
@@ -175,7 +176,7 @@ test("a skill message is a row drawn by its name, whose conversation rewind puts
   expect(setup.actions().filter((action) => action !== "interrupt" && action !== "wait")).toEqual([
     `stage ${JSON.stringify({ messageID: "msg_0004s", files: false })}`,
   ])
-  const frame = await setup.waitForFrame(
+  const frame = await waitForFrame(setup,
     (frame) => !frame.includes("Do nothing") && !frame.includes(listHeading) && linesWith(frame, "/deploy") > 0,
     { maxPasses: 200 },
   )
@@ -190,10 +191,10 @@ test("a prompt of several lines is one line on its row", async () => {
     message.id === "msg_0003" ? { ...message, text: "Rename the helper\nand every caller" } : message,
   )
   await using setup = await rewindApp({ state: state.path, messages: lines })
-  await setup.waitForFrame((frame) => frame.includes("Renamed it."))
+  await waitForFrame(setup, (frame) => frame.includes("Renamed it."))
   await setup.mockInput.typeText("/rewind")
   setup.mockInput.pressEnter()
-  const list = await setup.waitForFrame((frame) => frame.includes(listHeading) && frame.includes("(current)"))
+  const list = await waitForFrame(setup, (frame) => frame.includes(listHeading) && frame.includes("(current)"))
   expect(linesWith(list, "Rename the helper and every caller")).toBe(1)
 })
 
@@ -218,7 +219,7 @@ test("the Markdown transcript shows a slash command's prompt as its command", as
         ? json({ data: { info: session, messages: withCommand } })
         : undefined,
   })
-  await setup.waitForFrame((frame) => frame.includes("Renamed it."))
+  await waitForFrame(setup, (frame) => frame.includes("Renamed it."))
   await setup.mockInput.typeText("/copy")
   setup.mockInput.pressEnter()
   await until(() => written.length > 0, "the transcript on the clipboard")
@@ -246,19 +247,19 @@ test.each([
       dispose: async () => {},
     },
   })
-  await setup.waitForFrame((frame) => frame.includes("Renamed it."))
+  await waitForFrame(setup, (frame) => frame.includes("Renamed it."))
   await setup.mockInput.typeText("/timeline")
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => frame.includes("Timeline"))
+  await waitForFrame(setup, (frame) => frame.includes("Timeline"))
   // A select dialog focuses its search field a moment after it is drawn.
   await Bun.sleep(50)
   await setup.mockInput.typeText(filter)
-  await setup.waitForFrame((frame) => frame.includes(copied))
+  await waitForFrame(setup, (frame) => frame.includes(copied))
   setup.mockInput.pressEnter()
-  await setup.waitForFrame((frame) => frame.includes("Message Actions"))
+  await waitForFrame(setup, (frame) => frame.includes("Message Actions"))
   await Bun.sleep(50)
   await setup.mockInput.typeText("Copy")
-  await setup.waitForFrame((frame) => frame.includes("message text to clipboard"))
+  await waitForFrame(setup, (frame) => frame.includes("message text to clipboard"))
   setup.mockInput.pressEnter()
   await until(() => written.length > 0, "the prompt on the clipboard")
   expect(written).toEqual([copied])

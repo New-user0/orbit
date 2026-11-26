@@ -6,6 +6,7 @@ import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
+import { waitForFrame } from "./fixture/frame"
 
 const sessionID = "ses_compaction_progress"
 
@@ -89,7 +90,7 @@ async function drawCompaction(input: {
   )
   try {
     await ready.promise
-    await setup.waitForFrame((frame) => frame.includes("Compaction"))
+    await waitForFrame(setup, (frame) => frame.includes("Compaction"))
     for (const delta of input.deltas)
       events.emit({
         id: `evt_${Math.random().toString(36).slice(2)}`,

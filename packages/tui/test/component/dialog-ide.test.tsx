@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { DialogIde, DialogIdeOpen, formatFolders } from "../../src/component/dialog-ide"
 import type { Editor } from "../../src/editor"
 import { renderLocal } from "../fixture/local"
+import { waitForFrame } from "../fixture/frame"
 
 const window = (port: number, name: string, folders: string[], modified = 0): Editor => ({
   port,
@@ -24,7 +25,7 @@ test("lists the windows, the current one focused, with a last row for none", asy
       onSelect={() => {}}
     />
   ))
-  const frame = await setup.waitForFrame((frame) => frame.includes("Select an editor"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("Select an editor"))
   expect(frame).toContain("Code")
   expect(frame).toContain("Cursor")
   expect(frame).toContain("No editor")
@@ -48,7 +49,7 @@ test("windows of the same editor are told apart by their folders, shown relative
       onSelect={() => {}}
     />
   ))
-  const frame = await setup.waitForFrame((frame) => frame.includes("Select an editor"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("Select an editor"))
   expect(frame).toContain(["packages", "a"].join(require("node:path").sep))
   expect(frame).toContain("/work/app")
   expect(frame).toContain("Tip:")
@@ -67,7 +68,7 @@ test("windows that do not hold the folder are named apart and cannot be chosen; 
       onSelect={(port) => chosen.push(port)}
     />
   ))
-  const frame = await setup.waitForFrame((frame) => frame.includes("Select an editor"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("Select an editor"))
   expect(frame.replace(/\s+/g, " ")).toContain("No editor with this folder open was found")
   expect(frame.replace(/\s+/g, " ")).toContain("2 windows have no folder that holds this one")
   expect(frame).toContain("Other /elsewhere")
@@ -92,7 +93,7 @@ test("the name and folders an editor chose are drawn without control characters"
       onSelect={() => {}}
     />
   ))
-  const frame = await setup.waitForFrame((frame) => frame.includes("Select an editor"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("Select an editor"))
   expect(frame.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
 })
 
@@ -102,7 +103,7 @@ test("the open picker lists the windows with their folders", async () => {
   setup.dialog.replace(() => (
     <DialogIdeOpen windows={[window(7, "Cursor", [here])]} directory={here} onSelect={(item) => chosen.push(item.port)} />
   ))
-  await setup.waitForFrame((frame) => frame.includes("Open this folder in"))
+  await waitForFrame(setup, (frame) => frame.includes("Open this folder in"))
   await Bun.sleep(80)
   setup.mockInput.pressEnter()
   await Bun.sleep(60)

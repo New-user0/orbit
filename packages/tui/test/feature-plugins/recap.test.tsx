@@ -9,6 +9,7 @@ import { Global } from "@orbit/util/global"
 import { Config } from "../../src/config"
 import { createEventStream, createFetch, directory, json } from "../fixture/tui-client"
 import { tmpdir } from "../fixture/fixture"
+import { waitForFrame } from "../fixture/frame"
 
 const sessionID = "ses_recap"
 // 60 ms, so that a test waits a few delays rather than five minutes.
@@ -95,7 +96,7 @@ async function start(input: {
       log: () => {},
     }).pipe(Effect.provide(Global.layerWith({ state: state.path })), Effect.provide(FileSystem.layerNoop({}))),
   )
-  await setup.waitForFrame((frame) => frame.includes(input.ready ?? "Fix the build"))
+  await waitForFrame(setup, (frame) => frame.includes(input.ready ?? "Fix the build"))
   let seq = 100
   return {
     ...setup,
@@ -129,7 +130,7 @@ async function start(input: {
         data: { sessionID, title },
         location: { directory },
       } as OrbitEvent)
-      await setup.waitForFrame((frame) => frame.includes(title))
+      await waitForFrame(setup, (frame) => frame.includes(title))
     },
     execution(
       type:
@@ -206,7 +207,7 @@ test("after the delay the session asks for one recap, and blur cycles with no ne
   expect(await until(() => app.requests.length === 1)).toBe(true)
   // The server records it, and the event reaches this client.
   app.recorded("Fixing the build. Next: tests.")
-  await app.waitForFrame((frame) => frame.includes("Next: tests."))
+  await waitForFrame(app, (frame) => frame.includes("Next: tests."))
 
   app.focus()
   app.blur()
@@ -397,7 +398,7 @@ test.each([40, 120])("the recap row is a dimmed reference mark and sanitized tex
     width,
     messages: [user("Fix the build"), recap("Fixing\u001b]0;pwned\u0007 the build\u202e.\rOVERWRITTEN")],
   })
-  await app.waitForFrame((frame) => frame.includes("※"))
+  await waitForFrame(app, (frame) => frame.includes("※"))
   await app.waitForVisualIdle()
   const frame = app.captureCharFrame()
   expect(frame).toMatch(/※\s+Fixing/)

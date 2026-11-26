@@ -12,6 +12,7 @@ import { ToastProvider } from "../../src/ui/toast"
 import { emptyThemeSource, tmpdir } from "../fixture/fixture"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
+import { waitForFrame } from "../fixture/frame"
 
 test("installation progress replaces checking while the update job is still pending", async () => {
   await using temporary = await tmpdir()
@@ -44,9 +45,9 @@ test("installation progress replaces checking while the update job is still pend
 
   try {
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("Checking for updates"))
+    await waitForFrame(app, (frame) => frame.includes("Checking for updates"))
     setState({ type: "installing", version: "2.0.0" })
-    await app.waitForFrame(
+    await waitForFrame(app,
       (frame) =>
         frame.includes("Updating Orbit") &&
         frame.includes("Installing Orbit 2.0.0") &&
@@ -54,7 +55,7 @@ test("installation progress replaces checking while the update job is still pend
     )
     expect(app.captureCharFrame()).not.toContain("Skip")
     pending.reject(new Error("Update service unavailable"))
-    await app.waitForFrame((frame) => frame.includes("Update service unavailable") && !frame.includes("Installing"))
+    await waitForFrame(app, (frame) => frame.includes("Update service unavailable") && !frame.includes("Installing"))
   } finally {
     pending.resolve(undefined)
     app.renderer.destroy()

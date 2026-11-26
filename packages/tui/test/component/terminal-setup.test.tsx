@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { outcome, runTerminalSetup } from "../../src/component/terminal-setup"
 import type { Result } from "../../src/util/terminal-setup"
 import { renderLocal } from "../fixture/local"
+import { waitForFrame } from "../fixture/frame"
 
 // Class 9: the path of the keybindings file comes from the environment, and the reason an install failed from the
 // file system, so each reaches the person through `plain`. Either one can hold an escape sequence.
@@ -31,7 +32,7 @@ test("the confirm dialog of /terminal-setup draws the keybindings path without c
     toast: { show: () => {} },
     copy: async () => {},
   })
-  const frame = await setup.waitForFrame((frame) => frame.includes("Add Shift+Enter for newlines"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("Add Shift+Enter for newlines"))
   expect(frame.replaceAll("\n", "")).not.toMatch(/\p{C}/u)
   expect(frame.replace(/\s+/g, "")).toContain("C:\\Users\\x")
 })

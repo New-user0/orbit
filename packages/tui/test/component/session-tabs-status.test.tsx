@@ -26,6 +26,7 @@ import { emptyThemeSource, tmpdir } from "../fixture/fixture"
 import { createApi, createEventStream, createFetch } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
+import { waitForFrame } from "../fixture/frame"
 
 for (const orientation of ["horizontal", "vertical"] as const) {
   test(`${orientation} tabs replace ordinals with status without moving titles and keep context menu actions`, async () => {
@@ -121,7 +122,7 @@ for (const orientation of ["horizontal", "vertical"] as const) {
 
     try {
       app.renderer.start()
-      await app.waitForFrame((frame) => frame.includes("   First") && frame.includes("   Second"))
+      await waitForFrame(app, (frame) => frame.includes("   First") && frame.includes("   Second"))
 
       const titleColumn = app
         .captureCharFrame()
@@ -139,7 +140,7 @@ for (const orientation of ["horizontal", "vertical"] as const) {
       for (const state of states) {
         setStatus({ ...EMPTY_SESSION_TAB_STATUS, ...state.status })
         await app.renderOnce()
-        await app.waitForFrame((frame) => frame.includes(`${state.label.padStart(2)} First`))
+        await waitForFrame(app, (frame) => frame.includes(`${state.label.padStart(2)} First`))
         const rows = app.captureCharFrame().split("\n")
         expect(rows.find((line) => line.includes("First"))!.indexOf("First")).toBe(titleColumn)
         expect(rows[orientation === "vertical" ? 2 : 1]?.trim()).toBe(orientation === "vertical" ? "project" : "")
@@ -202,11 +203,11 @@ for (const orientation of ["horizontal", "vertical"] as const) {
       await config.update((draft) => {
         draft.tabs.indicators = "numbers"
       })
-      await app.waitForFrame((frame) => frame.includes("1 First") && frame.includes("2 Second"))
+      await waitForFrame(app, (frame) => frame.includes("1 First") && frame.includes("2 Second"))
       await config.update((draft) => {
         draft.tabs.indicators = "status"
       })
-      await app.waitForFrame((frame) => frame.includes(`${SPINNER_FRAMES[0]} First`))
+      await waitForFrame(app, (frame) => frame.includes(`${SPINNER_FRAMES[0]} First`))
 
       setStatus(EMPTY_SESSION_TAB_STATUS)
       setActive("second")
@@ -215,7 +216,7 @@ for (const orientation of ["horizontal", "vertical"] as const) {
       const row = rows.findIndex((line) => line.includes("First"))
       const column = rows[row]!.indexOf("First")
       await app.mockMouse.click(column, row, MouseButton.RIGHT)
-      await app.waitForFrame((frame) => frame.includes("Rename"))
+      await waitForFrame(app, (frame) => frame.includes("Rename"))
       expect(app.captureCharFrame().split("\n")[row + 2]!.indexOf("Rename")).toBe(column + 1)
       expect(app.captureCharFrame()).toContain("Copy session ID")
       expect(app.captureCharFrame()).toContain("Close")
@@ -223,17 +224,17 @@ for (const orientation of ["horizontal", "vertical"] as const) {
       expect(active()).toBe("second")
       await app.mockMouse.click(column + 1, row + 3)
       expect(copied).toEqual(["first"])
-      await app.waitForFrame((frame) => !frame.includes("Rename"))
+      await waitForFrame(app, (frame) => !frame.includes("Rename"))
 
       setNewTab(true)
-      await app.waitForFrame((frame) => frame.includes("+ New session"))
+      await waitForFrame(app, (frame) => frame.includes("+ New session"))
       for (const width of [60, 35]) {
         app.renderer.resize(width, 10)
         await app.renderOnce()
         const rows = app.captureCharFrame().split("\n")
         const row = rows.findIndex((line) => line.includes("+ New session"))
         await app.mockMouse.click(rows[row]!.indexOf("+ New session") + 2, row, MouseButton.RIGHT)
-        await app.waitForFrame((frame) => frame.includes("Recently closed tabs"))
+        await waitForFrame(app, (frame) => frame.includes("Recently closed tabs"))
         expect(app.captureCharFrame()).not.toContain("New tab")
         const menu = app.captureCharFrame().split("\n")
         expect(menu.some((line) => line.trim() === "New session")).toBe(false)
@@ -241,7 +242,7 @@ for (const orientation of ["horizontal", "vertical"] as const) {
         expect(earlier).toBeGreaterThan(menu.findIndex((line) => line.includes("Most recently closed")))
         await app.mockMouse.click(menu[earlier]!.indexOf("Earlier session"), earlier)
         expect(reopened.at(-1)).toBe("closed-old")
-        await app.waitForFrame((frame) => !frame.includes("Recently closed tabs"))
+        await waitForFrame(app, (frame) => !frame.includes("Recently closed tabs"))
         setClosed([
           { sessionID: "closed-new", title: "Most recently closed" },
           { sessionID: "closed-old", title: "Earlier session" },
@@ -253,7 +254,7 @@ for (const orientation of ["horizontal", "vertical"] as const) {
       const historyRows = app.captureCharFrame().split("\n")
       const newRow = historyRows.findIndex((line) => line.includes("+ New session"))
       await app.mockMouse.click(historyRows[newRow]!.indexOf("+ New session") + 2, newRow, MouseButton.RIGHT)
-      await app.waitForFrame((frame) => frame.includes("History 10"))
+      await waitForFrame(app, (frame) => frame.includes("History 10"))
       expect(app.captureCharFrame()).not.toContain("History 11")
     } finally {
       app.renderer.destroy()

@@ -17,6 +17,7 @@ import { emptyThemeSource } from "../../fixture/fixture"
 import { createApi, createEventStream, createFetch, json } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { waitForFrame } from "../../fixture/frame"
 
 test("renders account management with an uncategorized add row and marks the active credential", async () => {
   const fixture = await renderIntegration()
@@ -41,7 +42,7 @@ test("opens the key connection prompt from the initially focused add account row
 
   try {
     fixture.app.mockInput.pressEnter()
-    await fixture.app.waitForFrame((frame) => frame.includes("API key") && !frame.includes("Connected accounts"))
+    await waitForFrame(fixture.app, (frame) => frame.includes("API key") && !frame.includes("Connected accounts"))
 
     expect(fixture.requests).toEqual([])
   } finally {
@@ -82,7 +83,7 @@ test("switches the selected account with enter and keeps the reactive account ma
     fixture.app.mockInput.pressArrow("down")
     fixture.app.mockInput.pressEnter()
 
-    await fixture.app.waitForFrame((frame) => {
+    await waitForFrame(fixture.app, (frame) => {
       const line = frame.split("\n").find((entry) => entry.includes("Work"))
       return frame.includes("Connected accounts") && line?.includes("\u25cf") === true
     })
@@ -129,7 +130,7 @@ test("renames the selected account through a prefilled prompt and reopens the ac
 
     await fixture.app.mockInput.typeText(" Account")
     fixture.app.mockInput.pressEnter()
-    await fixture.app.waitForFrame((frame) => frame.includes("Connected accounts") && frame.includes("Work Account"))
+    await waitForFrame(fixture.app, (frame) => frame.includes("Connected accounts") && frame.includes("Work Account"))
 
     expect(fixture.requests).toEqual([
       { method: "PATCH", path: "/api/credential/cred_work", body: { label: "Work Account" } },
@@ -151,7 +152,7 @@ test("requires delete confirmation and preserves the account manager when anothe
     expect(fixture.requests).toEqual([])
 
     fixture.app.mockInput.pressKey("d", { ctrl: true })
-    await fixture.app.waitForFrame((frame) => frame.includes("Connected accounts") && !frame.includes("Work"))
+    await waitForFrame(fixture.app, (frame) => frame.includes("Connected accounts") && !frame.includes("Work"))
 
     expect(fixture.requests).toEqual([{ method: "DELETE", path: "/api/credential/cred_work" }])
     expect(fixture.accounts).toEqual([{ type: "credential", method: "key", id: "cred_personal", label: "Personal" }])
@@ -171,7 +172,7 @@ test("renames the account label rather than its delete-confirmation message", as
     fixture.app.mockInput.pressArrow("down")
     fixture.app.mockInput.pressArrow("down")
     fixture.app.mockInput.pressKey("d", { ctrl: true })
-    await fixture.app.waitForFrame((frame) => frame.includes("again to confirm"))
+    await waitForFrame(fixture.app, (frame) => frame.includes("again to confirm"))
 
     fixture.app.mockInput.pressKey("r", { ctrl: true })
     await fixture.app.waitFor(() => fixture.app.renderer.currentFocusedEditor instanceof TextareaRenderable)
@@ -192,7 +193,7 @@ test("marks the remaining account active after deleting the active credential", 
     fixture.app.mockInput.pressKey("d", { ctrl: true })
     fixture.app.mockInput.pressKey("d", { ctrl: true })
 
-    await fixture.app.waitForFrame((frame) => {
+    await waitForFrame(fixture.app, (frame) => {
       const line = frame.split("\n").find((entry) => entry.includes("Work"))
       return !frame.includes("Personal") && line?.includes("\u25cf") === true
     })
@@ -220,10 +221,10 @@ test("hides account rename and delete actions while the add account row is selec
     expect(fixture.app.captureCharFrame()).toContain("Connected accounts")
 
     fixture.app.mockInput.pressArrow("down")
-    await fixture.app.waitForFrame((frame) => frame.includes("rename") && frame.includes("delete"))
+    await waitForFrame(fixture.app, (frame) => frame.includes("rename") && frame.includes("delete"))
 
     fixture.app.mockInput.pressArrow("up")
-    await fixture.app.waitForFrame((frame) => !frame.includes("rename") && !frame.includes("delete"))
+    await waitForFrame(fixture.app, (frame) => !frame.includes("rename") && !frame.includes("delete"))
   } finally {
     fixture.app.renderer.destroy()
   }
@@ -382,7 +383,7 @@ async function renderIntegration(activeLocation?: LocationRef, form?: FormFields
   )
 
   app.renderer.start()
-  await app.waitForFrame(
+  await waitForFrame(app,
     (frame) => frame.includes("Add account") && frame.includes("Personal") && frame.includes("Work"),
   )
   await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)

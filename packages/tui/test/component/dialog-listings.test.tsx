@@ -3,6 +3,7 @@ import { DialogAgent } from "../../src/component/dialog-agent"
 import { DialogSkill } from "../../src/component/dialog-skill"
 import { agent, renderLocal } from "../fixture/local"
 import { directory, json } from "../fixture/tui-client"
+import { waitForFrame } from "../fixture/frame"
 
 // Repository-supplied names and descriptions reach the pickers through `plain`: no control byte survives to the frame.
 const hostile = "line\u001b]0;pwned\u0007 one‮\r\ntwo three"
@@ -15,7 +16,7 @@ test("the agent picker draws a hostile name and description without control char
     ],
   })
   setup.dialog.replace(() => <DialogAgent />)
-  const frame = await setup.waitForFrame((frame) => frame.includes("Select agent"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("Select agent"))
   expect(frame).toContain("one")
   expect(frame).toContain("build")
   expect(frame).toContain("ok")
@@ -36,7 +37,7 @@ test("the skill picker draws a hostile name and description without control char
     },
   })
   setup.dialog.replace(() => <DialogSkill onSelect={() => {}} />)
-  const frame = await setup.waitForFrame((frame) => frame.includes("Skills"))
+  const frame = await waitForFrame(setup, (frame) => frame.includes("Skills"))
   expect(frame).toContain("one")
   expect(frame).toContain("zzgoodskill")
   expect(frame).toContain("fine desc")

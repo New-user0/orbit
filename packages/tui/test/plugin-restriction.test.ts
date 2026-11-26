@@ -4,6 +4,7 @@ import path from "node:path"
 import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
+import { waitForFrame } from "./fixture/frame"
 
 // A project with one plugin that leaves a trace when its module is evaluated, when its setup runs and when it unloads.
 async function project() {
@@ -61,7 +62,7 @@ async function run(
       fetch: (url) => (url.pathname === "/api/config/effective" ? answer(fixture) : undefined),
     })
     await setup.ready
-    await setup.waitForFrame((frame) => promptReady(frame))
+    await waitForFrame(setup, (frame) => promptReady(frame))
     await setup.flush()
     await check(fixture, setup)
   })
@@ -169,7 +170,7 @@ test("an unreadable answer logs the skip once per answer, not once per plugin", 
       fetch: (url) => (url.pathname === "/api/config/effective" ? new Response("gone", { status: 503 }) : undefined),
     })
     await setup.ready
-    await setup.waitForFrame((frame) => promptReady(frame))
+    await waitForFrame(setup, (frame) => promptReady(frame))
     await setup.flush()
   })
   expect(lines.filter((line) => line.includes("skipped the external plugins"))).toHaveLength(1)
@@ -188,13 +189,13 @@ test("the failed state of a blocked plugin names the organization", async () => 
           : undefined,
     })
     await setup.ready
-    await setup.waitForFrame((frame) => promptReady(frame))
+    await waitForFrame(setup, (frame) => promptReady(frame))
     await setup.flush()
     await setup.mockInput.typeText("/plugins")
     setup.mockInput.pressEnter()
-    await setup.waitForFrame((frame) => frame.includes("enter view error"))
+    await waitForFrame(setup, (frame) => frame.includes("enter view error"))
     setup.mockInput.pressEnter()
-    await setup.waitForFrame((frame) => frame.includes("Acme"))
+    await waitForFrame(setup, (frame) => frame.includes("Acme"))
     expect(setup.captureCharFrame()).toContain("Blocked by Acme's managed settings")
   })
 })
