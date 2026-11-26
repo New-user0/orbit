@@ -64,7 +64,7 @@ test("a trigger during an in-flight run gives exactly one trailing refresh", asy
   test.status.trigger()
   test.status.trigger()
   test.gate.release.shift()?.()
-  // The trailing run starts 300 ms after the first one started.
+  // The trailing run starts 300 ms after the first trigger.
   await wait(400)
   expect(test.calls.length).toBe(2)
   test.gate.release.shift()?.()
@@ -92,6 +92,58 @@ test("a trigger during a run does not start another run after the status line is
   test.gate.release.shift()?.()
   await wait(400)
   expect(test.calls.length).toBe(1)
+})
+
+test("a trigger during a run stops it, and only the newer run's output is drawn", async () => {
+  const runs: Array<{ signal: AbortSignal; release: (value: string) => void }> = []
+  const dispose = { current: () => {} }
+  const status = createRoot((stop) => {
+    dispose.current = stop
+    return createStatusLine({
+      command: () => "line",
+      interval: () => 60_000,
+      payload: () => ({}),
+      run: (_command, _stdin, signal) => new Promise<string>((resolve) => runs.push({ signal, release: resolve })),
+    })
+  })
+  await wait(20)
+  expect(runs.length).toBe(1)
+  status.trigger()
+  status.trigger()
+  await wait(400)
+  expect(runs.map((run) => run.signal.aborted)).toEqual([true, false])
+  runs[1].release("newer\n")
+  await wait(20)
+  expect(status.line()).toBe("newer")
+  // The replaced run answering late does not bring its older line back.
+  runs[0].release("older\n")
+  await wait(20)
+  expect(status.line()).toBe("newer")
+  status.trigger()
+  await wait(400)
+  expect(runs.length).toBe(3)
+  dispose.current()
+  expect(runs[2].signal.aborted).toBe(true)
+})
+
+test("the interval leaves a running command alone", async () => {
+  const runs: AbortSignal[] = []
+  const dispose = { current: () => {} }
+  createRoot((stop) => {
+    dispose.current = stop
+    return createStatusLine({
+      command: () => "line",
+      interval: () => 1_000,
+      payload: () => ({}),
+      run: (_command, _stdin, signal) => {
+        runs.push(signal)
+        return new Promise<string>(() => {})
+      },
+    })
+  })
+  await wait(1_300)
+  expect(runs.map((signal) => signal.aborted)).toEqual([false])
+  dispose.current()
 })
 
 test("the interval still fires", async () => {
@@ -160,7 +212,7 @@ test("a real command that hangs keeps the last good line and the next trigger st
   await wait(700)
   expect(status.line()).toBe("good")
   status.trigger()
-  // The hang starts at about 300 ms and is given up at 2 s; a run that kept waiting for its output would still be open.
+  // The hang starts at about 300 ms and is still running: the line stays as it was until the next trigger replaces it.
   await wait(2_800)
   expect(state.index).toBe(2)
   expect(status.line()).toBe("good")
@@ -170,26 +222,67 @@ test("a real command that hangs keeps the last good line and the next trigger st
   expect(status.line()).toBe("after")
 }, 15_000)
 
-test("a command that outlives the timeout is stopped together with what it started", async () => {
+test("a real command that prints and then fails keeps the last good line", async () => {
+  const fail = process.platform === "win32" ? "echo bad& exit /b 1" : "echo bad; exit 1"
+  const commands = ["echo good", fail]
+  const state = { index: 0 }
+  const dispose = { current: () => {} }
+  const status = createRoot((stop) => {
+    dispose.current = stop
+    return createStatusLine({ command: () => commands[state.index++], interval: () => 60_000, payload: () => ({}) })
+  })
+  await wait(700)
+  expect(status.line()).toBe("good")
+  status.trigger()
+  await wait(1_200)
+  dispose.current()
+  expect({ runs: state.index, line: status.line() }).toEqual({ runs: 2, line: "good" })
+}, 15_000)
+
+// The status line used to give up on a command after 2 s, so a slow script on a loaded machine never showed its line.
+test("a real command that takes longer than two seconds still draws its line", async () => {
+  const slow = process.platform === "win32" ? "ping -n 4 127.0.0.1 >nul & echo slow" : "sleep 2.5; echo slow"
+  const dispose = { current: () => {} }
+  const status = createRoot((stop) => {
+    dispose.current = stop
+    return createStatusLine({ command: () => slow, interval: () => 60_000, payload: () => ({}) })
+  })
+  const started = Date.now()
+  while (status.line() === undefined && Date.now() - started < 10_000) await wait(50)
+  dispose.current()
+  expect({ line: status.line(), slow: Date.now() - started > 2_000 }).toEqual({ line: "slow", slow: true })
+}, 15_000)
+
+test("a command that a newer run replaces, or that runs when the line goes away, is stopped with what it started", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "status-line-kill-"))
   try {
-    const marker = path.join(dir, "late.txt")
-    // The marker is written after the point where the run gives up (2 s), by the shell itself: only a stopped tree
-    // never gets there.
+    const marker = (name: string) => path.join(dir, name + ".txt")
+    // The marker is written about 7 s after the start, by the shell itself: only a stopped tree never gets there.
     const command = (pings: number, file: string) =>
       process.platform === "win32"
         ? `ping -n ${pings} 127.0.0.1 >nul & echo late> ${file}`
         : `sleep ${pings - 1}; echo late > '${file}'`
-    // The control is the same command with a delay that ends before the timeout, so it is known to write its marker.
-    const control = path.join(dir, "control.txt")
-    createRoot((dispose) => {
-      createStatusLine({ command: () => command(8, marker), interval: () => 60_000, payload: () => ({}) })
-      createStatusLine({ command: () => command(1, control), interval: () => 60_000, payload: () => ({}) })
+    const replaced = { index: 0 }
+    const commands = [command(8, marker("replaced")), "echo after"]
+    const line = createRoot((dispose) => {
+      // The control is the same command with a delay that ends soon and nothing stopping it, so it writes its marker.
+      createStatusLine({ command: () => command(1, marker("control")), interval: () => 60_000, payload: () => ({}) })
       setTimeout(dispose, 9_000)
+      return createStatusLine({ command: () => commands[replaced.index++], interval: () => 60_000, payload: () => ({}) })
     })
-    await wait(9_500)
-    expect(await Bun.file(control).exists()).toBe(true)
-    expect(await Bun.file(marker).exists()).toBe(false)
+    createRoot((dispose) => {
+      createStatusLine({ command: () => command(8, marker("closed")), interval: () => 60_000, payload: () => ({}) })
+      setTimeout(dispose, 1_000)
+    })
+    await wait(1_000)
+    line.trigger()
+    await wait(8_500)
+    expect({
+      control: await Bun.file(marker("control")).exists(),
+      replaced: await Bun.file(marker("replaced")).exists(),
+      closed: await Bun.file(marker("closed")).exists(),
+      line: line.line(),
+    }).toEqual({ control: true, replaced: false, closed: false, line: "after" })
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

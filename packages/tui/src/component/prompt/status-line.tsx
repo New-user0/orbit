@@ -33,7 +33,7 @@ export function StatusLine(props: {
   /** Why the command does not run, when it is configured and something other than trust keeps it from running. */
   readonly notice?: () => string | undefined
   readonly fg: RGBA
-  readonly run?: (command: string, stdin: string) => Promise<string | undefined>
+  readonly run?: (command: string, stdin: string, signal: AbortSignal) => Promise<string | undefined>
 }) {
   const statusLine = createStatusLine({
     command: props.command,

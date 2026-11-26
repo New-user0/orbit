@@ -19,6 +19,8 @@ test("the status line follows the selection, the session's location and its step
 const input = JSON.parse(await Bun.stdin.text())
 appendFileSync(${JSON.stringify(counter)}, "x")
 const n = readFileSync(${JSON.stringify(counter)}, "utf8").length
+// The run after the agent changes takes 2.5 s, as a cold start on a loaded runner did: it must still reach the line.
+if (input.agent === "plan" && input.model?.id === "first" && !input.model?.variant) await Bun.sleep(2_500)
 console.log("n=" + n + " " + JSON.stringify({
   style: input.output_style,
   status: input.status,
