@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import type { JSX } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { addDefaultParsers, type TextRenderable } from "@opentui/core"
@@ -309,7 +309,7 @@ function mount(input: {
   message: (id: string) => SessionMessageInfo | undefined
   entry: (entry: SessionEntry) => JSX.Element
 }) {
-  return testRender(
+  return testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={input.config}>

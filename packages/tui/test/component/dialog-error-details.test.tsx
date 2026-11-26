@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { expect, test } from "bun:test"
 import { onMount } from "solid-js"
 import { DialogErrorDetails } from "../../src/component/dialog-error-details"
@@ -49,7 +49,7 @@ for (const width of [40, 100]) {
       return null
     }
 
-    const app = await testRender(
+    const app = await testRenderTimed(
       () => (
         <TestTuiContexts
           directory={temporary.path}
@@ -127,7 +127,7 @@ test.each([
     return null
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts directory={temporary.path} paths={{ state: temporary.path }}>
         <ConfigProvider config={createTuiResolvedConfig()}>

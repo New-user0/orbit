@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { EmbeddedTerminalRenderable } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import path from "node:path"
@@ -218,7 +218,7 @@ test.each(["dismissed", "refreshing"])(
 // cleaned of control characters as a session title is (class 9): an escape in the name cannot reach the terminal.
 test("a plugin route titles the window with its name, without the control characters in it", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   const titles: string[] = []
   const named = Promise.withResolvers<void>()
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
@@ -260,7 +260,7 @@ test("a plugin route titles the window with its name, without the control charac
 
 test("SIGHUP clears title and disposes scoped resources once", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   const titles: string[] = []
   let started!: () => void
   const ready = new Promise<void>((resolve) => {
@@ -304,7 +304,7 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
 
 test("session lifecycle updates the terminal title and prints the epilogue after cleanup", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   let initialTitle!: () => void
   const initialTitleSet = new Promise<void>((resolve) => {
     initialTitle = resolve
@@ -465,7 +465,7 @@ test.each<[string, OrbitEvent]>([
   ],
 ])("the terminal title says needs input for %s", async (_name, request) => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   const seen: string[] = []
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   setup.renderer.setTerminalTitle = (title) => {
@@ -541,7 +541,7 @@ test.each<[string, OrbitEvent]>([
 // once the interface has gone.
 test("a session title with control characters is cleaned in the terminal title and written out in the epilogue", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   const titles: string[] = []
   const oddTitle = Promise.withResolvers<void>()
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
@@ -614,7 +614,7 @@ test("a session title with control characters is cleaned in the terminal title a
 
 test("session title generated while an untitled session is loading remains visible", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   const titles: string[] = []
   const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
   const generatedTitle = Promise.withResolvers<void>()
@@ -1078,7 +1078,7 @@ test("keeps assistant footer metrics current after prepend, same-length refresh,
 
 test("session startup prompt is submitted exactly once", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 24, useThread: false })
   const events = createEventStream()
   const cwd = process.cwd()
   const location = { directory: cwd, project: { id: "project", directory: cwd } }
@@ -1627,7 +1627,7 @@ test.skipIf(process.platform === "win32").each(["manual", "select"] as const)(
   "selection copy and pane management respect %s mode in the prompt and terminal pane",
   async (copy) => {
     await using state = await tmpdir()
-    const setup = await createTestRenderer({ width: 100, height: 30, useThread: false, kittyKeyboard: true })
+    const setup = await createTestRendererTimed({ width: 100, height: 30, useThread: false, kittyKeyboard: true })
     setup.renderer.start()
     const ready = Promise.withResolvers<void>()
     const session = {

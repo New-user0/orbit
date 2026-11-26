@@ -10,7 +10,7 @@ import { expect, test } from "bun:test"
 import type { PermissionRequest } from "@orbit/client"
 import type { JsonValue } from "@orbit/client/promise"
 import { parseColor, SyntaxStyle, type CapturedFrame, type RGBA } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import { onMount, Show } from "solid-js"
 import { Hanging } from "../src/component/hanging"
 import { ConfigProvider } from "../src/config"
@@ -181,7 +181,7 @@ async function drawFull(
       </Show>
     )
   }
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts directory={tmp.path} paths={{ home: tmp.path, state: tmp.path, worktree: tmp.path }}>
         <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
@@ -309,7 +309,7 @@ async function drawMini(
   })
   if (view.type !== "permission") throw new Error("not a permission")
   const theme = mono ? RUN_THEME_MONO : RUN_THEME_FALLBACK
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <Keymap.Provider config={createTuiResolvedConfig({ animations: false })}>
         <box {...size}>
@@ -1464,7 +1464,7 @@ test("the compact prompt's header and its row about saving take a row each, and 
 test("a line of an approval keeps its rows where the box is too low for all of them (class 8)", async () => {
   // A line with a lead, and one without, which is plain text.
   for (const lead of ["- ", ""]) {
-    const app = await testRender(
+    const app = await testRenderTimed(
       () => (
         <box height={3} width={30} overflow="hidden">
           <Hanging text={`${lead}first`} fg="#ffffff" />

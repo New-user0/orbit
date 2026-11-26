@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { Context } from "@orbit/plugin/tui/context"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { ConfigProvider } from "../../../src/config"
 import { Keymap } from "../../../src/context/keymap"
@@ -28,7 +28,7 @@ async function render() {
     } as unknown as Context
     return trustIndicatorStory.render(context)
   }
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>

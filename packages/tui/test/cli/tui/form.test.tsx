@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
@@ -118,7 +118,7 @@ async function mountForm(
     )
   }
 
-  const app = await testRender(() => <Harness />, { width, height, kittyKeyboard: true })
+  const app = await testRenderTimed(() => <Harness />, { width, height, kittyKeyboard: true })
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("Authorization required"))
   return { app, cancellations, copied, replies }

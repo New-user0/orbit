@@ -1,7 +1,7 @@
 // context-memory-2 part 2 (class 9): a running compaction row draws how long it has run and an estimate of the reply's
 // tokens after 30 seconds, and never the reply itself. The count arrives as `session.compaction.delta`.
 import { expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
@@ -29,7 +29,7 @@ async function drawCompaction(input: {
   readonly until?: () => boolean
 }) {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: input.width, height: 30, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width: input.width, height: 30, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const ready = Promise.withResolvers<void>()
   const events = createEventStream()

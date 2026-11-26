@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { BoxRenderable, RGBA, ScrollBoxRenderable, TextRenderable, type Renderable } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
-import { testRender } from "@opentui/solid"
+import { createTestRendererTimed } from "../fixture/render"
+import { testRenderTimed } from "../fixture/render"
 import { Keymap } from "../../src/context/keymap"
 import { RunFooter } from "../../src/mini/footer"
 import { RunFormBody } from "../../src/mini/footer.form"
@@ -43,7 +43,7 @@ function descendants(root: Renderable): Renderable[] {
   return root.getChildren().flatMap((child) => [child, ...descendants(child)])
 }
 
-async function settle(app: Pick<Awaited<ReturnType<typeof testRender>>, "renderOnce">) {
+async function settle(app: Pick<Awaited<ReturnType<typeof testRenderTimed>>, "renderOnce">) {
   await app.renderOnce()
   await Bun.sleep(0)
   await app.renderOnce()
@@ -52,7 +52,7 @@ async function settle(app: Pick<Awaited<ReturnType<typeof testRender>>, "renderO
 
 async function renderForm(request: MiniFormRequest, width = 80, height = 20) {
   const replies: FormReply[] = []
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <RunFormBody
         request={request}
@@ -207,7 +207,7 @@ test.each([false, true])(
       { file: "a.txt", patch: file("a.txt", "one", "FIRST_FILE_CHANGE") },
       { file: "b.txt", patch: file("b.txt", "two", "SECOND_FILE_CHANGE") },
     ]
-    const app = await testRender(
+    const app = await testRenderTimed(
       () => (
         <RunPermissionBody
           request={{
@@ -239,7 +239,7 @@ test.each([false, true])(
 )
 
 test("roomy permission prompts retain their header and padded action bar", async () => {
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <RunPermissionBody
         request={permission}
@@ -271,7 +271,7 @@ test("roomy permission prompts retain their header and padded action bar", async
 })
 
 test("roomy rejection keeps the editor and confirmation hints inline", async () => {
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <Keymap.Provider config={createTuiResolvedConfig()}>
         <RunPermissionBody
@@ -307,7 +307,7 @@ test("roomy rejection keeps the editor and confirmation hints inline", async () 
 test.each([false, true])("picked options budget their full ordinal and selection marker (mono=%s)", async (mono) => {
   for (const width of [16, 112]) {
     const description = width === 16 ? "prod" : "d".repeat(85) + "_END_LAST"
-    const app = await testRender(
+    const app = await testRenderTimed(
       () => (
         <RunFormBody
           request={{
@@ -363,7 +363,7 @@ test.each([
   { width: 112, height: 20 },
 ])("permission controls fit the allocated $width x $height viewport", async (size) => {
   const replies: PermissionReply[] = []
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <RunPermissionBody
         request={permission}
@@ -397,7 +397,7 @@ test.each([
 test.each(["once", "always", "reject"] as const)(
   "24 x 8 production permission confirms the visible %s choice",
   async (choice) => {
-    const app = await createTestRenderer({
+    const app = await createTestRendererTimed({
       width: 24,
       height: 8,
       screenMode: "split-footer",
@@ -513,7 +513,7 @@ test("form review scrolls from the first answer to the last", async () => {
       })),
     ],
   }
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <RunFormBody
         request={request}
@@ -539,7 +539,7 @@ test("form review scrolls from the first answer to the last", async () => {
 })
 
 test("long permission paths, diffs and persistent scopes remain keyboard accessible", async () => {
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <RunPermissionBody
         request={{
@@ -626,7 +626,7 @@ test("scrolling a choice offscreen reveals it before submission and survives res
 })
 
 test.each([16, 24, 80])("text form keeps its editor, error and controls at %s x 8", async (width) => {
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <Keymap.Provider config={createTuiResolvedConfig()}>
         <RunFormBody
@@ -672,7 +672,7 @@ test.each([16, 24, 80])("text form keeps its editor, error and controls at %s x 
 test("external form exposes its complete URL and state-specific actions", async () => {
   const opened: string[] = []
   const url = "https://identity.example.test/oauth/authorize?client_id=orbit&redirect_uri=URL_SENTINEL"
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <RunFormBody
         request={{ ...form, fields: [{ key: "auth", type: "external", title: "Sign in", url }] }}
@@ -705,7 +705,7 @@ test("external form exposes its complete URL and state-specific actions", async 
 test.each([false, true])("wrapped permission characters stay outside the scrollbar (mono=%s)", async (mono) => {
   const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
   const theme = mono ? RUN_THEME_MONO : RUN_THEME_FALLBACK
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <RunPermissionBody
         request={{ ...permission, resources: [alphabet] }}
@@ -739,7 +739,7 @@ test.each([
   { width: 112, height: 20 },
 ])("inspector keeps task identity and controls at $width x $height", async (size) => {
   let closed = 0
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <RunFooterSubagentBody
         active={() => true}

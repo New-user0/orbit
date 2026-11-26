@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test"
 import { mkdir, realpath } from "node:fs/promises"
 import path from "node:path"
 import { RGBA, type CliRenderer, type TerminalColors } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import { RunFooter } from "../../src/mini/footer"
 import { resolveMiniSettings } from "../../src/mini/runtime.boot"
 import { createRuntimeLifecycle } from "../../src/mini/runtime.lifecycle"
@@ -121,7 +121,7 @@ test("the Mini's first draw and a theme refresh both keep to the folder the serv
   process.chdir(app)
 
   const painted = async (root: string | undefined) => {
-    const test = await createTestRenderer({
+    const test = await createTestRendererTimed({
       width: 80,
       height: 20,
       screenMode: "split-footer",
@@ -183,7 +183,7 @@ test("turning monochrome off in the settings keeps to the folder the server deci
   process.chdir(app)
 
   const toggled = async (root: string | undefined) => {
-    const test = await createTestRenderer({
+    const test = await createTestRendererTimed({
       width: 112,
       height: 24,
       screenMode: "split-footer",

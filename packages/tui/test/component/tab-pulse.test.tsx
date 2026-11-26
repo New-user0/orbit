@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 /** @jsxImportSource @opentui/solid */
 import { RGBA } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { createSignal } from "solid-js"
 import {
   TabPulse,
@@ -16,7 +16,7 @@ import { tint } from "../../src/theme/color"
 test("a disabled pulse stays idle when it becomes active", async () => {
   const background = RGBA.fromHex("#101010")
   const [active, setActive] = createSignal(false)
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => <TabPulse enabled={false} active={active()} color={background} backgroundColor={background} />,
     { width: 8, height: 1 },
   )
@@ -35,7 +35,7 @@ test("a disabled pulse stays idle when it becomes active", async () => {
 
 test("an attention glow becomes idle after ignition", async () => {
   const background = RGBA.fromHex("#101010")
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => <TabPulse active={false} glow color={RGBA.fromHex("#ffcc00")} backgroundColor={background} />,
     { width: 8, height: 1 },
   )

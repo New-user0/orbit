@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { BoxRenderable } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { ConfigProvider } from "../../src/config"
@@ -48,7 +48,7 @@ for (const mode of ["dark", "light"] as const) {
         </box>
       )
     }
-    const app = await testRender(
+    const app = await testRenderTimed(
       () => (
         <TestTuiContexts>
           <ConfigProvider config={createTuiResolvedConfig({ theme: { name: "orbit", mode } })}>

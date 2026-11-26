@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { BoxRenderable, EmbeddedTerminalRenderable, type Renderable, ScrollBoxRenderable } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
@@ -10,7 +10,7 @@ test
   .skipIf(process.platform === "win32")
   .each([80, 120, 180])("session wheel scrolling preserves pane focus at width %s", async (width) => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width, height: 36, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width, height: 36, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const session = {
     id: "ses_wheel",

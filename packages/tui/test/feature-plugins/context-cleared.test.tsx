@@ -1,7 +1,7 @@
 // context-memory-3: a clearing leaves old tool results out of what the model is sent, never out of what a person sees.
 // The marker is a row of the stored history; the session route draws the full stored output and nothing for the marker.
 import { expect, setDefaultTimeout, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "../fixture/tui-client"
@@ -52,7 +52,7 @@ const marker = {
 
 async function screen(messages: unknown[], width: number, done: string) {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width, height: 40, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width, height: 40, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const events = createEventStream()
   const calls = createFetch((url) => {

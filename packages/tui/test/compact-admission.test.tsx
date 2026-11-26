@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { InputRenderable } from "@opentui/core"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
@@ -10,7 +10,7 @@ test.each([70, 120])(
   "/compact renders before model setup, suppresses repeat gestures, and toasts rollback at %i columns",
   async (width) => {
     await using state = await tmpdir()
-    const setup = await createTestRenderer({ width, height: 30, useThread: false, kittyKeyboard: true })
+    const setup = await createTestRendererTimed({ width, height: 30, useThread: false, kittyKeyboard: true })
     setup.renderer.start()
     const ready = Promise.withResolvers<void>()
     const model = Promise.withResolvers<Response>()
@@ -98,7 +98,7 @@ test.each(["first", "second"])(
   "a following prompt commits its selected model after prompt and compaction setup (cached: %s)",
   async (initial) => {
     await using state = await tmpdir()
-    const setup = await createTestRenderer({ width: 100, height: 30, useThread: false, kittyKeyboard: true })
+    const setup = await createTestRendererTimed({ width: 100, height: 30, useThread: false, kittyKeyboard: true })
     setup.renderer.start()
     const ready = Promise.withResolvers<void>()
     const first = Promise.withResolvers<void>()
@@ -239,7 +239,7 @@ test.each(["first", "second"])(
 // context-memory-2 part 2 (class 12): `/compact <text>` is a compaction with instructions, not a prompt.
 async function compactApp(width: number, serverCommands: Array<{ name: string; description: string }> = []) {
   const state = await tmpdir()
-  const setup = await createTestRenderer({ width, height: 30, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width, height: 30, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const ready = Promise.withResolvers<void>()
   const events = createEventStream()

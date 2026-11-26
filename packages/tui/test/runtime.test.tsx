@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import { abbreviateHome } from "../src/runtime"
 import { TuiPathsProvider, useTuiPaths } from "../src/context/runtime"
 
@@ -18,7 +18,7 @@ test("provides focused immutable runtime inputs", async () => {
     return <text>{paths.cwd}</text>
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TuiPathsProvider value={{ cwd: "/work", home: "/home/test", state: "/state", worktree: "/worktree" }}>
         <Runtime />

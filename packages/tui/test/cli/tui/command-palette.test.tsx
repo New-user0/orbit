@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { InputRenderable } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { onMount } from "solid-js"
 import { ConfigProvider, resolve, type Info, type Interface } from "../../../src/config"
@@ -50,7 +50,7 @@ async function palette(linked?: () => boolean) {
     return null
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={resolve(state.current, { terminalSuspend: true })} service={service}>

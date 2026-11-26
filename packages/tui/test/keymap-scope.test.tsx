@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import { expect, test } from "bun:test"
 import { createSignal, onCleanup, onMount, Show } from "solid-js"
 import { Keymap } from "../src/context/keymap"
@@ -39,7 +39,7 @@ test("disabled scopes isolate named, inline, and global layers without disabling
     )
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <Keymap.Provider config={config}>
       <Harness />
     </Keymap.Provider>
@@ -110,7 +110,7 @@ test("nested scopes conjoin ancestors and retain dispatch-time layer predicates"
     )
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <Keymap.Provider config={config}>
       <Harness />
     </Keymap.Provider>
@@ -181,7 +181,7 @@ test("ownerless mode pushes suspend and resume in their captured scope without c
     )
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <Keymap.Provider config={config}>
       <Harness />
     </Keymap.Provider>
@@ -244,7 +244,7 @@ test("forwarded keymaps push modes in the calling component's nested scope and c
     )
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <Keymap.Provider config={config}>
       <Harness />
     </Keymap.Provider>

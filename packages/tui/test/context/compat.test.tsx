@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { ClientProvider, useClient } from "../../src/context/client"
 import { createCompat } from "../../src/context/compat"
 import { createApi, createEventStream, createFetch, directory, json } from "../fixture/tui-client"
@@ -37,7 +37,7 @@ async function renderCompat(input: { answer?: () => Response | Promise<Response>
     return <box />
   }
 
-  const setup = await testRender(() => (
+  const setup = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <Probe />

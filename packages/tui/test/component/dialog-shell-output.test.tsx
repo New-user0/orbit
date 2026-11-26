@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { ScrollBoxRenderable } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import type { ShellInfo } from "@orbit/client"
 import { expect, test } from "bun:test"
 import { createSignal, onMount } from "solid-js"
@@ -63,7 +63,7 @@ async function setup(width: number, output = "", command = "render-scene --quali
     return <Composer sessionID="ses_fixture" open={open()} defaultTab="shell" onClose={() => setOpen(false)} />
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts directory={temporary.path} paths={{ state: temporary.path }}>
         <ConfigProvider config={createTuiResolvedConfig({}, { terminal: false })}>

@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test"
 import { BoxRenderable, RGBA, TextAttributes, TextRenderable } from "@opentui/core"
-import { createTestRenderer, ManualClock } from "@opentui/core/testing"
+import { ManualClock } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import { TitleShimmerRenderable } from "../../src/component/title-shimmer"
 
 test("shimmer fades in from idle and fades out on unchanged completion", async () => {
   const clock = new ManualClock()
-  const app = await createTestRenderer({ width: 24, height: 1, useThread: false, clock })
+  const app = await createTestRendererTimed({ width: 24, height: 1, useThread: false, clock })
   const title = new TitleShimmerRenderable(app.renderer, {
     width: 24,
     height: 1,
@@ -50,7 +51,7 @@ test("shimmer fades in from idle and fades out on unchanged completion", async (
 
 test("a feathered wipe keeps the old shimmer moving without dimming the revealed new title", async () => {
   const clock = new ManualClock()
-  const app = await createTestRenderer({ width: 16, height: 1, useThread: false, clock })
+  const app = await createTestRendererTimed({ width: 16, height: 1, useThread: false, clock })
   const title = new TitleShimmerRenderable(app.renderer, {
     width: 16,
     height: 1,
@@ -107,7 +108,7 @@ test("a feathered wipe keeps the old shimmer moving without dimming the revealed
 
 test("native Unicode clipping and shorter replacement leave no split glyphs or old tail", async () => {
   const clock = new ManualClock()
-  const app = await createTestRenderer({ width: 24, height: 3, useThread: false, clock })
+  const app = await createTestRendererTimed({ width: 24, height: 3, useThread: false, clock })
   const content = "A\u65e5B \u{1f680} cafe\u0301"
   const title = new TitleShimmerRenderable(app.renderer, {
     width: 20,
@@ -153,7 +154,7 @@ test.each([1, 10, 11, 12, 33, 100, 120, 239])(
   "the fade-out ends after 240 ms whatever frame boundary falls %d ms into it",
   async (first) => {
     const clock = new ManualClock()
-    const app = await createTestRenderer({ width: 24, height: 1, useThread: false, clock })
+    const app = await createTestRendererTimed({ width: 24, height: 1, useThread: false, clock })
     const title = new TitleShimmerRenderable(app.renderer, {
       width: 24,
       height: 1,

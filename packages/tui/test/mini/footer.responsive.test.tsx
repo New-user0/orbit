@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from "bun:test"
 import { RGBA, TextAttributes } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import { RunFooter } from "../../src/mini/footer"
 import { resolveMiniSettings } from "../../src/mini/runtime.boot"
 import { RUN_THEME_FALLBACK, RUN_THEME_MONO } from "../../src/mini/theme"
@@ -15,7 +15,7 @@ const sizes = [
 ] as const
 
 async function setup(mono = false) {
-  const app = await createTestRenderer({
+  const app = await createTestRendererTimed({
     width: 112,
     height: 30,
     screenMode: "split-footer",
