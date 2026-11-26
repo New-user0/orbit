@@ -160,9 +160,9 @@ export function linuxState(pid: number) {
 
 // Stops `bun test` and every worker under it. On Windows taskkill is started by its full path, never by its name, which
 // Windows would look up in the package's folder first (class 10). Elsewhere the run's process group and every process under
-// it (workers have their own groups) are killed, and the run waits (a few seconds at most) until they have been
-// reaped, so none is left when it ends.
-async function stop(child: Bun.Subprocess) {
+// it (workers have their own groups) are killed, and the run waits (`bound` at most) until `probe` finds none of them,
+// so none is left when it ends. A test passes its own probe and bound.
+export async function stop(child: Bun.Subprocess, probe = alive, bound = 5_000) {
   if (process.platform === "win32") {
     const taskkill = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe")
     await Bun.spawn([taskkill, "/T", "/F", "/PID", String(child.pid)], { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
@@ -181,14 +181,15 @@ async function stop(child: Bun.Subprocess) {
       // Gone already.
     }
   }
-  const until = Date.now() + 5_000
-  while (Date.now() < until && (alive(-child.pid) || tree.some(alive))) await Bun.sleep(50)
+  const until = Date.now() + bound
+  while (Date.now() < until && (probe(-child.pid) || tree.some(probe))) await Bun.sleep(50)
 }
 
-// The processes below `root`, found by the parent each one names. Linux reads /proc; elsewhere `ps` lists them.
-function descendants(root: number) {
+// The processes below `root`, found by the parent each one names. Linux reads /proc; elsewhere `ps` lists them. A test
+// names the source, so the `ps` branch also runs on Linux.
+export function descendants(root: number, source: "proc" | "ps" = fs.existsSync("/proc/self/stat") ? "proc" : "ps") {
   const parents = new Map<number, number>()
-  if (fs.existsSync("/proc/self/stat")) {
+  if (source === "proc") {
     for (const name of fs.readdirSync("/proc")) {
       if (!/^\d+$/.test(name)) continue
       try {
