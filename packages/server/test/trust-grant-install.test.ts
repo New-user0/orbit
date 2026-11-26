@@ -31,28 +31,92 @@ afterAll(() => {
   silent.close()
 })
 
+const clone = {
+  package: "aisdk:@ai-sdk/openai-compatible",
+  settings: { apiKey: "secret", baseURL: "http://127.0.0.1:9/v1" },
+  models: { "clone-model": {} },
+}
+
+// A config folder and a repository whose orbit.json files name the given packages. The repository also names its own
+// provider, which applies without any install.
+const project = (packages: { readonly global?: string; readonly folder?: string }) =>
+  Effect.gen(function* () {
+    const tmp = yield* Effect.acquireDisposable(Effect.promise(() => tmpdir("orbit-trust-grant-install-")))
+    const folders = { config: path.join(tmp.path, "config"), repo: path.join(tmp.path, "repo") }
+    yield* Effect.promise(async () => {
+      await fs.mkdir(folders.config, { recursive: true })
+      if (packages.global)
+        await Bun.write(path.join(folders.config, "orbit.json"), JSON.stringify({ plugins: [packages.global] }))
+      await Bun.write(
+        path.join(folders.repo, "orbit.json"),
+        JSON.stringify({ ...(packages.folder ? { plugins: [packages.folder] } : {}), providers: { clone } }),
+      )
+    })
+    return folders
+  })
+
+const lists = (models: ReadonlyArray<{ readonly providerID: string; readonly id: string }>) =>
+  models.some((model) => model.providerID === "clone" && model.id === "clone-model")
+
+// Each call answers within the limit a client gives it (VS Code's grant waits 10 s).
+const within = async <A>(call: (signal: AbortSignal) => Promise<A>) => {
+  const started = performance.now()
+  const result = await call(AbortSignal.timeout(10_000))
+  expect(performance.now() - started).toBeLessThan(10_000)
+  return result
+}
+
+// The install the first grant started still waits on the registry when the revoke and the second grant arrive. Each is
+// taken up and answered on its own, not queued behind that install, and the model list follows each one.
+it.live(
+  "a revoke and a second grant while the first grant's package install waits each answer and list the folder as it then stands",
+  () =>
+    Effect.gen(function* () {
+      const folders = yield* project({ folder: "orbit-grant-install-again@1.0.0" })
+      const server = yield* startServer(folders.config, { trust: { implicit: false } })
+      const api = Orbit.make({ baseUrl: server.base, headers: server.headers })
+      const location = { directory: folders.repo }
+      yield* Effect.promise(async () => {
+        const models = async () => lists((await within((signal) => api.model.list({ location }, { signal }))).data)
+        const update = (trust: boolean) =>
+          within((signal) => api.location.trust.update({ location, trust }, { signal }))
+        expect(await update(true)).toMatchObject({ trusted: true })
+        expect(await models()).toBe(true)
+        expect(await update(false)).toMatchObject({ trusted: false })
+        expect(await models()).toBe(false)
+        expect(await update(true)).toMatchObject({ trusted: true })
+        expect(await models()).toBe(true)
+      })
+    }),
+  30_000,
+)
+
+// Here the package that waits is a global one, named by the config folder: the server's first activation starts its
+// install before any request, and a grant that follows does not wait for it.
+it.live(
+  "a grant while a global plugin's package install waits answers and lists the folder's models",
+  () =>
+    Effect.gen(function* () {
+      const folders = yield* project({ global: "orbit-grant-install-global@1.0.0" })
+      const server = yield* startServer(folders.config, { trust: { implicit: false } })
+      const api = Orbit.make({ baseUrl: server.base, headers: server.headers })
+      const location = { directory: folders.repo }
+      yield* Effect.promise(async () => {
+        expect(lists((await within((signal) => api.model.list({ location }, { signal }))).data)).toBe(false)
+        expect(
+          await within((signal) => api.location.trust.update({ location, trust: true }, { signal })),
+        ).toMatchObject({ trusted: true })
+        expect(lists((await within((signal) => api.model.list({ location }, { signal }))).data)).toBe(true)
+      })
+    }),
+  30_000,
+)
+
 it.live(
   "a grant of a folder that names a plugin package to install answers before the install and is stored",
   () =>
     Effect.gen(function* () {
-      const tmp = yield* Effect.acquireDisposable(Effect.promise(() => tmpdir("orbit-trust-grant-install-")))
-      const folders = { config: path.join(tmp.path, "config"), repo: path.join(tmp.path, "repo") }
-      yield* Effect.promise(async () => {
-        await fs.mkdir(folders.config, { recursive: true })
-        await Bun.write(
-          path.join(folders.repo, "orbit.json"),
-          JSON.stringify({
-            plugins: ["orbit-grant-install-plugin@1.0.0"],
-            providers: {
-              clone: {
-                package: "aisdk:@ai-sdk/openai-compatible",
-                settings: { apiKey: "secret", baseURL: "http://127.0.0.1:9/v1" },
-                models: { "clone-model": {} },
-              },
-            },
-          }),
-        )
-      })
+      const folders = yield* project({ folder: "orbit-grant-install-plugin@1.0.0" })
       const server = yield* startServer(folders.config, { trust: { implicit: false } })
       const api = Orbit.make({ baseUrl: server.base, headers: server.headers })
       const location = { directory: folders.repo }

@@ -38,19 +38,40 @@ const npm = {
   gate: undefined as Deferred.Deferred<void> | undefined,
   inflight: 0,
   peak: 0,
+  // When set, the package is not on the machine until `add` installs it, and `add` waits for `gate` to install it.
+  install: undefined as
+    | { readonly gate: Deferred.Deferred<void>; adds: number; stopped: number; done: boolean }
+    | undefined,
 }
 
 const npmLayer = Layer.succeed(
   Npm.Service,
   Npm.Service.of({
-    add: (name) => Effect.succeed({ directory: npm.directory, name }),
+    add: (name) =>
+      Effect.gen(function* () {
+        const install = npm.install
+        if (install) {
+          install.adds++
+          yield* Deferred.await(install.gate).pipe(
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                install.stopped++
+              }),
+            ),
+          )
+          install.done = true
+        }
+        return { directory: npm.directory, name }
+      }),
     resolve: (name) =>
       Effect.gen(function* () {
         npm.inflight++
         npm.peak = Math.max(npm.peak, npm.inflight)
         if (npm.gate) yield* Deferred.await(npm.gate)
         npm.inflight--
-        return { directory: npm.directory, name }
+        const missing = npm.install !== undefined && !npm.install.done
+        // Beside the package, not in it: inside, the package would resolve by its own name.
+        return { directory: missing ? path.join(path.dirname(npm.directory), "not-installed") : npm.directory, name }
       }),
     check: () => Effect.succeed(false),
     update: (name) => Effect.succeed({ directory: npm.directory, name }),
@@ -363,7 +384,66 @@ describe("PluginSupervisor reload", () => {
       )
     }),
   )
+
+  // An install runs beside the activations, so a change that follows it is answered while it waits (a trust grant,
+  // then a revoke: server/test/trust-grant-install.test.ts). A later activation that still lacks the package starts
+  // no second install. Once the first one ends, what it installed applies, through an activation that reads the
+  // sources as they are then: the local plugin removed meanwhile does not come back.
+  it.live("a package install that a later activation finds under way runs once, and what it installs applies", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped()
+      yield* installable(directory.path, "install-pkg", "greet-installed")
+      const extra = path.join(directory.path, ".orbit/plugins/extra.ts")
+      yield* Effect.promise(() => Bun.write(extra, greeter("greet-extra").replace("greeter", "extra")))
+      const gate = yield* Deferred.make<void>()
+      npm.install = { gate, adds: 0, stopped: 0, done: false }
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.gen(function* () {
+        const plugins = yield* Plugin.Service
+        const commands = yield* Command.Service
+        yield* plugins.awaitApplied
+        expect(yield* commands.get("greet-extra")).toBeDefined()
+        yield* settle(() => npm.install?.adds === 1)
+        yield* Effect.promise(() => fs.rm(extra))
+        yield* plugins.refresh()
+        expect(yield* commands.get("greet-extra")).toBeUndefined()
+        expect(yield* commands.get("greet-installed")).toBeUndefined()
+        // Give a second install the time to start, if one would.
+        yield* settle(() => (npm.install?.adds ?? 0) > 1, 20).pipe(Effect.ignore)
+        expect(npm.install?.adds).toBe(1)
+
+        yield* Deferred.succeed(gate, undefined)
+        yield* plugins.awaitActivation
+        expect(yield* commands.get("greet-installed")).toBeDefined()
+        expect(npm.install?.adds).toBe(1)
+        expect(yield* commands.get("greet-extra")).toBeUndefined()
+        const inventory = yield* plugins.list()
+        expect(inventory.filter((plugin) => plugin.source.type === "local").map((plugin) => plugin.id)).toEqual([])
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
+        Effect.ensuring(
+          Effect.sync(() => {
+            npm.install = undefined
+          }),
+        ),
+      )
+    }),
+  )
 })
+
+// A package plugin in `<root>/package` that adds the command `command`, named by the folder's own config.
+const installable = (root: string, name: string, command: string) =>
+  Effect.promise(async () => {
+    npm.directory = path.join(root, "package")
+    npm.gate = undefined
+    await Bun.write(
+      path.join(npm.directory, "package.json"),
+      JSON.stringify({ name, exports: { "./server": "./server.ts" } }),
+    )
+    await Bun.write(path.join(npm.directory, "server.ts"), greeter(command))
+    await Bun.write(path.join(root, ".orbit/orbit.json"), JSON.stringify({ plugins: [name] }))
+  })
 
 describe("PluginSupervisor under workspace trust", () => {
   // The supervisor follows a trust change through the config, which reloads and then reactivates the plugins.
@@ -449,6 +529,40 @@ describe("PluginSupervisor under workspace trust", () => {
       }).pipe(
         Effect.scoped,
         Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
+      )
+    }),
+  )
+
+  // The grant names a package that has to be installed, and the registry never answers. The revoke that follows leaves
+  // nothing to install, so the install stops and readiness no longer waits for it.
+  untrusted.live("a revoke stops the package install that the grant started", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped()
+      yield* installable(directory.path, "revoked-pkg", "greet-revoked")
+      npm.install = { gate: yield* Deferred.make<void>(), adds: 0, stopped: 0, done: false }
+      const locations = yield* LocationServiceMap.Service
+      yield* Effect.gen(function* () {
+        const plugins = yield* Plugin.Service
+        const project = yield* ProjectTrust.Service
+        yield* plugins.awaitActivation
+        expect(npm.install?.adds).toBe(0)
+        yield* project.grant({ persist: false, via: "test" })
+        yield* plugins.refresh()
+        yield* settle(() => npm.install?.adds === 1)
+
+        yield* project.revoke()
+        yield* plugins.refresh()
+        const settled = yield* plugins.awaitActivation.pipe(Effect.timeoutOption("5 seconds"))
+        expect(settled._tag).toBe("Some")
+        expect(npm.install?.stopped).toBe(1)
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
+        Effect.ensuring(
+          Effect.sync(() => {
+            npm.install = undefined
+          }),
+        ),
       )
     }),
   )

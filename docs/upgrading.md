@@ -2261,15 +2261,17 @@ folder's config before it answered, but the providers, agents and commands of th
 again a moment later. A client that listed models right after the grant, as `orb doctor --probe --trust` does, could
 get the list of before the grant. The answer now comes once the plugins that are already on the machine have started.
 A plugin package the folder names that still has to be installed does not hold the answer: it starts when its install
-finishes, as at startup.
+finishes, as at startup. A revoke, a second grant or a model list that comes while that install still runs is answered
+without waiting for it either, and an install that a revoke leaves with nothing to bring is stopped.
 
 Ending trust works the same way. `location.trust.update` with `trust: false` and `orb trust --revoke` (the
 `trust.revoke` route) used to answer while the folder's provider, plugins and commands were still active. They now read
 the config again and stop the folder's plugins before they answer.
 
-The model list and the default model of a folder (`model.list`, `model.default`) also wait for its plugins to start
-now, as its agents and commands already did, so the first list after a folder is opened holds its providers. An editor's
-first ACP session in a busy machine no longer fails because the models were not listed yet.
+The model list and the default model of a folder (`model.list`, `model.default`) also wait for the plugins that are on
+the machine to start now, as its agents and commands already did, so the first list after a folder is opened holds its
+providers. A package that still has to be installed does not hold the list. An editor's first ACP session in a busy
+machine no longer fails because the models were not listed yet.
 
 **Affects:** clients and scripts that trust or untrust a folder and then list or use its models, agents or commands.
 
