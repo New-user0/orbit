@@ -121,7 +121,7 @@ async function spawn(command: string, stdin: string, cwd: string | undefined, si
   signal.addEventListener("abort", () => killTree(child), { once: true })
   // The run ends once the output is closed and the shell has exited. A command can close its stdout and keep running,
   // and a grandchild can hold stdout open after the shell is gone: such a run lasts until something replaces it.
-  const [output, code] = await Promise.all([new Response(child.stdout).text().catch(() => ""), child.exited])
+  const [output, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
   return code === 0 ? output : undefined
 }
 
