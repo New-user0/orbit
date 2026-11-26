@@ -526,6 +526,13 @@ describe.skipIf(process.platform === "win32")("stop and descendants", () => {
     expect(descendants(process.pid, "ps").some((pid) => !running(pid))).toBe(true)
   }, 20_000)
 
+  // Without a named source Linux reads /proc: a listing that starts no ps names no process that is gone once it returns.
+  test.skipIf(process.platform !== "linux")("reads /proc on Linux unless a source is named", () => {
+    // Control: the ps source names the ps it started, gone by the time it is asked about.
+    expect(descendants(process.pid, "ps").some((pid) => !running(pid))).toBe(true)
+    expect(descendants(process.pid).every(running)).toBe(true)
+  })
+
   test("does not return while a process it listed is still there", async () => {
     await using dir = await tmpdir()
     const started = await run(dir.path)
