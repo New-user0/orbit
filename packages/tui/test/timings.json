@@ -217,6 +217,7 @@
     "test/theme/v2/v1-migrate.test.ts": 223,
     "test/tmpdir.test.ts": 40,
     "test/trust-first.test.ts": 14665,
+    "test/trust-grant-plugins.test.ts": 6000,
     "test/trust-prompt.test.ts": 4210,
     "test/trust-reference.test.ts": 5512,
     "test/ui/file-path.test.ts": 131,
