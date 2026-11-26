@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, setDefaultTimeout } from "bun:test"
 import fs from "fs/promises"
 import net from "net"
 import path from "path"
@@ -195,6 +195,10 @@ const graph = AppNodeBuilder.build(
     Global.node.replace(tempGlobalLayer),
   ],
 )
+// Every row runs the real tools, a database and file system work, and none of its claims is about how fast that is: on
+// a Windows machine running eight copies of this file beside busy loops, rows that take half a second alone ran past
+// Bun's 5 s default (m5-flakes). Rows with more work set their own limit.
+setDefaultTimeout(30_000)
 // `config` is one layer, built once, so `Config.Test` sets the entries the production node reads.
 const it = testEffect(Layer.merge(graph, config))
 // The rows whose claim is what a step reports, not how its budget is spent, run with a budget that load cannot use up.
@@ -933,7 +937,7 @@ describe("the re-read gate (class 4, 7)", () => {
     ),
   )
   for (const cell of swapCells) {
-    const row = cell.part === "the file" && !canLinkFile ? it.live.skip : it.live
+    const row = cell.part === "the file" && !canLinkFile ? calm.live.skip : calm.live
     row(
       `a file in the ${cell.home} whose path has ${cell.part} swapped for a link elsewhere is skipped (${cell.trust})`,
       () =>
@@ -1827,7 +1831,7 @@ describe("the rebuild after a restart", () => {
     }),
   )
 
-  const linkedRebuild = canLinkFile ? it.live : it.live.skip
+  const linkedRebuild = canLinkFile ? calm.live : calm.live.skip
   // Gate's row (class 4): while the project is not trusted, a project file that is a link leading out is placed outside
   // the project, so the rebuild reads nothing through it. Not seeded, it is not reported once the project is trusted
   // again, while a project file the same history wrote is.
@@ -2938,7 +2942,7 @@ describe("the context-window usage reminder", () => {
 })
 
 describe("the production reminder node", () => {
-  it.live("collects the file-change, style, diagnostics and context-usage rows, in the reference's order", () =>
+  calm.live("collects the file-change, style, diagnostics and context-usage rows, in the reference's order", () =>
     Effect.gen(function* () {
       const h = yield* setup()
       const file = h.inside("notes.txt")
