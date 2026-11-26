@@ -521,6 +521,9 @@ describe.skipIf(process.platform === "win32")("stop and descendants", () => {
     await stop(started.child)
     listed.forEach((pids) => expect(pids).toContain(started.other))
     listed.forEach((pids) => expect(pids).toEqual(listed[0]))
+    // The ps source asks ps, which runs below this process while it lists and is gone afterwards; /proc read in this
+    // process finds only processes that are still there.
+    expect(descendants(process.pid, "ps").some((pid) => !running(pid))).toBe(true)
   }, 20_000)
 
   test("does not return while a process it listed is still there", async () => {
