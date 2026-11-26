@@ -96,6 +96,36 @@ describe("runTests", () => {
   )
 
   test(
+    "stops a process under the run that is in its own process group, as Bun's test workers are",
+    async () => {
+      await using dir = await tmpdir()
+      const pidFile = path.join(dir.path, "grandchild")
+      const code = await runTests(
+        [
+          "-e",
+          [
+            `const { spawn } = require("node:child_process")`,
+            `const fs = require("node:fs")`,
+            // `detached` starts its own session and group, so the signal to the run's group cannot reach it.
+            `const other = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)"], { detached: true, stdio: "ignore" })`,
+            `fs.writeFileSync(${JSON.stringify(pidFile)}, String(other.pid))`,
+            `const log = require("node:path").join(process.env.ORBIT_TEST_HEARTBEAT, String(process.pid))`,
+            `fs.appendFileSync(log, (Date.now() - 60_000) + " start " + ${JSON.stringify(path.join(dir.path, "test", "a.test.ts"))} + "\\n")`,
+            `setTimeout(() => {}, 30_000)`,
+          ].join("\n"),
+        ],
+        quiet({ ORBIT_TEST_FILE_DEADLINE_MS: "1000" }),
+        dir.path,
+        captured().output,
+      )
+      expect(code).toBe(1)
+      const other = Number(await Bun.file(pidFile).text())
+      expect(() => process.kill(other, 0)).toThrow()
+    },
+    60_000,
+  )
+
+  test(
     "looks at the folder every quarter of the deadline, so a file found stuck between two looks is stopped at the next",
     async () => {
       await using dir = await tmpdir()
