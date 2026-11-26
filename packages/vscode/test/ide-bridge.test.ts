@@ -1138,14 +1138,51 @@ test("the chat's open of a question a terminal UI reviews does not take that ter
 })
 
 // A disk whose first real path waits until the test lets it go, so a close can come while the review is read.
+// `reading` settles when the review's reader has been called, so a test acts while the read is under way without a wait.
 function held() {
   const gate = Promise.withResolvers<void>()
+  const called = Promise.withResolvers<void>()
   const reader: Disk = {
-    realpath: async (file) => (await gate.promise, disk.realpath(file)),
+    realpath: async (file) => (called.resolve(), await gate.promise, disk.realpath(file)),
     lstat: (file) => disk.lstat(file),
     readFile: (file) => disk.readFile(file),
   }
-  return { reader, release: gate.resolve }
+  return { reader, release: gate.resolve, reading: called.promise }
+}
+
+// A link delivers its frames in the order they were sent, so the answer to a question asked now (a patch that does not
+// apply, which answers and opens nothing) comes after every frame already sent: a test that expects no frame reads
+// the frames once this answer is in, and does not wait a while and look.
+async function afterSent(client: { socket: WebSocket; frames: Frame[] }) {
+  ask(client, { id: "per_z", patch: `${patch}${"+x\n".repeat(70_000)}` })
+  await until(() => answers(client).some((answer) => answer.id === "per_z"), "the answer that follows")
+}
+
+// The review's service as the bridge calls it, with what the bridge's calls did: `handled` settles when the bridge has
+// handed a close or a close-all to the review and the review has returned, `settled` when the review's open has ended
+// (it opened, answered or dropped).
+function watched(review: Review) {
+  const handled = Promise.withResolvers<void>()
+  const settled = Promise.withResolvers<void>()
+  const diff: DiffService = {
+    ...review.bridge,
+    open: async (owner, request, window) => {
+      try {
+        await review.bridge.open(owner, request, window)
+      } finally {
+        settled.resolve()
+      }
+    },
+    close: (owner, id) => {
+      review.bridge.close(owner, id)
+      handled.resolve()
+    },
+    closeAll: () => {
+      review.bridge.closeAll()
+      handled.resolve()
+    },
+  }
+  return { diff, handled: handled.promise, settled: settled.promise }
 }
 
 // A question is busy from the moment its open is taken, not only once its tab is shown: a second open while the file is
@@ -1220,22 +1257,24 @@ describe("a review closed while its file is still being read opens nothing", () 
       const editor = tabs()
       const review = new Review(editor.host, disk.reader)
       editor.holder.review = review
-      const { bridge } = await start(await folder(), { folders: [world.root], diff: review.bridge })
+      const service = watched(review)
+      const { bridge } = await start(await folder(), { folders: [world.root], diff: service.diff })
       cleanup.push(() => review.dispose())
-      await Bun.sleep(60)
       const client = await connect(bridge, (await lock(bridge)).authToken, features)
       await until(() => client.frames.length >= 2, "the hello and the selection")
       ask(client)
-      await Bun.sleep(50)
+      // The close comes while the file is being read, and the read ends only after the review has handled the close.
+      await disk.reading
       client.socket.send(JSON.stringify(row.close({ type: "diff.closeAll" })))
-      await Bun.sleep(50)
+      await service.handled
       disk.release()
-      // The dismissal is sent once the read ends; a loaded runner can take longer than a fixed wait for it, so the row
-      // waits for it, bounded by the test's limit. A row that expects no answer can only wait a while and look.
-      if (row.dismissed) await until(() => answers(client).length > 0, "the dismissal")
-      await Bun.sleep(100)
+      // The review's open ends when it has shown nothing and sent whatever it sends (the dismissal comes before it ends).
+      await service.settled
+      await afterSent(client)
       expect(editor.shown).toEqual([])
-      expect(answers(client)).toEqual(row.dismissed ? [{ type: "diff.answer", id: "per_a1", answer: "dismissed" }] : [])
+      expect(answers(client).filter((answer) => answer.id === "per_a1")).toEqual(
+        row.dismissed ? [{ type: "diff.answer", id: "per_a1", answer: "dismissed" }] : [],
+      )
     })
 })
 
@@ -1246,17 +1285,18 @@ test("a review the window closes while its file is still being read opens nothin
   const editor = tabs()
   const review = new Review(editor.host, disk.reader)
   editor.holder.review = review
-  const { bridge } = await start(await folder(), { folders: [world.root], diff: review.bridge })
-  await Bun.sleep(60)
+  const service = watched(review)
+  const { bridge } = await start(await folder(), { folders: [world.root], diff: service.diff })
   const client = await connect(bridge, (await lock(bridge)).authToken, features)
   await until(() => client.frames.length >= 2, "the hello and the selection")
   ask(client)
-  await Bun.sleep(50)
+  await disk.reading
   review.dispose()
   disk.release()
-  await Bun.sleep(100)
+  await service.settled
+  await afterSent(client)
   expect(editor.shown).toEqual([])
-  expect(answers(client)).toEqual([])
+  expect(answers(client).filter((answer) => answer.id === "per_a1")).toEqual([])
 })
 
 test("a client that goes away takes its reviews with it, and nothing is answered", async () => {
