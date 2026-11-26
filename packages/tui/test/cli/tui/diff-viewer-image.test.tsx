@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { ImageRenderable, type Renderable } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { createSignal, Show, type JSX } from "solid-js"
 import { ConfigProvider } from "../../../src/config"
 import { ThemeProvider } from "../../../src/context/theme"
@@ -148,7 +148,7 @@ function renderImage(
   component: () => JSX.Element,
   options = { width: 80, height: 24, mode: "dark" as "dark" | "light" },
 ) {
-  return testRender(
+  return testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>

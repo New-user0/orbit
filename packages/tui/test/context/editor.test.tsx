@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { createSignal } from "solid-js"
 import { EditorContextProvider, useEditorContext, type EditorIntegration } from "../../src/context/editor"
 import { IdeLock } from "@orbit/util/ide-lock"
@@ -56,7 +56,7 @@ async function renderEditor(
     return <box />
   }
 
-  const setup = await testRender(() => (
+  const setup = await testRenderTimed(() => (
     <TestTuiContexts cwd={input.cwd} paths={input.state ? { state: input.state } : undefined}>
       <EditorContextProvider
         integration={input.integration}

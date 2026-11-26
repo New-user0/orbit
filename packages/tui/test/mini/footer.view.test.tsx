@@ -8,8 +8,8 @@ import {
   type CliRenderer,
   type RootRenderable,
 } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
-import { testRender } from "@opentui/solid"
+import { createTestRendererTimed } from "../fixture/render"
+import { testRenderTimed } from "../fixture/render"
 import { createSignal } from "solid-js"
 import type { FormInfo } from "@orbit/client/promise"
 import { Keymap } from "../../src/context/keymap"
@@ -226,7 +226,7 @@ async function renderFooter(
     )
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={input.width ?? 100} height={input.height ?? 8}>
         <Harness />
@@ -849,7 +849,7 @@ test("run entry content updates when live commit text changes", async () => {
     tool: "shell",
   })
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={80} height={4}>
         <RunEntryContent commit={commit()} theme={RUN_THEME_FALLBACK} />
@@ -891,7 +891,7 @@ test("run entry content preserves monochrome markdown grammar", async () => {
     messageID: "msg-1",
     partID: "part-1",
   })
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={60} height={8}>
         <RunEntryContent commit={commit()} theme={RUN_THEME_FALLBACK} opts={{ mono: true }} />
@@ -943,7 +943,7 @@ test("run entry content toggles unchanged live markdown between color and monoch
     messageID: "msg-1",
     partID: "part-1",
   }
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={60} height={4}>
         <RunEntryContent commit={commit} theme={RUN_THEME_FALLBACK} opts={{ mono: mono() }} />
@@ -971,7 +971,7 @@ test("run entry content toggles unchanged live markdown between color and monoch
 })
 
 test("run entry content eagerly renders final monochrome markdown", async () => {
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={60} height={6}>
         <RunEntryContent
@@ -1005,7 +1005,7 @@ test("direct command panel renders grouped actions without catalog commands", as
   const [variants] = createSignal(["high", "minimal"])
   let status = 0
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={100} height={RUN_COMMAND_PANEL_ROWS}>
         <RunCommandMenuBody
@@ -1088,7 +1088,7 @@ test("direct command panel renders grouped actions without catalog commands", as
 test.each([false, true])("settings change preferences and preview the work spinner (mono=%s)", async (mono) => {
   const [settings, setSettings] = createSignal(resolveMiniSettings())
   const [animations, setAnimations] = createSignal(true)
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width="100%" height="100%">
         <RunSettingsBody
@@ -1218,7 +1218,7 @@ test("direct command panel shows subagent entry when available", async () => {
   const [subagents] = createSignal([subagent({ sessionID: "s-1", label: "Explore", description: "Inspect auth flow" })])
   const [variants] = createSignal<string[]>([])
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={100} height={RUN_COMMAND_PANEL_ROWS}>
         <RunCommandMenuBody
@@ -1268,7 +1268,7 @@ test("direct command panel keeps completed subagents available", async () => {
   ])
   const [variants] = createSignal<string[]>([])
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={100} height={RUN_COMMAND_PANEL_ROWS}>
         <RunCommandMenuBody
@@ -1319,7 +1319,7 @@ test("direct subagent panel toggles between active and inactive subagents", asyn
   const [current] = createSignal<string | undefined>("s-1")
   let rows = 0
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={100} height={RUN_SUBAGENT_PANEL_ROWS}>
         <RunSubagentSelectBody
@@ -1376,7 +1376,7 @@ test("direct subagent panel closes when moving up from the first item", async ()
   const [current] = createSignal<string | undefined>()
   let closed = 0
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={100} height={RUN_SUBAGENT_PANEL_ROWS}>
         <RunSubagentSelectBody
@@ -2017,7 +2017,7 @@ test.each([
 })
 
 test.each([8, 12])("production footer grows for wrapped instructions in %i rows", async (height) => {
-  const app = await createTestRenderer({ width: 16, height, screenMode: "split-footer", footerHeight: 4 })
+  const app = await createTestRendererTimed({ width: 16, height, screenMode: "split-footer", footerHeight: 4 })
   const footer = new RunFooter(app.renderer, {
     directory: () => "/project",
     findFiles: async () => [],
@@ -2071,7 +2071,7 @@ test.each([8, 12])("production footer grows for wrapped instructions in %i rows"
 })
 
 test("the mini footer takes the keys of the mini context from the keybindings file, and no other context's", async () => {
-  const app = await createTestRenderer({ width: 40, height: 12, screenMode: "split-footer", footerHeight: 4 })
+  const app = await createTestRendererTimed({ width: 40, height: 12, screenMode: "split-footer", footerHeight: 4 })
   const footer = new RunFooter(app.renderer, {
     directory: () => "/project",
     findFiles: async () => [],
@@ -2542,7 +2542,7 @@ test("direct permission rejection submits through keymap return binding", async 
     )
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={100} height={18}>
         <Harness />
@@ -2575,7 +2575,7 @@ test("direct model panel keeps native V2 light search and options readable on a 
   ])
   const [current] = createSignal<RunInput["model"]>({ providerID: "acme-llm", modelID: "gpt-5" })
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={100} height={RUN_COMMAND_PANEL_ROWS} backgroundColor={background}>
         <RunModelSelectBody
@@ -2679,7 +2679,7 @@ test("direct agent panel shows eligible agents and marks the current agent", asy
   const [current] = createSignal("review")
   let selected: string | undefined
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={100} height={RUN_COMMAND_PANEL_ROWS}>
         <RunAgentSelectBody
@@ -2729,7 +2729,7 @@ test("direct variant panel renders current variant selector", async () => {
   const [variants] = createSignal(["high", "minimal"])
   const [current] = createSignal<string | undefined>("high")
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={100} height={RUN_COMMAND_PANEL_ROWS}>
         <RunVariantSelectBody
@@ -2799,7 +2799,7 @@ test.each([
     { ...row, name: "x", mode: "primary", hidden: false },
     { id: "trusted", name: "Trusted", description: "fine", mode: "primary", hidden: false },
   ])
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={100} height={RUN_COMMAND_PANEL_ROWS}>
         <RunAgentSelectBody

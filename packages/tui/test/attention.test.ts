@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { EventEmitter } from "node:events"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { createTuiAttention } from "../src/attention"
 
 type Settings = { bell: boolean; notifications?: boolean; sound?: boolean; backend?: "terminal" | "system" }
@@ -81,7 +81,7 @@ test("stays silent when the bell is off, and for requests that opt out of notifi
 })
 
 test("waits for a real renderer to be idle before it writes", async () => {
-  const setupRenderer = await createTestRenderer({ width: 40, height: 10 })
+  const setupRenderer = await createTestRendererTimed({ width: 40, height: 10 })
   try {
     const written: string[] = []
     const attention = createTuiAttention({

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { For } from "solid-js"
-import { testRender, type JSX } from "@opentui/solid"
+import { type JSX } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import {
   InlineToolRow,
   executeCallSummary,
@@ -14,7 +15,7 @@ import {
   toolDisplay,
 } from "../../../src/routes/session"
 
-let testSetup: Awaited<ReturnType<typeof testRender>> | undefined
+let testSetup: Awaited<ReturnType<typeof testRenderTimed>> | undefined
 
 afterEach(() => {
   testSetup?.renderer.destroy()
@@ -110,7 +111,7 @@ function TrailingStatusFixture() {
 
 async function renderFrame(component: () => JSX.Element, options: { width: number; height: number }) {
   testSetup?.renderer.destroy()
-  testSetup = await testRender(component, options)
+  testSetup = await testRenderTimed(component, options)
   await testSetup.renderOnce()
   await testSetup.renderOnce()
 

@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test"
 import { EmbeddedTerminalRenderable, InputRenderable, TextareaRenderable, TextRenderable } from "@opentui/core"
-import { createTestRenderer, ManualClock } from "@opentui/core/testing"
+import { ManualClock } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import type { ClipboardService } from "../../src/context/clipboard"
 import { Selection } from "../../src/util/selection"
 
 async function setup(copyOnSelect = false) {
   const clock = new ManualClock()
-  const app = await createTestRenderer({
+  const app = await createTestRendererTimed({
     width: 24,
     height: 3,
     useThread: false,

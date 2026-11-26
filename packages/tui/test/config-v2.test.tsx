@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import { expect, test } from "bun:test"
 import { Schema } from "effect"
 import { mkdir, writeFile } from "node:fs/promises"
@@ -63,7 +63,7 @@ test("the /config dialog lists Diff tool only while linked to an editor", async 
       )
       process.env.ORBIT_EDITOR_SSE_PORT = String(server.port)
     } else delete process.env.ORBIT_EDITOR_SSE_PORT
-    const app = await testRender(
+    const app = await testRenderTimed(
       () => (
         <TestTuiContexts paths={{ state: state.path }}>
           <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
@@ -112,7 +112,7 @@ test("the /config dialog opened without a link state does not list Diff tool", a
     onMount(() => dialog.replace(() => <DialogConfig current="diffs.view" />))
     return null
   }
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
@@ -434,7 +434,7 @@ test("provides config and its host interface", async () => {
     return <text>{`${context.data.mouse ? "mouse" : "none"} ${context.data.keybinds.get("leader")?.[0]?.key}`}</text>
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <ConfigProvider config={config} service={service}>
       <Consumer />
     </ConfigProvider>
@@ -580,7 +580,7 @@ test("reloads the keybindings file when it changes, and a broken one does not di
     return <text>config</text>
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <ConfigProvider
       config={resolve(loaded.info, { terminalSuspend: true, keybindings: loaded.keybindings })}
       keybindings={loaded.keybindings}
@@ -668,7 +668,7 @@ test("prompt.suggestions is a boolean, off by default, with an Input row in sett
     onMount(() => dialog.replace(() => <DialogConfig current="prompt.suggestions" />))
     return null
   }
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={resolve(current, { terminalSuspend: true })} service={service}>

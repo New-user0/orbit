@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { ManualClock } from "@opentui/core/testing"
-import { testRender, useRenderer } from "@opentui/solid"
+import { useRenderer } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { useClipboard } from "../../src/context/clipboard"
 import { copyOnSelectRelease } from "../../src/util/selection"
 import { TestTuiContexts } from "../fixture/tui-environment"
@@ -25,7 +26,7 @@ test.each([
   { column: 17, word: "" },
 ])("copy-on-select preserves multi-clicks at column $column", async (input) => {
   const writes: string[] = []
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts
         clipboard={{

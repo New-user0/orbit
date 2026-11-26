@@ -13,7 +13,7 @@ import {
   type Renderable,
   ScrollBoxRenderable,
 } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import type {
   Context,
   Destination,
@@ -2095,7 +2095,7 @@ async function renderDiffViewer(
     )
   }
 
-  const app = await testRender(() => <Harness />, {
+  const app = await testRenderTimed(() => <Harness />, {
     width: options.width ?? 80,
     height: options.height ?? 20,
     kittyKeyboard: options.kittyKeyboard,

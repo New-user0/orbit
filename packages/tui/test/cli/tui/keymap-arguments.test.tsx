@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { ConfigProvider } from "../../../src/config"
 import { Keymap } from "../../../src/context/keymap"
@@ -27,7 +27,7 @@ test("dispatch passes slash input through the registered command", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <ConfigProvider config={createTuiResolvedConfig()}>
       <Keymap.Provider>
         <Commands />

@@ -1,4 +1,4 @@
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import type { TuiInput } from "../../src/app"
@@ -29,7 +29,7 @@ export async function createAppFixture(
 ) {
   const { run } = await import("../../src/app")
   const state = input.state ? undefined : await tmpdir()
-  const setup = await createTestRenderer({
+  const setup = await createTestRendererTimed({
     width: input.width ?? 100,
     height: input.height ?? 30,
     useThread: false,
@@ -67,23 +67,6 @@ export async function createAppFixture(
   )
   return {
     ...setup,
-    /**
-     * opentui's wait counts frames and gives up as soon as nothing is scheduled to draw, which a loaded runner reaches
-     * while the app still waits on a request it made (a frame timeout of `server plugin failures are visible`, Windows
-     * CI). This one keeps looking until the predicate holds or 10 s have passed, and then fails as opentui's does.
-     */
-    async waitForFrame(...args: Parameters<typeof setup.waitForFrame>) {
-      const deadline = Date.now() + 10_000
-      for (;;) {
-        const result = await setup.waitForFrame(...args).then(
-          (frame) => ({ frame }),
-          (error: unknown) => ({ error }),
-        )
-        if ("frame" in result) return result.frame
-        if (Date.now() >= deadline) throw result.error
-        await Bun.sleep(25)
-      }
-    },
     events,
     ready: ready.promise,
     /** Settles when the terminal UI has ended and done what it does at the end. */

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { Context, Page } from "@orbit/plugin/tui/context"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { ConfigProvider } from "../../../src/config"
 import { Keymap } from "../../../src/context/keymap"
@@ -43,7 +43,7 @@ async function render(width: number) {
     void Storybook.setup(context)
     return pages.find((page) => page.name === "storybook")?.render({ data: { story: "rewind" } })
   }
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>

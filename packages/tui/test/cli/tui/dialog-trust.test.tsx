@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { TrustStatus } from "@orbit/client"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { onMount } from "solid-js"
 import { ConfigProvider } from "../../../src/config"
@@ -400,7 +400,7 @@ async function renderTrust(
     return null
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ExitProvider exit={(reason) => void exits.push(reason)}>

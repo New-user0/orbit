@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { TextRenderable } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import { permissionAlwaysLines, permissionPresentation } from "../../src/util/permission"
 import { formLabel } from "../../src/util/form"
 
@@ -22,7 +22,7 @@ const requests = [
 ]
 
 async function drawn(content: string) {
-  const setup = await createTestRenderer({ width: 80, height: 4, remote: true, useThread: false })
+  const setup = await createTestRendererTimed({ width: 80, height: 4, remote: true, useThread: false })
   try {
     setup.renderer.root.add(new TextRenderable(setup.renderer, { content }))
     setup.renderer.start()

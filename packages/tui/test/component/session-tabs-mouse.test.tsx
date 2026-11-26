@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { MouseButton } from "@opentui/core"
 import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
@@ -25,7 +25,7 @@ test("releasing a transcript selection over tab controls does not activate them"
     add: () => setAdded((value) => value + 1),
     status: () => EMPTY_SESSION_TAB_STATUS,
   } satisfies SessionTabsController
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig({ tabs: { mode: "on" } })}>
@@ -76,7 +76,7 @@ test("middle-click closes a session tab without selecting it", async () => {
     move() {},
     status: () => EMPTY_SESSION_TAB_STATUS,
   } satisfies SessionTabsController
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig({ tabs: { mode: "on" } })}>
@@ -124,7 +124,7 @@ test("keeps consecutive close controls fixed across overflow window changes", as
     move() {},
     status: () => EMPTY_SESSION_TAB_STATUS,
   } satisfies SessionTabsController
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig({ tabs: { mode: "on" } })}>
@@ -175,7 +175,7 @@ test("reflows held tabs when the pointer leaves the strip", async () => {
     move() {},
     status: () => EMPTY_SESSION_TAB_STATUS,
   } satisfies SessionTabsController
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig({ tabs: { mode: "on" } })}>

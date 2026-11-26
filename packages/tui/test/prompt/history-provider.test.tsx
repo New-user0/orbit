@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { expect, test } from "bun:test"
 import { appendFile, mkdir } from "node:fs/promises"
 import path from "node:path"
@@ -183,7 +183,7 @@ async function renderHistory(root: string, persisted?: string, historyLimit?: nu
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TuiPathsProvider value={{ cwd: root, home: root, state, worktree: root }}>
       <ConfigProvider config={createTuiResolvedConfig({ prompt: { history_limit: historyLimit } })}>
         <PromptHistoryProvider>

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { RGBA, TextRenderable } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import type { Context } from "@orbit/plugin/tui/context"
 import { createSignal } from "solid-js"
 import { PromptFooter } from "../../src/feature-plugins/prompt/footer"
@@ -41,7 +41,7 @@ test("prompt footer separates simultaneous subagent, shell, and usage status", a
       },
     },
   } as unknown as Context
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => <PromptFooter context={context} sessionID="session" mode="normal" showDetails={true} />,
     {
       width: 80,
@@ -109,7 +109,7 @@ test("prompt footer can hide details", async () => {
   } as unknown as Context
   const [showDetails, setShowDetails] = createSignal(true)
   const [sessionID, setSessionID] = createSignal<string | undefined>("session")
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width="100%" flexDirection="row" justifyContent="space-between" gap={2}>
         <PromptFooter context={context} sessionID={sessionID()} mode="normal" showDetails={showDetails()} />
@@ -166,7 +166,7 @@ test("prompt footer offers the agent and command shortcuts when nothing is runni
       location: { model: { list: () => [] } },
     },
   } as unknown as Context
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width="100%" flexDirection="row" justifyContent="space-between" gap={2}>
         <PromptFooter context={context} sessionID="session" mode="normal" showDetails={true} />
@@ -219,7 +219,7 @@ test("prompt footer draws the context line in the color of its state and hides i
       location: { model: { list: () => [] } },
     },
   } as unknown as Context
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width="100%" flexDirection="row" gap={2}>
         <PromptFooter context={context} sessionID="session" mode="normal" showDetails={true} />

@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { ConfigProvider, resolve, useConfig } from "../src/config"
@@ -25,7 +25,7 @@ test("legacy page key aliases compile as page keys", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <ConfigProvider
       config={createTuiResolvedConfig({
         keybinds: {
@@ -59,7 +59,7 @@ test("formats navigation keys as arrows", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <ConfigProvider config={createTuiResolvedConfig()}>
       <Keymap.Provider>
         <Harness />
@@ -88,7 +88,7 @@ test("returns every formatted command shortcut", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <ConfigProvider config={createTuiResolvedConfig()}>
       <Keymap.Provider>
         <Harness />
@@ -127,7 +127,7 @@ test("global commands stay reachable when the mode changes", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <ConfigProvider config={createTuiResolvedConfig()}>
       <Keymap.Provider>
         <Harness />
@@ -165,7 +165,7 @@ test("a session-list override of dialog.session.rename applies only in the sessi
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <Keymap.Provider config={keybindings({ contexts: { "session-list": { "dialog.session.rename": "ctrl+alt+r" } } })}>
       <Harness />
     </Keymap.Provider>
@@ -205,7 +205,7 @@ test("null in a context unbinds the command there and nowhere else", async () =>
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <Keymap.Provider config={keybindings({ contexts: { "session-list": { "dialog.session.rename": null } } })}>
       <Harness />
     </Keymap.Provider>
@@ -238,7 +238,7 @@ test("a layer with no context, or one that Orbit does not know, gets only what a
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <Keymap.Provider
       config={keybindings({
         bindings: { "session.list": "ctrl+alt+l" },
@@ -281,7 +281,7 @@ test("a ctrl+k ctrl+s chord dispatches its command once both strokes are pressed
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <Keymap.Provider config={keybindings({ bindings: { "session.new": "ctrl+k ctrl+s" } })}>
       <Harness />
     </Keymap.Provider>
@@ -316,7 +316,7 @@ test("Escape clears a chord that is waiting for its second stroke", async () => 
     return <box />
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <Keymap.Provider config={keybindings({ bindings: { "session.new": "ctrl+k ctrl+s" } })}>
         <Harness />
@@ -355,7 +355,7 @@ test("<leader> sequences work beside chords", async () => {
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <Keymap.Provider config={keybindings({ bindings: { "session.list": "ctrl+k ctrl+s" } })}>
       <Harness />
     </Keymap.Provider>
@@ -387,7 +387,7 @@ test("chords combine with comma lists, spelled-out keys and the leader key", asy
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <Keymap.Provider
       config={keybindings({
         bindings: {
@@ -430,7 +430,7 @@ test("the second stroke of a chord matches on the key's position when the layout
     return <box />
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <Keymap.Provider config={keybindings({ bindings: { "session.new": "ctrl+k ctrl+s" } })}>
         <Harness />
@@ -476,7 +476,7 @@ test("the text area's keys stay below the app's own when a change to the config 
     return <textarea focused initialValue="text" />
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <ConfigProvider config={resolve({}, { terminalSuspend: true })} service={service}>
         <Keymap.Provider>
@@ -523,7 +523,7 @@ test("a change to the leader key in the config takes effect while the app runs",
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <ConfigProvider config={resolve({}, { terminalSuspend: true })} service={service}>
       <Keymap.Provider>
         <Harness />

@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { TrustStatus, TrustWithheld } from "@orbit/client"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { TrustIndicator } from "../../../src/component/trust-indicator"
 import { ConfigProvider } from "../../../src/config"
@@ -18,7 +18,7 @@ const untrusted: TrustStatus = {
 }
 
 async function render(status: TrustStatus | undefined, width: number, onOpen = () => {}) {
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>

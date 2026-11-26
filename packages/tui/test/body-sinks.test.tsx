@@ -1,5 +1,5 @@
 import { expect, setDefaultTimeout, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
@@ -63,7 +63,7 @@ function assistant(content: unknown[], extra: Record<string, unknown> = {}) {
   }
 }
 
-type App = Awaited<ReturnType<typeof createTestRenderer>> & { events: ReturnType<typeof createEventStream> }
+type App = Awaited<ReturnType<typeof createTestRendererTimed>> & { events: ReturnType<typeof createEventStream> }
 
 // Click the first place `needle` is drawn.
 async function click(app: App, needle: string) {
@@ -403,7 +403,7 @@ const rows: {
 
 async function screen(messages: unknown[], inbox: unknown[] = [], act?: (app: App, text: string) => Promise<void>, text = hostile, until?: string) {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 110, height: 40, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width: 110, height: 40, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const events = createEventStream()
   const calls = createFetch((url) => {

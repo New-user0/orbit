@@ -1,6 +1,6 @@
 import { promptReady } from "./fixture/app"
 import { expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { Global } from "@orbit/util/global"
 import { Effect, FileSystem } from "effect"
 import { createEventStream, createFetch, json } from "./fixture/tui-client"
@@ -11,7 +11,7 @@ test("stats shows only this year and returns after errors or success", async () 
   // Other app tests can leave a home draft in the process-wide stash.
   takeDraft(undefined)
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 100, height: 34, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width: 100, height: 34, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const requests: URL[] = []
   const calls = createFetch((url) => {

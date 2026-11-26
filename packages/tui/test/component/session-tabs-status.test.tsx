@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { MouseButton } from "@opentui/core"
 import { expect, test } from "bun:test"
 import { batch, createSignal } from "solid-js"
@@ -71,7 +71,7 @@ for (const orientation of ["horizontal", "vertical"] as const) {
       detail: () => "project",
       status: (sessionID: string) => (sessionID === "first" ? status() : EMPTY_SESSION_TAB_STATUS),
     } satisfies SessionTabsController
-    const app = await testRender(
+    const app = await testRenderTimed(
       () => (
         <TestTuiContexts
           paths={{ state: temporary.path }}

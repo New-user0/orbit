@@ -1,4 +1,4 @@
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./render"
 import type { AgentInfo, ModelInfo, SessionInfo } from "@orbit/client"
 import path from "node:path"
 import { ConfigProvider } from "../../src/config"
@@ -66,7 +66,7 @@ export async function renderLocal(
     return <box />
   }
 
-  const setup = await testRender(
+  const setup = await testRenderTimed(
     () => (
       <TestTuiContexts paths={{ state: temporary.path }} log={input.log}>
         <ArgsProvider {...input.args}>

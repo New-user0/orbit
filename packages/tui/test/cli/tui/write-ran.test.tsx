@@ -5,7 +5,7 @@
 // would show PROPOSED (class 14).
 import type { JsonValue, SessionMessageAssistantTool } from "@orbit/client/promise"
 import { addDefaultParsers } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { ConfigProvider } from "../../../src/config"
 import { ArgsProvider } from "../../../src/context/args"
@@ -284,7 +284,7 @@ async function draw(input: {
     if (url.pathname === "/api/agent") return json({ location, data: [agent("build")] })
     if (url.pathname === "/api/model") return json({ location, data: [model("first")] })
   }, createEventStream())
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts paths={{ state: temporary.path }}>
         <ArgsProvider>

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
 import type { OrbitClient, OrbitEvent } from "@orbit/client"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { onMount } from "solid-js"
 import { ClientProvider, useClient } from "../../../src/context/client"
 import { useEvent } from "../../../src/context/event"
@@ -58,7 +58,7 @@ async function mount(reconnect?: (signal: AbortSignal) => Promise<{ api: OrbitCl
   })
   const service = reconnect ? { reconnect, restart: () => Promise.resolve() } : undefined
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts log={log}>
       <ClientProvider api={createApi(calls.fetch)} service={service}>
         <Probe

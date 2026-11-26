@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
@@ -9,7 +9,7 @@ import { tmpdir } from "./fixture/fixture"
 
 test("an expanded group spends the mounting budget that older rows used", async () => {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 100, height: 30, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width: 100, height: 30, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const session = {
     id: "ses_budget",

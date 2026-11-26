@@ -2,7 +2,7 @@
 // (cli.json, default 5, 0 turns it off), the session in view asks the server for a recap once; the recap is drawn as a dimmed `※` row through the body sanitizer. A refocus cancels the timer and drops a
 // request in flight, a turn in progress defers it to the turn's end, and a terminal that never reports focus never asks.
 import { expect, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import type { OrbitEvent } from "@orbit/client"
 import { Effect, FileSystem, Schema } from "effect"
 import { Global } from "@orbit/util/global"
@@ -32,7 +32,7 @@ async function start(input: {
   eventDelay?: number
 }) {
   const state = await tmpdir()
-  const setup = await createTestRenderer({ width: input.width ?? 100, height: 30, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width: input.width ?? 100, height: 30, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const session = {
     id: sessionID,

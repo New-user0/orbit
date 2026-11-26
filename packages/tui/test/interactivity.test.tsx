@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { InteractivityProvider, useInteractivity } from "../src/context/interactivity"
@@ -26,7 +26,7 @@ test("interactivity is independent of the keymap and cannot re-enable a disabled
     )
   }
 
-  const app = await testRender(() => <Harness />)
+  const app = await testRenderTimed(() => <Harness />)
   try {
     expect(defaults()).toBe(true)
     expect(enabled()).toBe(true)

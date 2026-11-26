@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { ClientProvider, useClient } from "../../src/context/client"
 import { createPermissionMode, type PermissionMode } from "../../src/context/permission"
 import { createApi, createEventStream, createFetch, directory, json } from "../fixture/tui-client"
@@ -44,7 +44,7 @@ async function render(input: { answer: () => Response | Promise<Response>; reque
     return <box />
   }
 
-  const setup = await testRender(() => (
+  const setup = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         <Probe />
@@ -92,7 +92,7 @@ test("is prompt until the server answers", async () => {
     return gate.then(answering({ bypass: true, always: true }))
   }, events)
   let mode!: () => PermissionMode
-  const setup = await testRender(() => (
+  const setup = await testRenderTimed(() => (
     <TestTuiContexts>
       <ClientProvider api={createApi(calls.fetch)}>
         {(() => {
@@ -142,7 +142,7 @@ test("draws the managed-bypass toast on screen", async () => {
     return <Toast />
   }
   // The real toast needs a theme and the resolved config, as the application provides them.
-  const setup = await testRender(
+  const setup = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig({})}>

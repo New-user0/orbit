@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test"
 import { CodeRenderable, MarkdownRenderable, SyntaxStyle } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import { batch, createSignal } from "solid-js"
 
-const renderers: Awaited<ReturnType<typeof testRender>>["renderer"][] = []
+const renderers: Awaited<ReturnType<typeof testRenderTimed>>["renderer"][] = []
 const syntaxStyle = SyntaxStyle.fromStyles({ default: { fg: "#ffffff" } })
 
 afterEach(() => {
@@ -13,7 +13,7 @@ afterEach(() => {
 test.each(["completion-first", "content-first"])("applies final fence text in a Solid batch: %s", async (order) => {
   const [content, setContent] = createSignal("```text\ninitial")
   const [streaming, setStreaming] = createSignal(true)
-  const output = await testRender(
+  const output = await testRenderTimed(
     () => (
       <markdown syntaxStyle={syntaxStyle} content={content()} streaming={streaming()} internalBlockMode="top-level" />
     ),

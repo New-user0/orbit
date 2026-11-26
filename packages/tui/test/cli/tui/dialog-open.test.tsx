@@ -3,7 +3,7 @@ import { expect, test } from "bun:test"
 import { once } from "node:events"
 import { CliRenderEvents, TextAttributes } from "@opentui/core"
 import path from "path"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { createSignal, onMount } from "solid-js"
 import type { SessionInfo } from "@orbit/client"
 import { DialogOpen, DialogOpenKey } from "../../../src/component/dialog-open"
@@ -884,7 +884,7 @@ async function renderOpen(
     return null
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts paths={{ state }}>
         <TuiAppProvider value={{ name: "test", version: "test", channel: "test" }}>

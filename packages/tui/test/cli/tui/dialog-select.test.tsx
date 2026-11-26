@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { InputRenderable, type RGBA } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
@@ -82,7 +82,7 @@ async function renderSelect(
     )
   }
 
-  const app = await testRender(() => <Harness />, { width: 80, height: 20, kittyKeyboard: true })
+  const app = await testRenderTimed(() => <Harness />, { width: 80, height: 20, kittyKeyboard: true })
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("Items"))
   await app.waitFor(() => app.renderer.currentFocusedEditor instanceof InputRenderable)
@@ -161,7 +161,7 @@ async function mountSelect<T>(
     )
   }
 
-  const app = await testRender(() => <Harness />, { width: 80, height: 24, kittyKeyboard: true })
+  const app = await testRenderTimed(() => <Harness />, { width: 80, height: 24, kittyKeyboard: true })
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("Mutable options"))
   if (select?.renderFilter !== false)
