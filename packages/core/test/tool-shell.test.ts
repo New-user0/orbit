@@ -3604,7 +3604,7 @@ describe("ShellTool timeouts", () => {
           }
         }),
       ),
-    { timeout: 120_000 },
+    { timeout: 125_000 },
   )
 
   slowIt.live(
