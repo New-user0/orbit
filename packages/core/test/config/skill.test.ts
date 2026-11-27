@@ -23,6 +23,7 @@ import { SkillDiscovery } from "@orbit/core/skill/discovery"
 import { WellKnown } from "@orbit/core/wellknown"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
 import { trustedProject, untrustedProject } from "../fixture/project-trust"
+import { recordedFileSystem, sharesTouched } from "../fixture/recorded-fs"
 import { tmpdir, tmpdirScoped } from "../fixture/tmpdir"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
@@ -447,6 +448,49 @@ describe("ConfigSkillPlugin.Plugin", () => {
       expect(watched).toContain(path.join(vendor, "skills"))
       expect(watched.filter((target) => target.startsWith(agents))).toEqual([])
     }),
+  )
+
+  // A skills folder that appears while its watch is made can be a link to a share. The second look checks for that as the
+  // first one does, and resolves nothing then: realpath on the link would connect to the host, before trust is asked
+  // (class 6, a share reached before the check; class 3). The watch here makes the link while it subscribes, and the
+  // recorded file system shows every call after that. A symlink to a share needs Developer Mode, as on Windows CI.
+  ;(process.platform === "win32" ? it.live : it.live.skip)(
+    "does not resolve a skills folder that appears as a link to a share while its watch is made",
+    () =>
+      Effect.gen(function* () {
+        const tmp = (yield* tmpdirScoped()).path
+        const project = path.join(tmp, "project")
+        const vendor = path.join(project, CompatNames.vendor.directory)
+        const skillsFolder = path.join(vendor, "skills")
+        yield* Effect.promise(() => fs.mkdir(vendor, { recursive: true }))
+        const recorded = recordedFileSystem()
+        const after = { calls: -1 }
+        const native = Watcher.Native.of({
+          subscribe: (input) =>
+            Effect.promise(async () => {
+              if (input.type === "file" && input.target === skillsFolder) {
+                const host = `orbit-probe-${Date.now()}-${Math.random().toString(36).slice(2)}.invalid`
+                await fs.symlink(`\\\\${host}\\share\\skills`, skillsFolder, "dir")
+                after.calls = recorded.calls.length
+              }
+              return { unsubscribe: () => Promise.resolve() }
+            }),
+        })
+        const skills = yield* startEntries([], project, tmp, emptyDiscovery, {
+          enabled: true,
+          roots: [{ path: AbsolutePath.make(vendor), kind: "vendor", scope: "project", trusted: false }],
+        }).pipe(
+          Effect.provide(Watcher.layer().pipe(Layer.provide(Layer.succeed(Watcher.Native, native)))),
+          Effect.provide(recorded.layer),
+        )
+        expect(after.calls).toBeGreaterThanOrEqual(0)
+        expect(yield* skills.list()).toEqual([])
+        const later = recorded.calls.slice(after.calls)
+        // The link was looked at again (its parts read one at a time), and nothing opened it or what it leads to.
+        expect(later).toContain(`readLink ${skillsFolder}`)
+        expect(later.filter((call) => call.startsWith("readLink ") === false && call.includes(skillsFolder))).toEqual([])
+        expect(sharesTouched(recorded.touched)).toEqual([])
+      }),
   )
 
   // Two roots that lead to one skills folder watch it under one key: the second root's watch replaces the first one's and

@@ -59,7 +59,13 @@ export const Plugin = define({
           // reported by nothing else: the root is watched for it, and looked at again once that watch is in place.
           if (!found && (yield* fs.isDir(root.path)) && (yield* trust.supplies(root, directory)))
             yield* watch(directory, "file")
-          const resolved = found ?? (yield* fs.realPath(directory).pipe(Effect.orElseSucceed(() => undefined)))
+          // A skills folder that appeared while the watch was made can be a link to a share too, so it is checked as the
+          // first look was before it is resolved.
+          const resolved =
+            found ??
+            ((yield* LinkShare.blocked(fs, directory))
+              ? undefined
+              : yield* fs.realPath(directory).pipe(Effect.orElseSucceed(() => undefined)))
           if (!resolved) continue
           // Until the root's folder is trusted, a skills folder that a link leads out of it is not scanned, and neither
           // is a skill that a link leads out of it: they are not the repository's to supply.
