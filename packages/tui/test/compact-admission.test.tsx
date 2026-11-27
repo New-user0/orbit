@@ -371,6 +371,29 @@ test.each([70, 120])("/compact with text sends its instructions and no prompt at
   }
 })
 
+// The forced case of the second press in the row above: a loaded runner reads the first answer late on its own, so here the
+// answer is held until the test lets it go. A bare /compact pressed meanwhile adds no request of its own (the client
+// coalesces it onto the one in flight), so the row presses again after the answer, and that press goes out with no
+// instructions and no prompt. A row that pressed once and waited would wait for ever, which is what failed on a loaded runner.
+test("a bare /compact pressed again after a held first answer is sent without instructions", async () => {
+  const app = await compactApp(120)
+  try {
+    app.hold.first = Promise.withResolvers<void>()
+    await app.submit("/compact")
+    await waitUntil(() => app.compacts.length === 1)
+    await app.submit("/compact")
+    app.hold.first.resolve()
+    while (app.compacts.length < 2) {
+      await app.submit("/compact")
+      await Bun.sleep(50)
+    }
+    expect(app.compacts[1]).not.toHaveProperty("instructions")
+    expect(app.prompts).toEqual([])
+  } finally {
+    await app.close()
+  }
+})
+
 test("a /compact with instructions is sent while a bare one is in flight", async () => {
   const app = await compactApp(100)
   try {
