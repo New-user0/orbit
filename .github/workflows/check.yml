@@ -206,14 +206,21 @@ jobs:
       # The tests compare file contents byte for byte, so checkouts keep the line endings agents wrote.
       - name: Configure git
         run: git config --global core.autocrlf false
+      # The tests keep every folder they make on the runner's D: drive. The runner's own TEMP is on C:, its system disk,
+      # which stops answering for seconds at a time: in the typeperf logs of 103 traced Windows test jobs (about 181,000
+      # seconds), C: held queued requests and moved no byte for 305 seconds, 25 times for 3 s or more and at most 7 s,
+      # and D: never did. Such a stall holds every row then waiting on the disk, and 12 of the 19 rows that timed out in
+      # those jobs ran inside one. C: stays the other volume that a test of a copy across volumes needs.
       # The runner's TEMP is an 8.3 short name (C:\Users\RUNNER~1\...). Tests compare the folders they make under it
       # with the real paths Orbit resolves, which use the long name, as TEMP does on a developer's machine.
-      - name: Use the long name of the temp folder
+      - name: Keep the temp folder on D:, by its long name
         shell: bash
         run: |
-          long="$(cygpath -w -l "$TEMP")"
+          mkdir -p "$RUNNER_TEMP/tests"
+          long="$(cygpath -w -l "$RUNNER_TEMP/tests")"
           echo "TEMP=$long" >> "$GITHUB_ENV"
           echo "TMP=$long" >> "$GITHUB_ENV"
+          echo "ORBIT_TEST_OTHER_VOLUME=$(cygpath -w -l "$TEMP")" >> "$GITHUB_ENV"
           echo "$long"
       # Git Bash exports SHELL when a developer opens it, and Orbit's session shell on Windows follows SHELL; without it
       # the session shell is PowerShell and the tests' scripted Bash calls find no Bash tool. The runner's bash steps do
