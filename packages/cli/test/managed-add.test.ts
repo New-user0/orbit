@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { orbChild } from "./fixture/orb-child"
+import { runOrb } from "./fixture/orb"
 import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-managed-add-"))
@@ -56,7 +56,8 @@ await Bun.write(
 
 async function run(directory: string, args: string[], cwd = path.join(root, "project")) {
   await fs.mkdir(cwd, { recursive: true })
-  return orbChild(root, args, {
+  return runOrb(args, {
+    home: root,
     cwd,
     bun: [`--config=${bunfig}`],
     env: {
