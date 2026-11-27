@@ -238,6 +238,18 @@ it:
   lookup the row checks, the dot control still finds the decoy, and a module of the name planted first in
   PSModulePath pins that no module is searched. In 50 loaded runs here the row took at most 2.08 s before and 0.87 s
   after.
+- tui `status-line-app.test.tsx` 'the status line follows the selection, the session's location and its step events'
+  (Windows tui 2/2 of run 46034773188, 60 s, after 15 to 18 s in the five runs before): two causes, both shown by a
+  traced copy of the row under load on this machine. The startup notice can be drawn over the middle of the status
+  line for a frame ('"limit":n ⋯ Finishing startup… tle":"Status line fixture"'), and the row read that frame as the
+  first line, so its title check failed. That failure came before the row let the session's location in, and the
+  request it held back kept the app's close waiting until the row's 60 s ran out, with the message lost. The row now
+  reads a line only once its JSON is whole. The app fixture (`packages/tui/test/fixture/app.ts`) drops the requests a
+  row still holds when the app closes, so a failure in any row that holds one back (`app-lifecycle`,
+  `compact-admission`, `prompt-suggestion`, `session-home` and the two status line rows among them) reports its
+  message: a forced failure at that point of the status line row now ends after 2.8 s with it, instead of a timeout.
+  In loaded runs here (4 CPUs each, coverage on, beside `session-home.test.tsx`) the row timed out 10 times in 180
+  before and 0 times in 120 after.
 - cli `flow-team.test.ts` 'a resumed team reuses the turns that ran and continues from the failed one' (FU-M3-421,
   lead#3 for lead#2 once in a full parallel Linux cli run): not fixed, and FU-M3-421 stays open. Both suspects the
   register names were forced and ruled out: a resume through another spelling of the folder ('a team resumed through

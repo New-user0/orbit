@@ -74,6 +74,9 @@ export async function createAppFixture(
     async [Symbol.asyncDispose]() {
       try {
         if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+        // A request the test still holds back (a late location, a slow catalog) is dropped, so the app's end does not
+        // wait for an answer that a row which failed early will never give.
+        server.stop(true)
         await task
       } finally {
         // Drafts live in a module-level stash, so they would reach the next app of the same process.

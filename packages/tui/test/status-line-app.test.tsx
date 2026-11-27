@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test"
 import { InputRenderable } from "@opentui/core"
 import path from "node:path"
+import { Option, Schema } from "effect"
 import { directory, json } from "./fixture/tui-client"
 import { tmpdir } from "./fixture/fixture"
 import { createAppFixture } from "./fixture/app"
+
+const whole = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
 
 // The whole app, with a real status line command: what the Prompt hands to the line (the agent, the selected model and
 // variant, the session's location, the context of the selected model) and what refreshes it (the selections, the
@@ -130,11 +133,16 @@ console.log("n=" + n + " " + JSON.stringify({
   const line = async (matches: (row: string) => boolean) => {
     // Starting the command takes a moment, so wait by the clock and not by render passes.
     const started = Date.now()
-    const row = () =>
-      setup
-        .captureCharFrame()
-        .split("\n")
-        .find((item) => item.includes(" n=")) ?? ""
+    // The startup notice can be drawn over the middle of the line ('"limit":n ⋯ Finishing startup… tle":"Status line
+    // fixture"'), so a row is read only once its JSON is whole: every check then sees each field the command printed.
+    const row = () => {
+      const item =
+        setup
+          .captureCharFrame()
+          .split("\n")
+          .find((item) => item.includes(" n=")) ?? ""
+      return Option.isSome(whole(item.slice(item.indexOf("{"), item.lastIndexOf("}") + 1))) ? item : ""
+    }
     while (!matches(row())) {
       if (Date.now() - started > 8_000)
         throw new Error(`The line never matched (ran ${await count()} times):\n${setup.captureCharFrame()}`)
