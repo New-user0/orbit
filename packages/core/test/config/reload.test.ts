@@ -152,50 +152,57 @@ describe("config plugin reloads", () => {
     )
   }
 
-  // The plugin lists a skills folder only once its watch of the folder is in place: a skill written while the watch is
-  // still being made is found by that listing, since the watch will not report it. The watch here writes the skill
-  // before it subscribes, which is where a slow native subscription leaves such a write.
-  it.live("lists a compatibility skills folder after its watch is in place", () =>
-    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
-      Effect.flatMap((tmp) =>
-        Effect.gen(function* () {
-          const project = path.join(tmp.path, "project")
-          const skill = path.join(project, CompatNames.agents, "skills", "probe", "SKILL.md")
-          yield* Effect.promise(async () => {
-            await fs.mkdir(path.join(project, "home"), { recursive: true })
-            await fs.mkdir(path.join(project, "global"))
-            await fs.mkdir(path.dirname(skill), { recursive: true })
-            await Bun.write(path.join(project, "orbit.json"), JSON.stringify({ shell: "initial" }))
-          })
-          const real = processNative(Watcher.binding, Watcher.backend())
-          const native = Watcher.Native.of({
-            subscribe: (input) =>
-              input.type === "directory" && path.basename(input.target) === "skills"
-                ? Effect.sleep("100 millis").pipe(
-                    Effect.andThen(Effect.promise(() => Bun.write(skill, probeSkill("During the watch")))),
-                    Effect.andThen(real.subscribe(input)),
-                  )
-                : real.subscribe(input),
-          })
-          return yield* Effect.gen(function* () {
-            const plugins = yield* Plugin.Service
-            const skills = yield* Skill.Service
-            const probes = skills.list().pipe(Effect.map((items) => items.filter((item) => item.id === "probe")))
-            yield* ConfigCompatibilityPlugin.Plugin.effect(yield* PluginHost.make(plugins))
-            yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "During the watch")))
-          }).pipe(
-            Effect.provide(
-              // The plugin's own watches go through `native` too, not only the config's.
-              Layer.merge(
-                liveConfig(project, native),
-                Watcher.layer().pipe(Layer.provide(Layer.succeed(Watcher.Native, native))),
+  // The plugin looks into a folder only once its watch of that folder is in place, so what is written while the watch is
+  // still being made is found by that look, since the watch will not report it. Each watch here writes the skill before
+  // it subscribes, which is where a slow native subscription leaves such a write: into a skills folder that is there
+  // (the directory watch), and into a root that has none yet (the root's watch for its skills folder).
+  for (const row of [
+    { name: "lists a compatibility skills folder after its watch is in place", type: "directory", made: "probe" },
+    { name: "looks again for a skills folder made while the root's watch is made", type: "file", made: "root" },
+  ] as const) {
+    it.live(row.name, () =>
+      Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+        Effect.flatMap((tmp) =>
+          Effect.gen(function* () {
+            const project = path.join(tmp.path, "project")
+            const root = path.join(project, CompatNames.agents)
+            const skill = path.join(root, "skills", "probe", "SKILL.md")
+            yield* Effect.promise(async () => {
+              await fs.mkdir(path.join(project, "home"), { recursive: true })
+              await fs.mkdir(path.join(project, "global"))
+              await fs.mkdir(row.made === "probe" ? path.dirname(skill) : root, { recursive: true })
+              await Bun.write(path.join(project, "orbit.json"), JSON.stringify({ shell: "initial" }))
+            })
+            const real = processNative(Watcher.binding, Watcher.backend())
+            const native = Watcher.Native.of({
+              subscribe: (input) =>
+                input.type === row.type && path.basename(input.target) === "skills"
+                  ? Effect.sleep("100 millis").pipe(
+                      Effect.andThen(Effect.promise(() => Bun.write(skill, probeSkill("During the watch")))),
+                      Effect.andThen(real.subscribe(input)),
+                    )
+                  : real.subscribe(input),
+            })
+            return yield* Effect.gen(function* () {
+              const plugins = yield* Plugin.Service
+              const skills = yield* Skill.Service
+              const probes = skills.list().pipe(Effect.map((items) => items.filter((item) => item.id === "probe")))
+              yield* ConfigCompatibilityPlugin.Plugin.effect(yield* PluginHost.make(plugins))
+              yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "During the watch")))
+            }).pipe(
+              Effect.provide(
+                // The plugin's own watches go through `native` too, not only the config's.
+                Layer.merge(
+                  liveConfig(project, native),
+                  Watcher.layer().pipe(Layer.provide(Layer.succeed(Watcher.Native, native))),
+                ),
               ),
-            ),
-          )
-        }),
+            )
+          }),
+        ),
       ),
-    ),
-  )
+    )
+  }
 
   it.live("loads no compatibility skills and watches no compatibility roots when compatibility is off", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(

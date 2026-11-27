@@ -326,6 +326,60 @@ describe("ConfigSkillPlugin.Plugin", () => {
     }),
   )
 
+  // A root with no skills folder yet is watched for one (ConfigCompatibilityPlugin). Until the folder is trusted, a root
+  // that a link leads out of it is not: the skills folder would be the other folder's. A root of the project's own is
+  // watched either way, which is the control.
+  it.live(
+    "watches no root that a link leads out of an untrusted folder for its skills folder, until the folder is trusted",
+    () =>
+      Effect.gen(function* () {
+        const tmp = (yield* tmpdirScoped()).path
+        const project = path.join(tmp, "project")
+        const vendor = path.join(project, CompatNames.vendor.directory)
+        const agents = path.join(project, CompatNames.agents)
+        const outside = path.join(tmp, "outside")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(vendor, { recursive: true })
+          await fs.mkdir(outside, { recursive: true })
+          await fs.symlink(outside, agents, "junction")
+        })
+        yield* Effect.gen(function* () {
+          const bus = yield* Bus.Service
+          const trust = yield* ProjectTrust.Service
+          const watcher = yield* Watcher.Test
+          yield* startEntries(
+            [],
+            project,
+            tmp,
+            emptyDiscovery,
+            {
+              enabled: true,
+              roots: [
+                { path: AbsolutePath.make(vendor), kind: "vendor", scope: "project", trusted: false },
+                { path: AbsolutePath.make(agents), kind: "agents", scope: "project", trusted: false },
+              ],
+            },
+            { subscribe: () => bus.subscribe(Event.Updated) },
+          )
+          const watched = (root: string) =>
+            watcher
+              .subscriptions()
+              .pipe(
+                Effect.map((list) =>
+                  list.some((input) => input.type === "file" && input.path === path.join(root, "skills")),
+                ),
+              )
+          expect(yield* watched(vendor)).toBe(true)
+          expect(yield* watched(agents)).toBe(false)
+
+          yield* trust.grant({ persist: false, via: "test" })
+          yield* bus.publish(Event.Updated, {})
+          for (let attempt = 0; attempt < 100 && !(yield* watched(agents)); attempt++) yield* Effect.sleep("20 millis")
+          expect(yield* watched(agents)).toBe(true)
+        }).pipe(Effect.provide(untrustedProject({ directory: project })))
+      }),
+  )
+
   it.live("maps config entry types to skill directories", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) =>
