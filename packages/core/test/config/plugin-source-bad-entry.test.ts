@@ -180,6 +180,86 @@ describe("a plugin folder with a looping entry", () => {
     )
   }
 
+  // An entry folder, or a folder a step of `main` names, can be a link to a folder (a junction on Windows). The resolver
+  // enters it, so what is behind it is checked as in a real folder: the `index` of a linked `server` (rows A) and a
+  // `main` step through a linked `lib` (rows B). A `..` of `main` is taken from the link's own path, as Bun 1.4.5 does
+  // (rows C), and from the real path it leads to, the stricter answer (rows D). Each row has a control with a real file
+  // in place of the looping link, which keeps `p` offered.
+  for (const row of [
+    { name: "A", link: "server", to: "impl", files: ["index.ts"], entry: "impl/index.ts" },
+    {
+      name: "B",
+      link: "server/lib",
+      to: "server/real",
+      files: ["server/index.ts"],
+      manifest: { file: "server/package.json", main: "lib/x.js" },
+      entry: "server/real/x.js",
+    },
+    {
+      name: "C",
+      link: "server",
+      to: "a/real",
+      files: ["index.ts"],
+      manifest: { file: "a/real/package.json", main: "../q/x.js" },
+      entry: "q/x.js",
+    },
+    {
+      name: "D",
+      link: "server",
+      to: "a/real",
+      files: ["index.ts", "q/x.js"],
+      manifest: { file: "a/real/package.json", main: "../q/x.js" },
+      entry: "a/q/x.js",
+    },
+  ].flatMap((row) => [
+    { ...row, loops: true, offered: ["good.ts"] },
+    { ...row, loops: false, offered: ["good.ts", "p"] },
+  ])) {
+    const entry = `${row.loops ? "a looping" : "a real"} ${row.entry}`
+    const manifest = row.manifest === undefined ? "" : ` and main ${row.manifest.main}`
+    const name = `${row.name}: a server plugin folder whose ${row.link} links to ${row.to}, with ${entry}${manifest} beside ${row.files.join(" and ")}`
+    it.live(`${name} offers ${row.offered.join(" and ")}`, () =>
+      Effect.gen(function* () {
+        const root = (yield* tmpdirScoped()).path
+        const repo = path.join(root, "work", "repo")
+        const plugins = path.join(root, "home", ".config", "orbit", "plugins")
+        const inside = (file: string) => path.join(plugins, "p", file)
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.dirname(inside(row.entry)), { recursive: true })
+          await fs.mkdir(inside(row.to), { recursive: true })
+          await fs.writeFile(path.join(plugins, "good.ts"), "export default 1;")
+          await Promise.all(
+            row.files.map(async (file) => {
+              await fs.mkdir(path.dirname(inside(file)), { recursive: true })
+              await fs.writeFile(inside(file), "export default 1;")
+            }),
+          )
+          if (row.manifest !== undefined)
+            await fs.writeFile(inside(row.manifest.file), JSON.stringify({ main: row.manifest.main }))
+          await fs.symlink(inside(row.to), inside(row.link), "junction")
+          if (!row.loops) await fs.writeFile(inside(row.entry), "export default 1;")
+        })
+        const linked = yield* Effect.promise(() =>
+          row.loops
+            ? fs.symlink(inside(row.entry), inside(row.entry), "file").then(
+                () => true,
+                (error: NodeJS.ErrnoException) => {
+                  if (error.code === "EPERM" || error.code === "UNKNOWN") return false
+                  throw error
+                },
+              )
+            : Promise.resolve(true),
+        )
+        if (!linked) return
+        const offered = yield* Effect.gen(function* () {
+          const source = yield* ConfigPluginSource.Service
+          return (yield* source.operations()).flatMap((item) => (item.type === "add" ? [path.basename(item.target)] : []))
+        }).pipe(Effect.provide(loader(root, repo)))
+        expect(offered.toSorted()).toEqual(row.offered)
+      }),
+    )
+  }
+
   // `entryLinks` lists the folder after the resolver found its entries, and a listing that fails then (the folder was
   // removed, or its permissions changed, in between) costs no other plugin and not the folder's own (class 7). The
   // resolver lists the folder itself, so no folder on disk fails the second listing alone; the row fails it for `p`.

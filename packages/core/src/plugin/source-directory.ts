@@ -48,7 +48,7 @@ export const discover = Effect.fn("PluginSourceDirectory.discover")(function* (
  * What the supervisor loads from `target`: unset when nothing would be loaded (no server entry, an entry file that a
  * link leads out of the folder, or a link the resolver could take as an entry that loops or leads out, even when the
  * resolver did not take it: one named `server`, `index`, `tui` or `rpc` in any case and with any extension, or, in a
- * real folder of such a name, its `index`, its `package.json` or a step of the `main` that names).
+ * folder of such a name (a link to a folder too), its `index`, its `package.json` or a step of the `main` that names).
  * `ConfigPluginSource.scan` activates by this. It hands the folder to the runtime's resolver, which follows links, so
  * it runs only for folders that are trusted.
  */
@@ -67,7 +67,8 @@ export const entrypoints = Effect.fn("PluginSourceDirectory.entrypoints")(functi
   if (!directory) return { directory, files, manifest: path.join(path.dirname(target), "package.json") }
   // Bun's resolver passes over a link it cannot follow (one that loops) as if the entry were not there, so the links
   // it could have taken as an entry are checked with what it found: a link named `server`, `index`, `tui` or `rpc`
-  // with any extension, and in a real folder of one of those names the links it could take as that folder's entry.
+  // with any extension, and in a folder of one of those names (a link to one too) the links it could take as that
+  // folder's entry.
   const top = yield* named(fs, target, ["server", "index", "tui", "rpc"])
   const inner = yield* Effect.forEach(top.folders, (folder) => folderLinks(fs, folder))
   if (yield* leaves(fs, target, [...files, ...top.links, ...inner.flat()])) return undefined
@@ -90,7 +91,8 @@ const folderLinks = Effect.fnUntraced(function* (fs: FSUtil.Interface, folder: s
 })
 
 // `main` one step at a time: the links each step could name in the folders the steps before it reached, with or
-// without an extension and in any case, and the `index` of each real folder a step names, as the resolver tries it.
+// without an extension and in any case, and the `index` of each folder a step names (a link to one too), as the
+// resolver tries it.
 const walk = Effect.fnUntraced(function* (
   fs: FSUtil.Interface,
   folders: readonly string[],
@@ -109,17 +111,29 @@ const walk = Effect.fnUntraced(function* (
   ]
 })
 
-// The links and the real folders in `directory` whose name, or name without its extension, is one of `names`. Names
-// are compared without case on every platform: the resolver takes `TUI.ts` for `tui` on Windows and macOS, and the
-// stricter answer wins (class 3), so Linux refuses that spelling too.
+// The links and the folders in `directory` whose name, or name without its extension, is one of `names`. Names are
+// compared without case on every platform: the resolver takes `TUI.ts` for `tui` on Windows and macOS, and the stricter
+// answer wins (class 3), so Linux refuses that spelling too. A link to a folder is a folder the resolver enters as well
+// as a link `leaves` checks. It is entered at its own path, from which Bun 1.4.5 takes a `..` of `main`, and at the
+// real path it leads to, where a runtime that steps from there would look (class 3 again).
 const named = Effect.fnUntraced(function* (fs: FSUtil.Interface, directory: string, names: readonly string[]) {
   const wanted = new Set(names.map((name) => name.toLowerCase()))
   const entries = (yield* fs.readDirectoryEntries(directory).pipe(Effect.orElseSucceed(() => []))).filter(
     (entry) => wanted.has(entry.name.toLowerCase()) || wanted.has(path.parse(entry.name).name.toLowerCase()),
   )
+  const links = entries.filter((entry) => entry.type === "symlink").map((entry) => path.join(directory, entry.name))
+  const linked = yield* Effect.forEach(links, (link) =>
+    Effect.gen(function* () {
+      if (!(yield* fs.isDir(link))) return []
+      return [link, yield* fs.resolve(link)]
+    }),
+  )
   return {
-    links: entries.filter((entry) => entry.type === "symlink").map((entry) => path.join(directory, entry.name)),
-    folders: entries.filter((entry) => entry.type === "directory").map((entry) => path.join(directory, entry.name)),
+    links,
+    folders: [
+      ...entries.filter((entry) => entry.type === "directory").map((entry) => path.join(directory, entry.name)),
+      ...linked.flat(),
+    ],
   }
 })
 

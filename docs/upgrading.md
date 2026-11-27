@@ -3253,10 +3253,12 @@ A plugin folder is no longer loaded when it holds a link that loops or leads out
 could take as an entry, even when the runtime would have loaded a different entry. That covers a link named `server`,
 `index`, `tui` or `rpc` with any extension (`index.md` too), for example a looping `server.mjs` beside a good
 `server.ts`. The names match in any case on every platform, so `TUI.ts`, `Server.mjs` and `INDEX.js` count too: the
-runtime takes them on Windows and macOS. Inside a real folder with one of those names, such as `server/`, it also covers
-a link named `index` with any extension, a `package.json` that is a link, and a link on the way of the `main` that the
+runtime takes them on Windows and macOS. Inside a folder with one of those names, such as `server/`, it also covers a
+link named `index` with any extension, a `package.json` that is a link, and a link on the way of the `main` that the
 folder's `package.json` names (each step of that path, with or without an extension, and the `index` of a folder a step
-names). Until now only the entry files the runtime picked were checked, and Bun 1.4.5 passes over a link that loops as
+names). Such a folder can itself be a link to a folder (a junction on Windows), and so can a folder a step of `main`
+names: what is behind the link is checked the same way. A `..` in `main` is followed both from the link and from the
+folder the link leads to. Until now only the entry files the runtime picked were checked, and Bun 1.4.5 passes over a link that loops as
 if the file were not there, so such a folder could be loaded from its other entries. The folder's own plugin is the
 only one left out; the other plugins load as before (`packages/core/test/config/plugin-source-bad-entry.test.ts`).
 
