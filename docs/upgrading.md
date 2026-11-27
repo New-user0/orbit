@@ -3234,6 +3234,19 @@ the answer filled in.
 
 **What to do:** Nothing. A retry loop that waited for a model, provider or other plugin entry to appear can go.
 
+### A plugin folder with a broken link named like an entry is not loaded
+
+A plugin folder is no longer loaded when it holds a link named `server`, `index`, `tui` or `rpc`, with any extension
+(`index.md` too), that loops or leads out of the folder. That holds even when the runtime would have loaded a different
+entry, for example a looping `server.mjs` beside a good `server.ts`. Until now only the entry files the runtime picked
+were checked, and Bun 1.4.5 passes over a link that loops as if the file were not there, so such a folder could be loaded
+from its other entries. The folder's own plugin is the only one left out; the other plugins load as before
+(`packages/core/test/config/plugin-source-bad-entry.test.ts`).
+
+**Affects:** plugin folders that keep a link with one of those names that loops or points outside the folder.
+
+**What to do:** Remove the link, rename it, or point it at a file inside the plugin folder.
+
 ## Agent loop
 
 Changes to how a turn runs: what a response may call, and how its failures are told apart.
