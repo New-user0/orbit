@@ -103,6 +103,14 @@ const ollama = Bun.serve({
   },
 })
 
+// The updates that may reach a lead between two processes: a date that changed, a git snapshot taken late. A row that
+// does not force either asserts there is no other, so a spurious or duplicated update shows here and not nowhere.
+function unexpectedUpdates() {
+  return turns
+    .flatMap((item) => item.updates)
+    .filter((text) => !text.includes("Today's date is now:") && !text.includes("taken partway through the session"))
+}
+
 function reply(text: string) {
   return stream([{ role: "assistant", content: text }], "stop")
 }
@@ -217,8 +225,9 @@ test("a team stops when nobody has anything to do and the lead does not finish",
   expect(turns[2]?.prompt).toContain("Nobody on the team has anything pending")
 }, 240_000)
 
-// FU-M3-421: once, on a loaded Linux runner, the resumed lead's request held a third user message ("lead#3"). The two
-// ways a lead session can hold a message the flow did not send are each forced here. Neither gives one.
+// FU-M3-421: once, on a loaded Linux runner, the resumed lead's request held a third user message ("lead#3"). Two ways
+// that would be a product defect, a lead session holding a message the flow did not send, are each forced here, and
+// neither gives one. The instruction updates that legitimately reach a resumed lead are forced further down.
 // 1. The resume runs in another spelling of the same folder (a link on Linux, a junction on Windows), which would make
 //    the server move the session and add its "location switched" message, if it took the spelling for another folder.
 test("a team resumed through another spelling of its folder sends its lead no message of its own", async () => {
@@ -236,6 +245,7 @@ test("a team resumed through another spelling of its folder sends its lead no me
 
   expect({ code: resumed.code, stderr: resumed.code === 0 ? "" : resumed.stderr }).toEqual({ code: 0, stderr: "" })
   expect(JSON.parse(resumed.stdout)).toEqual({ done: true, turns: 4 })
+  expect(unexpectedUpdates()).toEqual([])
   expect(turns.map((item) => `${item.member}#${item.turn}`)).toEqual([
     "lead#1",
     "coder#1",
@@ -278,6 +288,7 @@ test("a team resumed after its process stopped during a lead turn asks the lead 
 
   expect({ code: resumed.code, stderr: resumed.code === 0 ? "" : resumed.stderr }).toEqual({ code: 0, stderr: "" })
   expect(JSON.parse(resumed.stdout)).toEqual({ done: true, turns: 4 })
+  expect(unexpectedUpdates()).toEqual([])
   expect(turns.map((item) => `${item.member}#${item.turn}`)).toEqual([
     "lead#1",
     "lead#1",
@@ -291,6 +302,7 @@ test("a team resumed after its process stopped during a lead turn asks the lead 
 // the server's documented behaviour (later frozen updates enter history as durable System messages), so the resumed
 // lead's request holds one more message than the flow sent, and the turn counts only what the flow sent. Before the
 // count left updates out, both rows saw "lead#3" where "lead#2" belongs.
+// Not on Windows: there `gitExecutable` is an absolute path that `which` resolved at module load (packages/core/src/util/git-executable.ts), so a git shim on PATH is never run.
 test.skipIf(process.platform === "win32")(
   "a lead whose first git snapshot failed is told of the late one and still counts two turns",
   async () => {
@@ -302,6 +314,8 @@ test.skipIf(process.platform === "win32")(
     // A git that fails its first `status --short` (the one the snapshot takes for the lead's first step) and runs the
     // real one for every other call. The resumed process runs the real git, so the snapshot is taken then, partway
     // through the session.
+    const git = Bun.which("git")
+    expect(git).not.toBeNull()
     const shims = path.join(root, "shims")
     await fs.mkdir(shims, { recursive: true })
     await Bun.write(
@@ -309,7 +323,7 @@ test.skipIf(process.platform === "win32")(
       `#!/bin/sh
 for a in "$@"; do [ "$a" = status ] && s=1; [ "$a" = --short ] && t=1; done
 if [ -n "$s" ] && [ -n "$t" ] && [ ! -e "$SHIM_MARKER" ]; then : > "$SHIM_MARKER"; echo "fatal: forced failure" >&2; exit 128; fi
-exec ${Bun.which("git")} "$@"
+exec '${git}' "$@"
 `,
     )
     await fs.chmod(path.join(shims, "git"), 0o755)
@@ -335,6 +349,7 @@ exec ${Bun.which("git")} "$@"
   240_000,
 )
 
+// Not on Windows: Bun 1.4.5 there ignores `TZ`, so the two processes would agree on the date.
 test.skipIf(process.platform === "win32")(
   "a lead resumed on another date is told the date changed and still counts two turns",
   async () => {
@@ -463,6 +478,7 @@ test("a resumed team reuses the turns that ran and continues from the failed one
   // reproduced in 64 loaded runs on Linux and 16 on Windows) shows it here, with each request in full, so the next
   // failure names the message.
   if (turns.some((item) => item.member === "lead" && item.turn > 2)) console.error(JSON.stringify(turns, null, 1))
+  expect(unexpectedUpdates()).toEqual([])
   expect(turns.map((item) => `${item.member}#${item.turn}`)).toEqual([
     "lead#1",
     "coder#1",
