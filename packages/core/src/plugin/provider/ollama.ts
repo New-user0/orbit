@@ -1,6 +1,6 @@
 import { define } from "@orbit/plugin/effect/plugin"
 import type { Entry } from "@orbit/schema/config"
-import { Duration, Effect, Schema, Semaphore, Stream } from "effect"
+import { Clock, Duration, Effect, Schema, Semaphore, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Config } from "../../config.js"
 import { Model } from "../../model.js"
@@ -120,15 +120,18 @@ export function make(
         const marks: { prior?: Discovery; written?: Discovery } = {}
         return yield* discoveryLock.withPermit(
           Effect.gen(function* () {
+            // The time comes from the Effect clock, the one the refresh loop sleeps on, so a test that moves that clock
+            // moves the freshness of a cached discovery with it.
+            const now = yield* Clock.currentTimeMillis
             const cached = discovery.get(current.tagsEndpoint)
             marks.prior = cached
-            if (cached && cached.apiKey === current.apiKey && Date.now() - cached.checked < Duration.toMillis(interval))
+            if (cached && cached.apiKey === current.apiKey && now - cached.checked < Duration.toMillis(interval))
               return { source: current, models: cached.models }
             const previous: Discovery =
               cached && cached.apiKey === current.apiKey
                 ? cached
                 : { checked: 0, apiKey: current.apiKey, shows: new Map() }
-            marks.written = { ...previous, checked: Date.now(), apiKey: current.apiKey }
+            marks.written = { ...previous, checked: now, apiKey: current.apiKey }
             discovery.set(current.tagsEndpoint, marks.written)
             const tagsRequest = current.apiKey
               ? HttpClientRequest.get(current.tagsEndpoint).pipe(
@@ -169,7 +172,7 @@ export function make(
                 model !== undefined && (model.show.capabilities?.includes("completion") ?? false),
             )
             discovery.set(current.tagsEndpoint, {
-              checked: Date.now(),
+              checked: yield* Clock.currentTimeMillis,
               apiKey: current.apiKey,
               models: filtered,
               shows,
