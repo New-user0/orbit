@@ -10,6 +10,9 @@ import { removeTree } from "../../core/test/fixture/remove-tree"
 // who is speaking from the first user message, and which turn it is from how many user messages the session holds.
 const turns: Array<{ member: string; turn: number; prompt: string; history: number; users: string[] }> = []
 const failures = { reviewer: 0 }
+// A lead request that the server holds: `arrived` resolves when the lead's first turn asks, and the answer waits for
+// `answer`, so a test can stop the process while that turn is still running.
+const held: { lead?: { arrived: PromiseWithResolvers<void>; answer: PromiseWithResolvers<void> } } = {}
 
 const ollama = Bun.serve({
   hostname: "127.0.0.1",
@@ -49,6 +52,12 @@ const ollama = Bun.serve({
     const prompt = users.at(-1) ?? ""
     if (messages.at(-1)?.role === "tool") return reply('<message to="reviewer">Done: answer.txt has 42.</message>')
     turns.push({ member, turn, prompt, history: messages.length, users })
+    const hold = member === "lead" && turn === 1 ? held.lead : undefined
+    if (hold) {
+      held.lead = undefined
+      hold.arrived.resolve()
+      await hold.answer.promise
+    }
     if (member === "lead" && turn === 1)
       return reply(
         'Plan ready.\n<note key="plan">coder writes answer.txt; reviewer checks it</note>\n<message to="coder">Write 42 into answer.txt.</message>',
@@ -196,6 +205,90 @@ test("a team stops when nobody has anything to do and the lead does not finish",
   expect(turns[2]?.prompt).toContain("Nobody on the team has anything pending")
 }, 240_000)
 
+// FU-M3-421: once, on a loaded Linux runner, the resumed lead's request held a third user message ("lead#3"). The two
+// ways a lead session can hold a message the flow did not send are each forced here. Neither gives one.
+// 1. The resume runs in another spelling of the same folder (a link on Linux, a junction on Windows), which would make
+//    the server move the session and add its "location switched" message, if it took the spelling for another folder.
+test("a team resumed through another spelling of its folder sends its lead no message of its own", async () => {
+  const repository = await repo("team-spelling")
+  const spelled = path.join(root, "team-spelling-link")
+  await fs.symlink(repository, spelled, "junction")
+  const file = path.join(flows, "team-spelling.ts")
+  await Bun.write(file, resumable)
+  turns.length = 0
+  failures.reviewer = 1
+
+  const failed = await orb(repository, ["flow", "run", "--standalone", "--model", "ollama/tiny:1b", file])
+  expect(failed.code).toBe(1)
+  const resumed = await orb(spelled, ["flow", "resume", "--standalone", await runID(repository)])
+
+  expect({ code: resumed.code, stderr: resumed.code === 0 ? "" : resumed.stderr }).toEqual({ code: 0, stderr: "" })
+  expect(JSON.parse(resumed.stdout)).toEqual({ done: true, turns: 4 })
+  expect(turns.map((item) => `${item.member}#${item.turn}`)).toEqual([
+    "lead#1",
+    "coder#1",
+    "reviewer#1",
+    "reviewer#1",
+    "lead#2",
+  ])
+}, 240_000)
+
+// 2. The first process stops while the lead's first turn is still running, which keeps that session's execution claim
+//    (a stop or a process death keeps it, AGENTS.md), so the resumed process could also recover the claimed run. The
+//    resumed lead asks again from its introduction, once.
+test("a team resumed after its process stopped during a lead turn asks the lead once, with no recovered message", async () => {
+  const repository = await repo("team-stopped")
+  const file = path.join(flows, "team-stopped.ts")
+  await Bun.write(file, resumable)
+  turns.length = 0
+  const hold = { arrived: Promise.withResolvers<void>(), answer: Promise.withResolvers<void>() }
+  held.lead = hold
+
+  const stopped = await startSlot(async () => {
+    const child = Bun.spawn(
+      [process.execPath, "run", "src/index.ts", "flow", "run", "--standalone", "--model", "ollama/tiny:1b", file],
+      {
+        cwd: path.join(import.meta.dir, ".."),
+        env: environment(repository),
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      },
+    )
+    await hold.arrived.promise
+    child.kill()
+    return child.exited
+  })
+  hold.answer.resolve()
+  expect(stopped).not.toBe(0)
+  expect(turns.map((item) => `${item.member}#${item.turn}`)).toEqual(["lead#1"])
+  const resumed = await orb(repository, ["flow", "resume", "--standalone", await runID(repository)])
+
+  expect({ code: resumed.code, stderr: resumed.code === 0 ? "" : resumed.stderr }).toEqual({ code: 0, stderr: "" })
+  expect(JSON.parse(resumed.stdout)).toEqual({ done: true, turns: 4 })
+  expect(turns.map((item) => `${item.member}#${item.turn}`)).toEqual([
+    "lead#1",
+    "lead#1",
+    "coder#1",
+    "reviewer#1",
+    "lead#2",
+  ])
+}, 240_000)
+
+const resumable = `export default {
+  name: "team",
+  run: (ctx) =>
+    ctx.team("feature", {
+      goal: "answer.txt must contain the answer, reviewed.",
+      members: {
+        lead: { role: "Plan and coordinate." },
+        coder: { role: "Write the files." },
+        reviewer: { role: "Review the work. Do not edit files." },
+      },
+    }).then((result) => ({ done: result.done, turns: result.turns })),
+}
+`
+
 async function repo(name: string) {
   const directory = path.join(root, name)
   await fs.mkdir(directory, { recursive: true })
@@ -214,17 +307,21 @@ async function runID(directory: string) {
 }
 
 // A child holds a start slot while it runs, so a loaded runner never has more cold children than the start gate allows.
+function environment(directory: string) {
+  return isolatedEnv(root, {
+    USERPROFILE: root,
+    PWD: directory,
+    ORBIT_CONFIG: undefined,
+    ORBIT_CONFIG_CONTENT: undefined,
+    OLLAMA_CONTEXT_LENGTH: undefined,
+  })
+}
+
 function orb(directory: string, args: string[]) {
   return startSlot(async () => {
     const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
       cwd: path.join(import.meta.dir, ".."),
-      env: isolatedEnv(root, {
-        USERPROFILE: root,
-        PWD: directory,
-        ORBIT_CONFIG: undefined,
-        ORBIT_CONFIG_CONTENT: undefined,
-        OLLAMA_CONTEXT_LENGTH: undefined,
-      }),
+      env: environment(directory),
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
