@@ -335,28 +335,36 @@ describe("OllamaPlugin", () => {
   // so a slow or stalled runner can neither stretch a pause nor make a request count come out short.
   const onWaitingClock = Effect.fn(function* (tags: (request: number) => Response) {
     const time = yield* waitingClock
-    const asked: number[] = []
-    const server = yield* Effect.acquireRelease(
-      Effect.sync(() =>
-        Bun.serve({
-          port: 0,
-          fetch: async (request) => {
-            if (request.method === "GET") {
-              asked.push(time.now())
-              return tags(asked.length)
-            }
-            decodeShowRequest(await request.json())
-            return Response.json(show({ capabilities: ["completion", "tools"], context: 8192 }))
-          },
-        }),
-      ),
-      (server) => Effect.promise(() => server.stop(true)),
-    )
+    // A server that records the clock's time of each /api/tags request it gets.
+    const serve = Effect.fn(function* (answer: (request: number) => Response) {
+      const asked: number[] = []
+      const server = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Bun.serve({
+            port: 0,
+            fetch: async (request) => {
+              if (request.method === "GET") {
+                asked.push(time.now())
+                return answer(asked.length)
+              }
+              decodeShowRequest(await request.json())
+              return Response.json(show({ capabilities: ["completion", "tools"], context: 8192 }))
+            },
+          }),
+        ),
+        (server) => Effect.promise(() => server.stop(true)),
+      )
+      return { asked, origin: server.url.origin }
+    })
+    const served = yield* serve(tags)
+    const asked = served.asked
     const http = yield* HttpClient.HttpClient
     return {
       asked,
+      // Another server on the same clock, for a row that points the plugin elsewhere.
+      serve,
       plugin: (interval: Duration.Input) =>
-        addPlugin(server.url.origin, interval).pipe(
+        addPlugin(served.origin, interval).pipe(
           // A request holds the clock while it runs, so its own 1 second limit never ends it early.
           Effect.provideService(
             HttpClient.HttpClient,
@@ -418,6 +426,37 @@ describe("OllamaPlugin", () => {
       yield* served.plugin("1 hour")
       yield* served.plugin("1 hour")
       expect(served.asked).toHaveLength(1)
+    }),
+  )
+
+  // A config reload that points the plugin at another server is a first read of that server, so its retry pauses start
+  // at 1 s again. Before the reload the plugin answered from the first server through six intervals, after which a pause
+  // that went on doubling would be the whole 30 s interval; the second server fails twice and then answers.
+  it.live("a reload to a server whose first read fails is asked again after 1 s, then 2 s", () =>
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      const config = yield* Config.Test
+      const modelState = yield* Model.Service
+      const first = yield* onWaitingClock(() => Response.json({ models: [summary("first:1b", "first-digest")] }))
+      const second = yield* first.serve((request) =>
+        request > 2 ? Response.json({ models: [summary("second:1b", "second-digest")] }) : unavailable(),
+      )
+      yield* first.plugin("30 seconds")
+      yield* first.pauses(7)
+      const asked = second.asked
+      yield* config.setEntries([configuration({ baseURL: `${second.origin}/v1` })])
+      yield* bus.publish(Event.Updated, {})
+      yield* within(
+        Effect.sync(() => asked.length),
+        (count) => count >= 3,
+        10_000,
+      )
+      expect(asked.slice(1, 3).map((at, index) => at - asked[index]!)).toEqual([1_000, 2_000])
+      yield* within(
+        modelState.get(Provider.ID.make("ollama"), Model.ID.make("second:1b")),
+        (model) => model !== undefined,
+        5_000,
+      )
     }),
   )
 

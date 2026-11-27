@@ -1,6 +1,6 @@
 import { define } from "@orbit/plugin/effect/plugin"
 import type { Entry } from "@orbit/schema/config"
-import { Clock, Duration, Effect, Schema, Semaphore, Stream } from "effect"
+import { Clock, Duration, Effect, FiberHandle, Schema, Semaphore, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Config } from "../../config.js"
 import { Model } from "../../model.js"
@@ -215,7 +215,9 @@ export function make(
           Effect.flatMap((ok) => keep(ok, Math.min(backoff * 2, Duration.toMillis(interval)))),
         )
       }
-      yield* keep(first, Math.min(1_000, Duration.toMillis(interval))).pipe(Effect.forkScoped)
+      const firstPause = Math.min(1_000, Duration.toMillis(interval))
+      const loop = yield* FiberHandle.make<void>()
+      yield* FiberHandle.run(loop, keep(first, firstPause))
       const reload = Effect.fn("OllamaPlugin.reload")(function* () {
         const next = configured(yield* config.entries(), origin)
         if (
@@ -229,7 +231,10 @@ export function make(
         loaded.hash = "[]"
         yield* ctx.integration.reload()
         yield* ctx.provider.reload()
-        yield* refresh().pipe(Effect.ignore)
+        const answered = yield* refresh().pipe(Effect.as(true), Effect.orElseSucceed(() => false))
+        // A new source is a first read again: the old loop ends here and its pauses start over at 1 second, instead of
+        // going on from the pause the old source's loop had doubled to.
+        yield* FiberHandle.run(loop, keep(answered, firstPause))
       })
       yield* ctx.event.subscribe().pipe(
         Stream.filter((event) => event.type === "config.updated"),
