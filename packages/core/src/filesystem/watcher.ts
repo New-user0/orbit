@@ -217,7 +217,6 @@ export const makeNative = Effect.fnUntraced(function* (
     Effect.promise(() => {
       pool.closed = true
       const parked = [...pool.parked.values()].flat()
-`)
       pool.parked.clear()
       return Promise.all(parked.map((entry) => entry.subscription.unsubscribe().catch(() => {})))
     }),
