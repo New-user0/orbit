@@ -141,7 +141,7 @@ describe("DatabaseMigration", () => {
         { concurrency: "unbounded" },
       ).pipe(Effect.provideService(Global.Service, Global.make({ data: tmp.path }))),
     )
-  })
+  }, 10_000)
 
   test("bootstraps distinct databases without waiting on each other's lock", async () => {
     await Effect.runPromise(

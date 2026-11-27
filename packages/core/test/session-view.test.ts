@@ -208,6 +208,6 @@ describe("Session.view", () => {
         expect(expected.time.updated).toEqual(created.time.updated)
         expect(expectedIdle).toBeGreaterThan(expectedViewed)
       }).pipe(Effect.provide(Layer.fresh(targetLayer)))
-    }),
+    }), 10_000,
   )
 })

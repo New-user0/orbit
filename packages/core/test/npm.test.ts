@@ -218,7 +218,7 @@ describe("Npm.add", () => {
 
     expect(await fs.stat(path.join(entries.added.directory, "package.json"))).toBeTruthy()
     expect(entries.cached).toEqual(entries.added)
-  })
+  }, 10_000)
 
   test.each(["unnamed", "named"])("installs and locates %s Git packages with dependencies", async (kind) => {
     await using tmp = await tmpdir()

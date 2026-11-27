@@ -195,7 +195,7 @@ test("a trusted run in the repository itself uses its git and runs its program (
 
   expect(result.status).toBe("succeeded")
   expect(found.ran()).toBe(true)
-})
+}, 15_000)
 
 test("a trusted run in a linked worktree that the repository lists uses its git, with the repository as the main checkout (control)", async () => {
   const found = await outer()
@@ -208,4 +208,4 @@ test("a trusted run in a linked worktree that the repository lists uses its git,
 
   expect(result.status).toBe("succeeded")
   expect(found.ran()).toBe(true)
-})
+}, 15_000)

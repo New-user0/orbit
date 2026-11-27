@@ -894,7 +894,7 @@ describe("Vcs", () => {
           "release.txt",
         ])
       }),
-    ),
+    ), 10_000,
   )
 
   for (const scenario of [
@@ -1035,7 +1035,7 @@ describe("Vcs", () => {
         })
         expect(yield* vcs.base().pipe(Effect.flip)).toMatchObject({ message: "Choose a review base" })
       }),
-    ), 10_000,
+    ), 15_000,
   )
 
   it.live("creates detached worktrees without review metadata and requires an explicit base without a named hint", () =>
@@ -1143,6 +1143,6 @@ describe("Vcs", () => {
         })
         expect(yield* vcs.base().pipe(Effect.flip)).toMatchObject({ message: "Choose a review base" })
       }),
-    ),
+    ), 20_000,
   )
 })

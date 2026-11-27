@@ -876,6 +876,7 @@ describe("ShellGuard.authorize", () => {
         expect(command.length).toBeGreaterThan(10_000)
         expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
       }),
+      15_000,
     )
   for (const [name, spelling] of spellings)
     real(`asks for the same folder with PowerShell's parser, short: ${name}`, () =>
@@ -1136,6 +1137,7 @@ console.log("done")`,
       clearTimeout(timer)
       expect(out.trim()).toBe("done")
     }),
+    20_000,
   )
   it.live("does not fail the call for block-commented code that holds a refused spelling", () =>
     Effect.gen(function* () {

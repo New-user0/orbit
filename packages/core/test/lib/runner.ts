@@ -727,13 +727,18 @@ const setup = Effect.gen(function* () {
 type Scenario = Effect.Success<typeof setup>
 const scenarioOn =
   (on: typeof it) =>
-  (name: string, body: (s: Scenario) => Effect.gen.Return<void, unknown, Layer.Success<typeof layer> | Scope.Scope>) =>
+  (
+    name: string,
+    body: (s: Scenario) => Effect.gen.Return<void, unknown, Layer.Success<typeof layer> | Scope.Scope>,
+    timeout?: number,
+  ) =>
     on.effect(
       name,
       Effect.gen(function* () {
         const s = yield* setup
         return yield* body(s)
       }),
+      timeout,
     )
 const scenario = scenarioOn(it)
 

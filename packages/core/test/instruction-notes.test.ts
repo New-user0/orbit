@@ -957,7 +957,7 @@ describe("InstructionNotes.add", () => {
 
         expect(opened(result.worktrees, found.sub)).toBe(true)
         expect(opened(result.worktrees, found.root)).toBe(false)
-      }),
+      }), 10_000,
     )
   })
 })

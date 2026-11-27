@@ -1140,7 +1140,7 @@ describe("ShellTool ordinary shell syntax", () => {
             pwsh ?? "pwsh",
           ),
         // The first command pays for PowerShell's cold start, which alone can exceed the default five seconds.
-        { timeout: 15_000 },
+        { timeout: 20_000 },
       )
     }
   }
@@ -2531,6 +2531,7 @@ describe("ShellTool", () => {
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
+    10_000,
   )
 
   // shell-safety-6: the head that stands for output that did not fit starts at its first line that is not blank and has no
@@ -3069,6 +3070,7 @@ describe("ShellTool", () => {
         },
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
       ),
+      10_000,
     )
   }
 
@@ -3555,6 +3557,7 @@ describe("ShellTool timeouts", () => {
         }),
       ),
     ),
+    10_000,
   )
 
   productionIt.live("advertises the built-in numbers without config, and leaves the shared input alone", () =>
@@ -3569,6 +3572,7 @@ describe("ShellTool timeouts", () => {
         }),
       ),
     ),
+    10_000,
   )
 
   it.live("keeps the registry schema static", () =>

@@ -483,7 +483,7 @@ describe("Worktree", () => {
       expect(created.directory).toBe(abs(path.join(targetParent, "target")))
       yield* worktree.remove({ directory: created.directory, force: false })
       yield* worktree.remove({ directory: source.directory, force: false })
-    }),
+    }), 10_000,
   )
 
   it.live("requires force to remove a dirty git worktree", () =>

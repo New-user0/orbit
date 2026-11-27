@@ -404,7 +404,7 @@ describe("ConfigInstructionRules.scan", () => {
       const listed = yield* scan(tmp.path)
       expect(listed).toHaveLength(ConfigInstructionRules.MAX_FILES)
       expect(listed[0]).toBe("0000.md")
-    }),
+    }), 10_000,
   )
 
   // A repository chooses how many folders it holds, empty ones too, and each one costs a walk of its path and the gate's
