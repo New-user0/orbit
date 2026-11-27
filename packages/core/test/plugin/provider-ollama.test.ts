@@ -328,6 +328,63 @@ describe("OllamaPlugin", () => {
     15_000,
   )
 
+  // The retry backs off: a server that keeps failing is asked after 1 s, then 2 s, then 4 s, not every second.
+  it.live(
+    "a server that keeps failing is asked again after pauses that double",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const requests = { tags: 0 }
+          const server = Bun.serve({
+            port: 0,
+            fetch: () => {
+              requests.tags++
+              return new Response("unavailable", { status: 503 })
+            },
+          })
+          return { requests, server }
+        }),
+        ({ requests, server }) =>
+          Effect.gen(function* () {
+            yield* addPlugin(server.url.origin, "1 hour")
+            // Asked at 0 s, 1 s and 3 s, and next at 7 s; a pause that stayed at 1 s would have asked seven times.
+            yield* Effect.promise(() => Bun.sleep(6_000))
+            expect(requests.tags).toBeGreaterThanOrEqual(2)
+            expect(requests.tags).toBeLessThanOrEqual(3)
+          }),
+        ({ server }) => Effect.promise(() => server.stop(true)),
+      ),
+    15_000,
+  )
+
+  // Control: a server that answered with no models has answered; the plugin has nothing, but it does not ask again
+  // before its interval either.
+  it.live(
+    "a server that answered with no models is not asked again before its interval",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const requests = { tags: 0 }
+          const server = Bun.serve({
+            port: 0,
+            fetch: () => {
+              requests.tags++
+              return Response.json({ models: [] })
+            },
+          })
+          return { requests, server }
+        }),
+        ({ requests, server }) =>
+          Effect.gen(function* () {
+            yield* addPlugin(server.url.origin, "1 hour")
+            yield* Effect.promise(() => Bun.sleep(2_500))
+            expect(requests.tags).toBe(1)
+          }),
+        ({ server }) => Effect.promise(() => server.stop(true)),
+      ),
+    15_000,
+  )
+
   it.live("replaces and restores the same-ID Models.dev provider", () =>
     Effect.acquireUseRelease(
       Effect.sync(() => {
