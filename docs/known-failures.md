@@ -125,20 +125,24 @@ this") removed every row of "Flaky, depend on load". Each row, grouped by cause,
 it:
 
 - core, the native watcher crash (`worker crashed: exit code 3` in files with real directory watches, FU-M5-022):
-  closing the native watcher layer ended every Windows directory watch it had parked, which meets
-  parcel-bundler/watcher#262, and core tests close a runtime per row. A count over the core suite on Windows found 2707
-  ends of a live watch at a runtime's close in 67 files. Every row now runs with the memo map of
-  `packages/core/test/fixture/native-watcher.ts` (`packages/core/test/lib/effect.ts`), whose one entry is the native
-  watcher layer built once for the file, so a runtime that closes parks its watches for the next one. "in a test
-  process the native watches outlive each runtime: a closed one ends none, the next reuses it"
-  (`packages/core/test/filesystem/watcher.test.ts`) pins it; the product keeps its close ("on Windows closing the native
-  watches ends the parked ones"). The pool first was never closed, and a parallel worker runs each file in a fresh
-  global while the binding keeps one native watch per folder for the whole process, so a finished file's callbacks
-  stayed on the watches of folders that outlive it. The pool now ends once, after the file's last row, pinned by "a
-  test file's native watches end once, after its last row". The ci-measure runs counted Windows core 1/3 worker
-  crashes: 4 in 77 runs with the pool never closed (two in JSC's marking threads, one in the binding's read completion,
-  one fail-fast), 1 in 45 with the close (in the binding's read completion), 0 in 50 on the base. That is too few to
-  tell them apart, so this crash is not shown fixed: FU-M5-022 keeps it, with the counts.
+  ending a live Windows directory watch while its read is queued meets parcel-bundler/watcher#262, and the tests ended
+  them all the time. Every row runs with the memo map of `packages/core/test/fixture/native-watcher.ts`
+  (`packages/core/test/lib/effect.ts`), whose one entry is the native watcher layer built once for the file, so a
+  runtime that closes parks its watches for the next one ("in a test process the native watches outlive each runtime:
+  a closed one ends none, the next reuses it", `packages/core/test/filesystem/watcher.test.ts`). That pool is never
+  closed ("a test file ends none of its native watches, also after its last row"). A watch a finished file leaves open
+  keeps a callback of that file's global, so the rows watch only folders that no later file touches: each test file
+  has a config folder of its own ("gives each test file a config folder of its own",
+  `packages/core/test/preload.test.ts`), and `config/reload.test.ts` copies its skill sources into the row's folder.
+  The product no longer ends a parked watch whose folder was moved, replaced or cannot be read, which
+  `config/reload.test.ts` met four times a run: it is retired until the native layer closes, and the next watch of the
+  folder gets a native watch of its own ("on Windows a parked watch whose folder was moved away is not reused and not
+  ended", "on Windows every later watch of a folder with a retired watch is set apart from it"). A pass over the core
+  files that watch folders on Windows, with every unsubscribe of the binding logged, ended 12 watches that had a read
+  queued before these changes (at a file's end: the worker's config folder in `mcp`, `session-prompt` and
+  `node-build`, and the two skill folders of the checkout in `config/reload`; during rows: the four replaced roots of
+  `config/reload`) and none after. FU-M5-022 keeps only the close of the native layer as a server or an SDK host
+  shuts down.
 - cli, the trust-doors control that runs a node with a model and the YAML `permissions:auto` row of `flow.test.ts`: a
   first Ollama `/api/tags` read that ran past its 1 s limit was kept as a fresh answer for 30 s and not tried again
   before the interval (FU-M3-385). A read that fails, times out or is interrupted now leaves the cache as it was, and
@@ -188,6 +192,19 @@ it:
   out the flush), and `controller.test.ts` dropped its first prompt when the cold server's first trust read outlasted
   the controller's 2 s limit, which then handed the scripted Write call to the next row. The file waits for the
   server's trust answer before its rows, and its model answers by what the prompt asks.
+- core, the rows that timed out at 5 s in the Windows core 1/3 runs of ci-measure run 45955987228 although they
+  took at most 2.4 s in the 50 runs before (SessionRetention 'home: a document that does not parse skips the pass',
+  `edit-link.test.ts` 'ask for its absolute spelling: Patch update through a folder link, in an untrusted folder' and
+  the `Lsp.ignored` gitlink row of `git-gitlink.test.ts`): the runner's system disk stopped. The typeperf logs of the
+  103 traced Windows jobs (about 181,000 seconds) show C:, where the runner's TEMP is and so every folder the tests
+  made, holding queued requests and moving no byte for 305 seconds in all, 25 times for 3 s or more and at most 7 s,
+  while D: never did. Each of these rows ran inside such a stall of 4 to 7 s, with the processor nearly idle, and so
+  did 9 of the 16 other rows that timed out in those jobs. `check.yml` now keeps TEMP and TMP of the Windows test jobs
+  in a folder of `RUNNER_TEMP` on D:, and names the C: temp folder in `ORBIT_TEST_OTHER_VOLUME` for 'copies the output
+  to the session's folder when the shell file is on another volume' (`tool-shell-output-cap.test.ts`), which needs a
+  second volume. The fourth row of that run, 'enters at most MAX_FOLDERS folders, however many empty ones a rules folder
+  holds' (`config/instruction-rules.test.ts`), waited on the same disk while it made and removed 2,048 folders, and
+  makes twice the cap in folders now (366c0b55).
 - The rows of the side builders of this task (cli children through the start gate and measured limits, the TUI waits,
   the sdk first-request row) are named with their causes in their own commits on PR #195.
 
@@ -195,14 +212,3 @@ Bun 1.4.2's segfault of a long-lived Windows test worker (FU-M5-023) is fixed by
 the decoded reports are a FinalizationRegistry cleanup of a finished file's global, which oven-sh/bun#44279 cancels from
 Bun 1.4.3 on, and its reproduction crashed 10 of 10 runs on 1.4.2 and none of 10 on 1.4.5. Every ci-measure count in
 this section was taken on 1.4.2.
-
-Still open when this was written:
-
-- The native watcher crash above (FU-M5-022), at the counts given there.
-- Pauses of one Windows worker that the decoy builds do not explain. After the fixes above, the ci-measure run
-  45955987228 (Windows core 1/3, 45 runs) still had four rows time out at 5 s that took at most 2.4 s in the 50 runs of 45943098053 (medians 0.14 to 1.74 s):
-  'enters at most MAX_FOLDERS folders, however many empty ones a rules folder holds' (`config/instruction-rules.test.ts`),
-  'home: a document that does not parse skips the pass' (SessionRetention), 'ask for its absolute spelling: Patch update
-  through a folder link, in an untrusted folder' (`edit-link.test.ts`) and the `Lsp.ignored` gitlink row of
-  `git-gitlink.test.ts`. A measured limit per row cannot reach a row that a pause meets once in 50 runs, so their cause
-  is open.

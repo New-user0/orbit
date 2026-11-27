@@ -5117,6 +5117,8 @@ for the whole interval, and it kept the failed read as a fresh answer for 30 sec
 that time, and every node of a workflow that named an Ollama model, found no Ollama models ("Provider ollama has no
 models here"). A read that fails is no longer kept, so the next location asks the server itself. Once the server has
 answered, the list is read again only at the interval, as before, and a failure then keeps the models already listed.
+A configuration change that points Orbit at another Ollama server, or changes its key, starts over: when the first read
+of the new server fails, Orbit asks it again after 1 second, then 2, 4 and so on, instead of only at the interval.
 
 **Affects:** people who run Ollama on the same machine, for example one that is still starting or busy when Orbit
 starts.
