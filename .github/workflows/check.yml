@@ -210,7 +210,10 @@ jobs:
       # which stops answering for seconds at a time: in the typeperf logs of 103 traced Windows test jobs (about 181,000
       # seconds), C: held queued requests and moved no byte for 305 seconds, 25 times for 3 s or more and at most 7 s,
       # and D: never did. Such a stall holds every row then waiting on the disk, and 12 of the 19 rows that timed out in
-      # those jobs ran inside one. C: stays the other volume that a test of a copy across volumes needs.
+      # those jobs ran inside one. C: stays the other volume that a test of a copy across volumes needs, and the runner's
+      # own temp folder there (ORBIT_TEST_OTHER_VOLUME) is where the class 3 and 4 rows that spell a path through the
+      # legacy junctions `Documents and Settings` and `Local Settings` make their folders, as those lead only below a
+      # profile's AppData\Local (packages/core/test/fixture/legacy-junction.ts).
       # What the tests need of the temp folder stays as it was on C:. Its volume makes 8.3 short names, which the class 3
       # and 4 spelling gates take apart (D: makes none until fsutil turns them on, and the step fails if it still makes
       # none). Its path holds no character that Markdown escapes (RUNNER_TEMP is D:\a\_temp), as the approval titles

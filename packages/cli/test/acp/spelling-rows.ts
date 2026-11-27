@@ -2,8 +2,8 @@
 // rows through each of them, which permission-spellings.subprocess.test.ts and spelling-matrix-*.subprocess.test.ts share.
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
-import os from "node:os"
 import path from "node:path"
+import { junctionSpellings, junctionTemporary } from "../../../core/test/fixture/legacy-junction"
 import { runProgram } from "../../../core/test/fixture/run-program"
 import {
   approval,
@@ -20,25 +20,13 @@ import {
 // `orb acp` in an untrusted folder, a call under such a spelling meets the same folder question and the same rules as
 // the plain spelling, and the link of the repository below it is followed in none of them; a share or device spelling is
 // refused with no question. The trusted rows are the controls (class 3, class 4, class 8, class 12; permissions-23).
-const temporary = os.tmpdir()
-const junctions = (
-  process.platform === "win32"
-    ? [
-        {
-          name: "Documents and Settings",
-          temporary: temporary.replace(/^([A-Za-z]:)\\Users\\/i, "$1\\Documents and Settings\\"),
-        },
-        {
-          name: "Local Settings",
-          temporary: temporary.replace(/^(.*?\\Users\\[^\\]+)\\AppData\\Local\\/i, "$1\\Local Settings\\"),
-        },
-      ]
-    : []
-).filter((item) => item.temporary !== temporary)
+// Windows' legacy junctions name a folder only below a profile's AppData\Local, so the rows through them make their run
+// folder there (`base`), which on Windows CI is the runner's own temporary folder on C: (fixture/legacy-junction.ts).
+const temporary = junctionTemporary()
 const present = await Promise.all(
-  junctions.map((item) =>
-    fs.stat(item.temporary).then(
-      () => [item],
+  (temporary === undefined ? [] : junctionSpellings(temporary)).map((item) =>
+    fs.stat(item.spelled).then(
+      () => [{ name: item.name, temporary: item.spelled, base: temporary }],
       () => [],
     ),
   ),
@@ -57,10 +45,16 @@ const shortWorkspace = async (root: string) => {
     throw new Error("this volume makes no 8.3 short names")
   return short
 }
-export const realSpellings = [
+// `base` is the folder a row's run folder is made in, the temporary folder when it is not given.
+export const realSpellings: ReadonlyArray<{
+  name: string
+  base?: string
+  spelled: (root: string) => string | Promise<string>
+}> = [
   { name: "a link to the project", spelled: (root: string) => path.join(root, "wsalias") },
   ...present.flat().map((item) => ({
     name: item.name,
+    base: item.base,
     spelled: (root: string) => path.join(item.temporary, path.basename(root), "workspace"),
   })),
   ...(process.platform === "win32"
@@ -136,6 +130,7 @@ export function spellingMatrix(rows: typeof linkRows) {
                 trusted: mode.trusted,
                 reply: mode.reply,
                 args: async (root) => spellArgs(row.args, await spelling.spelled(root)),
+                base: spelling.base,
                 setup: spellingLinks,
               },
               linkCheck(row, mode),
@@ -160,6 +155,7 @@ export function spellingMatrix(rows: typeof linkRows) {
               ],
               reply: "once",
               args: async (root) => spellArgs(row.args, await spelling.spelled(root)),
+              base: spelling.base,
               setup: spellingLinks,
             },
             async (run) => {

@@ -19,13 +19,25 @@ import {
   spellingLinks,
 } from "./spelling-rows"
 
+// Fails visibly on a Windows machine where the rows cannot make their folder below a profile's AppData\Local, where the
+// legacy junctions lead, rather than registering fewer rows (fixture/legacy-junction.ts; class 3, class 4).
+;(process.platform === "win32" ? test : test.skip)(
+  "the rows go through the Documents and Settings and Local Settings spellings of the workspace folder",
+  () => {
+    expect(realSpellings.map((item) => item.name).filter((name) => name.endsWith(" Settings"))).toEqual([
+      "Documents and Settings",
+      "Local Settings",
+    ])
+  },
+)
+
 for (const spelling of realSpellings) {
   const through = async (root: string) => path.join(await spelling.spelled(root), "cfg", "orbit.json")
   test.concurrent(
     `an untrusted Read through ${spelling.name} and the repository's link into the config folder is asked about as the plain spelling is`,
     () =>
       approval(
-        { tool: "Read", reply: "reject", args: async (root) => ({ file_path: await through(root) }), setup: spellingLinks },
+        { tool: "Read", reply: "reject", args: async (root) => ({ file_path: await through(root) }), base: spelling.base, setup: spellingLinks },
         async (run) => {
           expect(String(run.permissions[0]?.toolCall.title)).toContain("external directory")
           expect(shownAt(run.permissions[0]?.toolCall.locations)).toContain(path.join(run.root, "config"))
@@ -39,7 +51,7 @@ for (const spelling of realSpellings) {
     `an untrusted Read through ${spelling.name} and the repository's link, after the folder is allowed, names the folder it reads`,
     () =>
       approval(
-        { tool: "Read", reply: "once", args: async (root) => ({ file_path: await through(root) }), setup: spellingLinks },
+        { tool: "Read", reply: "once", args: async (root) => ({ file_path: await through(root) }), base: spelling.base, setup: spellingLinks },
         async (run) => {
           expect(run.permissions).toHaveLength(2)
           expect(shownAt(run.permissions[1]?.toolCall.locations)).toEqual([path.join(run.root, "config", "orbit.json")])
@@ -59,7 +71,7 @@ for (const spelling of realSpellings) {
           ],
           reply: "once",
           args: async (root) => ({ file_path: path.join(await spelling.spelled(root), "secret", "key.txt") }),
-          setup: spellingLinks,
+          base: spelling.base, setup: spellingLinks,
         },
         async (run) => {
           expect(run.permissions).toHaveLength(0)
@@ -78,7 +90,7 @@ for (const spelling of realSpellings) {
           permissions: [{ action: "Read", resource: "secret/*", effect: "ask" }],
           reply: "reject",
           args: async (root) => ({ file_path: path.join(await spelling.spelled(root), "secret", "key.txt") }),
-          setup: spellingLinks,
+          base: spelling.base, setup: spellingLinks,
         },
         async (run) => {
           expect(run.permissions).toHaveLength(1)
@@ -99,7 +111,7 @@ for (const spelling of realSpellings) {
           trusted: true,
           reply: "once",
           args: async (root) => ({ file_path: await through(root) }),
-          setup: spellingLinks,
+          base: spelling.base, setup: spellingLinks,
         },
         async (run) => {
           expect(run.permissions.filter((item) => String(item.toolCall.title).includes("external directory"))).toEqual(
