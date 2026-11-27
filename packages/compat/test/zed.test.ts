@@ -197,7 +197,7 @@ describe("CompatZed.activeSelection", () => {
       ])
 
       expect(yield* select(db, repo)).toEqual({ type: "unavailable" })
-    }), 10_000,
+    }),
   )
 
   live("is empty when no workspace contains the directory", () =>
