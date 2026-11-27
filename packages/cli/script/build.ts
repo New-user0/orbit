@@ -151,10 +151,12 @@ for (const item of targets) {
   await verifyArtifact(path.join(outdir, name))
 }
 
-// The Bun runtime embedded in every compiled binary carries the upstream product name in two places: its
-// trusted-dependency list for lifecycle scripts, and a local variable in its styleText builtin. Patch a copy of the
-// runtime with same-length replacements before compiling, so the compiled binary never contains the name.
-// The trusted-dependency entry becomes a name npm cannot publish (uppercase), and keeps the list's sort order.
+// The Bun runtime embedded in every compiled binary carries the upstream product name in three places: its
+// trusted-dependency list for lifecycle scripts, a local variable in its styleText builtin, and (since a release after
+// 1.4.2) the environment variable the upstream product sets, in the list of variables Bun reads to tell that an agent
+// started it. Patch a copy of the runtime with same-length replacements before compiling, so the compiled binary never
+// contains the name. The trusted-dependency entry becomes a name npm cannot publish (uppercase), and keeps the list's
+// sort order; the variable becomes one that nothing sets.
 async function brandRuntime(item: (typeof allTargets)[number], downloaded: string | undefined) {
   const native =
     item.os === process.platform && item.arch === process.arch && item.abi === undefined && item.avx2 === undefined
@@ -166,6 +168,7 @@ async function brandRuntime(item: (typeof allTargets)[number], downloaded: strin
   const replacements = [
     [`${word}-ai`, "opXXXXXX-ai"],
     [`${word.slice(0, 4)}C${word.slice(5)}s`, "leadCodes"],
+    [word.toUpperCase(), "OPXXXXXX"],
   ]
   const bytes = replacements.reduce(
     (text, [from, to]) => {
