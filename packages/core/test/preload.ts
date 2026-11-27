@@ -25,6 +25,12 @@ if (root) {
     // every worker and every job on the runner then share: CI's Git installs cloned into the runner's own cache. The
     // cache and the per-user folders that Windows programs write to are the worker's own.
     npm_config_cache: path.join(home, ".npm"),
+    // Bun keeps its transpiler cache under XDG_CACHE_HOME, which is the worker's own, so the first `bun` child of each
+    // worker transpiled what it imports from nothing: a shell-parser child that takes 0.4 s ran past 5 s on a loaded
+    // Windows runner (run 45924043976, attempt 2). Every child shares the run's one cache (tools/test/watchdog.ts).
+    ...(process.env.ORBIT_TEST_TRANSPILER_CACHE
+      ? { BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.ORBIT_TEST_TRANSPILER_CACHE }
+      : {}),
     ...(process.platform === "win32"
       ? {
           USERPROFILE: home,

@@ -6,7 +6,6 @@ import os from "os"
 import path from "path"
 import { fileLogger } from "@orbit/util/observability/logging"
 import { resource } from "@orbit/util/observability/otlp"
-import { sharedTranspilerCache } from "../fixture/child-env"
 
 const otelResourceAttributes = process.env.OTEL_RESOURCE_ATTRIBUTES
 
@@ -75,7 +74,6 @@ test("falls back to local logging when OTLP initialization fails", async () => {
         XDG_CONFIG_HOME: path.join(dir, "config"),
         XDG_DATA_HOME: path.join(dir, "data"),
         XDG_STATE_HOME: path.join(dir, "state"),
-        ...sharedTranspilerCache(),
       },
       stdout: "ignore",
       stderr: "pipe",
@@ -84,7 +82,7 @@ test("falls back to local logging when OTLP initialization fails", async () => {
   const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
 
   expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" })
-  // The child transpiled into the run's shared cache, not into a cache folder of its own.
+  // The child transpiled into the run's shared cache (test/preload.ts), not into a cache folder of its own.
   if (process.env.ORBIT_TEST_TRANSPILER_CACHE)
     expect(await fs.readdir(path.join(dir, "cache", "bun")).catch(() => [])).toEqual([])
 })

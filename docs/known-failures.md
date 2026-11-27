@@ -160,8 +160,9 @@ it:
   config-trust rows (FU-M3-387) took at most 1.6 s, so they keep 5 s.
 - core `falls back to local logging when OTLP initialization fails` (`effect/observability.test.ts`): its child had a
   cache folder of its own and transpiled Effect from nothing on every run (0.4 s alone, over 5 s on a loaded runner). It
-  shares the run's transpiler cache now (`packages/core/test/fixture/child-env.ts`), and the row checks that its own
-  cache folder holds none.
+  shares the run's transpiler cache now, as every `bun` child of a core worker does (`packages/core/test/preload.ts`
+  sets `BUN_RUNTIME_TRANSPILER_CACHE_PATH`), and the row checks that its own cache folder holds none. The same cause
+  timed out a shell-parser child of `shell-parse-compatibility.test.ts` (0.4 s, past 5 s in run 45924043976, attempt 2).
 - vscode, the two rows of FU-M4-226: `ide-bridge.test.ts` 'sends a cleared selection when no file editor remains'
   connected while its first selection's 20 ms flush was pending (1 of 400 repeats failed; 0 of 400 after the row waits
   out the flush), and `controller.test.ts` dropped its first prompt when the cold server's first trust read outlasted
