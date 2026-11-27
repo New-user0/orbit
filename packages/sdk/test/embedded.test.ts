@@ -88,9 +88,9 @@ for (const selection of ["explicit", "default"] as const) {
         expect(requests[0]?.model).toMatchObject({ provider: "custom", id: "fictional-chat" })
       }),
     ),
-    // Measured limit: a cold Location boot and a model call took up to 5.1 s on 4 cores shared with other work
-    // (14 runs, median 4.3 s), where the default 5 s gave out; twice that, rounded up to 5 s.
-    15_000,
+    // Measured limit (50 whole-file runs, 2 test processes at once on 4 cores, isolated home, Windows): explicit selection p50 5.3 s, p95 8.1 s, max 8.5 s;
+    // twice the maximum, rounded up to 5 s. The work is a cold Location boot plus a model call.
+    20_000,
   )
 }
 
@@ -199,7 +199,9 @@ it.live(
         expect(missingMessage._tag).toBe("MessageNotFoundError")
       }),
     ),
-  10_000,
+  // Measured limit (50 whole-file runs, 2 test processes at once on 4 cores, isolated home, Windows):
+  // p50 2.6 s, p95 5.3 s, max 6.0 s; twice the maximum, rounded up to 5 s.
+  15_000,
 )
 
 for (const implicit of [false, true]) {
@@ -240,9 +242,12 @@ for (const implicit of [false, true]) {
           expect(document.info.hooks).toBeDefined()
         }),
       ),
+    10_000,
   )
 }
 
+// Rows that boot a Location at the default 5 s were measured (50 runs, 2 test processes at once on 4 cores): web search max 4.0 s,
+// trust on max 3.7 s, workspace providers max 4.2 s; twice the maximum, rounded up to 5 s, is 10 s.
 it.live("embedded client exposes plugin-backed web search", () =>
   withEmbedded("orbit-embedded-websearch-", (fixture) =>
     Effect.gen(function* () {
@@ -280,6 +285,7 @@ it.live("embedded client exposes plugin-backed web search", () =>
       })
     }),
   ),
+  10_000,
 )
 
 type Embedded = Effect.Success<ReturnType<Sdk["Orbit"]["create"]>>
@@ -291,8 +297,6 @@ const firstAnswers: ReadonlyArray<{
   readonly name: string
   readonly ask: (orbit: Embedded, fixture: Fixture) => Effect.Effect<unknown, unknown>
   readonly expected: unknown
-  /** A row's own limit in ms, set only where its measured time needs one (see `mcp.connect`). */
-  readonly limit?: number
 }> = [
   {
     name: "websearch.providers lists the provider a plugin adds",
@@ -456,9 +460,6 @@ const firstAnswers: ReadonlyArray<{
     ask: (orbit: Embedded, fixture: Fixture) =>
       orbit.mcp.connect({ server: "first-answer-mcp", location: location(fixture) }).pipe(Effect.as("found")),
     expected: "found",
-    // Measured limit: the connect starts a program of its own on top of the Location's boot, and took up to 3.1 s on 4
-    // cores shared with other work (14 runs, median 2.4 s), where the default 5 s is within 2x; twice that, rounded up.
-    limit: 10_000,
   },
   {
     name: "mcp.disconnect finds the server a plugin adds",
@@ -615,7 +616,10 @@ for (const row of firstAnswers) {
           expect(yield* row.ask(orbit, fixture)).toEqual(row.expected)
         }),
       ),
-    row.limit,
+    // Measured limit (50 whole-file runs, 2 test processes at once on 4 cores, isolated home, Windows): the 24 first-request rows boot a Location, and the
+    // slowest, mcp.connect (it also starts a program), took p50 2.9 s, p95 5.0 s, max 6.3 s (model.list max 5.0 s, which ran
+    // out the 5 s limit once); twice the maximum, rounded up to 5 s. One limit, because they share the boot.
+    15_000,
   )
 
   // The control: the same set-up answers with the contribution once activation has had time, so the row above fails
@@ -770,6 +774,7 @@ it.live("configures workspace providers through the SDK facade", () =>
       expect(calls.map((call) => call.operation)).toEqual(["create", "destroy"])
     }),
   ),
+  10_000,
 )
 
 const workspaceModelScenario = (fixture: Fixture, policy: "eager" | "lazy") =>
