@@ -3,11 +3,12 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { startSlot } from "./fixture/start-gate"
 import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // A team against a scripted model. Each member's session starts with an introduction naming it, so the model knows
 // who is speaking from the first user message, and which turn it is from how many user messages the session holds.
-const turns: Array<{ member: string; turn: number; prompt: string; history: number }> = []
+const turns: Array<{ member: string; turn: number; prompt: string; history: number; users: string[] }> = []
 const failures = { reviewer: 0 }
 
 const ollama = Bun.serve({
@@ -47,7 +48,7 @@ const ollama = Bun.serve({
     const turn = users.length
     const prompt = users.at(-1) ?? ""
     if (messages.at(-1)?.role === "tool") return reply('<message to="reviewer">Done: answer.txt has 42.</message>')
-    turns.push({ member, turn, prompt, history: messages.length })
+    turns.push({ member, turn, prompt, history: messages.length, users })
     if (member === "lead" && turn === 1)
       return reply(
         'Plan ready.\n<note key="plan">coder writes answer.txt; reviewer checks it</note>\n<message to="coder">Write 42 into answer.txt.</message>',
@@ -212,26 +213,29 @@ async function runID(directory: string) {
   return JSON.parse((await orb(directory, ["flow", "ls", "--standalone", "--format", "json"])).stdout)[0].id as string
 }
 
-async function orb(directory: string, args: string[]) {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
-    cwd: path.join(import.meta.dir, ".."),
-    env: isolatedEnv(root, {
-      USERPROFILE: root,
-      PWD: directory,
-      ORBIT_CONFIG: undefined,
-      ORBIT_CONFIG_CONTENT: undefined,
-      OLLAMA_CONTEXT_LENGTH: undefined,
-    }),
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
+// A child holds a start slot while it runs, so a loaded runner never has more cold children than the start gate allows.
+function orb(directory: string, args: string[]) {
+  return startSlot(async () => {
+    const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
+      cwd: path.join(import.meta.dir, ".."),
+      env: isolatedEnv(root, {
+        USERPROFILE: root,
+        PWD: directory,
+        ORBIT_CONFIG: undefined,
+        ORBIT_CONFIG_CONTENT: undefined,
+        OLLAMA_CONTEXT_LENGTH: undefined,
+      }),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    return { code, stdout, stderr }
   })
-  const [code, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ])
-  return { code, stdout, stderr }
 }
 
 test("a resumed team reuses the turns that ran and continues from the failed one", async () => {
@@ -266,6 +270,9 @@ test("a resumed team reuses the turns that ran and continues from the failed one
   expect(JSON.parse(resumed.stdout)).toEqual({ done: true, turns: 4 })
   expect(resumed.stderr).toContain("= feature/lead#1 (recorded)")
   expect(resumed.stderr).toContain("= feature/coder#2 (recorded)")
+  // A lead whose session holds a user message the flow did not send (FU-M3-421, seen once on a loaded Linux runner, not
+  // reproduced in 64 loaded runs on Linux and 16 on Windows) shows it here, so the next failure names the message.
+  if (turns.some((item) => item.member === "lead" && item.turn > 2)) console.error(JSON.stringify(turns, null, 1))
   expect(turns.map((item) => `${item.member}#${item.turn}`)).toEqual([
     "lead#1",
     "coder#1",
