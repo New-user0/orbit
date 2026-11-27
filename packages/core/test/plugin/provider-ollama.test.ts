@@ -405,6 +405,14 @@ describe("OllamaPlugin", () => {
     }),
   )
 
+  // An interval shorter than the 1 s first pause is the longest pause too: the first retry already waits only the
+  // interval. A first pause of 1 s would ask after 1 s, then every 0.5 s.
+  it.live("a server that keeps failing with an interval under 1 s is asked again after the interval", () =>
+    Effect.gen(function* () {
+      expect(yield* pauses("500 millis", unavailable, 4)).toEqual([500, 500, 500])
+    }),
+  )
+
   // A plugin that holds an inventory keeps its interval through a failure: the 1 s retry is only for a plugin that has
   // nothing yet. Here the interval is 4 s and the server fails from its second request on; the backoff would ask 2 s
   // after that failure, the interval asks 4 s after it.
