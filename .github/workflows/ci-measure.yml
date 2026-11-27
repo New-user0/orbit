@@ -1,7 +1,7 @@
 name: ci-measure (temporary)
 
-# Temporary, for ci-always-green: on the branch head every Windows core shard, server and flow, and on its base every
-# Windows core shard, each run five times in each of ten jobs, so each row has 50 loaded runs on a real runner. Each run
+# Temporary, for ci-always-green: on the branch head, Windows core 1/3 (where the worker crashes were) run five times in
+# each of ten jobs, 50 loaded runs on a real runner. Each run
 # keeps bun's JUnit report; a preload records when each file and test starts and ends and any pause of the worker's
 # event loop; and typeperf samples the processor, memory and both disks every second. The next commit removes this
 # file.
@@ -18,17 +18,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ref: [head, base]
+        ref: [head]
         target:
           - { package: core, shard: "1/3", part: "-1of3" }
-          - { package: core, shard: "2/3", part: "-2of3" }
-          - { package: core, shard: "3/3", part: "-3of3" }
-          - { package: server }
-          - { package: flow }
         rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-        exclude:
-          - { ref: base, target: { package: server } }
-          - { ref: base, target: { package: flow } }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
