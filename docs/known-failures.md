@@ -200,9 +200,14 @@ it:
   made, holding queued requests and moving no byte for 305 seconds in all, 25 times for 3 s or more and at most 7 s,
   while D: never did. Each of these rows ran inside such a stall of 4 to 7 s, with the processor nearly idle, and so
   did 9 of the 16 other rows that timed out in those jobs. `check.yml` now keeps TEMP and TMP of the Windows test jobs
-  in a folder of `RUNNER_TEMP` on D:, and names the C: temp folder in `ORBIT_TEST_OTHER_VOLUME` for 'copies the output
-  to the session's folder when the shell file is on another volume' (`tool-shell-output-cap.test.ts`), which needs a
-  second volume. The fourth row of that run, 'enters at most MAX_FOLDERS folders, however many empty ones a rules folder
+  in `D:\orbit-test-temp`, and keeps what the tests needed of the C: folder: D: makes 8.3 short names (fsutil turns
+  them on, and the step fails if D: still makes none), the path holds no character that Markdown escapes (the ACP
+  approval titles show a path as plain text only then, and `RUNNER_TEMP` is `D:\a\_temp`), Bun runs from a copy on D:
+  (`retained-image.test.ts` hard-links the running image into a temp folder), and the sdk row 'the Effect SDK's
+  sessions.create and sessions.move refuse an untrusted folder, however it is spelled' makes its folders in the home
+  when the temp folder is not in it, for its `~` spelling (run 46006785063). The C: temp folder is named in
+  `ORBIT_TEST_OTHER_VOLUME` for 'copies the output to the session's folder when the shell file is on another volume'
+  (`tool-shell-output-cap.test.ts`), which needs a second volume. The fourth row of that run, 'enters at most MAX_FOLDERS folders, however many empty ones a rules folder
   holds' (`config/instruction-rules.test.ts`), waited on the same disk while it made and removed 2,048 folders, and
   makes twice the cap in folders now (366c0b55).
 - The rows of the side builders of this task (cli children through the start gate and measured limits, the TUI waits,
