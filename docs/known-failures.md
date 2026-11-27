@@ -135,8 +135,9 @@ it:
   watches ends the parked ones").
 - cli, the trust-doors control that runs a node with a model and the YAML `permissions:auto` row of `flow.test.ts`: a
   first Ollama `/api/tags` read that ran past its 1 s limit was kept as a fresh answer for 30 s and not tried again
-  before the interval (FU-M3-385). Discovery now caches nothing until the server answers and tries a failed read again
-  after 1 s, doubling up to the interval, pinned by three rows of `packages/core/test/plugin/provider-ollama.test.ts`.
+  before the interval (FU-M3-385). A read that fails, times out or is interrupted now leaves the cache as it was, and
+  while the plugin has no models a failed read is tried again after 1 s, doubling up to the interval, pinned by the rows
+  of `packages/core/test/plugin/provider-ollama.test.ts` that name the retry.
 - core `Npm.add` rows (`npm.test.ts`): the workers shared npm's cache (the runner's `%LOCALAPPDATA%\npm-cache` on
   Windows, the shared root's `~/.npm` on Linux), and a Git install cloned into it (run 45898058796). Each worker has its
   own now, pinned by "gives each worker an npm cache of its own" (`packages/core/test/preload.test.ts`).
