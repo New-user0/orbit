@@ -205,20 +205,24 @@ export const testLayer = Layer.effectContext(
 
 /**
  * Builds the native watches over a Parcel binding; a test passes its own binding. The Windows
- * directory watches parked in this scope end when it closes: a live Parcel watch keeps the event loop
- * running, so a host that closes Orbit could not exit otherwise.
+ * directory watches parked or retired in this scope end when it closes: a live Parcel watch keeps the
+ * event loop running, so a host that closes Orbit could not exit otherwise.
  */
 export const makeNative = Effect.fnUntraced(function* (
   binding: () => Pick<typeof ParcelWatcher, "subscribe"> | undefined,
   backend: ParcelWatcher.BackendType | undefined,
 ) {
-  const pool: Pool = { closed: false, parked: new Map() }
+  const pool: Pool = { closed: false, parked: new Map(), retired: new Map(), generation: 0 }
   yield* Effect.addFinalizer(() =>
     Effect.promise(() => {
       pool.closed = true
-      const parked = [...pool.parked.values()].flat()
+      const ending = [
+        ...[...pool.parked.values()].flat().map((entry) => entry.subscription),
+        ...[...pool.retired.values()].flat(),
+      ]
       pool.parked.clear()
-      return Promise.all(parked.map((entry) => entry.subscription.unsubscribe().catch(() => {})))
+      pool.retired.clear()
+      return Promise.all(ending.map((subscription) => subscription.unsubscribe().catch(() => {})))
     }),
   )
   return Native.of({
@@ -262,7 +266,12 @@ type Parked = {
   readonly subscription: ParcelWatcher.AsyncSubscription
   readonly folder: string | undefined
 }
-type Pool = { closed: boolean; readonly parked: Map<string, Parked[]> }
+type Pool = {
+  closed: boolean
+  readonly parked: Map<string, Parked[]>
+  readonly retired: Map<string, ParcelWatcher.AsyncSubscription[]>
+  generation: number
+}
 
 // On Windows, @parcel/watcher's unsubscribe frees a watch while its directory read is still queued,
 // and the read's completion then runs on freed memory and can crash the process
@@ -270,11 +279,13 @@ type Pool = { closed: boolean; readonly parked: Map<string, Parked[]> }
 // queued, so on Windows Orbit does not end one: a released watch is parked with its callback detached
 // and the next watch of the same folder and ignore list reuses it. A watch that reported an error or
 // the deletion of its own folder has no read queued, so it is unsubscribed and a folder created again
-// gets a new native watch. A parked watch follows its folder when the folder is moved, and the binding
-// would join a new watch of the same path to it, so a watch parked on a folder that is no longer at
-// its path, or whose folder cannot be read, is unsubscribed too. That case, after a watched folder
-// moved or became unreadable while nothing watched it, and the close of the native layer (see
-// makeNative) are the two that still meet #262.
+// gets a new native watch. A parked watch follows its folder when the folder is moved or replaced
+// without an event of its own (a parent removed and made again), and its read stays queued, so a
+// watch parked on a folder that is no longer at its path, or whose folder cannot be read, is not
+// reused and not ended either: it is retired, and ends with the native layer. The binding joins a new
+// watch to one of the same path and ignore list, so the next watch of that folder names one more
+// ignored path, which no Windows file can be called, and gets a native watch of its own. The close of
+// the native layer (see makeNative) is the one place that still meets #262.
 function subscribeDirectory(
   native: Pick<typeof ParcelWatcher, "subscribe"> | undefined,
   backend: ParcelWatcher.BackendType | undefined,
@@ -294,7 +305,14 @@ function subscribeDirectory(
   const reusable = (entry: Parked) => !entry.watch.ended && entry.folder !== undefined && entry.folder === current
   // The binding drops a callback before unsubscribe returns, so a subscribe after it starts a new
   // native watch instead of joining the one being ended.
-  free.filter((entry) => !reusable(entry)).forEach((entry) => entry.subscription.unsubscribe().catch(() => {}))
+  free
+    .filter((entry) => !reusable(entry) && entry.watch.ended)
+    .forEach((entry) => entry.subscription.unsubscribe().catch(() => {}))
+  const retired = [
+    ...(pool.retired.get(key) ?? []),
+    ...free.filter((entry) => !reusable(entry) && !entry.watch.ended).map((entry) => entry.subscription),
+  ]
+  if (retired.length > 0) pool.retired.set(key, retired)
   const reused = free.find(reusable)
   pool.parked.set(
     key,
@@ -320,8 +338,11 @@ function subscribeDirectory(
     for (const update of updates) watch.publish(update)
   }
   // Copy `ignore`: it aliases the RcMap key, whose structural hash is cached,
-  // so the array handed to native code must never be the mutable original.
-  const pending = native.subscribe(directory, callback, { ignore: [...ignore], backend })
+  // so the array handed to native code must never be the mutable original. A folder with a retired
+  // watch gets a name that sets this native watch apart from it (see above); `<` and `>` are not
+  // allowed in a Windows file name, so it hides no file.
+  const apart = retired.length > 0 ? [`<orbit-watch-${++pool.generation}>`] : []
+  const pending = native.subscribe(directory, callback, { ignore: [...ignore, ...apart], backend })
   return Effect.promise(() => pending).pipe(
     Effect.map((subscription) => ({ unsubscribe: () => release(watch, subscription), backend })),
     // Interruption (including the timeout below) abandons the pending native
