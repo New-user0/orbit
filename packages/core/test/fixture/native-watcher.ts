@@ -11,11 +11,11 @@ import { Effect, Exit, Layer, Scope } from "effect"
 //
 // The pool ends with its file. A parallel worker runs each file in a fresh module registry and global, and the binding
 // keeps one native watch per folder for the whole process, so a watch left open by a finished file would join the next
-// file's watch of the same folder and hand its events to a callback of the finished file's global. In the ci-measure
-// runs of ci-always-green, pools that were never closed went with four worker crashes in 77 Windows core 1/3 runs (two
-// in JSC's marking, one in the binding's read completion, one fail-fast) against none in 45 runs of the base, which ends
-// each runtime's watches. Closing once, after the file's last row, ends only what is still parked by then: most of it
-// watches folders the rows already removed, which have no read queued.
+// file's watch of the same folder and hand its events to a callback of the finished file's global. Closing once, after
+// the file's last row, ends only what is still parked by then: most of it watches folders the rows already removed,
+// which have no read queued. The ci-measure runs of ci-always-green counted Windows core 1/3 worker crashes: 4 in 77
+// runs with pools that were never closed, 1 in 45 with this close, 0 in 50 on the base, which ends each runtime's
+// watches; too few to tell the three apart (FU-M5-022).
 
 type Binding = () => Pick<typeof ParcelWatcher, "subscribe"> | undefined
 

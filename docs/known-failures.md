@@ -129,10 +129,16 @@ it:
   parcel-bundler/watcher#262, and core tests close a runtime per row. A count over the core suite on Windows found 2707
   ends of a live watch at a runtime's close in 67 files. Every row now runs with the memo map of
   `packages/core/test/fixture/native-watcher.ts` (`packages/core/test/lib/effect.ts`), whose one entry is the native
-  watcher layer built once for the process and never closed, so a runtime that closes parks its watches for the next
-  one. "in a test process the native watches outlive each runtime: a closed one ends none, the next reuses it"
+  watcher layer built once for the file, so a runtime that closes parks its watches for the next one. "in a test
+  process the native watches outlive each runtime: a closed one ends none, the next reuses it"
   (`packages/core/test/filesystem/watcher.test.ts`) pins it; the product keeps its close ("on Windows closing the native
-  watches ends the parked ones").
+  watches ends the parked ones"). The pool first was never closed, and a parallel worker runs each file in a fresh
+  global while the binding keeps one native watch per folder for the whole process, so a finished file's callbacks
+  stayed on the watches of folders that outlive it. The pool now ends once, after the file's last row, pinned by "a
+  test file's native watches end once, after its last row". The ci-measure runs counted Windows core 1/3 worker
+  crashes: 4 in 77 runs with the pool never closed (two in JSC's marking threads, one in the binding's read completion,
+  one fail-fast), 1 in 45 with the close (in the binding's read completion), 0 in 50 on the base. That is too few to
+  tell them apart, so this crash is not shown fixed: FU-M5-022 keeps it, with the counts.
 - cli, the trust-doors control that runs a node with a model and the YAML `permissions:auto` row of `flow.test.ts`: a
   first Ollama `/api/tags` read that ran past its 1 s limit was kept as a fresh answer for 30 s and not tried again
   before the interval (FU-M3-385). A read that fails, times out or is interrupted now leaves the cache as it was, and
@@ -154,15 +160,29 @@ it:
   `lsp-reminder.test.ts`, `edit-link.test.ts`, `mcp.test.ts` and `LifecycleHooksPlugin under workspace trust` in
   `plugin/lifecycle-hooks.test.ts`, a trust gate), and the server rows of the same kind: on a loaded Windows runner
   their git, language-server, MCP, shell and npm children passed 5 s. Each row whose worst time passed half its limit,
-  in the JUnit report of run 45919528051 (every core and server job, Windows and Linux) and in loaded runs on the
-  development machine (4 cores, 2 workers, coverage), now has a measured limit: twice that worst time, rounded up to a
-  whole 5 s, or 20 s where the worst time was a timeout at 5 s. No limit was lowered and no assertion changed. The
-  config-trust rows (FU-M3-387) took at most 1.6 s, so they keep 5 s.
+  in the JUnit report of run 45919528051 (every core and server job, Windows and Linux), in loaded runs on the
+  development machine (4 cores, 2 workers, coverage) and in the ci-measure run 45943098053 (every Windows core shard,
+  server and flow, 50 runs of each row on a real runner), now has a measured limit: twice that worst time, rounded up
+  to a whole 5 s. A row that timed out at 5 s in those 50 runs has twice its p95 plus the longest stall the run showed
+  in any row (7.2 s), rounded up. No limit was lowered and no assertion changed. The config-trust rows (FU-M3-387) took
+  at most 1.6 s, so they keep 5 s.
 - core `falls back to local logging when OTLP initialization fails` (`effect/observability.test.ts`): its child had a
   cache folder of its own and transpiled Effect from nothing on every run (0.4 s alone, over 5 s on a loaded runner). It
   shares the run's transpiler cache now, as every `bun` child of a core worker does (`packages/core/test/preload.ts`
   sets `BUN_RUNTIME_TRANSPILER_CACHE_PATH`), and the row checks that its own cache folder holds none. The same cause
   timed out a shell-parser child of `shell-parse-compatibility.test.ts` (0.4 s, past 5 s in run 45924043976, attempt 2).
+- core, rows of both workers that stalled at the same moment on Windows, among them the class 3 and 4 gate
+  'decides every spelling as the project's own name, and follows a repository link below it'
+  (`file-access-spelling.test.ts`) and `config/agent.test.ts` 'loads Markdown separate legacy variant', which timed out
+  together in run 45933441327 though neither starts a decoy: every decoy program of `packages/core/test/fixture/decoy.ts`
+  was a fresh build, a 110 MB copy of the Bun runtime, and the program lookup rows plant two or more per row. The
+  ci-measure run 45940559989 traced each test and each pause of a worker's event loop beside typeperf samples: both
+  workers' event loops stopped for 2 to 10 s at the same second while the processor was mostly idle and hard page
+  faults ran at 10,000 a second (median 9), and the rows that plant decoys took 21% of those seconds and 4% of the run.
+  A run of the test runner now keeps one build in its `ORBIT_TEST_PROGRAMS` folder and links every decoy to it, pinned
+  by `packages/core/test/decoy-build.test.ts`. Pauses of 1.5 s and more that met a pause of the other worker: 17 in the
+  150 Windows core runs of the base and 8 in 39 runs of the branch before the change (runs 45943098053 and
+  45940559989), none in the 150 runs after it.
 - vscode, the two rows of FU-M4-226: `ide-bridge.test.ts` 'sends a cleared selection when no file editor remains'
   connected while its first selection's 20 ms flush was pending (1 of 400 repeats failed; 0 of 400 after the row waits
   out the flush), and `controller.test.ts` dropped its first prompt when the cold server's first trust read outlasted
@@ -170,3 +190,18 @@ it:
   server's trust answer before its rows, and its model answers by what the prompt asks.
 - The rows of the side builders of this task (cli children through the start gate and measured limits, the TUI waits,
   the sdk first-request row) are named with their causes in their own commits on PR #195.
+
+Still open when this was written:
+
+- Bun 1.4.2's segfault of a long-lived Windows test worker (FU-M5-023). The decoded reports are a FinalizationRegistry
+  cleanup of a finished file's global, which oven-sh/bun#44279 fixed in Bun 1.4.3. The upgrade to Bun 1.4.5 lands after
+  this machine's global Bun is upgraded; until it does, a Windows core job can still end with `worker crashed: exit
+  code 3`.
+- The native watcher crash above (FU-M5-022), at the counts given there.
+- Pauses of one Windows worker that the decoy builds do not explain. After the fixes above, the ci-measure run
+  45955987228 (Windows core 1/3, 45 runs) still had four rows time out at 5 s that took at most 2.4 s in the 50 runs of 45943098053 (medians 0.14 to 1.74 s):
+  'enters at most MAX_FOLDERS folders, however many empty ones a rules folder holds' (`config/instruction-rules.test.ts`),
+  'home: a document that does not parse skips the pass' (SessionRetention), 'ask for its absolute spelling: Patch update
+  through a folder link, in an untrusted folder' (`edit-link.test.ts`) and the `Lsp.ignored` gitlink row of
+  `git-gitlink.test.ts`. A measured limit per row cannot reach a row that a pause meets once in 50 runs, so their cause
+  is open.
