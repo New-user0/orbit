@@ -211,16 +211,30 @@ jobs:
       # seconds), C: held queued requests and moved no byte for 305 seconds, 25 times for 3 s or more and at most 7 s,
       # and D: never did. Such a stall holds every row then waiting on the disk, and 12 of the 19 rows that timed out in
       # those jobs ran inside one. C: stays the other volume that a test of a copy across volumes needs.
-      # The runner's TEMP is an 8.3 short name (C:\Users\RUNNER~1\...). Tests compare the folders they make under it
-      # with the real paths Orbit resolves, which use the long name, as TEMP does on a developer's machine.
-      - name: Keep the temp folder on D:, by its long name
+      # What the tests need of the temp folder stays as it was on C:. Its volume makes 8.3 short names, which the class 3
+      # and 4 spelling gates take apart (D: makes none until fsutil turns them on, and the step fails if it still makes
+      # none). Its path holds no character that Markdown escapes (RUNNER_TEMP is D:\a\_temp), as the approval titles
+      # the ACP rows compare show a path as plain text only then. Bun runs from the same volume, as a test that
+      # hard-links the running image into a temp folder needs (a hard link cannot cross volumes).
+      # Tests compare the folders they make under TEMP with the real paths Orbit resolves, which use the long name, as
+      # TEMP does on a developer's machine.
+      - name: Keep the temp folder and Bun on D:
         shell: bash
         run: |
-          mkdir -p "$RUNNER_TEMP/tests"
-          long="$(cygpath -w -l "$RUNNER_TEMP/tests")"
+          fsutil.exe 8dot3name set 0
+          mkdir -p /d/orbit-test-temp/short-name-check-folder
+          short="$(cygpath -s -w /d/orbit-test-temp/short-name-check-folder)"
+          echo "short name: $short"
+          case "$short" in *"~"*) ;; *) echo "D: makes no 8.3 short names"; exit 1 ;; esac
+          rmdir /d/orbit-test-temp/short-name-check-folder
+          long="$(cygpath -w -l /d/orbit-test-temp)"
           echo "TEMP=$long" >> "$GITHUB_ENV"
           echo "TMP=$long" >> "$GITHUB_ENV"
           echo "ORBIT_TEST_OTHER_VOLUME=$(cygpath -w -l "$TEMP")" >> "$GITHUB_ENV"
+          mkdir -p /d/orbit-bun
+          cp "$(command -v bun)" /d/orbit-bun/bun.exe
+          if command -v bunx > /dev/null; then cp "$(command -v bunx)" /d/orbit-bun/bunx.exe; fi
+          cygpath -w /d/orbit-bun >> "$GITHUB_PATH"
           echo "$long"
       # Git Bash exports SHELL when a developer opens it, and Orbit's session shell on Windows follows SHELL; without it
       # the session shell is PowerShell and the tests' scripted Bash calls find no Bash tool. The runner's bash steps do
