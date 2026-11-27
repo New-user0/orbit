@@ -1,40 +1,31 @@
 import type ParcelWatcher from "@parcel/watcher"
-import { afterAll } from "bun:test"
 import { Watcher } from "@orbit/core/filesystem/watcher"
-import { Effect, Exit, Layer, Scope } from "effect"
+import { Effect, Layer, Scope } from "effect"
 
-// The native watches of a test file. Closing `Watcher.makeNative` ends every Windows directory watch it parked, and
-// ending a live Parcel watch on Windows can free it while its directory read is still queued
+// The native watches of a test file. Closing `Watcher.makeNative` ends every Windows directory watch it parked or
+// retired, and ending a live Parcel watch on Windows can free it while its directory read is still queued
 // (parcel-bundler/watcher#262), which crashed core test workers (FU-M5-022). Each test builds and closes a runtime of
 // its own, so the tests met that close all the time. So the runtimes of a test file take their watches from one pool
 // per binding, and a runtime that closes parks its watches there for the next one instead of ending them.
 //
-// The pool ends with its file. A parallel worker runs each file in a fresh module registry and global, and the binding
-// keeps one native watch per folder for the whole process, so a watch left open by a finished file would join the next
-// file's watch of the same folder and hand its events to a callback of the finished file's global. Closing once, after
-// the file's last row, ends only what is still parked by then: most of it watches folders the rows already removed,
-// which have no read queued. The ci-measure runs of ci-always-green counted Windows core 1/3 worker crashes: 4 in 77
-// runs with pools that were never closed, 1 in 45 with this close, 0 in 50 on the base, which ends each runtime's
-// watches; too few to tell the three apart (FU-M5-022).
+// The pool is never closed: a test process ends no live watch. Bun ends a test worker with live watches still open,
+// so nothing waits on them. A watch the file leaves open keeps a callback of the file's global, which a parallel worker
+// replaces for its next file, so a later file must not touch a folder the watch follows: the rows watch folders of
+// their own under tmpdir(), which they remove while their file runs (a removed folder ends its watch), and test/preload.ts
+// gives each file a config folder of its own, the one folder that a runtime with the default Global watches outside a
+// row's folders. A count over the core files that watch folders on Windows found 12 ends of a watch that still had a
+// read queued in one pass before (at a file's end, in config/reload's replaced roots and its repository skill folders)
+// and none after.
 
 type Binding = () => Pick<typeof ParcelWatcher, "subscribe"> | undefined
 
 const pools = new Map<Binding, Watcher.NativeInterface>()
-const scopes: Scope.Closeable[] = []
 
-const fileScope = () => {
-  const scope = Effect.runSync(Scope.make())
-  scopes.push(scope)
-  return scope
-}
-
-afterAll(() => Effect.runPromise(Effect.forEach(scopes.splice(0), (scope) => Scope.close(scope, Exit.void))))
-
-/** The file's native watches over `binding`: built on first use, ended after the file's last row. */
+/** The file's native watches over `binding`: built on first use, never ended. */
 export function processNative(binding: Binding, backend: ParcelWatcher.BackendType | undefined) {
   const found = pools.get(binding)
   if (found) return found
-  const native = Effect.runSync(Watcher.makeNative(binding, backend).pipe(Scope.provide(fileScope())))
+  const native = Effect.runSync(Watcher.makeNative(binding, backend).pipe(Scope.provide(Effect.runSync(Scope.make()))))
   pools.set(binding, native)
   return native
 }
@@ -48,8 +39,8 @@ export const processNativeLayer = Layer.sync(Watcher.Native, () => processNative
 /**
  * Effect builds a runtime's layers in a fork of the fiber's `Layer.CurrentMemoMap`, and a fork reuses what its parent
  * has already built. This parent holds one entry, the product's `Watcher.nativeLayer` (which `Watcher.nativeNode`
- * builds), built once from the file's watches (the entry's own scope holds no finalizer: the pool's scope ends with the
- * file); everything else a runtime builds stays in its own fork and closes with it. `testEffect` runs every row with
+ * builds), built once from the file's watches (the entry's own scope holds no finalizer, and the pool's scope is never
+ * closed); everything else a runtime builds stays in its own fork and closes with it. `testEffect` runs every row with
  * it, so no row's runtime ends a live watch.
  */
 export const processMemoMap = Effect.runSync(
