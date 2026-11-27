@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { approval } from "./acp/approval-harness"
+import { createAcpFixture, initialize } from "./acp/subprocess"
 import { isolatedEnv } from "./fixture/environment"
 import { runOrb } from "./fixture/orb"
 import { held, startSlot, takeStartSlot } from "./fixture/start-gate"
@@ -192,6 +193,29 @@ describe("an `orb` child that only prints (fixture/orb.ts)", () => {
       })
     },
     60_000,
+  )
+})
+
+describe("an `orb acp` child of the subprocess fixture", () => {
+  test(
+    "starts only once initialize holds a slot, not when it is spawned",
+    async () => {
+      await using folder = await slots()
+      await using fixture = await createAcpFixture()
+      await withGate(folder.path, 1, async () => {
+        await Bun.write(path.join(folder.path, "0"), String(process.pid))
+        const acp = fixture.spawn()
+        const answered = initialize(acp)
+        await Bun.sleep(4_000)
+        // The only slot is held: the child has not been started (its pid is 0 until it is).
+        expect(acp.pid).toBe(0)
+        await fs.rm(path.join(folder.path, "0"))
+        expect((await answered).protocolVersion).toBe(1)
+        expect(acp.pid).toBeGreaterThan(0)
+        expect(await fs.readdir(folder.path)).toEqual([])
+      })
+    },
+    120_000,
   )
 })
 
