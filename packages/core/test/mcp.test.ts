@@ -82,6 +82,7 @@ import { trustedProject, untrustedProject } from "./fixture/project-trust"
 import { ProjectTrust } from "@orbit/core/project-trust"
 import { grantFolder } from "./fixture/grant"
 import { location } from "./fixture/location"
+import { processNativeLayer } from "./fixture/native-watcher"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { expectOneSpelling, received, spellingEnv, withLookupVariable } from "./fixture/child-env"
 import { hostEnvironmentLayer, recordingEnvironmentLayer } from "./fixture/environment"
@@ -2796,6 +2797,7 @@ testEffect(Layer.empty).live("isolates invalid MCP tools and preserves plugin tr
             ),
             Permission.node.replace(Layer.mock(Permission.Service, { assert: () => Effect.void })),
             Image.node.replace(imagePassthrough),
+            Watcher.nativeNode.replace(processNativeLayer),
           ]),
         ),
       ),
@@ -3393,6 +3395,7 @@ describe("MCP tool traits", () => {
         Mcp.node.replace(service),
         Permission.node.replace(Layer.mock(Permission.Service, { assert: () => Effect.void })),
         Image.node.replace(imagePassthrough),
+        Watcher.nativeNode.replace(processNativeLayer),
       ]),
     )
 })
@@ -3417,6 +3420,7 @@ describe("MCP hints and permissions", () => {
           Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make("/project") }))),
         ),
         Image.node.replace(imagePassthrough),
+        Watcher.nativeNode.replace(processNativeLayer),
       ],
     )
 

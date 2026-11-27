@@ -24,7 +24,11 @@ export function processNative(binding: Binding, backend: ParcelWatcher.BackendTy
   return native
 }
 
-const processLayer = Layer.sync(Watcher.Native, () => processNative(Watcher.binding, Watcher.backend()))
+/**
+ * For `Watcher.nativeNode.replace`: the real binding, with the process's watches. A row whose runtime is built apart
+ * from the row's own memo map (`Layer.fresh`, or a plain `test` that calls Effect.runPromise) replaces the node with it.
+ */
+export const processNativeLayer = Layer.sync(Watcher.Native, () => processNative(Watcher.binding, Watcher.backend()))
 
 /**
  * Effect builds a runtime's layers in a fork of the fiber's `Layer.CurrentMemoMap`, and a fork reuses what its parent
@@ -37,7 +41,7 @@ export const processMemoMap = Effect.runSync(
     const memo = Layer.makeMemoMapUnsafe()
     const scope = yield* Scope.make()
     yield* memo.getOrElseMemoize(Watcher.nativeLayer, scope, (map, layerScope) =>
-      Layer.buildWithMemoMap(processLayer, map, layerScope),
+      Layer.buildWithMemoMap(processNativeLayer, map, layerScope),
     )
     return memo
   }),

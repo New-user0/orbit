@@ -35,7 +35,9 @@ import { Snapshot } from "@orbit/core/snapshot"
 import { Skill } from "@orbit/core/skill"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
+import { Watcher } from "@orbit/core/filesystem/watcher"
 import { trustedProject } from "./fixture/project-trust"
+import { processNativeLayer } from "./fixture/native-watcher"
 import { permissionLayer } from "./lib/permission"
 
 const executionCalls: Session.ID[] = []
@@ -82,6 +84,8 @@ const locations = makeGlobalNode({
                 Bus.node.replace(Layer.succeed(Bus.Service, bus)),
                 Location.node.replace(Location.boundNode(ref)),
                 Permission.node.replace(permissionLayer()),
+                // Layer.fresh builds apart from the row's memo map, so the node names the process's watches itself.
+                Watcher.nativeNode.replace(processNativeLayer),
               ],
             }),
             Layer.mock(Image.Service, {

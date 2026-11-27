@@ -534,6 +534,20 @@ describe("Watcher native directory watches", () => {
     },
   )
 
+  // The reach of that set: every runtime a row builds, through the app graph or its own Effect.provide, gets the same
+  // native watches, which no runtime's close ends (test/lib/effect.ts runs each row with the fixture's memo map).
+  it.effect("every runtime a row builds takes the native watches of the process", () =>
+    Effect.gen(function* () {
+      const native = Effect.gen(function* () {
+        return yield* Watcher.Native
+      })
+      const graph = AppNodeBuilder.build(LayerNode.group([Watcher.nativeNode]))
+      const first = yield* native.pipe(Effect.provide(graph))
+      expect(yield* native.pipe(Effect.provide(Watcher.nativeLayer))).toBe(first)
+      expect(yield* native.pipe(Effect.provide(graph))).toBe(first)
+    }),
+  )
+
   it.effect("on Windows a subscribe that resolves after the native watches closed is unsubscribed", () => {
     const held = Promise.withResolvers<void>()
     const parcel = fakeParcel({ held: held.promise })
