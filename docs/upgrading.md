@@ -3249,14 +3249,19 @@ the answer filled in.
 
 ### A plugin folder with a broken link named like an entry is not loaded
 
-A plugin folder is no longer loaded when it holds a link named `server`, `index`, `tui` or `rpc`, with any extension
-(`index.md` too), that loops or leads out of the folder. That holds even when the runtime would have loaded a different
-entry, for example a looping `server.mjs` beside a good `server.ts`. Until now only the entry files the runtime picked
-were checked, and Bun 1.4.5 passes over a link that loops as if the file were not there, so such a folder could be loaded
-from its other entries. The folder's own plugin is the only one left out; the other plugins load as before
-(`packages/core/test/config/plugin-source-bad-entry.test.ts`).
+A plugin folder is no longer loaded when it holds a link that loops or leads out of the folder and that the runtime
+could take as an entry, even when the runtime would have loaded a different entry. That covers a link named `server`,
+`index`, `tui` or `rpc` with any extension (`index.md` too), for example a looping `server.mjs` beside a good
+`server.ts`. The names match in any case on every platform, so `TUI.ts`, `Server.mjs` and `INDEX.js` count too: the
+runtime takes them on Windows and macOS. Inside a real folder with one of those names, such as `server/`, it also covers
+a link named `index` with any extension, a `package.json` that is a link, and a link on the way of the `main` that the
+folder's `package.json` names (each step of that path, with or without an extension, and the `index` of a folder a step
+names). Until now only the entry files the runtime picked were checked, and Bun 1.4.5 passes over a link that loops as
+if the file were not there, so such a folder could be loaded from its other entries. The folder's own plugin is the
+only one left out; the other plugins load as before (`packages/core/test/config/plugin-source-bad-entry.test.ts`).
 
-**Affects:** plugin folders that keep a link with one of those names that loops or points outside the folder.
+**Affects:** plugin folders that keep a link with one of those names, or in one of those places, that loops or points
+outside the folder.
 
 **What to do:** Remove the link, rename it, or point it at a file inside the plugin folder.
 

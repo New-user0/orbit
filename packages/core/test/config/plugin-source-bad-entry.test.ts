@@ -104,23 +104,59 @@ describe("a plugin folder with a looping entry", () => {
   // `entryLinks`: a link that could be an entry is checked even when the resolver took another file for that entry or
   // never asked for it (Bun 1.4.5's resolver passes over a link that loops). The `.mjs` link comes after `.ts` in the
   // resolver's order, so it is never what the resolver returns. A link whose name is not an entry name is not checked.
+  // The names are matched without case (Windows and macOS resolve `TUI.ts` for `tui`), and inside a real `server/`,
+  // `index/`, `tui/` or `rpc/` folder the links that folder's own entry could be are checked too: its `index`, its
+  // `package.json` and each step of the `main` that names. The lowercase rows are the controls of the case rows, and the
+  // `other` rows and `server/index/index.ts` (the resolver does not look two folders down for an index) are the
+  // controls of the names: a link the resolver would never look at keeps its folder offered.
   for (const row of [
     { link: "server.mjs", files: ["server.ts"], offered: ["good.ts"] },
     { link: "index.mjs", files: ["server.ts"], offered: ["good.ts"] },
     { link: "tui.mjs", files: ["server.ts", "tui.ts"], offered: ["good.ts"] },
     { link: "rpc.mjs", files: ["server.ts", "rpc.ts"], offered: ["good.ts"] },
     { link: "other.mjs", files: ["server.ts"], offered: ["good.ts", "p"] },
+    { link: "tui.ts", files: ["server.ts"], offered: ["good.ts"] },
+    { link: "TUI.ts", files: ["server.ts"], offered: ["good.ts"] },
+    { link: "Tui.ts", files: ["server.ts"], offered: ["good.ts"] },
+    { link: "Server.mjs", files: ["server.ts"], offered: ["good.ts"] },
+    { link: "INDEX.js", files: ["server.ts"], offered: ["good.ts"] },
+    { link: "server/index.ts", files: ["index.ts"], offered: ["good.ts"] },
+    { link: "Server/Index.ts", files: ["index.ts"], offered: ["good.ts"] },
+    { link: "tui/index.ts", files: ["server.ts"], offered: ["good.ts"] },
+    { link: "index/index.mjs", files: ["server.ts"], offered: ["good.ts"] },
+    { link: "server/other.ts", files: ["index.ts"], offered: ["good.ts", "p"] },
+    { link: "other/index.ts", files: ["server.ts"], offered: ["good.ts", "p"] },
+    { link: "server/index/index.ts", files: ["index.ts"], offered: ["good.ts", "p"] },
+    { link: "server/package.json", files: ["server/index.ts"], offered: ["good.ts"] },
+    { link: "server/Package.json", files: ["server/index.ts"], offered: ["good.ts"] },
+    { link: "server/main.js", files: ["server/index.ts"], main: "main.js", offered: ["good.ts"] },
+    { link: "server/x.ts", files: ["server/index.ts"], main: "x.js", offered: ["good.ts"] },
+    { link: "server/lib/x.js", files: ["server/index.ts"], main: "lib/x.js", offered: ["good.ts"] },
+    { link: "server/lib/x.js", files: ["server/index.ts"], main: "Lib/X.js", offered: ["good.ts"] },
+    { link: "server/lib.ts", files: ["server/index.ts"], main: "lib", offered: ["good.ts"] },
+    { link: "server/lib/index.ts", files: ["server/index.ts"], main: "lib", offered: ["good.ts"] },
+    { link: "server/lib/other.js", files: ["server/index.ts", "server/lib/x.js"], main: "lib/x.js", offered: ["good.ts", "p"] },
+    { link: "server/main.js", files: ["server/index.ts"], main: "../server/main.js", offered: ["good.ts"] },
+    { link: "q/x.js", files: ["server/index.ts"], main: "../q/x.js", offered: ["good.ts"] },
   ]) {
-    const name = `a server plugin folder with a looping ${row.link} beside ${row.files.join(" and ")}`
+    const manifest = row.main === undefined ? "" : ` with main ${row.main}`
+    const name = `a server plugin folder with a looping ${row.link}${manifest} beside ${row.files.join(" and ")}`
     it.live(`${name} offers ${row.offered.join(" and ")}`, () =>
       Effect.gen(function* () {
         const root = (yield* tmpdirScoped()).path
         const repo = path.join(root, "work", "repo")
         const plugins = path.join(root, "home", ".config", "orbit", "plugins")
         yield* Effect.promise(async () => {
-          await fs.mkdir(path.join(plugins, "p"), { recursive: true })
+          await fs.mkdir(path.dirname(path.join(plugins, "p", row.link)), { recursive: true })
           await fs.writeFile(path.join(plugins, "good.ts"), "export default 1;")
-          await Promise.all(row.files.map((file) => fs.writeFile(path.join(plugins, "p", file), "export default 1;")))
+          await Promise.all(
+            row.files.map(async (file) => {
+              await fs.mkdir(path.dirname(path.join(plugins, "p", file)), { recursive: true })
+              await fs.writeFile(path.join(plugins, "p", file), "export default 1;")
+            }),
+          )
+          if (row.main !== undefined)
+            await fs.writeFile(path.join(plugins, "p", "server", "package.json"), JSON.stringify({ main: row.main }))
         })
         const linked = yield* Effect.promise(() =>
           fs.symlink(path.join(plugins, "p", row.link), path.join(plugins, "p", row.link), "file").then(
