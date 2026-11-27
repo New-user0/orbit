@@ -368,7 +368,9 @@ test("a project's tui entry that links out of its folder is not imported", async
 // real tui entry that would load and a link the resolver could take as an entry, which loops (in the last row the link
 // is the entry the resolver takes, and leads to a file outside the folder). The plugin `good` beside it is set up in the
 // same reconcile, after every folder of it is resolved, so once its mark is written the loader has passed `hello`: a bad
-// folder costs only itself. Each row's control puts a real file where the link was, and `hello` loads.
+// folder costs only itself. Each row's control leaves the link out, and `hello` loads; the last row's control puts a
+// real file in the link's place. A real file is not the control of the others, because on Linux Bun's resolver finds no
+// tui entry at all in a folder where a real `TUI.ts` sits beside `tui.js`.
 describe("a plugin folder with a looping link named like a tui entry", () => {
   const rows: {
     name: string
@@ -414,8 +416,9 @@ describe("a plugin folder with a looping link named like a tui entry", () => {
     },
   ]
   for (const row of rows)
-    for (const linked of [true, false])
-      test(`${row.name} ${linked ? "is not imported" : "loads with a real file in the link's place"}`, async () => {
+    for (const linked of [true, false]) {
+      const control = row.outside ? "loads with a real file in the link's place" : "loads without the link"
+      test(`${row.name} ${linked ? "is not imported" : control}`, async () => {
         await using root = await tmpdir()
         await using state = await tmpdir()
         const project = path.join(root.path, "project")
@@ -437,8 +440,7 @@ describe("a plugin folder with a looping link named like a tui entry", () => {
         // The link loops, or leads to a marker file outside the plugin's folder.
         const to = row.outside ? path.join(root.path, "outside.ts") : entry
         if (row.outside) await Bun.write(to, marker(marks, "project.hello", "loaded"))
-        if (!linked)
-          await Bun.write(entry, row.link.endsWith(".json") ? "{}" : marker(marks, "project.hello", "loaded"))
+        if (!linked && row.outside) await Bun.write(entry, marker(marks, "project.hello", "loaded"))
         const made =
           !linked ||
           (await symlink(to, entry, "file").then(
@@ -467,4 +469,5 @@ describe("a plugin folder with a looping link named like a tui entry", () => {
           expect((await read()).toSorted()).toEqual(linked ? ["good"] : ["good", "loaded"])
         })
       }, 30_000)
+    }
 })
