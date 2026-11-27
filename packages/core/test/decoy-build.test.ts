@@ -37,6 +37,18 @@ describe("decoy programs", () => {
     expect(await ranFirst()).toEqual([])
   }, 60_000)
 
+  // A build makes the folder it writes to, and callers rely on it (packages/vscode/test/program.test.ts plants into a
+  // folder it never made), so a link into a folder that is not there yet makes the folder first.
+  test("a decoy linked into a folder that is not there yet makes the folder", async () => {
+    await using root = await tmpdir()
+    const folder = path.join(root.path, "not", "there")
+    const ran = await plant(folder, "orb")
+    expect(await identity(path.join(folder, "orb.exe"))).toBe(
+      await identity(path.join(process.env.ORBIT_TEST_PROGRAMS!, (await fs.readdir(process.env.ORBIT_TEST_PROGRAMS!)).find((name) => name.startsWith("decoy-"))!)),
+    )
+    expect(await ran()).toEqual([])
+  }, 60_000)
+
   // Control: a file run without the runner's folder builds a program of its own for each plant.
   test("without the runner's folder each plant builds its own program", async () => {
     const shared = process.env.ORBIT_TEST_PROGRAMS

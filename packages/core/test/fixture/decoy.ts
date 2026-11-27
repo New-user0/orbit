@@ -24,8 +24,12 @@ appendFileSync(
 export async function plant(directory: string, first: string, ...others: ReadonlyArray<string>) {
   const original = path.join(directory, `${first}.exe`)
   const shared = process.env.ORBIT_TEST_PROGRAMS
-  if (shared) await linkOrCopy(await sharedBuild(shared), original)
-  else await build(original)
+  if (!shared) await build(original)
+  if (shared) {
+    // A build makes the folder it writes to, so a caller may name one that is not there yet; a link needs it first.
+    await fs.mkdir(directory, { recursive: true })
+    await linkOrCopy(await sharedBuild(shared), original)
+  }
   await Promise.all(others.map((name) => linkOrCopy(original, path.join(directory, `${name}.exe`))))
   return ranIn(directory)
 }
