@@ -13,6 +13,8 @@ import { ProjectTrust } from "@orbit/core/project-trust"
 import { AbsolutePath } from "@orbit/core/schema"
 import { WellKnown } from "@orbit/core/wellknown"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
+import { NodeFileSystem } from "@effect/platform-node"
+import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
@@ -25,8 +27,9 @@ import { testEffect } from "../lib/effect"
 
 const it = testEffect(Layer.empty)
 
-const loader = (root: string, repo: string) =>
+const loader = (root: string, repo: string, filesystem?: Layer.Layer<FSUtil.Service>) =>
   AppNodeBuilder.build(LayerNode.group([Config.node, Bus.node, WorkspaceTrust.node, ProjectTrust.node, ConfigPluginSource.node]), [
+    ...(filesystem === undefined ? [] : [FSUtil.node.replace(filesystem)]),
     Config.node.replace(Config.configured({ content: "{}" })),
     WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false })),
     Location.node.replace(
@@ -137,6 +140,45 @@ describe("a plugin folder with a looping entry", () => {
       }),
     )
   }
+
+  // `entryLinks` lists the folder after the resolver found its entries, and a listing that fails then (the folder was
+  // removed, or its permissions changed, in between) costs no other plugin and not the folder's own (class 7). The
+  // resolver lists the folder itself, so no folder on disk fails the second listing alone; the row fails it for `p`.
+  it.live("a server plugin folder whose listing fails after it was resolved is offered with the others", () =>
+    Effect.gen(function* () {
+      const root = (yield* tmpdirScoped()).path
+      const repo = path.join(root, "work", "repo")
+      const plugins = path.join(root, "home", ".config", "orbit", "plugins")
+      const folder = path.join(plugins, "p")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(folder, { recursive: true })
+        await fs.writeFile(path.join(plugins, "good.ts"), "export default 1;")
+        await fs.writeFile(path.join(folder, "server.ts"), "export default 1;")
+      })
+      const refused: string[] = []
+      const filesystem = Layer.effect(
+        FSUtil.Service,
+        Effect.gen(function* () {
+          const real = yield* FSUtil.Service
+          return FSUtil.Service.of({
+            ...real,
+            readDirectoryEntries: (directory) => {
+              if (path.resolve(directory) !== folder) return real.readDirectoryEntries(directory)
+              refused.push(directory)
+              return Effect.fail(new FSUtil.FileSystemError({ method: "readDirectoryEntries" }))
+            },
+          })
+        }),
+      ).pipe(Layer.provide(FSUtil.layer.pipe(Layer.provide(NodeFileSystem.layer))))
+      const offered = yield* Effect.gen(function* () {
+        const source = yield* ConfigPluginSource.Service
+        return (yield* source.operations()).flatMap((item) => (item.type === "add" ? [path.basename(item.target)] : []))
+      }).pipe(Effect.provide(loader(root, repo, filesystem)))
+      // The control: the failing listing was the one the row is about.
+      expect(refused.length).toBeGreaterThan(0)
+      expect(offered.toSorted()).toEqual(["good.ts", "p"])
+    }),
+  )
 
   // A folder named node_modules is never a plugin; the single-file plugin beside it still is.
   it.live("plugins/node_modules is not offered, and the plugin beside it is", () =>
