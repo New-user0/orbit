@@ -8,7 +8,9 @@ import { Controller } from "../src/controller"
 import type { Item } from "../src/protocol"
 import { removeTree } from "../../core/test/fixture/remove-tree"
 
-// A real `orb serve` with a scripted OpenAI-compatible model: the first agent step writes a file, the second replies.
+// A real `orb serve` with a scripted OpenAI-compatible model: a prompt that asks for hello.txt gets a Write call, and
+// every other step a reply. It answers by what it is asked, not by the order of the steps, so a row whose prompt did not
+// go out (FU-M4-226) cannot hand its Write call to the next row.
 const steps: unknown[] = []
 const llm = Bun.serve({
   hostname: "127.0.0.1",
@@ -17,7 +19,8 @@ const llm = Bun.serve({
     const body = await request.json()
     if (!body.tools) return sse([{ delta: { content: "Title" } }], "stop")
     steps.push(body)
-    if (steps.length === 1)
+    const messages: Array<{ role: string; content?: unknown }> = body.messages
+    if (messages.at(-1)?.role !== "tool" && JSON.stringify(messages.at(-1)?.content).includes("Create hello.txt"))
       return sse(
         [
           {
@@ -93,6 +96,9 @@ beforeAll(async () => {
     server.url = /server listening on (\S+)/.exec(output)?.[1]
   }
   reader.releaseLock()
+  // The first trust read of the workspace boots its location, which took longer than the controller's 2 s read limit on
+  // a loaded runner, and the chat then dropped the row's prompt. The rows start once the server answers that read.
+  await connect().location.trust.get({ location: { directory: workspace } })
 }, 60_000)
 
 afterAll(async () => {
