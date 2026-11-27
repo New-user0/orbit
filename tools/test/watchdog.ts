@@ -30,6 +30,8 @@ export async function runTests(
   // transpiler cache for the `orb` processes that the cli tests start from source (packages/cli/test/fixture/environment.ts).
   const starts = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-starts-"))
   const transpiled = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-transpiled-"))
+  // The programs that every worker of this run links instead of building its own (packages/core/test/fixture/decoy.ts).
+  const programs = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-programs-"))
   const child = Bun.spawn({
     cmd: [process.execPath, ...args],
     cwd,
@@ -39,6 +41,7 @@ export async function runTests(
       ORBIT_TEST_HEARTBEAT: folder,
       ORBIT_TEST_START_SLOTS: starts,
       ORBIT_TEST_TRANSPILER_CACHE: transpiled,
+      ORBIT_TEST_PROGRAMS: programs,
     },
     stdin: "inherit",
     stdout: output.stdio,
@@ -80,6 +83,7 @@ export async function runTests(
   fs.rmSync(folder, { recursive: true, force: true })
   fs.rmSync(starts, { recursive: true, force: true })
   fs.rmSync(transpiled, { recursive: true, force: true })
+  fs.rmSync(programs, { recursive: true, force: true })
   return stuck.stopping ? 1 : code
 }
 
