@@ -435,11 +435,13 @@ describe("Watcher native directory watches", () => {
         const native = yield* Watcher.makeNative(() => parcel.binding, "windows")
         const watched = path.join(root.path, "watched")
         const watch = () => native.subscribe({ type: "directory", target: watched, ignore: ["x"], publish: () => {} })
+        // The folder is moved away, not removed, so the new one cannot get the old one's file ID back.
+        const moved = { count: 0 }
         const replace = Effect.promise(async () => {
-          await fs.rm(watched, { recursive: true, force: true })
+          await fs.rename(watched, path.join(root.path, `moved-${moved.count++}`))
           await fs.mkdir(watched)
         })
-        yield* replace
+        yield* Effect.promise(() => fs.mkdir(watched))
         const first = yield* watch()
         yield* Effect.promise(() => first!.unsubscribe())
         yield* replace
@@ -470,7 +472,7 @@ describe("Watcher native directory watches", () => {
             const first = yield* watch()
             yield* Effect.promise(() => first!.unsubscribe())
             yield* Effect.promise(async () => {
-              await fs.rm(watched, { recursive: true })
+              await fs.rename(watched, path.join(root.path, "moved"))
               await fs.mkdir(watched)
             })
             const second = yield* watch()
