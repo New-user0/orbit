@@ -196,6 +196,18 @@ describe("an `orb` child that only prints (fixture/orb.ts)", () => {
   )
 })
 
+// A child whose environment is the parent's with a few overrides reads the runner's own config and data folders, holds
+// no start slot and, given a cache folder of its own, transpiles the source from nothing on every start (debug-config
+// and debug-paths did so until fix loop 3 of ci-always-green). Such a child starts through runOrb instead.
+test("no cli test starts a child with the parent's environment and a few overrides", async () => {
+  const shaped = await Promise.all(
+    [...new Bun.Glob("**/*.{ts,tsx}").scanSync(import.meta.dir)].map(async (file) =>
+      /\.\.\.process\.env,\s*\.\.\.env\s*\}/.test(await Bun.file(path.join(import.meta.dir, file)).text()) ? [file] : [],
+    ),
+  )
+  expect(shaped.flat()).toEqual([])
+})
+
 describe("an `orb acp` child of the subprocess fixture", () => {
   test(
     "starts only once initialize holds a slot, not when it is spawned",
