@@ -358,8 +358,12 @@ test.each([70, 120])("/compact with text sends its instructions and no prompt at
     expect(frame).not.toContain("focus on tests")
 
     // The bare control carries no instructions key.
-    await app.submit("/compact")
-    await waitUntil(() => app.compacts.length === 2)
+    // A bare /compact is coalesced onto a request that is still in flight (the client has not yet read the first
+    // answer), so it is pressed again until a second request goes out.
+    while (app.compacts.length < 2) {
+      await app.submit("/compact")
+      await Bun.sleep(50)
+    }
     expect(app.compacts[1]).not.toHaveProperty("instructions")
     expect(app.prompts).toEqual([])
   } finally {
@@ -430,6 +434,7 @@ test("a location command named compact keeps its place when typed with text", as
     await app.close()
   }
 })
+
 
 // The wait lasts as long as the row may run (the package's --timeout of 30 s). Its own 5 s deadline ran out first on a
 // loaded Windows runner, when the request came 5.9 s after the submit (run 45902385785), though the row had time left.
