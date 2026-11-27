@@ -26,6 +26,7 @@ import { keys, planted } from "../fixture/git-keys"
 import { traced } from "../fixture/git-trace"
 import { location } from "../fixture/location"
 import { processNative } from "../fixture/native-watcher"
+import { runProgram } from "../fixture/run-program"
 import { tmpdir, tmpdirScoped, withTempDir } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { host } from "../plugin/host"
@@ -532,6 +533,49 @@ describe("Watcher native directory watches", () => {
         }),
       )
     },
+  )
+
+  // The pool ends with its file, after the last row: a parallel worker runs the next file in a fresh global, and the
+  // binding would join that file's watch of the same folder to a watch left open here, with this file's callback on it.
+  it.live("a test file's native watches end once, after its last row", () =>
+    Effect.promise(async () => {
+      await using dir = await tmpdir()
+      const marks = path.join(dir.path, "marks.txt")
+      const file = path.join(dir.path, "pool.test.ts")
+      await Bun.write(
+        file,
+        [
+          `import { appendFileSync } from "node:fs"`,
+          `import { test } from "bun:test"`,
+          // A folder outside the package resolves no bare package name, so the child imports Effect by its path.
+          `import { Effect } from ${JSON.stringify(Bun.resolveSync("effect", import.meta.dir))}`,
+          `import { processNative } from ${JSON.stringify(path.join(import.meta.dir, "..", "fixture", "native-watcher.ts"))}`,
+          `const mark = (line: string) => appendFileSync(${JSON.stringify(marks)}, line + "\\n")`,
+          `const binding = () => ({`,
+          `  subscribe: async () => {`,
+          `    mark("subscribe")`,
+          `    return { unsubscribe: async () => mark("unsubscribe") }`,
+          `  },`,
+          `})`,
+          `test("first row", async () => {`,
+          `  const native = processNative(binding, "windows")`,
+          `  const watch = { type: "directory" as const, target: ${JSON.stringify(dir.path)}, ignore: [], publish: () => {} }`,
+          `  const subscription = await Effect.runPromise(native.subscribe(watch))`,
+          `  await subscription!.unsubscribe()`,
+          `  mark("first row ended")`,
+          `})`,
+          `test("last row", () => mark("last row ran"))`,
+        ].join("\n"),
+      )
+      const run = await runProgram([process.execPath, "test", file], { cwd: path.join(import.meta.dir, "..", "..") })
+      expect({ code: run.exitCode, stderr: run.exitCode === 0 ? "" : run.stderr.toString() }).toEqual({ code: 0, stderr: "" })
+      expect((await Bun.file(marks).text()).trim().split(/\r?\n/)).toEqual([
+        "subscribe",
+        "first row ended",
+        "last row ran",
+        "unsubscribe",
+      ])
+    }),
   )
 
   // The reach of that set: every runtime a row builds, through the app graph or its own Effect.provide, gets the same
