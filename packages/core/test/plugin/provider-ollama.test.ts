@@ -469,6 +469,61 @@ describe("OllamaPlugin", () => {
     }),
   )
 
+  // Each way a first read can fail is a failure, never an answer with no models (FU-M3-385; class 6 and class 7): the
+  // plugin asks again 1 s after the failed read, then 2 s after the next one, and the failure is not kept as fresh, so
+  // a second plugin of the same server asks it too. The clock waits while a request that answers runs; a request that
+  // never answers lets it move, so that its own 1 second limit ends it. Each request is recorded with the plugin that
+  // made it and the clock's time when it began and ended.
+  const failures = [
+    { name: "a server that refuses the connection", refused: true, answer: () => Response.json({ models: [] }) },
+    { name: "a body that is not JSON", answer: () => new Response("<html>not json</html>", { status: 200 }) },
+    { name: "a body of the wrong shape", answer: () => Response.json({ models: "none" }) },
+    { name: "a 503", answer: unavailable },
+    { name: "a server that does not answer in time", hangs: true, answer: () => new Promise<Response>(() => {}) },
+  ]
+  for (const failure of failures)
+    it.live(
+      `a first read that fails with ${failure.name} is asked again after 1 s, then 2 s, and is not kept as fresh`,
+      () =>
+        Effect.gen(function* () {
+          const time = yield* waitingClock
+          const server = yield* Effect.acquireRelease(
+            Effect.sync(() => Bun.serve({ port: 0, fetch: () => failure.answer() })),
+            (server) => Effect.promise(() => server.stop(true)),
+          )
+          const origin = server.url.origin
+          // Nothing listens on a port whose server has stopped, so every connection to it is refused.
+          if (failure.refused) yield* Effect.promise(() => server.stop(true))
+          const asked: Array<{ by: string; at: number; done?: number }> = []
+          const http = yield* HttpClient.HttpClient
+          const plugin = (by: string) =>
+            addPlugin(origin, "1 hour").pipe(
+              Effect.provideService(
+                HttpClient.HttpClient,
+                HttpClient.transform(http, (response, request) => {
+                  if (!request.url.endsWith("/api/tags")) return response
+                  const entry: { by: string; at: number; done?: number } = { by, at: time.now() }
+                  asked.push(entry)
+                  const recorded = response.pipe(Effect.ensuring(Effect.sync(() => (entry.done = time.now()))))
+                  return failure.hangs ? recorded : time.work(recorded)
+                }),
+              ),
+              Effect.provideService(Clock.Clock, time.clock),
+            )
+          yield* plugin("first")
+          const first = () => asked.filter((entry) => entry.by === "first" && entry.done !== undefined)
+          yield* within(
+            Effect.sync(() => first().length),
+            (count) => count >= 3,
+            15_000,
+          )
+          expect(first().slice(1, 3).map((entry, index) => entry.at - first()[index]!.done!)).toEqual([1_000, 2_000])
+          yield* plugin("second")
+          expect(asked.filter((entry) => entry.by === "second").length).toBeGreaterThanOrEqual(1)
+        }),
+      30_000,
+    )
+
   // Control: a server that answered with no models has answered; the plugin has nothing, but it does not ask again
   // before its interval either.
   it.live(
