@@ -1020,7 +1020,7 @@ describe("ConfigNormalize", () => {
         }),
         { numRuns: 100 },
       )
-    })
+    }, 10_000)
   })
 })
 

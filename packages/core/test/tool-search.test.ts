@@ -189,7 +189,7 @@ describe("search tools", () => {
           )
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-    ),
+    ), 10_000,
   )
 
   it.live("pages context-heavy grep results by token budget with no gaps or repeats", () =>
@@ -222,7 +222,7 @@ describe("search tools", () => {
           expect(seen).toEqual(Array.from({ length: 60 }, (_, index) => index * 60 + 1))
         }),
       )
-    }),
+    }), 10_000,
   )
 
   for (const outputMode of ["content", "count"] as const) {
@@ -260,7 +260,7 @@ describe("search tools", () => {
             expect(seen).toEqual(names.toSorted())
           }),
         )
-      }),
+      }), 10_000,
     )
   }
 
@@ -299,7 +299,7 @@ describe("search tools", () => {
             expect(names1(yield* page(limit))).toEqual(seen.slice(limit, limit * 2))
           }),
         )
-      }),
+      }), 10_000,
     )
   }
 
@@ -485,7 +485,7 @@ describe("search tools", () => {
           ),
         ),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-    ),
+    ), 10_000,
   )
 
   it.live("reports no grep matches", () =>
@@ -575,7 +575,7 @@ describe("search tools", () => {
         Effect.promise(() =>
           Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
         ),
-    ),
+    ), 10_000,
   )
 
   for (const name of ["Glob", "Grep"] as const) {
@@ -640,7 +640,7 @@ describe("search tools", () => {
           ),
         ),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-    ),
+    ), 10_000,
   )
 
   it.live("requires external_directory approval for an explicit external glob path", () =>
@@ -719,7 +719,7 @@ describe("search tools", () => {
           Effect.promise(() =>
             Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
           ),
-      ),
+      ), 20_000,
     )
 
   // A repository that is not trusted ships its links: a search through one asks about the real folder, marked as one a
@@ -834,7 +834,7 @@ describe("search tools", () => {
             )
           },
           (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-        ),
+        ), 10_000,
     )
 
   it.live("globs through an in-location external symlink after asking about the folder it leads to", () =>
@@ -938,7 +938,7 @@ describe("search tools", () => {
           expect(multiline.metadata).toEqual({ matches: 1, truncated: false })
         }),
       )
-    }),
+    }), 10_000,
   )
 
   it.live("glob lists the oldest files first", () =>

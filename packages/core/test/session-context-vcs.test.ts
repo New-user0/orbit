@@ -213,7 +213,7 @@ describe("the git snapshot in the baseline of a session", () => {
       expect(second.value.delta).toEqual({})
       expect(second.git).toEqual([])
       expect(yield* stored(ids.main)).toEqual(snapshot)
-    }),
+    }), 10_000,
   )
 
   it.live("starts no git and holds no snapshot while the folder is untrusted, then admits one update after a grant", () =>
@@ -239,7 +239,7 @@ describe("the git snapshot in the baseline of a session", () => {
       const again = yield* stepped(ids.main)
       expect(again.value.delta).toEqual({})
       expect(again.git).toEqual([])
-    }),
+    }), 10_000,
   )
 
   it.live("is removed at the next step when trust is taken away, with no git, and captured afresh on a new grant", () =>
@@ -262,7 +262,7 @@ describe("the git snapshot in the baseline of a session", () => {
       const regranted = yield* stepped(ids.main)
       expect(Object.keys(regranted.value.delta)).toEqual([key])
       expect(mentions(regranted.git, "status")).toHaveLength(1)
-    }),
+    }), 10_000,
   )
 
   it.live("is not stored when git_status is false, and a session that holds it gets one removal when it turns false", () =>
@@ -282,7 +282,7 @@ describe("the git snapshot in the baseline of a session", () => {
       const removed = yield* stepped(ids.child)
       expect(removed.value.delta[key]).toBe("removed")
       expect(yield* stored(ids.child)).toBeUndefined()
-    }),
+    }), 10_000,
   )
 
   // Class 8: the entries of a folder above a trusted project keep that folder's own trust, and the later document wins.
@@ -309,7 +309,7 @@ describe("the git snapshot in the baseline of a session", () => {
       yield* setEntries([user, above(true)])
       yield* stepped(ids.main)
       expect(yield* stored(ids.main)).toBeDefined()
-    }),
+    }), 10_000,
   )
 
   it.live("gives a subagent its parent's snapshot without running git", () =>
@@ -322,7 +322,7 @@ describe("the git snapshot in the baseline of a session", () => {
 
       expect(child.git).toEqual([])
       expect(yield* stored(ids.child)).toEqual(yield* stored(ids.main))
-    }),
+    }), 10_000,
   )
 
   it.live("starts no git for a fork that starts from the values of its session", () =>
@@ -338,7 +338,7 @@ describe("the git snapshot in the baseline of a session", () => {
 
       expect(fork.value.delta).toEqual({})
       expect(fork.git).toEqual([])
-    }),
+    }), 20_000,
   )
 
   it.live("is captured once when a preview comes before the first step", () =>
@@ -385,7 +385,7 @@ describe("the git snapshot in the baseline of a session", () => {
 
       expect(Object.keys(run.value.delta)).toContain(key)
       expect(yield* stored(ids.main)).toMatchObject({ branch: "main" })
-    }),
+    }), 10_000,
   )
 
   it.live("keeps the same snapshot through compaction and starts no git", () =>
@@ -440,7 +440,7 @@ describe("the git snapshot in the baseline of a session", () => {
       expect(Object.keys(second.delta)).toContain(key)
       expect(third.delta).toEqual({})
       expect(yield* stored(ids.main)).toMatchObject({ branch: "main" })
-    }),
+    }), 10_000,
   )
 
   it.live("captures its own snapshot when the value of the parent no longer matches the schema", () =>

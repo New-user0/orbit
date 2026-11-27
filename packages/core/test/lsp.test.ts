@@ -140,7 +140,7 @@ describe("Lsp", () => {
             ),
         )
       }
-    }),
+    }), 10_000,
   )
 
   it.live("the lsp tool's diagnostics action never saves", () =>

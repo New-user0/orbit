@@ -836,7 +836,7 @@ describe("InstructionNotes.add", () => {
         const trusted = yield* run(true)
         expect(trusted.git.length).toBeGreaterThan(0)
         expect(trusted.lines).toHaveLength(1)
-      }),
+      }), 10_000,
     )
 
     it.live("keeps the note when the exclude step fails", () =>

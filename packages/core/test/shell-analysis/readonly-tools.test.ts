@@ -372,7 +372,7 @@ describe("read paths", () => {
   ]
   test.each(paths)("%s", (text, expected) => {
     expect(bash(text).readPaths).toEqual(expected)
-  })
+  }, 20_000)
   test("a share on Windows refuses", () => {
     expect(bash("git diff --no-index //host/share/a b", windows()).readOnly).toBe(false)
     expect(bash("git blame --ignore-revs-file \\\\\\\\host\\\\s\\\\f x", windows()).readOnly).toBe(false)

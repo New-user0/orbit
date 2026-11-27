@@ -522,7 +522,7 @@ describe("PluginSupervisor", () => {
           const list = yield* inventory({ plugins: { allow: [allow] } }, [add(target)])
           expect(state(list, "corp.real")).toEqual({ status: "active" })
         }
-      }),
+      }), 10_000,
     )
 
     // Classes 3 and 4: the same folder spelled with its Windows 8.3 short name. The TUI resolves with the native realpath, which

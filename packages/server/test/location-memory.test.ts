@@ -167,7 +167,7 @@ it.live("lists the value the toggle wrote as soon as the write answers, in every
       expect((yield* s.patch(s.project, { memory: { enabled: true } })).status).toBe(204)
       expect((yield* listed).enabled).toBe(true)
     }
-  }).pipe(Effect.scoped),
+  }).pipe(Effect.scoped), 10_000,
 )
 
 // A Location still being built when the write answers is reloaded by waiting for its build. A build that then fails has

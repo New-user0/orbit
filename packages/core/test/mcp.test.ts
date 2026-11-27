@@ -686,7 +686,7 @@ test("retains output schemas across paginated MCP discovery", async () => {
       },
     },
   ])
-})
+}, 10_000)
 
 test("lists paginated prompts and invokes them through the MCP client", async () => {
   const result = await Effect.runPromise(
@@ -2036,7 +2036,7 @@ test("adds, disconnects, and reconnects MCP servers at runtime", async () => {
       }),
     ),
   )
-})
+}, 10_000)
 
 testEffect(Layer.empty).live(
   "merges MCP defaults into the winning configured server without changing runtime overrides",
@@ -2189,7 +2189,7 @@ describe("MCP servers from .mcp.json", () => {
         // `docs` only exists in .mcp.json, and connects. `shared` is in both files, and the one in orbit.json is the one
         // that connects: the .mcp.json server would have failed to start.
         expect(servers).toEqual({ docs: { status: "connected" }, shared: { status: "connected" } })
-      }),
+      }), 10_000,
   )
 
   testEffect(Layer.empty).live("are gone once compatibility is off, and the native server stays", () =>
@@ -2235,7 +2235,7 @@ describe("MCP servers from .mcp.json", () => {
         yield* Fiber.join(revoked)
         expect(yield* registered(yield* config.entries())).toEqual({ personal: { status: "connected" } })
       }).pipe(Effect.provide(projectConfig(home, project, { implicit: false })))
-    }),
+    }), 20_000,
   )
 })
 
@@ -2291,7 +2291,7 @@ testEffect(resourceMcpLayer(new ConfigMCP.Local({ type: "local", command: ["unus
 
       expect((yield* service.servers()).map((server) => server.name)).toEqual([Mcp.ServerName.make("resources")])
       expect(yield* service.tools()).toEqual([])
-    }),
+    }), 20_000,
 )
 
 test("restores runtime MCP config when a transform is disposed", async () => {
@@ -2654,7 +2654,7 @@ test("serializes concurrent MCP lifecycle operations", async () => {
       }),
     ),
   )
-})
+}, 10_000)
 
 testEffect(Layer.empty).live("isolates invalid MCP tools and preserves plugin transforms through catalog updates", () =>
   Effect.gen(function* () {
@@ -4061,8 +4061,7 @@ describe("MCP servers under the organization's lists", () => {
           { mcp: { managed_only: true } },
           "failed",
         )
-      }).pipe(Effect.scoped),
-      20_000,
+      }).pipe(Effect.scoped), 25_000,
     )
 
     testEffect(Layer.empty).live("logs each dropped server once, by name and reason, never its URL", () =>

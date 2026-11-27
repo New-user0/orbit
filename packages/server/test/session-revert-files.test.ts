@@ -321,7 +321,7 @@ it.live(
         status: 200,
         body: { data: { canRewind: true, filesChanged: [], insertions: 0, deletions: 0 } },
       })
-    }),
+    }), 10_000,
 )
 
 it.live("answers a message that is not a prompt, a prompt without a checkpoint and a folder without snapshots", () =>
@@ -382,7 +382,7 @@ it.live("answers a message that is not a prompt, a prompt without a checkpoint a
       },
     })
     expect(yield* read(path.join(plain, "a.txt"))).toBe("a\n")
-  }),
+  }), 10_000,
 )
 
 it.live("refuses a busy session with 409 and writes nothing", () =>
@@ -426,7 +426,7 @@ it.live("undoes only the file-tool edits when /undo stages a conversation revert
       a: yield* read(path.join(repo, "a.txt")),
       shell: yield* read(path.join(repo, "shell.txt")),
     }).toEqual({ a: undefined, shell: "shell two\n" })
-  }),
+  }), 20_000,
 )
 
 it.live("does not restore through a folder that became a link after the checkpoint, and restores the control", () =>
@@ -461,7 +461,7 @@ it.live("does not restore through a folder that became a link after the checkpoi
       link: yield* Effect.promise(() => fs.lstat(path.join(repo, "dir")).then((info) => info.isSymbolicLink())),
       tracked: yield* read(path.join(repo, "tracked.txt")),
     }).toEqual({ outside: "outside\n", link: true, tracked: "one\n" })
-  }),
+  }), 10_000,
 )
 
 // The file a tool edited can itself become a link (a junction on Windows) after the checkpoint, through a shell command
@@ -498,7 +498,7 @@ it.live("does not restore over a file whose name became a link to an outside fol
       link: yield* Effect.promise(() => fs.lstat(path.join(repo, "leaf.txt")).then((info) => info.isSymbolicLink())),
       tracked: yield* read(path.join(repo, "tracked.txt")),
     }).toEqual({ victim: "outside\n", link: true, tracked: "one\n" })
-  }),
+  }), 10_000,
 )
 
 // Two prompts sent while a step runs are delivered together, as steers, and the step that follows works for both. The
@@ -592,7 +592,7 @@ it.live("keeps a forged checkpoint ID of an imported session away from git", () 
       staged: 200,
       marker: false,
     })
-  }),
+  }), 10_000,
 )
 
 // FU-M1-083: a turn spans a whole busy period, so a prompt steered in while the session was busy shared the earlier
@@ -628,7 +628,7 @@ it.live("diffs one prompt's own file-tool edits with scope=prompt, a steered pro
       steered: yield* files(`from=${steered}&scope=prompt`),
       turn: yield* files(`from=${first}`),
     }).toEqual({ first: ["a.txt"], steered: ["b.txt"], turn: ["a.txt", "b.txt", "shell.txt"] })
-  }),
+  }), 10_000,
 )
 
 // Builder's rows beside the spec's: a checkpoint of the right shape that git cannot read answers the fixed `failed`

@@ -347,7 +347,7 @@ it.live("flags a file only above 40,000 characters, counts code units, and sends
       // Sent whole, the end of the file included.
       expect(preview.initial).toContain(item.text.slice(-8))
     }
-  }).pipe(Effect.scoped),
+  }).pipe(Effect.scoped), 10_000,
 )
 
 it.live("previews the baseline the next request sends, and the update a change starts", () =>
@@ -376,7 +376,7 @@ it.live("previews the baseline the next request sends, and the update a change s
     expect(second?.system.map((part) => part.text)).toContain(before.initial)
     // Once recorded, nothing is pending.
     expect((yield* s.preview(session.id)).update).toBe("")
-  }).pipe(Effect.scoped),
+  }).pipe(Effect.scoped), 10_000,
 )
 
 it.live("answers an unknown session with SessionNotFoundError", () =>

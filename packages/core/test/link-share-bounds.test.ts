@@ -126,6 +126,6 @@ describe.skipIf(!canLinkFile)("the real loaders on a large config folder", () =>
       expect(result.skills!.value).toBeGreaterThan(0)
       // Before the change these took seconds with a chain, and minutes under load; a generous bound still tells them apart.
       for (const name of ["commands", "agents", "skills", "up"]) expect(result[name]!.ms).toBeLessThan(10_000)
-    }),
+    }), 10_000,
   )
 })

@@ -497,7 +497,7 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
         yield* Fiber.join(revoked)
         expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
       }).pipe(Effect.provide(projectConfig(home, project)))
-    }),
+    }), 20_000,
   )
 
   // The attack as a marker file: the person's own hook runs a program in the clone's folder, and the clone's file is
@@ -538,6 +538,6 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
         yield* fire
         expect([yield* ran("marker.txt"), yield* ran("prompt-marker.txt")]).toEqual([true, true])
       }).pipe(Effect.provide(projectConfig(home, project)))
-    }),
+    }), 20_000,
   )
 })

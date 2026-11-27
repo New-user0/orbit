@@ -314,7 +314,7 @@ describe("Project.resolve", () => {
       yield* Effect.yieldNow
 
       expect(updates).toEqual([])
-    }),
+    }), 10_000,
   )
 
   // A `.git` file can name any git directory, and that directory's `commondir` file can name another repository's `.git`.

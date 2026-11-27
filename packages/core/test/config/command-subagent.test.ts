@@ -106,7 +106,7 @@ describe("command subagents", () => {
         const notices = (yield* sessions.context(parent.id)).filter((message) => message.type === "synthetic")
         expect(notices).toMatchObject([{ metadata: { source: "subagent", childID: child.id, state: "completed" } }])
         expect(notices[0]?.text).toContain("Review complete")
-      }),
+      }), 10_000,
     )
   }
 

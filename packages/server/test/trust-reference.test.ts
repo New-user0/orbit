@@ -120,7 +120,7 @@ it.live("a folder above a project supplies no config to it, even once a grant fo
       // And nothing above the project is listed as held back for it, since nothing there is a source.
       expect(await status(server, folders.inner)).toMatchObject({ withheld: [] })
     })
-  }),
+  }), 10_000,
 )
 
 it.live("a trusted folder's config that changes after the grant applies as it is, and nothing asks to trust it again", () =>

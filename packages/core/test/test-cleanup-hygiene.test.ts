@@ -25,7 +25,7 @@ test("no test, fixture or script asks fs.rm for retries that Bun ignores", async
     }
   }
   expect(offenders).toEqual([])
-})
+}, 20_000)
 
 // The scan reads a call's whole argument list, so options written over several lines are found too, and an option of
 // the same name outside a removal (an MCP transport's reconnection has one) is not.

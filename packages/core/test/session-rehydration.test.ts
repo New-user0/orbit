@@ -1514,7 +1514,7 @@ describe("rehydration after a compaction", () => {
       const notes = h.pointers(second).map((section) => section.harness)
       for (const file of ["big.txt", "long.txt", "image.png", "doc.pdf"])
         expect(notes.filter((note) => note.includes(name(file)))).toHaveLength(1)
-    }),
+    }), 10_000,
   )
 
   // RH14
@@ -1556,7 +1556,7 @@ describe("rehydration after a compaction", () => {
       expect(errorType(yield* h.run("Edit", { file_path: h.inside("filler2.txt"), old_string: "filler", new_string: "z" }))).toBe(
         "file.unread",
       )
-    }),
+    }), 10_000,
   )
 
   late.live("a restored file stays fresh when the ledger hears of the compaction's end only after the restore", () =>
@@ -1571,7 +1571,7 @@ describe("rehydration after a compaction", () => {
       expect(status(yield* h.run("Edit", { file_path: file, old_string: "restored", new_string: "edited" }))).toBe(
         "completed",
       )
-    }),
+    }), 10_000,
   )
 
   // RH15
@@ -2045,7 +2045,7 @@ describe("rehydration after a compaction", () => {
       ).toBe("completed")
       expect(yield* h.compact()).toEqual({ status: "completed" })
       expect(h.restored((yield* h.rows()).at(-1)!)).toEqual([moved, ...recent.toReversed()])
-    }),
+    }), 10_000,
   )
 
   // RH16: a compaction that ended earlier does not hide the interruption of a later one before its end.

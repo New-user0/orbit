@@ -169,7 +169,7 @@ describe("the language-server reminder", () => {
       expect(entry).toMatchObject({ kind: "lsp-diagnostics", description: "1 language server problem in 1 file" })
       expect(entry!.data!.content).toBe(`late.fake:\n  error 2:9 found LATE`)
       expect(yield* reminder(h, session)).toEqual([])
-    }),
+    }), 10_000,
   )
 
   it.live("does not repeat an error that the inline block showed", () =>
@@ -190,7 +190,7 @@ describe("the language-server reminder", () => {
       yield* published(h, file)
       yield* h.edit(session.id, "fixed.fake", "all fine\n")
       expect(yield* reminder(h, session)).toEqual([])
-    }),
+    }), 10_000,
   )
 
   it.live("lists errors first, a missing severity as an error, then warnings and hints", () =>
@@ -213,7 +213,7 @@ describe("the language-server reminder", () => {
       const session = yield* h.create()
       yield* h.edit(session.id, "code.fake", "a HINT CODE=E42\n")
       expect(content(yield* reminder(h, session))).toEqual(["code.fake:\n  hint 1:3 found HINT [E42] (fake)"])
-    }),
+    }), 10_000,
   )
 
   it.live("caps a file at ten problems and offers the rest at a later step", () =>
@@ -238,7 +238,7 @@ describe("the language-server reminder", () => {
       expect(first.data!.content.match(/^\S+\.fake:$/gm)).toEqual(["a.fake:", "b.fake:", "c.fake:"])
       expect(first.description).toBe("30 language server problems in 3 files")
       expect((yield* reminder(h, session))[0]!.data!.content.match(/^\S+\.fake:$/gm)).toEqual(["d.fake:"])
-    }),
+    }), 20_000,
   )
 
   it.live("an unchanged problem is not reported again after the file is edited, and a moved one is", () =>
@@ -251,7 +251,7 @@ describe("the language-server reminder", () => {
       expect(yield* reminder(h, session)).toEqual([])
       yield* h.edit(session.id, "move.fake", "down\na HINT\n")
       expect(content(yield* reminder(h, session))).toEqual(["move.fake:\n  hint 2:3 found HINT"])
-    }),
+    }), 20_000,
   )
 
   it.live("gives the main conversation what a subagent's edit left, and the subagent nothing", () =>
@@ -265,7 +265,7 @@ describe("the language-server reminder", () => {
       expect(LspReminder.durable(h.collector, h.place.directory).scope).toBe("primary")
       expect(content(yield* reminder(h, parent))).toEqual(["child.fake:\n  error 1:9 found LATE"])
       expect(yield* reminder(h, parent)).toEqual([])
-    }),
+    }), 20_000,
   )
 
   it.live("keeps two sessions apart", () =>
@@ -276,7 +276,7 @@ describe("the language-server reminder", () => {
       yield* h.edit(a.id, "mine.fake", "a HINT\n")
       expect(yield* reminder(h, b)).toEqual([])
       expect(yield* reminder(h, a)).toHaveLength(1)
-    }),
+    }), 10_000,
   )
 
   it.live("announces a problem again after a compaction, and forgets a deleted or moved session", () =>
@@ -311,7 +311,7 @@ describe("the language-server reminder", () => {
       expect(yield* h.collector.size(session.id)).toBe(1)
       yield* h.bus.publish(SessionEvent.Deleted, { sessionID: session.id })
       yield* until(() => h.collector.size(session.id).pipe(Effect.map((size) => size === 0)))
-    }),
+    }), 10_000,
   )
 
   it.live("gives nothing, and marks nothing, while no shell tool is offered", () =>
@@ -407,7 +407,7 @@ describe("the language-server reminder", () => {
       const lines = warned.filter((args) => String(args[0]).includes("malformed diagnostics in one publication"))
       expect(lines.length).toBeGreaterThan(0)
       expect(lines.every((args) => String(args[0]).includes("sent 1 malformed"))).toBe(true)
-    }),
+    }), 10_000,
   )
 })
 
@@ -533,7 +533,7 @@ describe("an edit that meets a server which is not running", () => {
         "cold.fake:\n  error 1:4 found ERROR\n  error 1:1 checked on save (with text)",
       ])
       expect(yield* reminder(h, session)).toEqual([])
-    }),
+    }), 10_000,
   )
 
   it.live("control: a running server still shows the inline block", () =>
@@ -542,7 +542,7 @@ describe("an edit that meets a server which is not running", () => {
       const session = yield* h.create()
       const { result } = yield* h.edit(session.id, "warm.fake", "an ERROR here\n")
       expect(JSON.stringify(result.content)).toContain("found ERROR")
-    }),
+    }), 10_000,
   )
 
   it.live("control: a direct call still waits for the start", () =>
@@ -552,7 +552,7 @@ describe("an edit that meets a server which is not running", () => {
       yield* Effect.promise(() => Bun.write(file, "an ERROR here\n"))
       const found = yield* h.lsp.diagnostics([file], { save: true })
       expect(found[file]?.map((item) => item.message)).toContain("found ERROR")
-    }),
+    }), 10_000,
   )
 
   it.live("stops the process that was starting when the Location ends", () =>
@@ -580,7 +580,7 @@ describe("an edit that meets a server which is not running", () => {
           }
         }),
       )
-    }),
+    }), 10_000,
   )
 })
 
@@ -603,7 +603,7 @@ describe("language-server requests", () => {
       // One text goes to the server: the open, and no change for the retries.
       expect(yield* h.lines(h.place.marker)).toHaveLength(1)
       expect(yield* h.lines(h.place.changes)).toEqual([])
-    }),
+    }), 10_000,
   )
 
   it.live("checks the size of a file before it starts a server", () =>

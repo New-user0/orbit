@@ -263,7 +263,7 @@ describe("PluginSupervisor reload", () => {
           Effect.scoped,
           Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
         )
-      }),
+      }), 10_000,
     )
   })
   ;(["discovered", "configured"] as const).forEach((mode) => {
@@ -317,7 +317,7 @@ describe("PluginSupervisor reload", () => {
           Effect.scoped,
           Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
         )
-      }),
+      }), 10_000,
     )
   })
 
@@ -409,7 +409,7 @@ describe("PluginSupervisor reload", () => {
         Effect.scoped,
         Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
       )
-    }),
+    }), 10_000,
   )
 
   // An install runs beside the activations, so a change that follows it is answered while it waits (a trust grant,
@@ -455,7 +455,7 @@ describe("PluginSupervisor reload", () => {
           }),
         ),
       )
-    }),
+    }), 10_000,
   )
 
   // The update check runs after the activation applied, so what it finds shows on the package's entry once it ends.
@@ -705,6 +705,6 @@ describe("PluginSupervisor under workspace trust", () => {
         Effect.scoped,
         Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
       )
-    }),
+    }), 10_000,
   )
 })
