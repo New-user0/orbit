@@ -210,6 +210,11 @@ it:
   (`tool-shell-output-cap.test.ts`), which needs a second volume. The fourth row of that run, 'enters at most MAX_FOLDERS folders, however many empty ones a rules folder
   holds' (`config/instruction-rules.test.ts`), waited on the same disk while it made and removed 2,048 folders, and
   makes twice the cap in folders now (366c0b55).
+- core `ShellTool timeouts` 'returns a command that exits as the deadline passes inline, with no notification and no
+  marker' (`tool-shell.test.ts`, Windows core 3/3 of run 46017939770): the row held the call 1.5 s after the deadline
+  and needed the command to end in that time, so a PowerShell that took longer to start found the command still
+  running. The command now outlives its 200 ms deadline and the row holds the call until the job has ended, so the
+  command always ends between its move and the call's look at it, however slow its shell is to start.
 - The rows of the side builders of this task (cli children through the start gate and measured limits, the TUI waits,
   the sdk first-request row) are named with their causes in their own commits on PR #195.
 

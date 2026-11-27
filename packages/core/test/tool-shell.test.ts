@@ -218,8 +218,9 @@ const permissionIt = testEffect(
 )
 
 // The real job registry, with `block` and `cancel` held back for a set time, so a test can land the deadline in the window
-// between a job settling and the call looking at it.
-const slow = { block: 0, cancel: 0, stale: false }
+// between a job settling and the call looking at it. With `settle` set, `block` holds the call until the job has ended,
+// so the command ends in that window however long its shell takes to start.
+const slow = { block: 0, cancel: 0, stale: false, settle: false }
 const slowJobs = makeGlobalNode({
   service: Job.Service,
   layer: Layer.effect(
@@ -233,7 +234,11 @@ const slowJobs = makeGlobalNode({
             jobs.get(id).pipe(
               Effect.map((info) => (slow.stale && info?.status === "running" ? { ...info, status: "completed" as const } : info)),
             ),
-          block: (input) => jobs.block(input).pipe(Effect.tap(() => Effect.sleep(Duration.millis(slow.block)))),
+          block: (input) =>
+            jobs.block(input).pipe(
+              Effect.tap(() => Effect.sleep(Duration.millis(slow.block))),
+              Effect.tap(() => (slow.settle ? ended(jobs, input.id) : Effect.void)),
+            ),
           cancel: (id) => jobs.cancel(id).pipe(Effect.tap(() => Effect.sleep(Duration.millis(slow.cancel)))),
         }),
       ),
@@ -241,6 +246,14 @@ const slowJobs = makeGlobalNode({
   ),
   deps: [KV.node],
 })
+const ended = (jobs: Job.Interface, id: string): Effect.Effect<void> =>
+  jobs
+    .get(id)
+    .pipe(
+      Effect.flatMap((info) =>
+        info?.status === "running" ? Effect.sleep("20 millis").pipe(Effect.andThen(ended(jobs, id))) : Effect.void,
+      ),
+    )
 const slowIt = testEffect(
   AppNodeBuilder.build(nodes, [
     ...replacements,
@@ -3607,20 +3620,24 @@ describe("ShellTool timeouts", () => {
     { timeout: 125_000 },
   )
 
+  // The command outlives its 200 ms deadline, so the timer moves it, and it ends before the call looks at the move. The
+  // window used to be a fixed 1.5 s from the deadline, which a PowerShell that took that long to start on a stalled
+  // Windows runner missed (run 46017939770, Windows core 3/3): the call then saw the command still running.
   slowIt.live(
     "returns a command that exits as the deadline passes inline, with no notification and no marker",
     () =>
       inFolder(undefined, ({ registry, notifications }) =>
         Effect.gen(function* () {
-          slow.block = 1500
+          slow.block = 0
           slow.cancel = 0
-          const settled = yield* executeTool(registry, call({ command: briefThenDone(50), timeout: 200 }))
+          slow.settle = true
+          const settled = yield* executeTool(registry, call({ command: briefThenDone(400), timeout: 200 }))
           expect(settled.metadata).toMatchObject({ status: "completed" })
           expect(text(settled)).toBe("done")
           yield* Effect.promise(() => Bun.sleep(500))
           expect(notifications()).toEqual([])
           expect(yield* pending).toEqual([])
-        }).pipe(Effect.ensuring(Effect.sync(() => void (slow.block = 0)))),
+        }).pipe(Effect.ensuring(Effect.sync(() => void (slow.settle = false)))),
       ),
     { timeout: 30_000 },
   )
