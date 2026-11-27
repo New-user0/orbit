@@ -349,12 +349,82 @@ describe("OllamaPlugin", () => {
             yield* addPlugin(server.url.origin, "1 hour")
             // Asked at 0 s, 1 s and 3 s, and next at 7 s; a pause that stayed at 1 s would have asked seven times.
             yield* Effect.promise(() => Bun.sleep(6_000))
-            expect(requests.tags).toBeGreaterThanOrEqual(2)
-            expect(requests.tags).toBeLessThanOrEqual(3)
+            // The third ask needs a retry that failed to count as unanswered too, not only the first discovery.
+            expect(requests.tags).toBe(3)
           }),
         ({ server }) => Effect.promise(() => server.stop(true)),
       ),
     15_000,
+  )
+
+  // The doubling stops at the interval: with a 1.5 s interval a failing server is asked at 0, 1, 2.5, 4 and 5.5 s; a
+  // pause that kept doubling past it would ask at 0, 1, 3 and 7 s.
+  it.live(
+    "a server that keeps failing is never asked after a pause longer than the interval",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const requests = { tags: 0 }
+          const server = Bun.serve({
+            port: 0,
+            fetch: () => {
+              requests.tags++
+              return new Response("unavailable", { status: 503 })
+            },
+          })
+          return { requests, server }
+        }),
+        ({ requests, server }) =>
+          Effect.gen(function* () {
+            yield* addPlugin(server.url.origin, "1500 millis")
+            yield* Effect.promise(() => Bun.sleep(6_000))
+            expect(requests.tags).toBeGreaterThanOrEqual(4)
+          }),
+        ({ server }) => Effect.promise(() => server.stop(true)),
+      ),
+    15_000,
+  )
+
+  // A plugin that holds an inventory keeps its interval through a failure: the 1 s retry is only for a plugin that has
+  // nothing yet. Here the interval is 4 s and the server fails from its second request on; the backoff would ask 2 s
+  // after that failure, the interval asks 4 s after it.
+  it.live(
+    "a server that fails after it answered with models is asked again only after the interval",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const requests = { tags: 0 }
+          const server = Bun.serve({
+            port: 0,
+            fetch: async (request) => {
+              if (request.method === "GET") {
+                requests.tags++
+                if (requests.tags > 1) return new Response("unavailable", { status: 503 })
+                return Response.json({ models: [summary("kept:1b", "kept-digest")] })
+              }
+              decodeShowRequest(await request.json())
+              return Response.json(show({ capabilities: ["completion", "tools"], context: 8192 }))
+            },
+          })
+          return { requests, server }
+        }),
+        ({ requests, server }) =>
+          Effect.gen(function* () {
+            const modelState = yield* Model.Service
+            yield* addPlugin(server.url.origin, "4 seconds")
+            expect(yield* modelState.get(Provider.ID.make("ollama"), Model.ID.make("kept:1b"))).toBeDefined()
+            yield* within(
+              Effect.sync(() => requests.tags),
+              (count) => count >= 2,
+              8_000,
+            )
+            yield* Effect.promise(() => Bun.sleep(3_000))
+            expect(requests.tags).toBe(2)
+            expect(yield* modelState.get(Provider.ID.make("ollama"), Model.ID.make("kept:1b"))).toBeDefined()
+          }),
+        ({ server }) => Effect.promise(() => server.stop(true)),
+      ),
+    20_000,
   )
 
   // Control: a server that answered with no models has answered; the plugin has nothing, but it does not ask again

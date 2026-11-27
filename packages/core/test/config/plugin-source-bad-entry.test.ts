@@ -98,6 +98,46 @@ describe("a plugin folder with a looping entry", () => {
     }),
   )
 
+  // `entryLinks`: a link that could be an entry is checked even when the resolver took another file for that entry or
+  // never asked for it (Bun 1.4.5's resolver passes over a link that loops). The `.mjs` link comes after `.ts` in the
+  // resolver's order, so it is never what the resolver returns. A link whose name is not an entry name is not checked.
+  for (const row of [
+    { link: "server.mjs", files: ["server.ts"], offered: ["good.ts"] },
+    { link: "index.mjs", files: ["server.ts"], offered: ["good.ts"] },
+    { link: "tui.mjs", files: ["server.ts", "tui.ts"], offered: ["good.ts"] },
+    { link: "rpc.mjs", files: ["server.ts", "rpc.ts"], offered: ["good.ts"] },
+    { link: "other.mjs", files: ["server.ts"], offered: ["good.ts", "p"] },
+  ]) {
+    const name = `a server plugin folder with a looping ${row.link} beside ${row.files.join(" and ")}`
+    it.live(`${name} offers ${row.offered.join(" and ")}`, () =>
+      Effect.gen(function* () {
+        const root = (yield* tmpdirScoped()).path
+        const repo = path.join(root, "work", "repo")
+        const plugins = path.join(root, "home", ".config", "orbit", "plugins")
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(plugins, "p"), { recursive: true })
+          await fs.writeFile(path.join(plugins, "good.ts"), "export default 1;")
+          await Promise.all(row.files.map((file) => fs.writeFile(path.join(plugins, "p", file), "export default 1;")))
+        })
+        const linked = yield* Effect.promise(() =>
+          fs.symlink(path.join(plugins, "p", row.link), path.join(plugins, "p", row.link), "file").then(
+            () => true,
+            (error: NodeJS.ErrnoException) => {
+              if (error.code === "EPERM" || error.code === "UNKNOWN") return false
+              throw error
+            },
+          ),
+        )
+        if (!linked) return
+        const offered = yield* Effect.gen(function* () {
+          const source = yield* ConfigPluginSource.Service
+          return (yield* source.operations()).flatMap((item) => (item.type === "add" ? [path.basename(item.target)] : []))
+        }).pipe(Effect.provide(loader(root, repo)))
+        expect(offered.toSorted()).toEqual(row.offered)
+      }),
+    )
+  }
+
   // A folder named node_modules is never a plugin; the single-file plugin beside it still is.
   it.live("plugins/node_modules is not offered, and the plugin beside it is", () =>
     Effect.gen(function* () {
