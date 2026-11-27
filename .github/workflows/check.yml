@@ -218,7 +218,7 @@ jobs:
       # hard-links the running image into a temp folder needs (a hard link cannot cross volumes).
       # Tests compare the folders they make under TEMP with the real paths Orbit resolves, which use the long name, as
       # TEMP does on a developer's machine.
-      - name: Keep the temp folder and Bun on D:
+      - name: Keep the temp folder and Bun on the D drive
         shell: bash
         run: |
           fsutil.exe 8dot3name set 0
