@@ -191,12 +191,13 @@ it:
 - The rows of the side builders of this task (cli children through the start gate and measured limits, the TUI waits,
   the sdk first-request row) are named with their causes in their own commits on PR #195.
 
+Bun 1.4.2's segfault of a long-lived Windows test worker (FU-M5-023) is fixed by the upgrade to Bun 1.4.5 (84e1f83a):
+the decoded reports are a FinalizationRegistry cleanup of a finished file's global, which oven-sh/bun#44279 cancels from
+Bun 1.4.3 on, and its reproduction crashed 10 of 10 runs on 1.4.2 and none of 10 on 1.4.5. Every ci-measure count in
+this section was taken on 1.4.2.
+
 Still open when this was written:
 
-- Bun 1.4.2's segfault of a long-lived Windows test worker (FU-M5-023). The decoded reports are a FinalizationRegistry
-  cleanup of a finished file's global, which oven-sh/bun#44279 fixed in Bun 1.4.3. The upgrade to Bun 1.4.5 lands after
-  this machine's global Bun is upgraded; until it does, a Windows core job can still end with `worker crashed: exit
-  code 3`.
 - The native watcher crash above (FU-M5-022), at the counts given there.
 - Pauses of one Windows worker that the decoy builds do not explain. After the fixes above, the ci-measure run
   45955987228 (Windows core 1/3, 45 runs) still had four rows time out at 5 s that took at most 2.4 s in the 50 runs of 45943098053 (medians 0.14 to 1.74 s):

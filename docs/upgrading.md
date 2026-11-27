@@ -5832,3 +5832,17 @@ figures under new wording and names, and the usage line of `/cost` has a new for
 `reason`, and every session's first request after the upgrade (prompt caches are cold once).
 
 **What to do:** Update matches on the old wording and on the old reason names. Nothing else.
+
+## Building Orbit
+
+### Building and pushing Orbit needs Bun 1.4.5
+
+The repository now pins Bun 1.4.5 (`packageManager` in the root `package.json`, the `bun-types` override, `bun.lock`
+and `tools/linux-test/Dockerfile`), up from 1.4.2. Bun 1.4.2 could crash a long-lived parallel test worker on Windows
+when a finished test file's global was collected while a FinalizationRegistry cleanup was still queued
+(oven-sh/bun#44279, fixed in 1.4.3). The pre-push hook (`.husky/pre-push`) now refuses a Bun older than 1.4.5, and
+CI's `setup-bun` installs the pinned version.
+
+**Affects:** people who build Orbit or run its tests from a checkout, and anyone who pushes to the repository.
+
+**What to do:** Upgrade Bun with `bun upgrade` (or install 1.4.5), then run `bun install` again.
