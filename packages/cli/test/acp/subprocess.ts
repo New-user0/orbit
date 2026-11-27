@@ -44,6 +44,8 @@ type Waiter = {
 export type AcpProcess = {
   readonly pid: number
   readonly exited: Promise<number>
+  /** Starts the child. Any other call starts it too; a caller that holds a start slot calls this inside it. */
+  readonly start: () => void
   readonly request: <T>(method: string, params?: unknown, timeoutMs?: number) => Promise<JsonRpcResponse<T>>
   readonly send: <T>(
     method: string,
@@ -134,7 +136,7 @@ export async function createAcpFixture(
       )
       const serverResults = await Promise.allSettled([llm.stop(true)])
       const directoryResults = await Promise.allSettled([
-        removeTree(root, { parents: [...processes].map((process) => process.pid) }),
+        removeTree(root, { parents: [...processes].map((process) => process.pid).filter((pid) => pid > 0) }),
       ])
       const failure = [...processResults, ...serverResults, ...directoryResults].find(
         (result): result is PromiseRejectedResult => result.status === "rejected",
@@ -155,7 +157,10 @@ export function initialize(
   // The first answer is the process's readiness signal. Its deadline starts when the start gate admits this process, so a
   // runner that is busy starting other children delays the start without failing it. Every first request goes through
   // here: one sent with `request`'s 20 s default timed out while a loaded Windows runner was still starting the process.
-  return startSlot(() => acp.request<InitializeResponse>("initialize", params, 60_000).then(expectOk))
+  return startSlot(() => {
+    acp.start()
+    return acp.request<InitializeResponse>("initialize", params, 60_000).then(expectOk)
+  })
 }
 
 export function newSession(acp: AcpProcess, cwd: string) {
@@ -201,13 +206,12 @@ function verifierConfig(llmUrl: string, skills?: string) {
 }
 
 function spawnAcp(input: { readonly env: Record<string, string | undefined> }): AcpProcess {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", "acp"], {
-    cwd: path.join(import.meta.dir, "../.."),
-    env: input.env,
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+  // The child starts on the first use (`start`), so a caller that holds a start slot starts it inside the slot: the
+  // gate then bounds how many children start at once, not only how many wait for their first answer.
+  let started:
+    | { child: Bun.Subprocess<"pipe", "pipe", "pipe">; output: Promise<void>; errors: Promise<void> }
+    | undefined
+  const start = () => (started ??= begin())
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
   const errorDecoder = new TextDecoder()
@@ -239,6 +243,14 @@ function spawnAcp(input: { readonly env: Record<string, string | undefined> }): 
     waiter.resolve(message)
   }
 
+  const begin = () => {
+  const child = Bun.spawn([process.execPath, "run", "src/index.ts", "acp"], {
+    cwd: path.join(import.meta.dir, "../.."),
+    env: input.env,
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  })
   const output = (async () => {
     const reader = child.stdout.getReader()
     let buffered = ""
@@ -268,6 +280,8 @@ function spawnAcp(input: { readonly env: Record<string, string | undefined> }): 
     }
     stderr += errorDecoder.decode()
   })()
+  return { child, output, errors }
+  }
 
   const take = (predicate: (message: JsonRpcMessage) => boolean, timeoutMs: number, description: string) => {
     const index = messages.findIndex(predicate)
@@ -290,6 +304,7 @@ function spawnAcp(input: { readonly env: Record<string, string | undefined> }): 
 
   const write = async (message: JsonRpcRequest | JsonRpcNotification<unknown>) => {
     if (inputClosed) throw new Error("ACP stdin is closed")
+    const child = start().child
     await child.stdin.write(encoder.encode(`${JSON.stringify(message)}\n`))
     await child.stdin.flush()
   }
@@ -307,8 +322,16 @@ function spawnAcp(input: { readonly env: Record<string, string | undefined> }): 
   }
 
   return {
-    pid: child.pid,
-    exited: child.exited,
+    // Zero until the child has started; the fixture's cleanup lists only started processes.
+    get pid() {
+      return started?.child.pid ?? 0
+    },
+    get exited() {
+      return start().child.exited
+    },
+    start() {
+      start()
+    },
     request: <T>(method: string, params?: unknown, timeoutMs?: number) => send<T>(method, params, timeoutMs).response,
     send,
     notify: (method: string, params: unknown) => write({ jsonrpc: "2.0", method, params }),
@@ -324,12 +347,13 @@ function spawnAcp(input: { readonly env: Record<string, string | undefined> }): 
       return notification
     },
     async close() {
+      if (!started) return 0
       if (!inputClosed) {
         inputClosed = true
-        await child.stdin.end()
+        await started.child.stdin.end()
       }
-      const exitCode = await withTimeout(child.exited, 5_000, "ACP did not exit after stdin EOF")
-      await Promise.all([output, errors])
+      const exitCode = await withTimeout(started.child.exited, 5_000, "ACP did not exit after stdin EOF")
+      await Promise.all([started.output, started.errors])
       if (exitCode !== 0) throw new Error(`ACP exited with ${exitCode}: ${stderr}`)
       return exitCode
     },
@@ -337,9 +361,10 @@ function spawnAcp(input: { readonly env: Record<string, string | undefined> }): 
     async [Symbol.asyncDispose]() {
       if (disposed) return
       disposed = true
-      if (child.exitCode === null) child.kill("SIGKILL")
-      await child.exited
-      await Promise.all([output, errors])
+      if (!started) return
+      if (started.child.exitCode === null) started.child.kill("SIGKILL")
+      await started.child.exited
+      await Promise.all([started.output, started.errors])
     },
   }
 }
