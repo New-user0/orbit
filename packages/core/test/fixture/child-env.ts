@@ -42,3 +42,13 @@ export const withLookupVariable = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         else process.env.NoDefaultCurrentDirectoryInExePath = previous
       }),
   )
+
+/**
+ * Bun keeps its transpiler cache under XDG_CACHE_HOME, so a child given a cache folder of its own transpiles everything
+ * it imports before it does anything, every run: the OTLP fallback child took 0.4 s alone and over 5 s on a loaded
+ * Windows runner. The test runner gives its run one cache (ORBIT_TEST_TRANSPILER_CACHE, tools/test/watchdog.ts) that a
+ * child shares through this; without the runner the child keeps its own.
+ */
+export function sharedTranspilerCache() {
+  return { BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.ORBIT_TEST_TRANSPILER_CACHE }
+}
