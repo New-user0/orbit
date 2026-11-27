@@ -114,8 +114,26 @@ const spellingModes = [
   { trusted: true, reply: "once" },
 ] as const
 
+/**
+ * Registers a Windows row that fails when the rows cannot make their folder below a profile's AppData\Local, where the
+ * legacy junctions lead, rather than registering fewer rows (fixture/legacy-junction.ts; class 3, class 4). CI runs the
+ * files that register rows from `realSpellings` in different jobs, so each of them registers this row.
+ */
+export function spellingPresence() {
+  ;(process.platform === "win32" ? test : test.skip)(
+    "the rows go through the Documents and Settings and Local Settings spellings of the workspace folder",
+    () => {
+      expect(realSpellings.map((item) => item.name).filter((name) => name.endsWith(" Settings"))).toEqual([
+        "Documents and Settings",
+        "Local Settings",
+      ])
+    },
+  )
+}
+
 /** Registers the matrix for the given link rows: each through every real spelling, answered each way and under a deny. */
 export function spellingMatrix(rows: typeof linkRows) {
+  spellingPresence()
   for (const row of rows)
     for (const spelling of realSpellings) {
       for (const mode of spellingModes)

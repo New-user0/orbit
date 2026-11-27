@@ -17,19 +17,10 @@ import {
   refusedSpellings,
   spellArgs,
   spellingLinks,
+  spellingPresence,
 } from "./spelling-rows"
 
-// Fails visibly on a Windows machine where the rows cannot make their folder below a profile's AppData\Local, where the
-// legacy junctions lead, rather than registering fewer rows (fixture/legacy-junction.ts; class 3, class 4).
-;(process.platform === "win32" ? test : test.skip)(
-  "the rows go through the Documents and Settings and Local Settings spellings of the workspace folder",
-  () => {
-    expect(realSpellings.map((item) => item.name).filter((name) => name.endsWith(" Settings"))).toEqual([
-      "Documents and Settings",
-      "Local Settings",
-    ])
-  },
-)
+spellingPresence()
 
 for (const spelling of realSpellings) {
   const through = async (root: string) => path.join(await spelling.spelled(root), "cfg", "orbit.json")

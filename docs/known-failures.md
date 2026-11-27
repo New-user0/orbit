@@ -221,7 +221,8 @@ it:
   `file-access-spelling.test.ts` and `external-leads.test.ts` rows; run 46021659425). They make their folders through
   `packages/core/test/fixture/legacy-junction.ts` now, and a Windows row of each file fails when those spellings are
   missing ('the rows go through the Documents and Settings and Local Settings spellings of the workspace folder',
-  'has the Documents and Settings and Local Settings spellings of the project to decide', and the `external-leads`
+  which `spellingPresence` in `acp/spelling-rows.ts` registers in `acp/permission-spellings` and, through
+  `spellingMatrix`, in each of the four `acp/spelling-matrix-*` files, as CI runs them in different jobs; 'has the Documents and Settings and Local Settings spellings of the project to decide', and the `external-leads`
   row itself). The `file-access-spelling.test.ts` rows that use them have a measured limit of 20 s for the C: stall.
   The fourth row of that run, 'enters at most MAX_FOLDERS folders, however many empty ones a rules folder
   holds' (`config/instruction-rules.test.ts`), waited on the same disk while it made and removed 2,048 folders, and
