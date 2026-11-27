@@ -5,7 +5,7 @@ import { Trust } from "@orbit/schema/trust"
 import { FSUtil } from "@orbit/util/fs-util"
 import { LinkShare } from "@orbit/util/link-share"
 import path from "path"
-import { Effect, FiberMap, PubSub, Semaphore, Stream } from "effect"
+import { Deferred, Effect, FiberMap, PubSub, Semaphore, Stream } from "effect"
 import { Bus } from "../../bus.js"
 import { Config } from "../../config.js"
 import { Watcher } from "../../filesystem/watcher.js"
@@ -26,17 +26,22 @@ export const Plugin = define({
     const lock = Semaphore.makeUnsafe(1)
     const skills: Skill.Info[] = []
 
-    const watch = Effect.fn("ConfigCompatibilityPlugin.watch")(function* (
-      target: string,
-      type: "file" | "directory",
-    ) {
-      const updates = yield* watcher.subscribe({ path: target, type })
+    // Returns once the watch is in place, so what the caller reads next cannot change unseen. A second root that leads
+    // to the same folder replaces the first one's watch, which shares its native subscription.
+    const watch = Effect.fn("ConfigCompatibilityPlugin.watch")(function* (target: string, type: "file" | "directory") {
+      const ready = yield* Deferred.make<void>()
+      const updates = yield* watcher.subscribe({ path: target, type }, Deferred.succeed(ready, undefined))
       yield* FiberMap.run(
         watches,
         `${type}:${target}`,
-        updates.pipe(Stream.runForEach((update) => PubSub.publish(changes, update.path).pipe(Effect.asVoid))),
-        { onlyIfMissing: true, startImmediately: true },
+        updates.pipe(
+          Stream.runForEach((update) => PubSub.publish(changes, update.path).pipe(Effect.asVoid)),
+          // A watch the platform cannot make ends at once, and must not leave the refresh waiting.
+          Effect.ensuring(Deferred.succeed(ready, undefined)),
+        ),
+        { startImmediately: true },
       )
+      yield* Deferred.await(ready)
     })
 
     const refresh = Effect.fn("ConfigCompatibilityPlugin.refresh")(
@@ -49,7 +54,12 @@ export const Plugin = define({
           const directory = path.join(root.path, "skills")
           // A link to a share is not resolved: realpath connects to it, and this runs before trust is asked.
           if (yield* LinkShare.blocked(fs, directory)) continue
-          const resolved = yield* fs.realPath(directory).pipe(Effect.orElseSucceed(() => undefined))
+          const found = yield* fs.realPath(directory).pipe(Effect.orElseSucceed(() => undefined))
+          // The config watches a root's own entry only, so a skills folder made in a root that is already there is
+          // reported by nothing else: the root is watched for it, and looked at again once that watch is in place.
+          if (!found && (yield* fs.isDir(root.path)) && (yield* trust.supplies(root, directory)))
+            yield* watch(directory, "file")
+          const resolved = found ?? (yield* fs.realPath(directory).pipe(Effect.orElseSucceed(() => undefined)))
           if (!resolved) continue
           // Until the root's folder is trusted, a skills folder that a link leads out of it is not scanned, and neither
           // is a skill that a link leads out of it: they are not the repository's to supply.

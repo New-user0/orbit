@@ -36,6 +36,7 @@ import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "../plugin/fixture"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
 import { location } from "../fixture/location"
+import { processNative } from "../fixture/native-watcher"
 import { tmpdir } from "../fixture/tmpdir"
 
 const it = testEffect(
@@ -97,7 +98,52 @@ describe("config plugin reloads", () => {
             }).pipe(
               Effect.provide(
                 // A root in the folder above is read only when that folder is the project's root (D7).
-                liveConfig(project, undefined, { global: input.global }, input.root.startsWith("../") ? tmp.path : project),
+                liveConfig(
+                  project,
+                  undefined,
+                  { global: input.global },
+                  input.root.startsWith("../") ? tmp.path : project,
+                ),
+              ),
+            )
+          }),
+        ),
+      ),
+    )
+
+    // The config watches only the root's own entry, so this skills folder, made in a root that was there all along, is
+    // seen only through the plugin's watch of the root. The row above met the same case when the root was made a moment
+    // before its skills folder and the plugin looked in between (Linux core, run 45964175972).
+    it.live(`loads skills when ${input.root} is there at startup and its skills folder comes later`, () =>
+      Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+        Effect.flatMap((tmp) =>
+          Effect.gen(function* () {
+            const project = path.join(tmp.path, "project")
+            const root = path.resolve(project, input.root)
+            yield* Effect.promise(async () => {
+              await fs.mkdir(path.join(project, "home"), { recursive: true })
+              await fs.mkdir(path.join(project, "global"))
+              await fs.mkdir(root, { recursive: true })
+              await Bun.write(path.join(project, "orbit.json"), JSON.stringify({ shell: "initial" }))
+            })
+            return yield* Effect.gen(function* () {
+              const plugins = yield* Plugin.Service
+              const skills = yield* Skill.Service
+              const probes = skills.list().pipe(Effect.map((items) => items.filter((item) => item.id === "probe")))
+              yield* ConfigCompatibilityPlugin.Plugin.effect(yield* PluginHost.make(plugins))
+              expect(yield* probes).toEqual([])
+              const skill = path.join(root, "skills", "probe", "SKILL.md")
+              yield* Effect.promise(() => Bun.write(skill, probeSkill("Later")))
+              yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "Later")))
+              expect((yield* probes)[0]?.path).toBe(AbsolutePath.make(skill))
+            }).pipe(
+              Effect.provide(
+                liveConfig(
+                  project,
+                  undefined,
+                  { global: input.global },
+                  input.root.startsWith("../") ? tmp.path : project,
+                ),
               ),
             )
           }),
@@ -105,6 +151,51 @@ describe("config plugin reloads", () => {
       ),
     )
   }
+
+  // The plugin lists a skills folder only once its watch of the folder is in place: a skill written while the watch is
+  // still being made is found by that listing, since the watch will not report it. The watch here writes the skill
+  // before it subscribes, which is where a slow native subscription leaves such a write.
+  it.live("lists a compatibility skills folder after its watch is in place", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const project = path.join(tmp.path, "project")
+          const skill = path.join(project, CompatNames.agents, "skills", "probe", "SKILL.md")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(project, "home"), { recursive: true })
+            await fs.mkdir(path.join(project, "global"))
+            await fs.mkdir(path.dirname(skill), { recursive: true })
+            await Bun.write(path.join(project, "orbit.json"), JSON.stringify({ shell: "initial" }))
+          })
+          const real = processNative(Watcher.binding, Watcher.backend())
+          const native = Watcher.Native.of({
+            subscribe: (input) =>
+              input.type === "directory" && path.basename(input.target) === "skills"
+                ? Effect.sleep("100 millis").pipe(
+                    Effect.andThen(Effect.promise(() => Bun.write(skill, probeSkill("During the watch")))),
+                    Effect.andThen(real.subscribe(input)),
+                  )
+                : real.subscribe(input),
+          })
+          return yield* Effect.gen(function* () {
+            const plugins = yield* Plugin.Service
+            const skills = yield* Skill.Service
+            const probes = skills.list().pipe(Effect.map((items) => items.filter((item) => item.id === "probe")))
+            yield* ConfigCompatibilityPlugin.Plugin.effect(yield* PluginHost.make(plugins))
+            yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "During the watch")))
+          }).pipe(
+            Effect.provide(
+              // The plugin's own watches go through `native` too, not only the config's.
+              Layer.merge(
+                liveConfig(project, native),
+                Watcher.layer().pipe(Layer.provide(Layer.succeed(Watcher.Native, native))),
+              ),
+            ),
+          )
+        }),
+      ),
+    ),
+  )
 
   it.live("loads no compatibility skills and watches no compatibility roots when compatibility is off", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(

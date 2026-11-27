@@ -820,6 +820,19 @@ at the moment of the grant now starts as well; before, it kept waiting until the
 
 **What to do:** connect the server when you want it, for example with `/mcp`.
 
+### A skills folder made in another product's folder loads without a restart
+
+A `skills` folder made inside another agent product's folder that is already there, such as `.agents`, now loads its
+skills while Orbit runs. On Linux nothing reported that folder before: Orbit watched only the product folder's own
+entry beside it, so its skills waited for the next config change or a restart (Windows reported it through the
+folder's change time). The skills folder is also listed only once its watch is in place, so a skill written while the
+watch is being made is found (`packages/core/test/config/reload.test.ts`, 'loads skills when ... is there at startup
+and its skills folder comes later' and 'lists a compatibility skills folder after its watch is in place').
+
+**Affects:** people who add a `skills` folder to `.agents` or a vendor's dot-directory while Orbit runs.
+
+**What to do:** Nothing.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
