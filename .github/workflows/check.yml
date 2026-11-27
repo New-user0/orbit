@@ -95,10 +95,13 @@ jobs:
       - uses: ./.github/actions/setup-bun
       # Orbit does not download ripgrep; the search tools and their tests use the one on PATH.
       - name: Install ripgrep
-        # A mirror that answers an error is retried with a growing pause before the job fails.
+        # A mirror that answers an error is retried with a growing pause before the job fails. The update's exit code is
+        # not what decides: a third-party list of the image that fails (packages.microsoft.com answered 403 in run
+        # 45956226249) fails the whole update though Ubuntu's own lists, which hold ripgrep, were read.
         run: |
           for attempt in 1 2 3 4 5; do
-            sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y -o Acquire::Retries=3 ripgrep && exit 0
+            sudo apt-get update -o Acquire::Retries=3 || echo "apt-get update reported an error; installing from the lists it read" >&2
+            sudo apt-get install -y -o Acquire::Retries=3 ripgrep && exit 0
             echo "ripgrep install attempt $attempt failed, retrying in $((attempt * 10)) s" >&2
             sleep $((attempt * 10))
           done
