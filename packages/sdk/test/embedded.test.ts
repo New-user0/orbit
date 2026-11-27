@@ -88,6 +88,9 @@ for (const selection of ["explicit", "default"] as const) {
         expect(requests[0]?.model).toMatchObject({ provider: "custom", id: "fictional-chat" })
       }),
     ),
+    // Measured limit: a cold Location boot and a model call took up to 5.1 s on 4 cores shared with other work
+    // (14 runs, median 4.3 s), where the default 5 s gave out; twice that, rounded up to 5 s.
+    15_000,
   )
 }
 
@@ -288,6 +291,8 @@ const firstAnswers: ReadonlyArray<{
   readonly name: string
   readonly ask: (orbit: Embedded, fixture: Fixture) => Effect.Effect<unknown, unknown>
   readonly expected: unknown
+  /** A row's own limit in ms, set only where its measured time needs one (see `mcp.connect`). */
+  readonly limit?: number
 }> = [
   {
     name: "websearch.providers lists the provider a plugin adds",
@@ -451,6 +456,9 @@ const firstAnswers: ReadonlyArray<{
     ask: (orbit: Embedded, fixture: Fixture) =>
       orbit.mcp.connect({ server: "first-answer-mcp", location: location(fixture) }).pipe(Effect.as("found")),
     expected: "found",
+    // Measured limit: the connect starts a program of its own on top of the Location's boot, and took up to 3.1 s on 4
+    // cores shared with other work (14 runs, median 2.4 s), where the default 5 s is within 2x; twice that, rounded up.
+    limit: 10_000,
   },
   {
     name: "mcp.disconnect finds the server a plugin adds",
@@ -597,14 +605,17 @@ const prepareFirstAnswer = (fixture: Fixture) =>
   })
 
 for (const row of firstAnswers) {
-  it.live(`the first request to a fresh Location: ${row.name}`, () =>
-    withEmbedded("orbit-embedded-first-answer-", (fixture) =>
-      Effect.gen(function* () {
-        const orbit = yield* prepareFirstAnswer(fixture)
-        // No retry and no wait: the request below is the one that boots the Location.
-        expect(yield* row.ask(orbit, fixture)).toEqual(row.expected)
-      }),
-    ),
+  it.live(
+    `the first request to a fresh Location: ${row.name}`,
+    () =>
+      withEmbedded("orbit-embedded-first-answer-", (fixture) =>
+        Effect.gen(function* () {
+          const orbit = yield* prepareFirstAnswer(fixture)
+          // No retry and no wait: the request below is the one that boots the Location.
+          expect(yield* row.ask(orbit, fixture)).toEqual(row.expected)
+        }),
+      ),
+    row.limit,
   )
 
   // The control: the same set-up answers with the contribution once activation has had time, so the row above fails
