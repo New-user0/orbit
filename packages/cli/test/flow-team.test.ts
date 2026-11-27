@@ -9,7 +9,7 @@ import { removeTree } from "../../core/test/fixture/remove-tree"
 // A team against a scripted model. Each member's session starts with an introduction naming it, so the model knows
 // who is speaking from the first user message, and which turn it is from how many user messages the flow sent it. The
 // server may add instruction updates (a date that changed, a git snapshot taken late) to a session between two turns;
-// the OpenAI-compatible request carries each as a user-role message that starts with `<system-update>`, so they are
+// the chat-completions request carries each as a user-role message that starts with `<system-update>`, so they are
 // listed apart in `updates` and do not count as turns (FU-M3-421).
 const turns: Array<{
   member: string

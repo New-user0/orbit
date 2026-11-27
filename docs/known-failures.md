@@ -258,12 +258,15 @@ it:
   30 s the row gives it. A forced case, a PowerShell that sleeps 6 s before its prompt, failed with CI's message
   before and passes after.
 - cli `flow-team.test.ts` 'a resumed team reuses the turns that ran and continues from the failed one' (FU-M3-421,
-  lead#3 for lead#2 once in a full parallel Linux cli run): not fixed, and FU-M3-421 stays open. Both suspects the
-  register names were forced and ruled out: a resume through another spelling of the folder ('a team resumed through
-  another spelling of its folder sends its lead no message of its own') and a process stopped during a lead turn ('a
-  team resumed after its process stopped during a lead turn asks the lead once, with no recovered message'), each on
-  Windows and on Linux. The row ran 131 times under load (115 on Linux, 16 on Windows) without a failure, and it
-  prints every recorded request when a lead turn passes 2, so a recurrence names the extra message.
+  lead#3 for lead#2 once in a full parallel Linux cli run): fixed in the test (84c2c59d). The extra message was not a
+  turn the flow sent: the server freezes an instruction update into the lead's history (a date that changed between the
+  two processes, a git snapshot taken late after the first capture failed) and the chat-completions request lowers it
+  to a user-role message, which the fake model counted. Two forced rows ('a lead whose first git snapshot failed is told
+  of the late one and still counts two turns', 'a lead resumed on another date is told the date changed and still counts
+  two turns') reproduced lead#3 and fail with it when the update filter is removed. Which of the two was the one CI saw
+  is not known; the row now prints every recorded request in full when a lead turn passes 2. The file ran 50 times
+  under load on Linux (4 CPUs, 3 busy loops, 2 workers, all 7 rows each time) without a failure, and six full parallel
+  cli runs passed.
 - util `observability-otlp.test.ts` 'exports a span through the configured OTLP trace endpoint': no cause in the code.
   The row starts no child and nothing in `packages/util` changed; it ran 50 times under load on Windows (4 CPUs,
   coverage on) with no failure, so the row is closed on that count.
