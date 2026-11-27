@@ -147,7 +147,8 @@ it:
   first Ollama `/api/tags` read that ran past its 1 s limit was kept as a fresh answer for 30 s and not tried again
   before the interval (FU-M3-385). A read that fails, times out or is interrupted now leaves the cache as it was, and
   while the plugin has no models a failed read is tried again after 1 s, doubling up to the interval, pinned by the rows
-  of `packages/core/test/plugin/provider-ollama.test.ts` that name the retry.
+  of `packages/core/test/plugin/provider-ollama.test.ts` that name the retry, one for each way a read fails (a refused
+  connection, a body that is not JSON, a body of the wrong shape, a 503 and a read that runs out of time).
 - core `Npm.add` rows (`npm.test.ts`): the workers shared npm's cache (the runner's `%LOCALAPPDATA%\npm-cache` on
   Windows, the shared root's `~/.npm` on Linux), and a Git install cloned into it (run 45898058796). Each worker has its
   own now, pinned by "gives each worker an npm cache of its own" (`packages/core/test/preload.test.ts`).
@@ -155,9 +156,15 @@ it:
   default: the waits gave up before their row's own 30 s limit. Both now last as long as the row, pinned by "the wait
   for a compaction request is not cut short before the row's own limit" (`compact-admission.test.tsx`) and "a wait that
   names no limit keeps looking for as long as its row may run" (`packages/tui/test/fixture/render.test.tsx`).
-- cli `import-export`, `session-list`, `auth`, `mini`, `argv`, `mcp-auth-choices` and `acp/command`: their `orb`
-  children took the parent's environment, so they shared the runner's own data, config and state folders, and held no
-  start slot. They start through `packages/cli/test/fixture/orb.ts` now, which applies `isolatedEnv` and the start gate.
+- cli `import-export`, `session-list`, `auth`, `mini`, `argv`, `mcp-auth-choices`, `acp/command`, `debug-config` and
+  `debug-paths`: their `orb` children took the parent's environment, so they shared the runner's own data, config and
+  state folders, and held no start slot. They start through `packages/cli/test/fixture/orb.ts` now, which applies
+  `isolatedEnv` and the start gate, and `child-starts.test.ts` 'no cli test starts a child with the parent's
+  environment and a few overrides' fails on that shape. The children of the other cli files that start `orb` with an
+  environment of their own (`isolatedEnv`, `serviceEnv` and the like) but no start slot are left out of the gate: in
+  run 46021659425 the slowest row of each such file took less than half its limit on both platforms, apart from rows
+  whose time is mostly a fixed wait of their own (the `config-overlay-flags` and `managed-bypass` root runs that
+  wait out 60 s).
 - core, the rows at Bun's 5 s default that start real processes (`npm.test.ts`, `vcs.test.ts`, `git.test.ts`,
   `session-context-vcs.test.ts`, `session-context-usage.test.ts`, `project.test.ts`, `lsp-ignored.test.ts`,
   `session-rehydration.test.ts`, `tool-lsp.test.ts`, `tool-search.test.ts`, `formatter.test.ts`, `location-layer.test.ts`,
@@ -207,7 +214,16 @@ it:
   sessions.create and sessions.move refuse an untrusted folder, however it is spelled' makes its folders in the home
   when the temp folder is not in it, for its `~` spelling (run 46006785063). The C: temp folder is named in
   `ORBIT_TEST_OTHER_VOLUME` for 'copies the output to the session's folder when the shell file is on another volume'
-  (`tool-shell-output-cap.test.ts`), which needs a second volume. The fourth row of that run, 'enters at most MAX_FOLDERS folders, however many empty ones a rules folder
+  (`tool-shell-output-cap.test.ts`), which needs a second volume. That folder also holds the class 3 and 4 rows that
+  spell a path through the legacy junctions `Documents and Settings` and `Local Settings`, which lead only below a
+  profile's `AppData\Local`: with TEMP on D: those spellings named nothing, and the rows dropped them without a skip
+  (98 ACP approval rows of `acp/spelling-matrix-*` and `acp/permission-spellings`, and spellings inside the
+  `file-access-spelling.test.ts` and `external-leads.test.ts` rows; run 46021659425). They make their folders through
+  `packages/core/test/fixture/legacy-junction.ts` now, and a Windows row of each file fails when those spellings are
+  missing ('the rows go through the Documents and Settings and Local Settings spellings of the workspace folder',
+  'has the Documents and Settings and Local Settings spellings of the project to decide', and the `external-leads`
+  row itself). The `file-access-spelling.test.ts` rows that use them have a measured limit of 20 s for the C: stall.
+  The fourth row of that run, 'enters at most MAX_FOLDERS folders, however many empty ones a rules folder
   holds' (`config/instruction-rules.test.ts`), waited on the same disk while it made and removed 2,048 folders, and
   makes twice the cap in folders now (366c0b55).
 - core `ShellTool timeouts` 'returns a command that exits as the deadline passes inline, with no notification and no
@@ -215,6 +231,16 @@ it:
   and needed the command to end in that time, so a PowerShell that took longer to start found the command still
   running. The command now outlives its 200 ms deadline and the row holds the call until the job has ended, so the
   command always ends between its move and the call's look at it, however slow its shell is to start.
+- cli `flow-team.test.ts` 'a resumed team reuses the turns that ran and continues from the failed one' (FU-M3-421,
+  lead#3 for lead#2 once in a full parallel Linux cli run): not fixed, and FU-M3-421 stays open. Both suspects the
+  register names were forced and ruled out: a resume through another spelling of the folder ('a team resumed through
+  another spelling of its folder sends its lead no message of its own') and a process stopped during a lead turn ('a
+  team resumed after its process stopped during a lead turn asks the lead once, with no recovered message'), each on
+  Windows and on Linux. The row ran 131 times under load (115 on Linux, 16 on Windows) without a failure, and it
+  prints every recorded request when a lead turn passes 2, so a recurrence names the extra message.
+- util `observability-otlp.test.ts` 'exports a span through the configured OTLP trace endpoint': no cause in the code.
+  The row starts no child and nothing in `packages/util` changed; it ran 50 times under load on Windows (4 CPUs,
+  coverage on) with no failure, so the row is closed on that count.
 - The rows of the side builders of this task (cli children through the start gate and measured limits, the TUI waits,
   the sdk first-request row) are named with their causes in their own commits on PR #195.
 
