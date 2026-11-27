@@ -8,6 +8,8 @@ const consoleForm = [
 ] satisfies FormFields
 
 describe("auth command", () => {
+  // Limit 70 s: four starts of `orb` through the start gate. Over 50 loaded runs (4 cores, busy loops, cold transpiler
+  // cache) p50 14.5 s, p95 25.3 s, at most 32.7 s.
   test("registers authentication commands", async () => {
     const [auth, list, login, logout] = await Promise.all([
       cli(["auth", "--help"]),
@@ -36,7 +38,7 @@ describe("auth command", () => {
     expect(login.stdout).toContain("--answer")
     expect(logout.exitCode).toBe(0)
     expect(logout.stdout).toContain("orb auth logout [flags] [<target>] [<credential>]")
-  })
+  }, 70_000)
 
   test("lists stored and environment connections", async () => {
     const requests: string[] = []

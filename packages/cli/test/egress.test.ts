@@ -7,6 +7,7 @@ import os from "node:os"
 import path from "node:path"
 import { runProgram } from "../../core/test/fixture/run-program"
 import { isolatedEnv } from "./fixture/environment"
+import { startSlot, takeStartSlot } from "./fixture/start-gate"
 import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Orbit must only talk to the model provider it is configured with. Every proxy variable points at a trap that
@@ -55,9 +56,13 @@ afterAll(async () => {
   await removeTree(root)
 })
 
+// A cold child waits for a start slot first, so the rows below never start more children at once than the start gate
+// allows; their assertions are unchanged.
 test("a headless run reaches only the configured model", async () => {
-  const child = spawn(["run", "--standalone", "--model", "test/test-model", "Reply with ok"])
-  const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
+  const [code, stderr] = await startSlot(async () => {
+    const child = spawn(["run", "--standalone", "--model", "test/test-model", "Reply with ok"])
+    return Promise.all([child.exited, new Response(child.stderr).text()])
+  })
   expect({ code, stderr: code === 0 ? "" : stderr }).toEqual({ code: 0, stderr: "" })
   expect(requests.length).toBeGreaterThan(0)
   expect(attempts).toEqual([])
@@ -89,6 +94,7 @@ test("a stream-json input run cannot search the web without consent, and does no
   requests.length = 0
   attempts.length = 0
   script.search = true
+  const release = await takeStartSlot()
   try {
     const child = spawn(
       [
@@ -131,6 +137,7 @@ test("a stream-json input run cannot search the web without consent, and does no
     expect(attempts).toEqual([])
     expect(consent({ databaseExists: true })).toBeUndefined()
   } finally {
+    release()
     script.search = false
   }
 }, 120_000)
@@ -209,13 +216,15 @@ async function run(directory: string, flags: string[], env: Record<string, strin
   attempts.length = 0
   script.search = true
   try {
-    const child = spawn(["run", "--standalone", "--model", "test/test-model", ...flags, "Search the web"], {
-      PWD: directory,
-      ORBIT_TRUST_PROJECT: undefined,
-      ...env,
+    return await startSlot(async () => {
+      const child = spawn(["run", "--standalone", "--model", "test/test-model", ...flags, "Search the web"], {
+        PWD: directory,
+        ORBIT_TRUST_PROJECT: undefined,
+        ...env,
+      })
+      const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
+      return { code, stderr }
     })
-    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
-    return { code, stderr }
   } finally {
     script.search = false
   }

@@ -61,9 +61,21 @@ export const entrypoints = Effect.fn("PluginSourceDirectory.entrypoints")(functi
   const files = Object.values(resolved)
     .filter((entry) => entry !== undefined)
     .map((entry) => fileURLToPath(entry))
-  if (directory && (yield* leaves(fs, target, files))) return undefined
+  if (directory && (yield* leaves(fs, target, [...files, ...(yield* entryLinks(fs, target))]))) return undefined
   return { directory, files, manifest: path.join(directory ? target : path.dirname(target), "package.json") }
 })
+
+// The links in the folder that `Host.resolve` could take as an entry (`server`, `index`, `tui` or `rpc`, with any
+// extension). Bun's resolver passes over a link it cannot follow (one that loops) as if the entry were not there, so
+// `leaves` checks these links as well as what the resolver found.
+const entryLinks = Effect.fnUntraced(function* (fs: FSUtil.Interface, target: string) {
+  const entries = yield* fs.readDirectoryEntries(target).pipe(Effect.orElseSucceed(() => []))
+  return entries
+    .filter((entry) => entry.type === "symlink" && ENTRY_NAMES.has(path.parse(entry.name).name))
+    .map((entry) => path.join(target, entry.name))
+})
+
+const ENTRY_NAMES = new Set(["server", "index", "tui", "rpc"])
 
 // An entry whose real path cannot be found (a loop of links, a share that cannot be reached) counts as leaving the
 // folder, so that one bad plugin costs only itself.

@@ -6,6 +6,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./environment"
+import { startSlot } from "./start-gate"
 import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 
@@ -245,22 +246,26 @@ export async function layered(name: string) {
 export async function orb(directory: string, given: string[], env: Record<string, string | undefined> = {}) {
   // A suite file in a clone cannot name its models, so an eval takes them from the flag unless the test passes its own.
   const args = given[0] === "eval" && !given.includes("--models") ? [...given, "--models", model] : given
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
-    cwd: path.join(import.meta.dir, "..", ".."),
-    env: isolatedEnv(root, {
-      USERPROFILE: root,
-      PWD: directory,
-      ORBIT_TRUST_PROJECT: undefined,
-      ORBIT_CONFIG: undefined,
-      ORBIT_CONFIG_CONTENT: undefined,
-      OLLAMA_CONTEXT_LENGTH: undefined,
-      ...env,
-    }),
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
+  // The child holds a start slot while it runs, so its 240 s limit measures the child and never the queue behind the
+  // other files' cold children. The refusal and the control of a door run the same way.
+  return startSlot(() => {
+    const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
+      cwd: path.join(import.meta.dir, "..", ".."),
+      env: isolatedEnv(root, {
+        USERPROFILE: root,
+        PWD: directory,
+        ORBIT_TRUST_PROJECT: undefined,
+        ORBIT_CONFIG: undefined,
+        ORBIT_CONFIG_CONTENT: undefined,
+        OLLAMA_CONTEXT_LENGTH: undefined,
+        ...env,
+      }),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    return finished(child, `orb ${args.join(" ")} in ${directory}`, 240_000)
   })
-  return finished(child, `orb ${args.join(" ")} in ${directory}`, 240_000)
 }
 
 // A program the tests run in their folders, such as git. It is never started with `Bun.spawnSync`: a synchronous spawn

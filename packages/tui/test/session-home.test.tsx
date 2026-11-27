@@ -223,7 +223,8 @@ test.each([
       )
       await setup.waitForVisualIdle()
       expect(frames).toEqual([before, visible()])
-      expect(setup.captureCharFrame()).toContain("History message 0001")
+      // An assistant row draws its markdown after the row is mounted, so its text can come a frame later.
+      await setup.waitForFrame((frame) => frame.includes("History message 0001"))
       expect(mounted().map((child) => child.id)).toEqual(messages.slice(0, 40).map((message) => message.id))
       expect(scroll.scrollTop).toBe(0)
       expect(Math.max(...mountCounts)).toBeLessThanOrEqual(60)

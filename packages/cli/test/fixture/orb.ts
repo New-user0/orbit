@@ -14,12 +14,19 @@ const pkg = path.join(import.meta.dir, "..", "..")
  */
 export async function runOrb(
   args: string[],
-  options: { cwd?: string; env?: Record<string, string | undefined>; stdin?: string; home?: string } = {},
+  options: {
+    cwd?: string
+    env?: Record<string, string | undefined>
+    stdin?: string
+    home?: string
+    /** Bun's own arguments before `run`, for example a config file. */
+    bun?: string[]
+  } = {},
 ) {
   await using root = options.home === undefined ? await tmpdir() : undefined
   // Awaited here, so the folder is removed only once the child has ended.
   return await startSlot(async () => {
-    const child = Bun.spawn([process.execPath, "run", path.join(pkg, "src", "index.ts"), ...args], {
+    const child = Bun.spawn([process.execPath, ...(options.bun ?? []), "run", path.join(pkg, "src", "index.ts"), ...args], {
       cwd: options.cwd ?? pkg,
       env: isolatedEnv(options.home ?? root!.path, options.env),
       stdin: options.stdin === undefined ? "ignore" : new Blob([options.stdin]),

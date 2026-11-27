@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { runProgram } from "../../core/test/fixture/run-program"
 import { isolatedEnv } from "./fixture/environment"
+import { startSlot } from "./fixture/start-gate"
 import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // `orb flow` end to end: a real standalone server, a scripted local model and a real git repository. Each agent node
@@ -259,26 +260,30 @@ function gitEnv() {
   return isolatedEnv(root, { USERPROFILE: root })
 }
 
-async function orb(directory: string, args: string[]) {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
-    cwd: path.join(import.meta.dir, ".."),
-    env: isolatedEnv(root, {
-      USERPROFILE: root,
-      PWD: directory,
-      ORBIT_CONFIG: undefined,
-      ORBIT_CONFIG_CONTENT: undefined,
-      OLLAMA_CONTEXT_LENGTH: undefined,
-    }),
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
+// A child holds a start slot while it runs, so a loaded runner never has more of these cold children than the start gate
+// allows beside the other files'.
+function orb(directory: string, args: string[]) {
+  return startSlot(async () => {
+    const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
+      cwd: path.join(import.meta.dir, ".."),
+      env: isolatedEnv(root, {
+        USERPROFILE: root,
+        PWD: directory,
+        ORBIT_CONFIG: undefined,
+        ORBIT_CONFIG_CONTENT: undefined,
+        OLLAMA_CONTEXT_LENGTH: undefined,
+      }),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    return { code, stdout, stderr }
   })
-  const [code, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ])
-  return { code, stdout, stderr }
 }
 
 test("a failing model is retried, then the fallback model completes the node", async () => {
