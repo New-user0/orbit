@@ -12,6 +12,8 @@ export async function createAppFixture(
     width?: number
     height?: number
     state?: string
+    /** The global config directory, whose `plugins` folder holds the user's own plugins; the default is the test home's. */
+    global?: string
     config?: Config.Info
     /** What `config.update` does; the default changes nothing. A test passes its own to see the draft it is given. */
     update?: (update: (draft: any) => void) => Promise<Config.Info>
@@ -61,7 +63,12 @@ export async function createAppFixture(
       log: input.log ?? (() => {}),
       clipboard: input.clipboard,
     }).pipe(
-      Effect.provide(Global.layerWith({ state: input.state ?? state?.path })),
+      Effect.provide(
+        Global.layerWith({
+          state: input.state ?? state?.path,
+          ...(input.global === undefined ? {} : { config: input.global }),
+        }),
+      ),
       Effect.provide(FileSystem.layerNoop({})),
     ),
   )

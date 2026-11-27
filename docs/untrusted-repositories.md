@@ -1810,6 +1810,12 @@ its gate, before the first trust task. It names every surface that M1 found over
 - The terminal UI imports plugins itself, so the server's gate does not apply. Filter the directories with
   `trustedPluginDirectories(directories, trust.startup.trusted(), trust.startup.above())`
   (`packages/tui/src/plugin/discovery.ts`) and import nothing before the first answer.
+- The runtime's resolver passes over a link that loops as if the entry were not there, so the server and the terminal UI
+  ask the same question of every local plugin folder, global or project, before they read or import an entry:
+  `EntryLinks.escapes` (`packages/plugin/src/entry-links.ts`) leaves the folder out when a link it could take as an
+  entry loops or leads out (classes 3, 4 and 12). Proof: `packages/core/test/config/plugin-source-bad-entry.test.ts`
+  for the server and the "a plugin folder with a looping link named like a tui entry" rows of
+  `packages/tui/test/plugin-trust.test.ts` for the terminal UI.
 - The terminal UI's startup walk (`localPluginDirectories`) runs before any answer and stats `.git`, `.hg` and each
   `.orbit` above the working folder. It asks `LinkShare.ofSync` (`@orbit/util/link-share`, shared with Core) first: a name
   that is a link to a share is "share", present but never stat-ed, and any other failure is one log line and an absent

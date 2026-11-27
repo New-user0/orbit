@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { mkdir, rm, symlink } from "node:fs/promises"
 import path from "node:path"
 import { createAppFixture, promptReady } from "./fixture/app"
@@ -13,26 +13,28 @@ async function project(traces?: string) {
   const plugin = path.join(root.path, ".orbit", "plugins", "hello")
   await mkdir(path.join(root.path, ".git"), { recursive: true })
   await mkdir(plugin, { recursive: true })
-  await Bun.write(
-    path.join(plugin, "tui.ts"),
-    [
-      'import { appendFileSync } from "node:fs"',
-      "export default {",
-      '  id: "project.hello",',
-      "  setup() {",
-      `    appendFileSync(${JSON.stringify(marks)}, "loaded\\n")`,
-      `    return () => appendFileSync(${JSON.stringify(marks)}, "unloaded\\n")`,
-      "  },",
-      "}",
-      "",
-    ].join("\n"),
-  )
+  await Bun.write(path.join(plugin, "tui.ts"), marker(marks, "project.hello", "loaded"))
   return {
     path: root.path,
     // A file is read through a new handle each time, because a handle keeps what it first found.
     marks: async () => ((await Bun.file(marks).exists()) ? (await Bun.file(marks).text()).trim().split("\n") : []),
     [Symbol.asyncDispose]: () => root[Symbol.asyncDispose](),
   }
+}
+
+// A tui entry that writes `mark` to the trace when it is set up, and `unloaded` when it is taken down.
+function marker(marks: string, id: string, mark: string) {
+  return [
+    'import { appendFileSync } from "node:fs"',
+    "export default {",
+    `  id: ${JSON.stringify(id)},`,
+    "  setup() {",
+    `    appendFileSync(${JSON.stringify(marks)}, ${JSON.stringify(`${mark}\n`)})`,
+    `    return () => appendFileSync(${JSON.stringify(marks)}, "unloaded\\n")`,
+    "  },",
+    "}",
+    "",
+  ].join("\n")
 }
 
 // The terminal UI finds its project from the directory it was started in.
@@ -359,3 +361,110 @@ test("a project's tui entry that links out of its folder is not imported", async
   })
   await rm(outside)
 }, 30_000)
+
+// Classes 3, 4, 7 and 12: Bun's resolver passes over a link that loops as if the entry were not there, so the terminal
+// UI could import another entry of a folder that the server leaves out. Its loader asks `EntryLinks.escapes`, as the
+// server does, for every local plugin folder before it reads or imports an entry. In each row the folder `hello` keeps a
+// real tui entry that would load and a link the resolver could take as an entry, which loops (in the last row the link
+// is the entry the resolver takes, and leads to a file outside the folder). The plugin `good` beside it is set up in the
+// same reconcile, after every folder of it is resolved, so once its mark is written the loader has passed `hello`: a bad
+// folder costs only itself. Each row's control puts a real file where the link was, and `hello` loads.
+describe("a plugin folder with a looping link named like a tui entry", () => {
+  const rows: {
+    name: string
+    link: string
+    files: string[]
+    main?: string
+    junction?: { link: string; to: string }
+    global?: boolean
+    outside?: boolean
+  }[] = [
+    { name: "a looping tui.ts beside tui.js, with no server entry,", link: "tui.ts", files: ["tui.js"] },
+    { name: "a looping TUI.ts beside tui.js", link: "TUI.ts", files: ["tui.js"] },
+    {
+      name: "a looping tui/index.ts beside tui.ts and server.ts",
+      link: "tui/index.ts",
+      files: ["server.ts", "tui.ts"],
+    },
+    { name: "a looping tui/package.json beside tui.ts", link: "tui/package.json", files: ["tui.ts"] },
+    {
+      name: "a looping step of the main of tui/package.json beside tui.ts",
+      link: "tui/lib/x.js",
+      files: ["tui.ts"],
+      main: "lib/x.js",
+    },
+    {
+      name: "a tui folder linked to a folder with a looping index, beside tui.js,",
+      link: "shelf/index.ts",
+      files: ["tui.js"],
+      junction: { link: "tui", to: "shelf" },
+    },
+    {
+      name: "a global plugin's looping tui.ts beside tui.js and server.ts",
+      link: "tui.ts",
+      files: ["server.ts", "tui.js"],
+      global: true,
+    },
+    {
+      name: "a global plugin's tui.ts linked to a file outside its folder, beside server.ts,",
+      link: "tui.ts",
+      files: ["server.ts"],
+      global: true,
+      outside: true,
+    },
+  ]
+  for (const row of rows)
+    for (const linked of [true, false])
+      test(`${row.name} ${linked ? "is not imported" : "loads with a real file in the link's place"}`, async () => {
+        await using root = await tmpdir()
+        await using state = await tmpdir()
+        const project = path.join(root.path, "project")
+        const global = path.join(root.path, "config")
+        const marks = path.join(root.path, "marks.txt")
+        const plugins = row.global ? path.join(global, "plugins") : path.join(project, ".orbit", "plugins")
+        const plugin = path.join(plugins, "hello")
+        const entry = path.join(plugin, row.link)
+        await mkdir(path.join(project, ".git"), { recursive: true })
+        await mkdir(path.dirname(entry), { recursive: true })
+        await Bun.write(path.join(plugins, "good", "tui.ts"), marker(marks, "project.good", "good"))
+        await Promise.all(
+          row.files.map((file) => Bun.write(path.join(plugin, file), marker(marks, "project.hello", "loaded"))),
+        )
+        if (row.main !== undefined)
+          await Bun.write(path.join(plugin, "tui", "package.json"), JSON.stringify({ main: row.main }))
+        if (row.junction !== undefined)
+          await symlink(path.join(plugin, row.junction.to), path.join(plugin, row.junction.link), "junction")
+        // The link loops, or leads to a marker file outside the plugin's folder.
+        const to = row.outside ? path.join(root.path, "outside.ts") : entry
+        if (row.outside) await Bun.write(to, marker(marks, "project.hello", "loaded"))
+        if (!linked)
+          await Bun.write(entry, row.link.endsWith(".json") ? "{}" : marker(marks, "project.hello", "loaded"))
+        const made =
+          !linked ||
+          (await symlink(to, entry, "file").then(
+            () => true,
+            (error: NodeJS.ErrnoException) => {
+              if (error.code === "EPERM" || error.code === "UNKNOWN") return false
+              throw error
+            },
+          ))
+        if (!made) return
+        const read = async () =>
+          (await Bun.file(marks).exists()) ? (await Bun.file(marks).text()).trim().split("\n") : []
+        await inside(project, async () => {
+          await using setup = await createAppFixture({
+            state: state.path,
+            global,
+            fetch: (url, request) => {
+              if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
+              return json(status(project, true))
+            },
+          })
+          await setup.ready
+          await setup.waitForFrame((frame) => promptReady(frame))
+          await setup.waitFor(async () => (await read()).includes("good"), { maxPasses: 200 })
+          if (!linked) await setup.waitFor(async () => (await read()).includes("loaded"), { maxPasses: 200 })
+          expect((await read()).toSorted()).toEqual(linked ? ["good"] : ["good", "loaded"])
+        })
+      }, 30_000)
+})

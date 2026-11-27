@@ -18,7 +18,10 @@ import { realpath, stat } from "fs/promises"
 import { PluginRestriction } from "@orbit/plugin/restriction"
 import { fileURLToPath } from "url"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LayerNode } from "@orbit/util/effect/layer-node"
+import { Effect, Logger } from "effect"
 import type { Page } from "@orbit/plugin/tui/context"
+import { EntryLinks } from "@orbit/plugin/entry-links"
 import { Host } from "@orbit/plugin/host"
 import { resolveSlots, type Claim } from "./structure"
 import { createStore, produce, reconcile as reconcileStore, unwrap } from "solid-js/store"
@@ -778,6 +781,10 @@ async function resolvePlugin(
     : await trace("prepare", { reconciliation, target: spec, install }, () => packages.prepare(spec, install))
   const entrypoint = Host.resolve(target).tui
   if (!entrypoint) return { status: "unsupported" as const }
+  // The resolver passes over a link that loops, so a folder with a link that could be an entry and loops or leads out
+  // is left out before an entry is read, global or project, as the server leaves it out (classes 3 and 12).
+  if (local && (await linkEscapes(fileURLToPath(local))))
+    throw new Error(`Plugin entry link loops or leads out of its folder: ${spec}`)
   // A project plugin's entry stays inside its folder: what a link leads out of it to is not the project's to supply.
   if (confined && local && !FSUtil.contains(await realpath(fileURLToPath(local)), await realpath(fileURLToPath(entrypoint))))
     throw new Error(`Project plugin entry leaves its folder: ${spec}`)
@@ -808,6 +815,12 @@ async function resolvePlugin(
     return { status: "loaded" as const, plugin: mod.default, version }
   }
 }
+
+const linkEscapes = (directory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FSUtil.Service
+    return yield* EntryLinks.escapes(fs, directory, [])
+  }).pipe(Effect.provide(LayerNode.compile(FSUtil.node)), Effect.provide(Logger.layer([])), Effect.runPromise)
 
 function toRegistration(item: Desired): Registration {
   return {
