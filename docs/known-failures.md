@@ -231,6 +231,13 @@ it:
   and needed the command to end in that time, so a PowerShell that took longer to start found the command still
   running. The command now outlives its 200 ms deadline and the row holds the call until the job has ended, so the
   command always ends between its move and the call's look at it, however slow its shell is to start.
+- core `shell-analysis/readonly-tools.test.ts` 'Windows PowerShell 5.1 ignores the empty entries of a Windows Path'
+  (a class 10 probe; Windows core 3/3 of run 46031287369, 60 s, after 1.2 to 3.6 s in the five runs before): given a
+  name in no folder of its Path, the child PowerShell goes on to look for it in every module of PSModulePath, and it
+  was still running when the row's 60 s ran out. Module autoloading is off in the child now. It comes after the Path
+  lookup the row checks, the dot control still finds the decoy, and a module of the name planted first in
+  PSModulePath pins that no module is searched. In 50 loaded runs here the row took at most 2.08 s before and 0.87 s
+  after.
 - cli `flow-team.test.ts` 'a resumed team reuses the turns that ran and continues from the failed one' (FU-M3-421,
   lead#3 for lead#2 once in a full parallel Linux cli run): not fixed, and FU-M3-421 stays open. Both suspects the
   register names were forced and ruled out: a resume through another spelling of the folder ('a team resumed through
