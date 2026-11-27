@@ -418,6 +418,15 @@ describe("OllamaPlugin", () => {
     }),
   )
 
+  // An answer with no models is an answer too, so the plugin waits its interval after it and not the 1 s backoff of a
+  // plugin whose read failed. A backoff would find the cached answer fresh until the interval ends and ask only at the
+  // first pause past it: 7 s after the first request with a 4 s interval, where the interval asks after 4 s.
+  it.live("a server that answered with no models is asked again only after the interval", () =>
+    Effect.gen(function* () {
+      expect(yield* pauses("4 seconds", () => Response.json({ models: [] }), 3)).toEqual([4_000, 4_000])
+    }),
+  )
+
   // An answer that came in time is kept for the interval: the next plugin of the same server takes it without asking.
   // Both plugins run on one clock, so the row fails if the cache and the refresh loop read different clocks.
   it.live("a discovery that answered is kept as a fresh answer for the next plugin of the same server", () =>

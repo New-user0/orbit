@@ -380,6 +380,99 @@ describe("ConfigSkillPlugin.Plugin", () => {
       }),
   )
 
+  // A watch that the platform cannot make (the native layer has no backend for it) ends at once without saying that it
+  // is ready, and the refresh does not wait for it: the root with no skills folder yet and the skills folder of the next
+  // root are both watches of that kind, and the next root's skill still loads.
+  it.live("loads the skills of other products' roots when no watch of them can be made", () =>
+    Effect.gen(function* () {
+      const tmp = (yield* tmpdirScoped()).path
+      const project = path.join(tmp, "project")
+      const vendor = path.join(project, CompatNames.vendor.directory)
+      const agents = path.join(project, CompatNames.agents)
+      yield* Effect.promise(async () => {
+        await fs.mkdir(vendor, { recursive: true })
+        await fs.mkdir(path.join(agents, "skills", "foreign"), { recursive: true })
+        await write(path.join(agents, "skills"), "foreign", "Shipped for another product")
+      })
+      const skills = yield* startEntries([], project, tmp, emptyDiscovery, {
+        enabled: true,
+        roots: [
+          { path: AbsolutePath.make(vendor), kind: "vendor", scope: "project", trusted: false },
+          { path: AbsolutePath.make(agents), kind: "agents", scope: "project", trusted: false },
+        ],
+      }).pipe(
+        Effect.timeout("5 seconds"),
+        Effect.provide(
+          Watcher.layer().pipe(
+            Layer.provide(
+              Layer.succeed(Watcher.Native, Watcher.Native.of({ subscribe: () => Effect.succeed(undefined) })),
+            ),
+          ),
+        ),
+      )
+      expect((yield* skills.list()).map((item) => item.id)).toEqual([Skill.ID.make("foreign")])
+    }),
+  )
+
+  // A root with no skills folder is looked at again once its watch is in place, because a folder made while the watch
+  // was being made is reported by no event. The watch here makes the folder while it subscribes and reports nothing. A
+  // root that is not there gets no watch for its skills folder: the config's watch of the root's own entry sees it come.
+  it.live("looks again for a root's skills folder made while its watch is made, and watches no missing root", () =>
+    Effect.gen(function* () {
+      const tmp = (yield* tmpdirScoped()).path
+      const project = path.join(tmp, "project")
+      const vendor = path.join(project, CompatNames.vendor.directory)
+      const agents = path.join(project, CompatNames.agents)
+      yield* Effect.promise(() => fs.mkdir(vendor, { recursive: true }))
+      const watched: string[] = []
+      const native = Watcher.Native.of({
+        subscribe: (input) =>
+          Effect.promise(async () => {
+            watched.push(input.target)
+            if (input.type === "file" && input.target === path.join(vendor, "skills")) {
+              await fs.mkdir(path.join(vendor, "skills", "made"), { recursive: true })
+              await write(path.join(vendor, "skills"), "made", "Made while the watch was made")
+            }
+            return { unsubscribe: () => Promise.resolve() }
+          }),
+      })
+      const skills = yield* startEntries([], project, tmp, emptyDiscovery, {
+        enabled: true,
+        roots: [
+          { path: AbsolutePath.make(vendor), kind: "vendor", scope: "project", trusted: false },
+          { path: AbsolutePath.make(agents), kind: "agents", scope: "project", trusted: false },
+        ],
+      }).pipe(Effect.provide(Watcher.layer().pipe(Layer.provide(Layer.succeed(Watcher.Native, native)))))
+      expect((yield* skills.list()).map((item) => item.id)).toEqual([Skill.ID.make("made")])
+      expect(watched).toContain(path.join(vendor, "skills"))
+      expect(watched.filter((target) => target.startsWith(agents))).toEqual([])
+    }),
+  )
+
+  // Two roots that lead to one skills folder watch it under one key: the second root's watch replaces the first one's and
+  // says it is ready, so the refresh goes on to load the folder's skills once.
+  it.live("loads the skills of two roots that lead to one skills folder", () =>
+    Effect.gen(function* () {
+      const tmp = (yield* tmpdirScoped()).path
+      const project = path.join(tmp, "project")
+      const vendor = path.join(project, CompatNames.vendor.directory)
+      const agents = path.join(project, CompatNames.agents)
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(vendor, "skills", "shared"), { recursive: true })
+        await write(path.join(vendor, "skills"), "shared", "Reached from both roots")
+        await fs.symlink(vendor, agents, "junction")
+      })
+      const skills = yield* startEntries([], project, tmp, emptyDiscovery, {
+        enabled: true,
+        roots: [
+          { path: AbsolutePath.make(vendor), kind: "vendor", scope: "project", trusted: false },
+          { path: AbsolutePath.make(agents), kind: "agents", scope: "project", trusted: false },
+        ],
+      }).pipe(Effect.timeout("5 seconds"))
+      expect((yield* skills.list()).map((item) => item.id)).toEqual([Skill.ID.make("shared")])
+    }),
+  )
+
   it.live("maps config entry types to skill directories", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) =>
