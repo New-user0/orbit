@@ -6,6 +6,7 @@ import path from "node:path"
 import { junctionSpellings, junctionTemporary } from "../../../core/test/fixture/legacy-junction"
 import { runProgram } from "../../../core/test/fixture/run-program"
 import {
+  APPROVAL_ROW_LIMIT,
   approval,
   canLinkDirectory,
   globMarker,
@@ -153,7 +154,7 @@ export function spellingMatrix(rows: typeof linkRows) {
               },
               linkCheck(row, mode),
             ),
-          90_000,
+          APPROVAL_ROW_LIMIT,
         )
       test.concurrent(
         `an untrusted ${row.name} through ${spelling.name} and the repository's link under the person's deny of the config folder is denied with no question`,
@@ -181,7 +182,7 @@ export function spellingMatrix(rows: typeof linkRows) {
               expect(await row.acted(run.root, run.bodies)).toBe(false)
             },
           ),
-        90_000,
+        APPROVAL_ROW_LIMIT,
       )
     }
 }
@@ -246,7 +247,7 @@ export function shareMatrix(rows: typeof linkRows) {
             },
             (run) => refusedAsShare(run, row),
           ),
-        90_000,
+        APPROVAL_ROW_LIMIT,
       )
       if (share !== shareTargets[0]) continue
       test.concurrent(
@@ -271,7 +272,7 @@ export function shareMatrix(rows: typeof linkRows) {
             },
             (run) => refusedAsShare(run, row),
           ),
-        90_000,
+        APPROVAL_ROW_LIMIT,
       )
       // The owner trusted the folder (2026-10-13: a trusted folder asks before a tool touches a link to a share): no
       // spelling refuses the call, and one folder question names the share. A reject keeps everything unopened.
@@ -301,7 +302,7 @@ export function shareMatrix(rows: typeof linkRows) {
                 if (reply === "reject") expect(await row.acted(run.root, run.bodies)).toBe(false)
               },
             ),
-          90_000,
+          APPROVAL_ROW_LIMIT,
         )
     }
 }

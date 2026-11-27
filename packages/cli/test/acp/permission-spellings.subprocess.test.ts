@@ -5,6 +5,7 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 import {
+  APPROVAL_ROW_LIMIT,
   approval,
   keySent,
   linkRows,
@@ -36,7 +37,7 @@ for (const spelling of realSpellings) {
           expect(keySent(run.root, run.bodies)).toBe(false)
         },
       ),
-    90_000,
+    APPROVAL_ROW_LIMIT,
   )
   test.concurrent(
     `an untrusted Read through ${spelling.name} and the repository's link, after the folder is allowed, names the folder it reads`,
@@ -48,7 +49,7 @@ for (const spelling of realSpellings) {
           expect(shownAt(run.permissions[1]?.toolCall.locations)).toEqual([path.join(run.root, "config", "orbit.json")])
         },
       ),
-    90_000,
+    APPROVAL_ROW_LIMIT,
   )
   test.concurrent(
     `an untrusted Read of secret/key.txt through ${spelling.name} under the person's deny of secret/* is denied`,
@@ -70,7 +71,7 @@ for (const spelling of realSpellings) {
           expect(toolResult(run)).toContain("denied")
         },
       ),
-    90_000,
+    APPROVAL_ROW_LIMIT,
   )
   test.concurrent(
     `an untrusted Read of secret/key.txt through ${spelling.name} under the person's ask of secret/* asks about secret/key.txt`,
@@ -91,7 +92,7 @@ for (const spelling of realSpellings) {
           expect(denyMarkerSent(run)).toBe(false)
         },
       ),
-    90_000,
+    APPROVAL_ROW_LIMIT,
   )
   test.concurrent(
     `a trusted Read through ${spelling.name} and the repository's link is the project's own, with no folder question (control)`,
@@ -111,7 +112,7 @@ for (const spelling of realSpellings) {
           expect(keySent(run.root, run.bodies)).toBe(true)
         },
       ),
-    90_000,
+    APPROVAL_ROW_LIMIT,
   )
 }
 for (const spelling of refusedSpellings)
@@ -133,7 +134,7 @@ for (const spelling of refusedSpellings)
             expect(toolResult(run)).toContain("file.spelling")
           },
         ),
-      90_000,
+      APPROVAL_ROW_LIMIT,
     )
 
 // A share or device spelling is refused before any question whatever the tool, trusted or not.
@@ -160,7 +161,7 @@ for (const row of refusedRows)
               expect(toolResult(run)).toContain("file.spelling")
             },
           ),
-        90_000,
+        APPROVAL_ROW_LIMIT,
       )
 
 // The matrix row of `clients-ux-61` over a real `orb acp` process: a NotebookEdit asks as an Edit, and its approval and
@@ -218,5 +219,5 @@ for (const trusted of [false, true])
           expect(await Bun.file(place).text()).toContain("print(2)")
         },
       ),
-    120_000,
+    APPROVAL_ROW_LIMIT,
   )
