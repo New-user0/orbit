@@ -106,7 +106,8 @@ describe("a plugin folder with a looping entry", () => {
   // resolver's order, so it is never what the resolver returns. A link whose name is not an entry name is not checked.
   // The names are matched without case (Windows and macOS resolve `TUI.ts` for `tui`), and inside a real `server/`,
   // `index/`, `tui/` or `rpc/` folder the links that folder's own entry could be are checked too: its `index`, its
-  // `package.json` and each step of the `main` that names. The lowercase rows are the controls of the case rows, and the
+  // `package.json` and each step of the `main` that names (a `./` step names the folder itself, and the `index` is checked
+  // when `main` names a file that is not there). The lowercase rows are the controls of the case rows, and the
   // `other` rows and `server/index/index.ts` (the resolver does not look two folders down for an index) are the
   // controls of the names: a link the resolver would never look at keeps its folder offered.
   for (const row of [
@@ -137,6 +138,8 @@ describe("a plugin folder with a looping entry", () => {
     { link: "server/lib/index.ts", files: ["server/index.ts"], main: "lib", offered: ["good.ts"] },
     { link: "server/lib/other.js", files: ["server/index.ts", "server/lib/x.js"], main: "lib/x.js", offered: ["good.ts", "p"] },
     { link: "server/main.js", files: ["server/index.ts"], main: "../server/main.js", offered: ["good.ts"] },
+    { link: "server/main.js", files: ["server/index.ts"], main: "./main.js", offered: ["good.ts"] },
+    { link: "server/index.ts", files: ["index.ts"], main: "missing.js", offered: ["good.ts"] },
     { link: "q/x.js", files: ["server/index.ts"], main: "../q/x.js", offered: ["good.ts"] },
   ]) {
     const manifest = row.main === undefined ? "" : ` with main ${row.main}`
@@ -233,6 +236,41 @@ describe("a plugin folder with a looping entry", () => {
         return (yield* source.operations()).flatMap((item) => (item.type === "add" ? [path.basename(item.target)] : []))
       }).pipe(Effect.provide(loader(root, repo)))
       expect(offered).toEqual(["good.ts"])
+    }),
+  )
+})
+
+describe("the time a plugin is stamped with", () => {
+  // A plugin is loaded again when its stamp changes, and the `package.json` the runtime reads beside its entry counts:
+  // the plugin folder's own for a folder, and the one in the folder that holds it for a single file. Each file gets
+  // its own time, so the stamp names the file it came from.
+  it.live("is the newest of the entry files and the package.json beside them", () =>
+    Effect.gen(function* () {
+      const root = (yield* tmpdirScoped()).path
+      const repo = path.join(root, "work", "repo")
+      const plugins = path.join(root, "home", ".config", "orbit", "plugins")
+      const times = [
+        { file: path.join(plugins, "good.ts"), seconds: 1_000_000 },
+        { file: path.join(plugins, "package.json"), seconds: 3_000_000 },
+        { file: path.join(plugins, "p", "server.ts"), seconds: 1_000_000 },
+        { file: path.join(plugins, "p", "package.json"), seconds: 2_000_000 },
+      ]
+      yield* Effect.promise(async () => {
+        await fs.mkdir(path.join(plugins, "p"), { recursive: true })
+        await Promise.all(
+          times.map(async (entry) => {
+            await fs.writeFile(entry.file, entry.file.endsWith(".json") ? "{}" : "export default 1;")
+            await fs.utimes(entry.file, entry.seconds, entry.seconds)
+          }),
+        )
+      })
+      const stamps = yield* Effect.gen(function* () {
+        const source = yield* ConfigPluginSource.Service
+        return (yield* source.operations()).flatMap((item) =>
+          item.type === "add" ? [[path.basename(item.target), item.mtime]] : [],
+        )
+      }).pipe(Effect.provide(loader(root, repo)))
+      expect(Object.fromEntries(stamps)).toEqual({ "good.ts": 3_000_000_000, p: 2_000_000_000 })
     }),
   )
 })
