@@ -103,9 +103,8 @@ const ollama = Bun.serve({
   },
 })
 
-// The updates that may reach a lead between two processes: a date that changed, a git snapshot taken late. A row that
-// does not force either asserts there is no other, so a separate spurious or duplicated update shows here and not
-// nowhere.
+// The updates that may reach a lead between two processes: a date that changed, a git snapshot taken late. The main
+// and spelling rows force neither and assert there is no other, so a separate spurious or duplicated update fails them.
 function unexpectedUpdates() {
   return turns
     .flatMap((item) => item.updates)
