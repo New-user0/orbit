@@ -431,6 +431,8 @@ describe("ConfigSkillPlugin.Plugin", () => {
           Effect.promise(async () => {
             watched.push(input.target)
             if (input.type === "file" && input.target === path.join(vendor, "skills")) {
+              // A slow subscription: the second look must wait until the watch is in place, not run beside it.
+              await Bun.sleep(200)
               await fs.mkdir(path.join(vendor, "skills", "made"), { recursive: true })
               await write(path.join(vendor, "skills"), "made", "Made while the watch was made")
             }
