@@ -58,7 +58,7 @@ describe("RepositoryCache", () => {
         }).pipe(Effect.provide(cacheLayer(fixture.root)))
         expect(yield* read(path.join(initial.localPath, "README.md"))).toBe("two\n")
       }),
-    ), 10_000,
+    ),
   )
 
   it.live("honors legacy attempt records while allowing forced refreshes", () =>
@@ -81,7 +81,7 @@ describe("RepositoryCache", () => {
         expect(yield* read(path.join(initial.localPath, "README.md"))).toBe("two\n")
         expect((yield* cache.ensure({ reference: fixture.reference, refresh: "daily" })).status).toBe("cached")
       }).pipe(Effect.provide(cacheLayer(fixture.root))),
-    ), 10_000,
+    ),
   )
 
   it.live("throttles failed refresh attempts until the next interval", () =>
@@ -110,7 +110,7 @@ describe("RepositoryCache", () => {
         expect((yield* cache.ensure({ reference: fixture.reference, refresh: "daily" })).status).toBe("refreshed")
         expect(yield* read(path.join(initial.localPath, "README.md"))).toBe("two\n")
       }).pipe(Effect.provide(cacheLayer(fixture.root))),
-    ), 10_000,
+    ),
   )
 
   it.live("refreshes existing untracked checkouts and keeps branch freshness independent", () =>
@@ -131,7 +131,7 @@ describe("RepositoryCache", () => {
         expect(yield* read(path.join(main.localPath, "README.md"))).toBe("one\n")
         expect(yield* read(path.join(feature.localPath, "README.md"))).toBe("new feature\n")
       }).pipe(Effect.provide(cacheLayer(fixture.root))),
-    ), 10_000,
+    ),
   )
 
   it.live("replaces a stale cache directory before cloning", () =>

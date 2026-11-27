@@ -263,7 +263,7 @@ it.live("an untrusted folder is refused before any instruction file is read, and
       }
       expect(decode(answer.body.data).files.map((file) => file.path)).toContain(marker)
     }
-  }).pipe(Effect.scoped), 10_000,
+  }).pipe(Effect.scoped),
 )
 
 // SV3, class 3: the folder checked is the session's own. A request whose header names a trusted folder does not open an
