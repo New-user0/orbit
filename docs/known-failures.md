@@ -148,3 +148,24 @@ it:
 - cli `import-export`, `session-list`, `auth`, `mini`, `argv`, `mcp-auth-choices` and `acp/command`: their `orb`
   children took the parent's environment, so they shared the runner's own data, config and state folders, and held no
   start slot. They start through `packages/cli/test/fixture/orb.ts` now, which applies `isolatedEnv` and the start gate.
+- core, the rows at Bun's 5 s default that start real processes (`npm.test.ts`, `vcs.test.ts`, `git.test.ts`,
+  `session-context-vcs.test.ts`, `session-context-usage.test.ts`, `project.test.ts`, `lsp-ignored.test.ts`,
+  `session-rehydration.test.ts`, `tool-lsp.test.ts`, `tool-search.test.ts`, `formatter.test.ts`, `location-layer.test.ts`,
+  `lsp-reminder.test.ts`, `edit-link.test.ts`, `mcp.test.ts` and `LifecycleHooksPlugin under workspace trust` in
+  `plugin/lifecycle-hooks.test.ts`, a trust gate), and the server rows of the same kind: on a loaded Windows runner
+  their git, language-server, MCP, shell and npm children passed 5 s. Each row whose worst time passed half its limit,
+  in the JUnit report of run 45919528051 (every core and server job, Windows and Linux) and in loaded runs on the
+  development machine (4 cores, 2 workers, coverage), now has a measured limit: twice that worst time, rounded up to a
+  whole 5 s, or 20 s where the worst time was a timeout at 5 s. No limit was lowered and no assertion changed. The
+  config-trust rows (FU-M3-387) took at most 1.6 s, so they keep 5 s.
+- core `falls back to local logging when OTLP initialization fails` (`effect/observability.test.ts`): its child had a
+  cache folder of its own and transpiled Effect from nothing on every run (0.4 s alone, over 5 s on a loaded runner). It
+  shares the run's transpiler cache now (`packages/core/test/fixture/child-env.ts`), and the row checks that its own
+  cache folder holds none.
+- vscode, the two rows of FU-M4-226: `ide-bridge.test.ts` 'sends a cleared selection when no file editor remains'
+  connected while its first selection's 20 ms flush was pending (1 of 400 repeats failed; 0 of 400 after the row waits
+  out the flush), and `controller.test.ts` dropped its first prompt when the cold server's first trust read outlasted
+  the controller's 2 s limit, which then handed the scripted Write call to the next row. The file waits for the
+  server's trust answer before its rows, and its model answers by what the prompt asks.
+- The rows of the side builders of this task (cli children through the start gate and measured limits, the TUI waits,
+  the sdk first-request row) are named with their causes in their own commits on PR #195.
