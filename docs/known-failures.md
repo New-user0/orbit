@@ -250,6 +250,12 @@ it:
   message: a forced failure at that point of the status line row now ends after 2.8 s with it, instead of a timeout.
   In loaded runs here (4 CPUs each, coverage on, beside `session-home.test.tsx`) the row timed out 10 times in 180
   before and 0 times in 120 after.
+- core `pty/pty-windows.test.ts` 'detached PTY hosts interrupt commands without closing the shell' (Windows core 2/3
+  of run 46041471233, after 0.6 to 2.6 s in the seven runs before): the child of the row waited 5 s for each answer
+  of its PowerShell, and the first prompt of a loaded runner's PowerShell came later, inside a row of 35 s. Every
+  wait of `packages/core/test/fixture/pty-windows.ts` now ends by one 25 s deadline for the whole child, inside the
+  30 s the row gives it. A forced case, a PowerShell that sleeps 6 s before its prompt, failed with CI's message
+  before and passes after.
 - cli `flow-team.test.ts` 'a resumed team reuses the turns that ran and continues from the failed one' (FU-M3-421,
   lead#3 for lead#2 once in a full parallel Linux cli run): not fixed, and FU-M3-421 stays open. Both suspects the
   register names were forced and ruled out: a resume through another spelling of the folder ('a team resumed through
