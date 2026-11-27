@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test"
-import { mkdir, realpath } from "node:fs/promises"
-import { homedir } from "node:os"
-import { join, relative } from "node:path"
+import { mkdir, mkdtemp, realpath } from "node:fs/promises"
+import os from "node:os"
+import { isAbsolute, join, relative } from "node:path"
 import { Effect } from "effect"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { Orbit } from "../src"
 
@@ -91,7 +92,14 @@ test("an embedded host gets the typed refusal from every route that starts work 
 // destination, read from the session's own folder however it is spelled (class 3, class 12). Each spelling of an
 // untrusted folder is refused, naming the folder; the control is a trusted folder, where each acts.
 test("the Effect SDK's sessions.create and sessions.move refuse an untrusted folder, however it is spelled", async () => {
-  await using directory = await tmpdir("orbit-sdk-trust-first-effect-")
+  // The `~` spelling below names the folder from the home, so the folders must be in it. A temporary folder usually
+  // is; Windows CI keeps its temporary folder on D: and the home on C:, so there the row makes its folder in the home.
+  const fromHome = relative(os.homedir(), os.tmpdir())
+  const parent = fromHome.startsWith("..") || isAbsolute(fromHome) ? os.homedir() : os.tmpdir()
+  await using directory = await (async () => {
+    const folder = await mkdtemp(join(parent, "orbit-sdk-trust-first-effect-"))
+    return { path: folder, [Symbol.asyncDispose]: () => removeTree(folder) }
+  })()
   const root = await realpath(directory.path)
   const config = join(root, "config")
   const repo = join(root, "repo")
@@ -103,7 +111,7 @@ test("the Effect SDK's sessions.create and sessions.move refuse an untrusted fol
   const spellings = (folder: string) => [
     folder,
     relative(repo, folder),
-    `~/${relative(homedir(), folder).replaceAll("\\", "/")}`,
+    `~/${relative(os.homedir(), folder).replaceAll("\\", "/")}`,
   ]
   await Effect.runPromise(
     Effect.scoped(
