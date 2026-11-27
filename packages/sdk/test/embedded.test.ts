@@ -884,10 +884,12 @@ it.live(
         let toolIssued = false
         const llm = yield* TestLLM.Test.pipe(Effect.provide(TestLLM.testLayer()))
         yield* llm.serve((request) => {
-          const wantsTool = !toolIssued && request.tools.some((tool) => tool.name === "Bash")
-          if (!wantsTool) return TestLLM.text("done", "answer")
+          // The shell tool is offered as `PowerShell` when the session shell is PowerShell, which on Windows is whatever
+          // `SHELL` and the PATH select, so the row asks for the name it was offered under.
+          const shell = request.tools.find((tool) => tool.name === "Bash" || tool.name === "PowerShell")
+          if (toolIssued || !shell) return TestLLM.text("done", "answer")
           toolIssued = true
-          return TestLLM.tool("call-shell", "Bash", { command: "echo hi" })
+          return TestLLM.tool("call-shell", shell.name, { command: "echo hi" })
         })
         const models = Layer.mock(SessionRunnerModel.Service, {
           resolve: () =>
