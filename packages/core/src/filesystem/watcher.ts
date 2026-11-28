@@ -212,7 +212,7 @@ export const makeNative = Effect.fnUntraced(function* (
   binding: () => Pick<typeof ParcelWatcher, "subscribe"> | undefined,
   backend: ParcelWatcher.BackendType | undefined,
 ) {
-  const pool: Pool = { closed: false, parked: new Map(), retired: new Map(), generation: 0 }
+  const pool: Pool = { closed: false, parked: new Map(), retired: new Map(), ending: new Map(), generation: 0 }
   yield* Effect.addFinalizer(() =>
     Effect.promise(() => {
       pool.closed = true
@@ -270,6 +270,8 @@ type Pool = {
   closed: boolean
   readonly parked: Map<string, Parked[]>
   readonly retired: Map<string, ParcelWatcher.AsyncSubscription[]>
+  // The end of each native watch that is still being ended, by folder and ignore list.
+  readonly ending: Map<string, Promise<unknown>>
   generation: number
 }
 
@@ -319,7 +321,16 @@ function subscribeDirectory(
     free.filter((entry) => entry !== reused && reusable(entry)),
   )
   const release = (watch: DirectoryWatch, subscription: ParcelWatcher.AsyncSubscription) => {
-    if (backend !== "windows" || watch.ended || pool.closed) return subscription.unsubscribe()
+    if (backend !== "windows" || watch.ended || pool.closed) {
+      // Parcel shares one native watch per folder and ignore list. A subscribe that starts while the last one is still
+      // being ended joins the one that is going away and never hears the folder, so the next subscribe waits for this.
+      const ended = subscription.unsubscribe()
+      const settled = Promise.all([pool.ending.get(key), ended.catch(() => {})]).then(() => {
+        if (pool.ending.get(key) === settled) pool.ending.delete(key)
+      })
+      pool.ending.set(key, settled)
+      return ended
+    }
     watch.publish = () => {}
     pool.parked.set(key, [...(pool.parked.get(key) ?? []), { watch, subscription, folder: folderIdentity(directory) }])
     return Promise.resolve()
@@ -342,7 +353,10 @@ function subscribeDirectory(
   // watch gets a name that sets this native watch apart from it (see above); `<` and `>` are not
   // allowed in a Windows file name, so it hides no file.
   const apart = retired.length > 0 ? [`<orbit-watch-${++pool.generation}>`] : []
-  const pending = native.subscribe(directory, callback, { ignore: [...ignore, ...apart], backend })
+  const earlier = pool.ending.get(key)
+  const pending = earlier
+    ? earlier.then(() => native.subscribe(directory, callback, { ignore: [...ignore, ...apart], backend }))
+    : native.subscribe(directory, callback, { ignore: [...ignore, ...apart], backend })
   return Effect.promise(() => pending).pipe(
     Effect.map((subscription) => ({ unsubscribe: () => release(watch, subscription), backend })),
     // Interruption (including the timeout below) abandons the pending native

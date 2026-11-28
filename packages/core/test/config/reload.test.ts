@@ -42,6 +42,41 @@ import { tmpdir } from "../fixture/tmpdir"
 const it = testEffect(
   Layer.merge(PluginTestLayer, AppNodeBuilder.build(LayerNode.group([AppProcess.node, ShellSelect.node, Job.node]))),
 )
+// The process's native watches, with each subscribe, update and failed end written to `seen`.
+function recorded(seen: string[]): Watcher.NativeInterface {
+  const real = processNative(Watcher.binding, Watcher.backend())
+  return Watcher.Native.of({
+    subscribe: (input) => {
+      const name = `${input.type} ${input.target}`
+      seen.push(`subscribe ${name}`)
+      return real
+        .subscribe({
+          ...input,
+          publish: (update) => {
+            seen.push(`update ${update.type} ${update.path}`)
+            input.publish(update)
+          },
+        })
+        .pipe(
+          Effect.map((subscription) =>
+            subscription
+              ? {
+                  ...subscription,
+                  unsubscribe: () =>
+                    subscription.unsubscribe().then(
+                      () => void seen.push(`unsubscribed ${name}`),
+                      (error: unknown) => {
+                        seen.push(`unsubscribe rejected ${name}: ${error}`)
+                        throw error
+                      },
+                    ),
+                }
+              : subscription,
+          ),
+        )
+    },
+  })
+}
 const decode = Schema.decodeUnknownSync(Info)
 const document = path.join(import.meta.dir, "orbit.json")
 
@@ -67,6 +102,7 @@ describe("config plugin reloads", () => {
             const project = path.join(tmp.path, "project")
             const root = path.resolve(project, input.root)
             const file = path.join(project, "orbit.json")
+            const seen: string[] = []
             yield* Effect.promise(async () => {
               await fs.mkdir(path.join(project, "home"), { recursive: true })
               await fs.mkdir(path.join(project, "global"))
@@ -96,11 +132,16 @@ describe("config plugin reloads", () => {
               yield* Effect.promise(() => Bun.write(skill, probeSkill("Recreated")))
               yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "Recreated")))
             }).pipe(
+              // Name what the watches saw when the row ends in a timeout, so a recurrence shows its cause.
+              Effect.timeoutOption("25 seconds"),
+              Effect.flatMap((done) =>
+                done._tag === "Some" ? Effect.void : Effect.die(new Error("no skill reload in 25 s; native watch calls:\n" + seen.join("\n"))),
+              ),
               Effect.provide(
                 // A root in the folder above is read only when that folder is the project's root (D7).
                 liveConfig(
                   project,
-                  undefined,
+                  recorded(seen),
                   { global: input.global },
                   input.root.startsWith("../") ? tmp.path : project,
                 ),

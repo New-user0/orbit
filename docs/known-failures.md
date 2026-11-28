@@ -143,6 +143,16 @@ it:
   `node-build`, and the two skill folders of the checkout in `config/reload`; during rows: the four replaced roots of
   `config/reload`) and none after. FU-M5-022 keeps only the close of the native layer as a server or an SDK host
   shuts down.
+- core, `config/reload.test.ts` "loads skills when home/.claude appears after startup" timing out at 30 s once on Linux
+  (push run 46097880990, the pull_request run of the same commit passed): the reload row's own cause is not proven. What
+  was found on the way is a defect of the watch layer, which the row's sequence can reach: Parcel shares one native watch
+  per folder and ignore list, and a subscribe that starts while the last one of that folder is still being ended joins the
+  watch that is going away and hears nothing for good (400 of 400 times in a script that did it on purpose; 2 of 15
+  runs of the second row of `test/filesystem/watcher-overlap.test.ts` on the old code, under six busy loops on 4 CPUs).
+  `Watcher.makeNative` now starts a watch of a folder only after the end of the one before it has been reported
+  ("starts a watch only after the end of the earlier one of the folder", which fails on the old code by order of calls).
+  The reload row now records its native watch calls, updates and failed ends, and when it passes 25 s it fails with
+  that list, so a recurrence names its cause.
 - cli, the trust-doors control that runs a node with a model and the YAML `permissions:auto` row of `flow.test.ts`: a
   first Ollama `/api/tags` read that ran past its 1 s limit was kept as a fresh answer for 30 s and not tried again
   before the interval (FU-M3-385). A read that fails, times out or is interrupted now leaves the cache as it was, and
