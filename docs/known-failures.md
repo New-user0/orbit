@@ -265,12 +265,17 @@ it:
   30 s the row gives it. A forced case, a PowerShell that sleeps 6 s before its prompt, failed with CI's message
   before and passes after.
 - cli `flow-team.test.ts` 'a resumed team reuses the turns that ran and continues from the failed one' (FU-M3-421,
-  lead#3 for lead#2 once in a full parallel Linux cli run): not fixed, and FU-M3-421 stays open. Both suspects the
-  register names were forced and ruled out: a resume through another spelling of the folder ('a team resumed through
-  another spelling of its folder sends its lead no message of its own') and a process stopped during a lead turn ('a
-  team resumed after its process stopped during a lead turn asks the lead once, with no recovered message'), each on
-  Windows and on Linux. The row ran 131 times under load (115 on Linux, 16 on Windows) without a failure, and it
-  prints every recorded request when a lead turn passes 2, so a recurrence names the extra message.
+  lead#3 for lead#2 once in a full parallel Linux cli run): the row counted the instruction updates that the server
+  freezes into a lead's history as turns. Two forced rows ('a lead whose first git snapshot failed is told of the late
+  one and still counts two turns', 'a lead resumed on another date is told the date changed and still counts two turns')
+  reproduce the symptom, and each fails with lead#3 when the update filter is removed (84c2c59d); the chat-completions
+  request lowers such an update to a user-role message. Which of the two CI hit is not known. The rows run on Linux and
+  macOS only. A recurrence from any other cause (a re-delivered or duplicated prompt, for one, such as one left queued
+  after DELIVERY_GRACE_MS in packages/flow/src/agent.ts, which was not forced) is still counted as a turn, and the row
+  prints every recorded request in full when a lead turn passes 2; the main and spelling rows assert that a resumed
+  team's only updates are the two legitimate kinds (each fails when an environment update is forced: the pid in the
+  directory). The file ran 50 times under load on Linux (4 CPUs, 3 busy loops, 2 workers, all
+  7 rows each time) without a failure, and six full parallel cli runs passed.
 - util `observability-otlp.test.ts` 'exports a span through the configured OTLP trace endpoint': no cause in the code.
   The row starts no child and nothing in `packages/util` changed; it ran 50 times under load on Windows (4 CPUs,
   coverage on) with no failure, so the row is closed on that count.
