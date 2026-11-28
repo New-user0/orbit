@@ -464,6 +464,9 @@ describe("a plugin folder with a looping link named like a tui entry", () => {
           })
           await setup.ready
           await setup.waitForFrame((frame) => promptReady(frame))
+          // A folder left out is reported as a failed plugin, not passed over as one with no tui entry. The toast is
+          // shown at the end of the reconcile that sets `good` up, and it stays 5 s, so it is looked for first.
+          if (linked) await setup.waitForFrame((frame) => frame.includes("Plugin failed:"), { timeout: 10_000 })
           await setup.waitFor(async () => (await read()).includes("good"), { maxPasses: 200 })
           if (!linked) await setup.waitFor(async () => (await read()).includes("loaded"), { maxPasses: 200 })
           expect((await read()).toSorted()).toEqual(linked ? ["good"] : ["good", "loaded"])

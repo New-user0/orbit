@@ -260,6 +260,40 @@ describe("a plugin folder with a looping entry", () => {
     )
   }
 
+  // The resolver follows a `main` that climbs out of the plugin's folder with `..`, with no link on the way, so the entry
+  // files it found are checked beside the links (`EntryLinks.escapes` takes them as `files`). The control's `main`
+  // climbs only to a file inside the folder, which keeps `p` offered.
+  for (const row of [
+    { to: ["outside", "x.js"], offered: ["good.ts"] },
+    { to: ["home", ".config", "orbit", "plugins", "p", "lib", "x.js"], offered: ["good.ts", "p"] },
+  ]) {
+    const name = `a server plugin folder whose server/package.json main climbs to ${row.to.join("/")}`
+    it.live(`${name} offers ${row.offered.join(" and ")}`, () =>
+      Effect.gen(function* () {
+        const root = (yield* tmpdirScoped()).path
+        const repo = path.join(root, "work", "repo")
+        const plugins = path.join(root, "home", ".config", "orbit", "plugins")
+        const server = path.join(plugins, "p", "server")
+        const entry = path.join(root, ...row.to)
+        yield* Effect.promise(async () => {
+          await fs.mkdir(server, { recursive: true })
+          await fs.mkdir(path.dirname(entry), { recursive: true })
+          await fs.writeFile(path.join(plugins, "good.ts"), "export default 1;")
+          await fs.writeFile(entry, "export default 1;")
+          await fs.writeFile(
+            path.join(server, "package.json"),
+            JSON.stringify({ main: path.relative(server, entry).split(path.sep).join("/") }),
+          )
+        })
+        const offered = yield* Effect.gen(function* () {
+          const source = yield* ConfigPluginSource.Service
+          return (yield* source.operations()).flatMap((item) => (item.type === "add" ? [path.basename(item.target)] : []))
+        }).pipe(Effect.provide(loader(root, repo)))
+        expect(offered.toSorted()).toEqual(row.offered)
+      }),
+    )
+  }
+
   // `entryLinks` lists the folder after the resolver found its entries, and a listing that fails then (the folder was
   // removed, or its permissions changed, in between) costs no other plugin and not the folder's own (class 7). The
   // resolver lists the folder itself, so no folder on disk fails the second listing alone; the row fails it for `p`.
