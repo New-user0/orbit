@@ -13,6 +13,7 @@ import path from "path"
 import loadBinding from "./watcher-binding.js"
 
 const SUBSCRIBE_TIMEOUT_MS = 10_000
+const ended = Symbol("orbit.watcher.ended")
 export const Event = { Updated: FileSystem.Event.Changed }
 
 /** The Parcel binding, loaded on first use; undefined where it cannot load. */
@@ -55,7 +56,11 @@ type Target = {
 
 export interface NativeInterface {
   readonly subscribe: (
-    input: Target & { readonly publish: (update: Update) => void },
+    input: Target & {
+      readonly publish: (update: Update) => void
+      /** The watch ended on its own, after its last update: its folder went away. Consumers watch again. */
+      readonly end?: () => void
+    },
   ) => Effect.Effect<Subscription | undefined>
 }
 
@@ -96,11 +101,19 @@ export const layer = (options?: Options) =>
       const watchers = yield* RcMap.make({
         lookup: (key: Target) =>
           Effect.gen(function* () {
-            const pubsub = yield* Effect.acquireRelease(PubSub.unbounded<Update>(), (pubsub) => PubSub.shutdown(pubsub))
+            const pubsub = yield* Effect.acquireRelease(PubSub.unbounded<Update | typeof ended>(), (pubsub) =>
+              PubSub.shutdown(pubsub),
+            )
             const subscription = yield* Effect.acquireRelease(
               native.subscribe({
                 ...key,
                 publish: (update) => PubSub.publishUnsafe(pubsub, update),
+                // The update that told of the end is already queued, so every consumer reads it before its stream ends. The
+                // entry leaves the map at once, so a consumer that watches again gets a native watch of its own.
+                end: () => {
+                  PubSub.publishUnsafe(pubsub, ended)
+                  Effect.runFork(RcMap.invalidate(watchers, key))
+                },
               }),
               (subscription) =>
                 subscription
@@ -143,7 +156,7 @@ export const layer = (options?: Options) =>
             const subscription = yield* PubSub.subscribe(pubsub)
             if (yield* PubSub.isShutdown(pubsub)) return Stream.empty
             yield* onReady
-            return Stream.fromSubscription(subscription)
+            return Stream.fromSubscription(subscription).pipe(Stream.takeWhile((item): item is Update => item !== ended))
           }),
         )
       })
@@ -212,7 +225,7 @@ export const makeNative = Effect.fnUntraced(function* (
   binding: () => Pick<typeof ParcelWatcher, "subscribe"> | undefined,
   backend: ParcelWatcher.BackendType | undefined,
 ) {
-  const pool: Pool = { closed: false, parked: new Map(), retired: new Map(), ending: new Map(), generation: 0 }
+  const pool: Pool = { closed: false, parked: new Map(), retired: new Map(), ending: undefined, generation: 0 }
   yield* Effect.addFinalizer(() =>
     Effect.promise(() => {
       pool.closed = true
@@ -231,11 +244,21 @@ export const makeNative = Effect.fnUntraced(function* (
         return Effect.sync(() => {
           const directory = input.type === "file" ? path.dirname(input.target) : input.target
           const names = new Set(input.type === "file" ? [path.basename(input.target)] : input.names)
-          const subscription = watch(directory, { recursive: false }, (_event, file) => {
-            if (file && !names.has(file)) return
-            for (const name of file ? [file] : names) {
+          const identity = folderIdentity(directory)
+          const subscription = watch(directory, { recursive: false }, (event, file) => {
+            // Bun keeps one watch per path on Linux: while this one stays open after its folder was removed and made
+            // again, a new watch of the path hears nothing. So a watch whose folder went away reports it, closes, and
+            // ends, and its consumers watch again once it is closed. A removed folder names itself in the event; the
+            // identity also catches one that was made again before the event was read.
+            const removed =
+              event === "rename" && (file === path.basename(directory) || folderIdentity(directory) !== identity)
+            if (!removed && file && !names.has(file)) return
+            for (const name of removed || !file ? names : [file]) {
               input.publish({ path: path.join(directory, name), type: "update" })
             }
+            if (!removed) return
+            subscription.close()
+            input.end?.()
           })
           subscription.on("error", (error: unknown) =>
             Effect.runFork(Effect.logError("watcher callback failed", { path: directory, error })),
@@ -270,8 +293,10 @@ type Pool = {
   closed: boolean
   readonly parked: Map<string, Parked[]>
   readonly retired: Map<string, ParcelWatcher.AsyncSubscription[]>
-  // The end of each native watch that is still being ended, by folder and ignore list.
-  readonly ending: Map<string, Promise<unknown>>
+  // Every native watch that is still being ended. Parcel shares one backend among all the watches of a process and
+  // destroys it when the last one ends, so a watch of any folder that is made while the last one is being ended joins the
+  // backend that is going away and hears nothing for good. A subscribe waits for this.
+  ending: Promise<unknown> | undefined
   generation: number
 }
 
@@ -309,7 +334,7 @@ function subscribeDirectory(
   // native watch instead of joining the one being ended.
   free
     .filter((entry) => !reusable(entry) && entry.watch.ended)
-    .forEach((entry) => entry.subscription.unsubscribe().catch(() => {}))
+    .forEach((entry) => ending(pool, entry.subscription.unsubscribe()))
   const retired = [
     ...(pool.retired.get(key) ?? []),
     ...free.filter((entry) => !reusable(entry) && !entry.watch.ended).map((entry) => entry.subscription),
@@ -321,16 +346,7 @@ function subscribeDirectory(
     free.filter((entry) => entry !== reused && reusable(entry)),
   )
   const release = (watch: DirectoryWatch, subscription: ParcelWatcher.AsyncSubscription) => {
-    if (backend !== "windows" || watch.ended || pool.closed) {
-      // Parcel shares one native watch per folder and ignore list. A subscribe that starts while the last one is still
-      // being ended joins the one that is going away and never hears the folder, so the next subscribe waits for this.
-      const ended = subscription.unsubscribe()
-      const settled = Promise.all([pool.ending.get(key), ended.catch(() => {})]).then(() => {
-        if (pool.ending.get(key) === settled) pool.ending.delete(key)
-      })
-      pool.ending.set(key, settled)
-      return ended
-    }
+    if (backend !== "windows" || watch.ended || pool.closed) return ending(pool, subscription.unsubscribe())
     watch.publish = () => {}
     pool.parked.set(key, [...(pool.parked.get(key) ?? []), { watch, subscription, folder: folderIdentity(directory) }])
     return Promise.resolve()
@@ -353,17 +369,19 @@ function subscribeDirectory(
   // watch gets a name that sets this native watch apart from it (see above); `<` and `>` are not
   // allowed in a Windows file name, so it hides no file.
   const apart = retired.length > 0 ? [`<orbit-watch-${++pool.generation}>`] : []
-  const earlier = pool.ending.get(key)
-  const pending = earlier
-    ? earlier.then(() => native.subscribe(directory, callback, { ignore: [...ignore, ...apart], backend }))
-    : native.subscribe(directory, callback, { ignore: [...ignore, ...apart], backend })
+  const subscribe = () => native.subscribe(directory, callback, { ignore: [...ignore, ...apart], backend })
+  const pending = pool.ending ? pool.ending.then(subscribe) : subscribe()
   return Effect.promise(() => pending).pipe(
     Effect.map((subscription) => ({ unsubscribe: () => release(watch, subscription), backend })),
     // Interruption (including the timeout below) abandons the pending native
     // subscription, so release it once it eventually resolves.
     Effect.onInterrupt(() =>
       Effect.sync(() => {
-        pending.then((subscription) => release(watch, subscription)).catch(() => {})
+        // Counted at once, so a watch made before the native one resolves waits for its end too.
+        ending(
+          pool,
+          pending.then((subscription) => release(watch, subscription)),
+        ).catch(() => {})
       }),
     ),
     Effect.timeout(SUBSCRIBE_TIMEOUT_MS),
@@ -384,4 +402,13 @@ function folderIdentity(directory: string) {
   } catch {
     return undefined
   }
+}
+
+// Tracks the end of a native watch in the pool, and returns it. The pool forgets it once it and every end after it settled.
+function ending<T>(pool: Pool, unsubscribed: Promise<T>) {
+  const settled = Promise.all([pool.ending, unsubscribed.catch(() => {})]).then(() => {
+    if (pool.ending === settled) pool.ending = undefined
+  })
+  pool.ending = settled
+  return unsubscribed
 }

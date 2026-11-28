@@ -42,20 +42,23 @@ import { tmpdir } from "../fixture/tmpdir"
 const it = testEffect(
   Layer.merge(PluginTestLayer, AppNodeBuilder.build(LayerNode.group([AppProcess.node, ShellSelect.node, Job.node]))),
 )
-// The process's native watches, with each subscribe, update and failed end written to `seen`.
-function recorded(seen: string[]): Watcher.NativeInterface {
+// The process's native watches (the config's and the plugins', file and entries watches too), with each subscribe, update,
+// end and failed end written to `seen` with the time since the row began.
+function recorded(seen: string[], began: number): Watcher.NativeInterface {
+  const note = (line: string) => seen.push(`${String(Date.now() - began).padStart(6)} ms ${line}`)
   const real = processNative(Watcher.binding, Watcher.backend())
   return Watcher.Native.of({
     subscribe: (input) => {
       const name = `${input.type} ${input.target}`
-      seen.push(`subscribe ${name}`)
+      note(`subscribe ${name}`)
       return real
         .subscribe({
           ...input,
           publish: (update) => {
-            seen.push(`update ${update.type} ${update.path}`)
+            note(`update ${update.type} ${update.path}`)
             input.publish(update)
           },
+          end: input.end && (() => (note(`ended ${name}`), input.end?.())),
         })
         .pipe(
           Effect.map((subscription) =>
@@ -64,9 +67,9 @@ function recorded(seen: string[]): Watcher.NativeInterface {
                   ...subscription,
                   unsubscribe: () =>
                     subscription.unsubscribe().then(
-                      () => void seen.push(`unsubscribed ${name}`),
+                      () => void note(`unsubscribed ${name}`),
                       (error: unknown) => {
-                        seen.push(`unsubscribe rejected ${name}: ${error}`)
+                        note(`unsubscribe rejected ${name}: ${error}`)
                         throw error
                       },
                     ),
@@ -103,6 +106,7 @@ describe("config plugin reloads", () => {
             const root = path.resolve(project, input.root)
             const file = path.join(project, "orbit.json")
             const seen: string[] = []
+            const native = recorded(seen, Date.now())
             yield* Effect.promise(async () => {
               await fs.mkdir(path.join(project, "home"), { recursive: true })
               await fs.mkdir(path.join(project, "global"))
@@ -133,17 +137,25 @@ describe("config plugin reloads", () => {
               yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "Recreated")))
             }).pipe(
               // Name what the watches saw when the row ends in a timeout, so a recurrence shows its cause.
-              Effect.timeoutOption("25 seconds"),
+              Effect.timeoutOption("20 seconds"),
               Effect.flatMap((done) =>
-                done._tag === "Some" ? Effect.void : Effect.die(new Error("no skill reload in 25 s; native watch calls:\n" + seen.join("\n"))),
+                done._tag === "Some"
+                  ? Effect.void
+                  : Effect.sync(() => console.error(`no skill reload in 20 s; native watch calls:\n${seen.join("\n")}`)).pipe(
+                      Effect.andThen(Effect.die(new Error("no skill reload in 20 s, see the native watch calls above"))),
+                    ),
               ),
               Effect.provide(
                 // A root in the folder above is read only when that folder is the project's root (D7).
-                liveConfig(
-                  project,
-                  recorded(seen),
-                  { global: input.global },
-                  input.root.startsWith("../") ? tmp.path : project,
+                // The plugin's own watches go through `native` too, not only the config's.
+                Layer.merge(
+                  liveConfig(
+                    project,
+                    native,
+                    { global: input.global },
+                    input.root.startsWith("../") ? tmp.path : project,
+                  ),
+                  Watcher.layer().pipe(Layer.provide(Layer.succeed(Watcher.Native, native))),
                 ),
               ),
             )
@@ -177,6 +189,62 @@ describe("config plugin reloads", () => {
               yield* Effect.promise(() => Bun.write(skill, probeSkill("Later")))
               yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "Later")))
               expect((yield* probes)[0]?.path).toBe(AbsolutePath.make(skill))
+            }).pipe(
+              Effect.provide(
+                liveConfig(
+                  project,
+                  undefined,
+                  { global: input.global },
+                  input.root.startsWith("../") ? tmp.path : project,
+                ),
+              ),
+            )
+          }),
+        ),
+      ),
+    )
+  }
+
+  // Bun keeps one fs.watch per path on Linux: while one stays open after its folder was removed and made again, a new
+  // watch of the path hears nothing. A root that is removed and made again before the config's debounced reload reads
+  // the change kept its dead watch of settings.json, and the plugin's watch of the root for its skills folder, opened
+  // between the root and its skills folder, was dead too (Linux core, run 46097880990). Each source here is in the
+  // state before: a root with no skills folder, removed and made again at once, then a skills folder a moment later.
+  for (const input of [
+    { root: CompatNames.agents, global: false },
+    { root: `../${CompatNames.vendor.directory}`, global: false },
+    { root: `home/${CompatNames.agents}`, global: true },
+    { root: `home/${CompatNames.vendor.directory}`, global: true },
+  ]) {
+    it.live(`loads skills when ${input.root} is removed and made again, and its skills folder comes later`, () =>
+      Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+        Effect.flatMap((tmp) =>
+          Effect.gen(function* () {
+            const project = path.join(tmp.path, "project")
+            const root = path.resolve(project, input.root)
+            yield* Effect.promise(async () => {
+              await fs.mkdir(path.join(project, "home"), { recursive: true })
+              await fs.mkdir(path.join(project, "global"))
+              await fs.mkdir(root, { recursive: true })
+              await Bun.write(path.join(project, "orbit.json"), JSON.stringify({ shell: "initial" }))
+            })
+            return yield* Effect.gen(function* () {
+              const plugins = yield* Plugin.Service
+              const skills = yield* Skill.Service
+              const probes = skills.list().pipe(Effect.map((items) => items.filter((item) => item.id === "probe")))
+              yield* ConfigCompatibilityPlugin.Plugin.effect(yield* PluginHost.make(plugins))
+              yield* Effect.sleep("500 millis")
+              // Back to back, inside the config's debounce of its reload.
+              yield* Effect.promise(async () => {
+                await fs.rm(root, { recursive: true })
+                await fs.mkdir(root)
+              })
+              yield* Effect.sleep("1500 millis")
+              yield* Effect.promise(() => Bun.write(path.join(root, "skills", "probe", "SKILL.md"), probeSkill("Later")))
+              const found = yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "Later"))).pipe(
+                Effect.timeoutOption("10 seconds"),
+              )
+              expect(found._tag).toBe("Some")
             }).pipe(
               Effect.provide(
                 liveConfig(

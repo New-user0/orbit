@@ -143,16 +143,27 @@ it:
   `node-build`, and the two skill folders of the checkout in `config/reload`; during rows: the four replaced roots of
   `config/reload`) and none after. FU-M5-022 keeps only the close of the native layer as a server or an SDK host
   shuts down.
-- core, `config/reload.test.ts` "loads skills when a home compatibility root appears after startup" timing out at 30 s once on Linux
-  (push run 46097880990, the pull_request run of the same commit passed): the reload row's own cause is not proven. What
-  was found on the way is a defect of the watch layer, which the row's sequence can reach: Parcel shares one native watch
-  per folder and ignore list, and a subscribe that starts while the last one of that folder is still being ended joins the
-  watch that is going away and hears nothing for good (400 of 400 times in a script that did it on purpose; 2 of 15
-  runs of the second row of `test/filesystem/watcher-overlap.test.ts` on the old code, under six busy loops on 4 CPUs).
-  `Watcher.makeNative` now starts a watch of a folder only after the end of the one before it has been reported
-  ("starts a watch only after the end of the earlier one of the folder", which fails on the old code by order of calls).
-  The reload row now records its native watch calls, updates and failed ends, and when it passes 25 s it fails with
-  that list, so a recurrence names its cause.
+- core, `config/reload.test.ts` "loads skills when a home compatibility root appears after startup" timing out at 30 s
+  once on Linux (push run 46097880990; the pull_request run of the same commit passed). Two defects of the watch layer,
+  both found by forcing them:
+  - Bun keeps one `fs.watch` per path on Linux. While one stays open after its folder was removed and made again, a
+    new `fs.watch` of the path hears nothing (50 of 50 in a script; 100 of 100 when the stale one was closed after the
+    new one opened). The config keeps its watch of `settings.json` in a vendor root (`onlyIfMissing`) when the root is
+    removed and made again inside its 100 ms reload, and the plugin's watch of the root for its skills folder opened
+    next to it was deaf too, so a skills folder made later was never seen. A file or entries watch whose folder went
+    away now reports it, closes, and ends its stream, so its consumers watch again after it is closed
+    ("a file or entries watch of a folder that is removed and made again", `test/filesystem/watcher-overlap.test.ts`;
+    "loads skills when ... is removed and made again, and its skills folder comes later", `config/reload.test.ts`, which
+    fails on the old code for both vendor roots, and passes for the `.agents` roots, which have no settings watch, as a
+    control).
+  - Parcel shares one backend among all the native watches of a process and destroys it when the last one ends. A native
+    watch of any folder that starts while the last one is being ended joins the backend that is going away and hears
+    nothing for good (97 of 100 in a script that did not wait for the end). `Watcher.makeNative` now starts a native
+    watch only once every watch that is being ended has ended, also one whose subscribe was still pending when it was
+    left ("the native watches of a process are made after the ends before them", which fails on the old code by the order of
+    the calls, and "a native watch made while the last native watch of the process is being ended").
+  The reload row now records the native watches of the config and the plugin (subscribe, update, end, failed end, with
+  the time since the row began) and prints them when the row has run for 20 s, so a recurrence names its cause.
 - cli, the trust-doors control that runs a node with a model and the YAML `permissions:auto` row of `flow.test.ts`: a
   first Ollama `/api/tags` read that ran past its 1 s limit was kept as a fresh answer for 30 s and not tried again
   before the interval (FU-M3-385). A read that fails, times out or is interrupted now leaves the cache as it was, and
