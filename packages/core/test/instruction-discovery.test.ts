@@ -4118,6 +4118,29 @@ describe("ConfigInstructionPlugin.Plugin loads rule files", () => {
     }),
   )
 
+  // A native watch ends when its folder goes away (Watcher.TestInterface.end does what the native one does). The plugin
+  // forgets the folder, and the pass that the last update causes watches it again.
+  it.live("watches a rules folder again after its watch ended", () =>
+    Effect.gen(function* () {
+      const where = yield* folders
+      yield* write(path.join(rulesOf(where.repo), "a.md"), "a")
+      yield* Effect.gen(function* () {
+        yield* baseline()
+        const watcher = yield* Watcher.Test
+        const rules = () =>
+          Effect.map(
+            watcher.subscriptions(),
+            (items) => items.filter((item) => item.type === "directory" && item.path === rulesOf(where.repo)).length,
+          )
+        expect(yield* rules()).toBe(1)
+        yield* watcher.end({ type: "update", path: path.join(rulesOf(where.repo), "a.md") })
+        // The time limit of the row bounds the wait.
+        while ((yield* rules()) < 2) yield* Effect.sleep("20 millis")
+        expect(yield* rules()).toBe(2)
+      }).pipe(Effect.provide(layerFor(where)))
+    }),
+  )
+
   // Class 6: a rules folder of the project, Orbit's own or the other product's, that is a link to a network share is never
   // statted, listed, read or watched, trusted or not: each would connect to a host the repository named. The file system
   // below answers a network path itself, so a regression fails here and contacts no host. Only Windows has shares, and the

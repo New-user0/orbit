@@ -2,20 +2,12 @@ import type ParcelWatcher from "@parcel/watcher"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { Effect, Layer, Scope } from "effect"
 
-// The native watches of a test file. Closing `Watcher.makeNative` ends every Windows directory watch it parked or
-// retired, and ending a live Parcel watch on Windows can free it while its directory read is still queued
-// (parcel-bundler/watcher#262), which crashed core test workers (FU-M5-022). Each test builds and closes a runtime of
-// its own, so the tests met that close all the time. So the runtimes of a test file take their watches from one pool
-// per binding, and a runtime that closes parks its watches there for the next one instead of ending them.
-//
-// The pool is never closed: a test process ends no live watch. Bun ends a test worker with live watches still open,
-// so nothing waits on them. A watch the file leaves open keeps a callback of the file's global, which a parallel worker
-// replaces for its next file, so a later file must not touch a folder the watch follows: the rows watch folders of
-// their own under tmpdir(), which they remove while their file runs (a removed folder ends its watch), and test/preload.ts
-// gives each file a config folder of its own, the one folder that a runtime with the default Global watches outside a
-// row's folders. A count over the core files that watch folders on Windows found 12 ends of a watch that still had a
-// read queued in one pass before (at a file's end, in config/reload's replaced roots and its repository skill folders)
-// and none after.
+// The native watches of a test file: one pool per binding, built on first use and never closed, so every runtime a row
+// builds takes the watches of the process. A watch a finished file leaves open keeps a callback of that file's global,
+// which a parallel worker replaces for its next file, so a later file must not touch a folder the watch follows: the rows
+// watch folders of their own under tmpdir(), which they remove while their file runs (a removed folder ends its watch),
+// and test/preload.ts gives each file a config folder of its own, the one folder that a runtime with the default Global
+// watches outside a row's folders.
 
 type Binding = () => Pick<typeof ParcelWatcher, "subscribe"> | undefined
 

@@ -38,4 +38,21 @@ const environment = {
   ...(process.platform === "win32" ? { USERPROFILE: home, TMP: temporary, TEMP: temporary } : {}),
 }
 
-process.exitCode = await runTests(testArgs(["--only-failures", ...process.argv.slice(2)]), environment)
+// The files in test/serial keep the machine busy, and run alone after the others, so that nothing runs beside them: they are
+// left out of the parallel run, and a run that names no file of its own, or one in that folder, runs them once. A run in
+// shards runs them in the first. Coverage, reports and timings are the parallel run's.
+const extra = process.argv.slice(2)
+const serial = "test/serial"
+const named = extra.filter((arg) => !arg.startsWith("-") && /\.test\.[cm]?[jt]sx?$|^test\//.test(arg))
+const only = named.length > 0 && named.every((arg) => arg.replaceAll("\\", "/").startsWith(serial))
+const shard = extra.find((arg) => arg.startsWith("--shard="))
+const everyone = named.length === 0 && (shard === undefined || shard.startsWith("--shard=1/"))
+const main = only ? 0 : await runTests(testArgs(["--only-failures", `--path-ignore-patterns=${serial}/**`, ...extra]), environment)
+const alone =
+  only || everyone
+    ? await runTests(
+        ["test", "--isolate", "--only-failures", ...(only ? named : [serial])],
+        environment,
+      )
+    : 0
+process.exitCode = main || alone

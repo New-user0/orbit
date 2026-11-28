@@ -5881,10 +5881,14 @@ CI's `setup-bun` installs the pinned version.
 ### Folders are watched with Bun's own file watcher
 
 On Windows Orbit watched folders (config folders, skill and plugin folders) with Parcel's watcher, whose Windows backend
-answered before it had started to read the folder. A file written right after a watch was ready was then lost for good, in
-12 of 40 tries with the machine busy, so an edit made just after a start could be missed until the next one. Orbit now
-watches folders on Windows with Bun's recursive `fs.watch`, which is armed when it returns, and reports the same create,
-update and delete updates with the same ignored paths. Linux and macOS keep Parcel's watcher.
+answered before it had started to read the folder. A file written right after a watch was ready was then lost for good
+when the machine was busy (15 of 60 and 18 of 30 tries in a script with 32 busy processes on 16 CPUs), so an edit made
+just after a start could be missed until the next one. Orbit now watches folders on Windows with Bun's recursive
+`fs.watch`, which is armed when it returns (none of 100 lost in the same script), and reports what Parcel reports for the
+cases the tests pin: a case-only rename is a delete of the old name and a create of the new one, an ignored folder and
+what is in it are not reported, and a change inside a folder is not an update of the folder. When Windows drops its changes
+because too many came at once (an install, a checkout or a build in the watched folder), the watch compares the folder with
+what it knew and reports the difference, so a file made after such a burst is heard. Linux and macOS keep Parcel's watcher.
 
 **Affects:** Windows users who edit config, skills or plugins while Orbit runs.
 

@@ -1,7 +1,7 @@
 export * as LocationWatcher from "./location-watcher.js"
 
 import { makeLocationNode } from "@orbit/util/effect/app-node"
-import { Cause, Context, Effect, Exit, Layer, Scope, Semaphore, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Scope, Semaphore, Stream } from "effect"
 import { FileSystem } from "@orbit/schema/filesystem"
 import path from "path"
 import { Bus } from "../bus.js"
@@ -80,7 +80,21 @@ const layer = Layer.effect(
             yield* Effect.sync(() => {
               if (active?.scope === scope) active = undefined
             })
+            // The folder may not be back yet: the folder around it says when it is. It is looked at once the watch of the
+            // folder around it is in place, so a folder that came back before is not waited for.
+            const folder = path.dirname(next)
+            const ready = yield* Deferred.make<void>()
+            const back = yield* watcher.subscribe(
+              { path: path.dirname(folder), type: "entries", names: [path.basename(folder)] },
+              Deferred.succeed(ready, undefined),
+            )
+            const waiting = yield* Stream.runHead(back).pipe(Effect.forkChild({ startImmediately: true }))
+            yield* Deferred.await(ready)
+            if (yield* fs.isDir(folder)) yield* Fiber.interrupt(waiting)
+            else yield* Fiber.join(waiting)
             yield* reconcile()
+            // This watch is over, and so is what holds it.
+            yield* Scope.close(scope, Exit.void)
           }).pipe(
             Effect.catchCauseIf(
               (cause) => !Cause.hasInterrupts(cause),

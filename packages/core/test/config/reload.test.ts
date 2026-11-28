@@ -80,6 +80,25 @@ function recorded(seen: string[], began: number): Watcher.NativeInterface {
     },
   })
 }
+// The native watches with an update of a path dropped when it follows another of the path within `window` ms, which is what
+// Bun's fs.watch on Linux does to a folder that is removed and made again at once.
+function collapsing(real: Watcher.NativeInterface, window: number): Watcher.NativeInterface {
+  return Watcher.Native.of({
+    subscribe: (input) => {
+      const last = new Map<string, number>()
+      return real.subscribe({
+        ...input,
+        publish: (update) => {
+          const now = Date.now()
+          const before = last.get(update.path)
+          last.set(update.path, now)
+          if (before !== undefined && now - before < window) return
+          input.publish(update)
+        },
+      })
+    },
+  })
+}
 const decode = Schema.decodeUnknownSync(Info)
 const document = path.join(import.meta.dir, "orbit.json")
 
@@ -258,6 +277,101 @@ describe("config plugin reloads", () => {
       ),
     )
   }
+
+  // Bun's fs.watch on Linux reports a folder that is removed and made again at once as one event (the two within 5 ms are
+  // one; 20 of 20 tries). The first is read at once, when the folder is not there, and nothing reports it coming back. The
+  // native watches here collapse an event on a path that follows another within 300 ms, which is what the system does to
+  // the two, and the folder is made again once the plugin has looked at its absence. A source that does not watch the folder
+  // again is lost for good (home/.agents, 3 of 25 runs with the machine busy, before).
+  for (const input of [
+    { root: CompatNames.agents, global: false },
+    { root: `../${CompatNames.vendor.directory}`, global: false },
+    { root: `home/${CompatNames.agents}`, global: true },
+    { root: `home/${CompatNames.vendor.directory}`, global: true },
+  ]) {
+    it.live(`loads skills when ${input.root} is made again after its removal was read, with the two events as one`, () =>
+      Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+        Effect.flatMap((tmp) =>
+          Effect.gen(function* () {
+            const project = path.join(tmp.path, "project")
+            const root = path.resolve(project, input.root)
+            const seen: string[] = []
+            const native = collapsing(recorded(seen, Date.now()), 300)
+            yield* Effect.promise(async () => {
+              await fs.mkdir(path.join(project, "home"), { recursive: true })
+              await fs.mkdir(path.join(project, "global"))
+              await fs.mkdir(root, { recursive: true })
+              await Bun.write(path.join(project, "orbit.json"), JSON.stringify({ shell: "initial" }))
+            })
+            return yield* Effect.gen(function* () {
+              const plugins = yield* Plugin.Service
+              const skills = yield* Skill.Service
+              const probes = skills.list().pipe(Effect.map((items) => items.filter((item) => item.id === "probe")))
+              yield* ConfigCompatibilityPlugin.Plugin.effect(yield* PluginHost.make(plugins))
+              // What the plugin does about the skills folder of the root, as the native watches saw it.
+              const watches = (name: string) =>
+                seen.filter((line) => line.includes(name) && line.endsWith(`${path.sep}skills`)).length
+              yield* waitUntil(Effect.sync(() => watches("subscribe file") > 0))
+              const before = watches("subscribe file")
+              yield* Effect.promise(() => fs.rm(root, { recursive: true }))
+              // The plugin looked at the folder's absence: it ended the watch of the folder it had.
+              yield* waitUntil(Effect.sync(() => watches("unsubscribed file") > 0))
+              yield* Effect.promise(() => fs.mkdir(root))
+              // The row's time limit bounds the waits: a folder that is not watched again is never heard.
+              yield* waitUntil(Effect.sync(() => watches("subscribe file") > before))
+              yield* Effect.promise(() => Bun.write(path.join(root, "skills", "probe", "SKILL.md"), probeSkill("Later")))
+              yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "Later")))
+            }).pipe(
+              Effect.provide(
+                // The plugin's own watches go through \`native\` too, not only the config's.
+                Layer.merge(
+                  liveConfig(project, native, { global: input.global }, input.root.startsWith("../") ? tmp.path : project),
+                  Watcher.layer().pipe(Layer.provide(Layer.succeed(Watcher.Native, native))),
+                ),
+              ),
+            )
+          }),
+        ),
+      ),
+    )
+  }
+
+  // The config watches the folder of a project's .orbit as a folder. The watch ends when the folder is removed, and the
+  // config watches the new one: a folder that is removed and made again before the config reads the change keeps its old
+  // watch otherwise, and an edit later is heard by nothing.
+  it.live("hears an edit in .orbit after it was removed and made again", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const root = path.join(tmp.path, ".orbit")
+          const file = path.join(root, "orbit.json")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(root)
+            await Bun.write(file, JSON.stringify({ shell: "a" }))
+          })
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const shell = (value: string) =>
+              config.entries().pipe(Effect.map((entries) => Config.latest(entries, "shell") === value))
+            yield* waitUntil(shell("a"))
+            yield* Effect.promise(async () => {
+              await fs.rm(root, { recursive: true })
+              await fs.mkdir(root)
+              await Bun.write(file, JSON.stringify({ shell: "b" }))
+            })
+            yield* waitUntil(shell("b"))
+            // An edit is heard only by a watch of the new folder, which is ready some time after the reload that read it, so an
+            // edit that is not heard is made again. An edit that is never heard ends in the row's time limit.
+            for (let edit = 0; ; edit++) {
+              yield* Effect.promise(() => Bun.write(file, JSON.stringify({ shell: `c${edit}` })))
+              const heard = yield* waitUntil(shell(`c${edit}`)).pipe(Effect.timeoutOption("500 millis"))
+              if (heard._tag === "Some") break
+            }
+          }).pipe(Effect.provide(liveConfig(tmp.path)))
+        }),
+      ),
+    ),
+  )
 
   // The plugin looks into a folder only once its watch of that folder is in place, so what is written while the watch is
   // still being made is found by that look, since the watch will not report it. Each watch here writes the skill before

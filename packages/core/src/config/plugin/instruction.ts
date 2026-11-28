@@ -119,10 +119,16 @@ export const Plugin = define({
         if (watchedDirectories.has(path)) return
         watchedDirectories.add(path)
         const updates = yield* watcher.subscribe({ path, type: "directory" })
-        yield* FiberMap.run(watches, `directory:${path}`, updates.pipe(Stream.runForEach(publish)), {
-          onlyIfMissing: true,
-          startImmediately: true,
-        })
+        yield* FiberMap.run(
+          watches,
+          `directory:${path}`,
+          updates.pipe(
+            Stream.runForEach(publish),
+            // The watch ends when the folder goes away. It is forgotten, so the next pass watches it again.
+            Effect.ensuring(Effect.sync(() => watchedDirectories.delete(path))),
+          ),
+          { onlyIfMissing: true, startImmediately: true },
+        )
       })
       // Which names to look for follows the compatibility switch, so every refresh resolves it again and watches any
       // name it has newly enabled. Names that were switched off are left watched, and ignored when loading.
