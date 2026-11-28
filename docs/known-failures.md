@@ -165,6 +165,13 @@ it:
   run 46021659425 the slowest row of each such file took less than half its limit on both platforms, apart from rows
   whose time is mostly a fixed wait of their own (the `config-overlay-flags` and `managed-bypass` root runs that
   wait out 60 s).
+- cli, the ACP approval rows (`acp/spelling-matrix-*`, `acp/share-links-*`, `acp/permission-spellings` and
+  `acp/permission-files`, gate rows of classes 3, 4 and 8): a row's time includes its wait for a start slot, so it
+  grows with the job's load, and the slowest took 54.89 s of its 90 s limit in run 46056315294. Every row of the
+  harness now has `APPROVAL_ROW_LIMIT` (120 s, `acp/approval-harness.ts`), measured from the JUnit of ten CI runs of
+  these files: 4,274 Windows rows, p50 11.35 s, p95 24.91 s, slowest 54.89 s, and twice that, rounded up to a whole
+  5 s, is 110 s. `acp/approval-limit.test.ts` fails when a row keeps a limit of its own or the limit is below twice
+  the slowest row.
 - core, the rows at Bun's 5 s default that start real processes (`npm.test.ts`, `vcs.test.ts`, `git.test.ts`,
   `session-context-vcs.test.ts`, `session-context-usage.test.ts`, `project.test.ts`, `lsp-ignored.test.ts`,
   `session-rehydration.test.ts`, `tool-lsp.test.ts`, `tool-search.test.ts`, `formatter.test.ts`, `location-layer.test.ts`,

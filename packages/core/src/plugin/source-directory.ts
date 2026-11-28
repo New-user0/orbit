@@ -2,6 +2,7 @@ export * as PluginSourceDirectory from "./source-directory.js"
 
 import { FSUtil } from "@orbit/util/fs-util"
 import { LinkShare } from "@orbit/util/link-share"
+import { EntryLinks } from "@orbit/plugin/entry-links"
 import { Host } from "@orbit/plugin/host"
 import { Effect, Option } from "effect"
 import path from "path"
@@ -46,10 +47,12 @@ export const discover = Effect.fn("PluginSourceDirectory.discover")(function* (
 
 /**
  * What the supervisor loads from `target`: unset when nothing would be loaded (no server entry, an entry file that a
- * link leads out of the folder, or a link in the folder named like an entry, `server`, `index`, `tui` or `rpc` with any
- * extension, that loops or leads out, even when the resolver did not take it). `ConfigPluginSource.scan` activates by
- * this. It hands the folder to the runtime's
- * resolver, which follows links, so it runs only for folders that are trusted.
+ * link leads out of the folder, or a link the resolver could take as an entry that loops or leads out, even when the
+ * resolver did not take it: one named `server`, `index`, `tui` or `rpc` in any case and with any extension, or, in a
+ * folder of such a name (a link to a folder too), its `index`, its `package.json` or a step of the `main` that names).
+ * `ConfigPluginSource.scan` activates by this. It hands the folder to the runtime's resolver, which follows links, so
+ * it runs only for folders that are trusted. The link check is `EntryLinks.escapes`, which the terminal UI's loader
+ * asks too.
  */
 export const entrypoints = Effect.fn("PluginSourceDirectory.entrypoints")(function* (
   fs: FSUtil.Interface,
@@ -63,33 +66,7 @@ export const entrypoints = Effect.fn("PluginSourceDirectory.entrypoints")(functi
   const files = Object.values(resolved)
     .filter((entry) => entry !== undefined)
     .map((entry) => fileURLToPath(entry))
-  if (directory && (yield* leaves(fs, target, [...files, ...(yield* entryLinks(fs, target))]))) return undefined
-  return { directory, files, manifest: path.join(directory ? target : path.dirname(target), "package.json") }
-})
-
-// The links in the folder that `Host.resolve` could take as an entry (`server`, `index`, `tui` or `rpc`, with any
-// extension). Bun's resolver passes over a link it cannot follow (one that loops) as if the entry were not there, so
-// `leaves` checks these links as well as what the resolver found.
-const entryLinks = Effect.fnUntraced(function* (fs: FSUtil.Interface, target: string) {
-  const entries = yield* fs.readDirectoryEntries(target).pipe(Effect.orElseSucceed(() => []))
-  return entries
-    .filter((entry) => entry.type === "symlink" && ENTRY_NAMES.has(path.parse(entry.name).name))
-    .map((entry) => path.join(target, entry.name))
-})
-
-const ENTRY_NAMES = new Set(["server", "index", "tui", "rpc"])
-
-// An entry whose real path cannot be found (a loop of links, a share that cannot be reached) counts as leaving the
-// folder, so that one bad plugin costs only itself.
-const leaves = Effect.fnUntraced(function* (fs: FSUtil.Interface, target: string, files: readonly string[]) {
-  const stays = yield* Effect.gen(function* () {
-    const root = yield* fs.resolve(target)
-    const real = yield* Effect.forEach(files, (entry) => fs.resolve(entry))
-    return real.every((entry) => FSUtil.contains(root, entry))
-  }).pipe(
-    Effect.catchCause((cause) =>
-      Effect.logWarning("plugin entry cannot be resolved", { target, cause }).pipe(Effect.as(false)),
-    ),
-  )
-  return !stays
+  if (!directory) return { directory, files, manifest: path.join(path.dirname(target), "package.json") }
+  if (yield* EntryLinks.escapes(fs, target, files)) return undefined
+  return { directory, files, manifest: path.join(target, "package.json") }
 })

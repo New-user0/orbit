@@ -58,19 +58,21 @@ describe("CI is green on every run", () => {
     expect(text).toMatch(/CI must be green/)
   })
 
-  // Control: green must mean the tests passed. No test job is allowed to fail, and no test step runs a file again.
-  test("the CI workflow lets no test job fail and runs no test again", async () => {
+  // Control: green must mean every job passed. No job or step is allowed to fail, and no test step runs a file again.
+  test("the CI workflow lets no job fail and runs no test again", async () => {
     const workflow = Bun.YAML.parse(await read(".github/workflows/check.yml")) as {
       jobs: Record<
         string,
         { "continue-on-error"?: unknown; steps: { name?: string; run?: string; "continue-on-error"?: unknown }[] }
       >
     }
+    const allowed = Object.entries(workflow.jobs).flatMap(([name, job]) => [
+      ...(job["continue-on-error"] === undefined ? [] : [name]),
+      ...job.steps.filter((step) => step["continue-on-error"] !== undefined).map((step) => `${name}: ${step.name}`),
+    ])
+    expect(allowed).toEqual([])
     for (const name of ["test", "windows"]) {
-      const job = workflow.jobs[name]!
-      expect(job["continue-on-error"]).toBeUndefined()
-      const step = job.steps.find((item) => item.name === "Test")!
-      expect(step["continue-on-error"]).toBeUndefined()
+      const step = workflow.jobs[name]!.steps.find((item) => item.name === "Test")!
       expect(step.run).toContain("set -o pipefail")
       expect(step.run).toMatch(/exit 1/)
       expect(step.run).not.toMatch(/--rerun-each|--retry|\|\| *bun run test/)

@@ -18,7 +18,10 @@ import { realpath, stat } from "fs/promises"
 import { PluginRestriction } from "@orbit/plugin/restriction"
 import { fileURLToPath } from "url"
 import { FSUtil } from "@orbit/util/fs-util"
+import { LayerNode } from "@orbit/util/effect/layer-node"
+import { Effect, Logger } from "effect"
 import type { Page } from "@orbit/plugin/tui/context"
+import { EntryLinks } from "@orbit/plugin/entry-links"
 import { Host } from "@orbit/plugin/host"
 import { resolveSlots, type Claim } from "./structure"
 import { createStore, produce, reconcile as reconcileStore, unwrap } from "solid-js/store"
@@ -432,7 +435,6 @@ export function PluginProvider(props: ParentProps<{ packages: PackageSource; dir
             sources.read,
             trace,
             id,
-            local !== undefined && props.directories.project.some((item) => FSUtil.contains(item, fileURLToPath(local))),
           ).catch((error) => ({
             status: "failed" as const,
             error: errorMessage(error),
@@ -767,7 +769,6 @@ async function resolvePlugin(
   readSource: ReturnType<typeof createPluginSources>["read"],
   trace: Trace,
   reconciliation: number,
-  confined: boolean,
 ) {
   // Package entrypoints never change within a session, so a loaded previous
   // version needs no re-resolution (which could otherwise hit npm).
@@ -776,11 +777,23 @@ async function resolvePlugin(
   const target = local
     ? { directory: fileURLToPath(local) }
     : await trace("prepare", { reconciliation, target: spec, install }, () => packages.prepare(spec, install))
-  const entrypoint = Host.resolve(target).tui
+  const resolved = Host.resolve(target)
+  const entrypoint = resolved.tui
   if (!entrypoint) return { status: "unsupported" as const }
-  // A project plugin's entry stays inside its folder: what a link leads out of it to is not the project's to supply.
-  if (confined && local && !FSUtil.contains(await realpath(fileURLToPath(local)), await realpath(fileURLToPath(entrypoint))))
-    throw new Error(`Project plugin entry leaves its folder: ${spec}`)
+  // Every entry the resolver took (server and rpc too, which this process never imports) must stay in the folder, and
+  // so must each link the resolver passes over because it loops: the server asks the same of the same files, so a
+  // folder it leaves out, global or project, is left out here before an entry is read (classes 3, 4 and 12). The tui
+  // entry is among those files, so what a link leads out of a project's folder to is refused here as well.
+  if (
+    local &&
+    (await linkEscapes(
+      fileURLToPath(local),
+      Object.values(resolved)
+        .filter((entry) => entry !== undefined)
+        .map((entry) => fileURLToPath(entry)),
+    ))
+  )
+    throw new Error(`Plugin entry loops or leads out of its folder: ${spec}`)
   // Content remains stable across the several mtimes one save may expose to
   // filesystem watchers, while the generation keeps reverted modules fresh.
   let source = local
@@ -808,6 +821,12 @@ async function resolvePlugin(
     return { status: "loaded" as const, plugin: mod.default, version }
   }
 }
+
+const linkEscapes = (directory: string, files: readonly string[]) =>
+  Effect.gen(function* () {
+    const fs = yield* FSUtil.Service
+    return yield* EntryLinks.escapes(fs, directory, files)
+  }).pipe(Effect.provide(LayerNode.compile(FSUtil.node)), Effect.provide(Logger.layer([])), Effect.runPromise)
 
 function toRegistration(item: Desired): Registration {
   return {

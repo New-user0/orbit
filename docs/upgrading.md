@@ -3249,14 +3249,28 @@ the answer filled in.
 
 ### A plugin folder with a broken link named like an entry is not loaded
 
-A plugin folder is no longer loaded when it holds a link named `server`, `index`, `tui` or `rpc`, with any extension
-(`index.md` too), that loops or leads out of the folder. That holds even when the runtime would have loaded a different
-entry, for example a looping `server.mjs` beside a good `server.ts`. Until now only the entry files the runtime picked
-were checked, and Bun 1.4.5 passes over a link that loops as if the file were not there, so such a folder could be loaded
-from its other entries. The folder's own plugin is the only one left out; the other plugins load as before
-(`packages/core/test/config/plugin-source-bad-entry.test.ts`).
+A plugin folder is no longer loaded, by the server or by the terminal UI, when it holds a link that loops or leads out
+of the folder and that the runtime could take as an entry, even when the runtime would have loaded a different entry.
+Both ask the same check of every local plugin folder, the user's own and a project's, before they read or import an
+entry, so a folder with only a `tui` entry is left out too, and so is a global folder whose `tui.ts` links to a file
+outside it. That covers a link named `server`, `index`, `tui` or `rpc` with any extension (`index.md` too), for
+example a looping `server.mjs` beside a good `server.ts`. The names match in any case on every platform, so `TUI.ts`, `Server.mjs` and `INDEX.js` count too: the
+runtime takes them on Windows and macOS. Inside a folder with one of those names, such as `server/`, it also covers a
+link named `index` with any extension, a `package.json` that is a link, and a link on the way of the `main` that the
+folder's `package.json` names (each step of that path, with or without an extension, and the `index` of a folder a step
+names). Such a folder can itself be a link to a folder (a junction on Windows), and so can a folder a step of `main`
+names: what is behind the link is checked the same way. A `..` in `main` is followed both from the link and from the
+folder the link leads to. Until now only the entry files the runtime picked were checked, and Bun 1.4.5 passes over a link that loops as
+if the file were not there, so such a folder could be loaded from its other entries. Both also check every entry the
+runtime picked, so a folder whose `server/package.json` or `tui/package.json` `main` climbs out of it with `..` is left
+out by both; the terminal UI used to look only at the tui entry, and only in a project's folder. The folder's own
+plugin is the only one left out; the other plugins load as before
+(`packages/core/test/config/plugin-source-bad-entry.test.ts` for the server, and the "a plugin folder with a looping
+link named like a tui entry" and "a plugin folder whose package.json main climbs out with .." rows of
+`packages/tui/test/plugin-trust.test.ts` for the terminal UI).
 
-**Affects:** plugin folders that keep a link with one of those names that loops or points outside the folder.
+**Affects:** plugin folders that keep a link with one of those names, or in one of those places, that loops or points
+outside the folder.
 
 **What to do:** Remove the link, rename it, or point it at a file inside the plugin folder.
 
