@@ -3261,10 +3261,13 @@ folder's `package.json` names (each step of that path, with or without an extens
 names). Such a folder can itself be a link to a folder (a junction on Windows), and so can a folder a step of `main`
 names: what is behind the link is checked the same way. A `..` in `main` is followed both from the link and from the
 folder the link leads to. Until now only the entry files the runtime picked were checked, and Bun 1.4.5 passes over a link that loops as
-if the file were not there, so such a folder could be loaded from its other entries. The folder's own plugin is the
-only one left out; the other plugins load as before
+if the file were not there, so such a folder could be loaded from its other entries. Both also check every entry the
+runtime picked, so a folder whose `server/package.json` or `tui/package.json` `main` climbs out of it with `..` is left
+out by both; the terminal UI used to look only at the tui entry, and only in a project's folder. The folder's own
+plugin is the only one left out; the other plugins load as before
 (`packages/core/test/config/plugin-source-bad-entry.test.ts` for the server, and the "a plugin folder with a looping
-link named like a tui entry" rows of `packages/tui/test/plugin-trust.test.ts` for the terminal UI).
+link named like a tui entry" and "a plugin folder whose package.json main climbs out with .." rows of
+`packages/tui/test/plugin-trust.test.ts` for the terminal UI).
 
 **Affects:** plugin folders that keep a link with one of those names, or in one of those places, that loops or points
 outside the folder.

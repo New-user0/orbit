@@ -779,12 +779,22 @@ async function resolvePlugin(
   const target = local
     ? { directory: fileURLToPath(local) }
     : await trace("prepare", { reconciliation, target: spec, install }, () => packages.prepare(spec, install))
-  const entrypoint = Host.resolve(target).tui
+  const resolved = Host.resolve(target)
+  const entrypoint = resolved.tui
   if (!entrypoint) return { status: "unsupported" as const }
-  // The resolver passes over a link that loops, so a folder with a link that could be an entry and loops or leads out
-  // is left out before an entry is read, global or project, as the server leaves it out (classes 3 and 12).
-  if (local && (await linkEscapes(fileURLToPath(local))))
-    throw new Error(`Plugin entry link loops or leads out of its folder: ${spec}`)
+  // Every entry the resolver took (server and rpc too, which this process never imports) must stay in the folder, and
+  // so must each link the resolver passes over because it loops: the server asks the same of the same files, so a
+  // folder it leaves out, global or project, is left out here before an entry is read (classes 3, 4 and 12).
+  if (
+    local &&
+    (await linkEscapes(
+      fileURLToPath(local),
+      Object.values(resolved)
+        .filter((entry) => entry !== undefined)
+        .map((entry) => fileURLToPath(entry)),
+    ))
+  )
+    throw new Error(`Plugin entry loops or leads out of its folder: ${spec}`)
   // A project plugin's entry stays inside its folder: what a link leads out of it to is not the project's to supply.
   if (confined && local && !FSUtil.contains(await realpath(fileURLToPath(local)), await realpath(fileURLToPath(entrypoint))))
     throw new Error(`Project plugin entry leaves its folder: ${spec}`)
@@ -816,10 +826,10 @@ async function resolvePlugin(
   }
 }
 
-const linkEscapes = (directory: string) =>
+const linkEscapes = (directory: string, files: readonly string[]) =>
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
-    return yield* EntryLinks.escapes(fs, directory, [])
+    return yield* EntryLinks.escapes(fs, directory, files)
   }).pipe(Effect.provide(LayerNode.compile(FSUtil.node)), Effect.provide(Logger.layer([])), Effect.runPromise)
 
 function toRegistration(item: Desired): Registration {

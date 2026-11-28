@@ -10,7 +10,9 @@ import path from "path"
  * follow (one that loops) as if the entry were not there, so the links it could have taken are checked beside what it
  * found: a link named `server`, `index`, `tui` or `rpc` with any extension, and in a folder of one of those names (a
  * link to one too) the links it could take as that folder's entry. The server's supervisor and the terminal UI's plugin
- * loader both ask this before they read or import an entry, so they leave out the same folders (classes 3 and 12).
+ * loader both ask this before they read or import an entry, and both pass every entry the resolver took as `files`, the
+ * server entry too in the terminal UI, which never imports it, so a folder whose server or tui entry leads out is left
+ * out by both (classes 3 and 12).
  */
 export const escapes = Effect.fn("EntryLinks.escapes")(function* (
   fs: FSUtil.Interface,

@@ -474,3 +474,74 @@ describe("a plugin folder with a looping link named like a tui entry", () => {
       }, 30_000)
     }
 })
+
+// Classes 3, 4 and 12: an entry the resolver takes through a `main` that climbs out of the folder with `..` and no link.
+// The server leaves out a folder when any entry it resolves (server, tui or rpc) leads out, and the terminal UI's loader
+// asks `EntryLinks.escapes` of the same files, so it leaves the folder out too, whichever entry climbs and whether the
+// folder is global or the project's. A server entry is never imported here, so a folder whose server entry climbs out
+// would otherwise load its real tui.ts. `good` beside it is set up in the same reconcile, as in the rows above. Each
+// row's control keeps `main` inside the folder, and `hello` loads.
+describe("a plugin folder whose package.json main climbs out with ..", () => {
+  const rows: { name: string; folder: "tui" | "server"; files: string[]; global: boolean }[] = [
+    {
+      name: "a global plugin's tui/package.json main beside server.ts",
+      folder: "tui",
+      files: ["server.ts"],
+      global: true,
+    },
+    {
+      name: "a project plugin's server/package.json main beside a real tui.ts",
+      folder: "server",
+      files: ["tui.ts"],
+      global: false,
+    },
+    {
+      name: "a global plugin's server/package.json main beside a real tui.ts",
+      folder: "server",
+      files: ["tui.ts"],
+      global: true,
+    },
+  ]
+  for (const row of rows)
+    for (const climbs of [true, false]) {
+      test(`${row.name} ${climbs ? "that leads out is not imported" : "that stays inside loads"}`, async () => {
+        await using root = await tmpdir()
+        await using state = await tmpdir()
+        const project = path.join(root.path, "project")
+        const global = path.join(root.path, "config")
+        const marks = path.join(root.path, "marks.txt")
+        const plugins = row.global ? path.join(global, "plugins") : path.join(project, ".orbit", "plugins")
+        const plugin = path.join(plugins, "hello")
+        const main = climbs ? "../../../outside/x.js" : "../lib/x.js"
+        await mkdir(path.join(project, ".git"), { recursive: true })
+        await Bun.write(path.join(plugins, "good", "tui.ts"), marker(marks, "project.good", "good"))
+        await Promise.all(
+          row.files.map((file) => Bun.write(path.join(plugin, file), marker(marks, "project.hello", "loaded"))),
+        )
+        await Bun.write(path.join(plugin, row.folder, "package.json"), JSON.stringify({ main }))
+        // The file `main` names, outside the folder or inside it: a tui entry that marks, or a server entry.
+        await Bun.write(
+          path.resolve(plugin, row.folder, main),
+          row.folder === "tui" ? marker(marks, "project.hello", "loaded") : "export default {}\n",
+        )
+        const read = async () =>
+          (await Bun.file(marks).exists()) ? (await Bun.file(marks).text()).trim().split("\n") : []
+        await inside(project, async () => {
+          await using setup = await createAppFixture({
+            state: state.path,
+            global,
+            fetch: (url, request) => {
+              if (url.pathname !== "/api/location/trust" || request.method !== "GET") return undefined
+              return json(status(project, true))
+            },
+          })
+          await setup.ready
+          await setup.waitForFrame((frame) => promptReady(frame))
+          if (climbs) await setup.waitForFrame((frame) => frame.includes("Plugin failed:"), { timeout: 10_000 })
+          await setup.waitFor(async () => (await read()).includes("good"), { maxPasses: 200 })
+          if (!climbs) await setup.waitFor(async () => (await read()).includes("loaded"), { maxPasses: 200 })
+          expect((await read()).toSorted()).toEqual(climbs ? ["good"] : ["good", "loaded"])
+        })
+      }, 30_000)
+    }
+})
