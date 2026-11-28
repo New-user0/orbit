@@ -5,6 +5,7 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 import {
+  APPROVAL_ROW_LIMIT,
   approval,
   keySent,
   linkRows,
@@ -17,7 +18,10 @@ import {
   refusedSpellings,
   spellArgs,
   spellingLinks,
+  spellingPresence,
 } from "./spelling-rows"
+
+spellingPresence()
 
 for (const spelling of realSpellings) {
   const through = async (root: string) => path.join(await spelling.spelled(root), "cfg", "orbit.json")
@@ -25,7 +29,7 @@ for (const spelling of realSpellings) {
     `an untrusted Read through ${spelling.name} and the repository's link into the config folder is asked about as the plain spelling is`,
     () =>
       approval(
-        { tool: "Read", reply: "reject", args: async (root) => ({ file_path: await through(root) }), setup: spellingLinks },
+        { tool: "Read", reply: "reject", args: async (root) => ({ file_path: await through(root) }), base: spelling.base, setup: spellingLinks },
         async (run) => {
           expect(String(run.permissions[0]?.toolCall.title)).toContain("external directory")
           expect(shownAt(run.permissions[0]?.toolCall.locations)).toContain(path.join(run.root, "config"))
@@ -33,19 +37,19 @@ for (const spelling of realSpellings) {
           expect(keySent(run.root, run.bodies)).toBe(false)
         },
       ),
-    90_000,
+    APPROVAL_ROW_LIMIT,
   )
   test.concurrent(
     `an untrusted Read through ${spelling.name} and the repository's link, after the folder is allowed, names the folder it reads`,
     () =>
       approval(
-        { tool: "Read", reply: "once", args: async (root) => ({ file_path: await through(root) }), setup: spellingLinks },
+        { tool: "Read", reply: "once", args: async (root) => ({ file_path: await through(root) }), base: spelling.base, setup: spellingLinks },
         async (run) => {
           expect(run.permissions).toHaveLength(2)
           expect(shownAt(run.permissions[1]?.toolCall.locations)).toEqual([path.join(run.root, "config", "orbit.json")])
         },
       ),
-    90_000,
+    APPROVAL_ROW_LIMIT,
   )
   test.concurrent(
     `an untrusted Read of secret/key.txt through ${spelling.name} under the person's deny of secret/* is denied`,
@@ -59,7 +63,7 @@ for (const spelling of realSpellings) {
           ],
           reply: "once",
           args: async (root) => ({ file_path: path.join(await spelling.spelled(root), "secret", "key.txt") }),
-          setup: spellingLinks,
+          base: spelling.base, setup: spellingLinks,
         },
         async (run) => {
           expect(run.permissions).toHaveLength(0)
@@ -67,7 +71,7 @@ for (const spelling of realSpellings) {
           expect(toolResult(run)).toContain("denied")
         },
       ),
-    90_000,
+    APPROVAL_ROW_LIMIT,
   )
   test.concurrent(
     `an untrusted Read of secret/key.txt through ${spelling.name} under the person's ask of secret/* asks about secret/key.txt`,
@@ -78,7 +82,7 @@ for (const spelling of realSpellings) {
           permissions: [{ action: "Read", resource: "secret/*", effect: "ask" }],
           reply: "reject",
           args: async (root) => ({ file_path: path.join(await spelling.spelled(root), "secret", "key.txt") }),
-          setup: spellingLinks,
+          base: spelling.base, setup: spellingLinks,
         },
         async (run) => {
           expect(run.permissions).toHaveLength(1)
@@ -88,7 +92,7 @@ for (const spelling of realSpellings) {
           expect(denyMarkerSent(run)).toBe(false)
         },
       ),
-    90_000,
+    APPROVAL_ROW_LIMIT,
   )
   test.concurrent(
     `a trusted Read through ${spelling.name} and the repository's link is the project's own, with no folder question (control)`,
@@ -99,7 +103,7 @@ for (const spelling of realSpellings) {
           trusted: true,
           reply: "once",
           args: async (root) => ({ file_path: await through(root) }),
-          setup: spellingLinks,
+          base: spelling.base, setup: spellingLinks,
         },
         async (run) => {
           expect(run.permissions.filter((item) => String(item.toolCall.title).includes("external directory"))).toEqual(
@@ -108,7 +112,7 @@ for (const spelling of realSpellings) {
           expect(keySent(run.root, run.bodies)).toBe(true)
         },
       ),
-    90_000,
+    APPROVAL_ROW_LIMIT,
   )
 }
 for (const spelling of refusedSpellings)
@@ -130,7 +134,7 @@ for (const spelling of refusedSpellings)
             expect(toolResult(run)).toContain("file.spelling")
           },
         ),
-      90_000,
+      APPROVAL_ROW_LIMIT,
     )
 
 // A share or device spelling is refused before any question whatever the tool, trusted or not.
@@ -157,7 +161,7 @@ for (const row of refusedRows)
               expect(toolResult(run)).toContain("file.spelling")
             },
           ),
-        90_000,
+        APPROVAL_ROW_LIMIT,
       )
 
 // The matrix row of `clients-ux-61` over a real `orb acp` process: a NotebookEdit asks as an Edit, and its approval and
@@ -215,5 +219,5 @@ for (const trusted of [false, true])
           expect(await Bun.file(place).text()).toContain("print(2)")
         },
       ),
-    120_000,
+    APPROVAL_ROW_LIMIT,
   )

@@ -82,7 +82,10 @@ test("falls back to local logging when OTLP initialization fails", async () => {
   const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
 
   expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" })
-})
+  // The child transpiled into the run's shared cache (test/preload.ts), not into a cache folder of its own.
+  if (process.env.ORBIT_TEST_TRANSPILER_CACHE)
+    expect(await fs.readdir(path.join(dir, "cache", "bun")).catch(() => [])).toEqual([])
+}, 20_000)
 
 test("file logger appends concurrent runs with a run on every line", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-log-test-"))

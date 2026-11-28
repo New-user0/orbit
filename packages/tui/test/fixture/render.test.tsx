@@ -34,6 +34,16 @@ test("waitFor waits through an idle gap until the predicate holds", async () => 
   }
 })
 
+// The forced case of the rows that timed out at the old 10 s default: a frame that comes after 11 s is still waited for.
+test("a wait that names no limit keeps looking for as long as its row may run", async () => {
+  const setup = await lateScreen(11_000)
+  try {
+    expect(await setup.waitForFrame((frame) => frame.includes("late"))).toContain("late")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("a wait ends at its time limit, with the error of the last look, when the predicate never holds", async () => {
   const setup = await lateScreen(60_000)
   try {

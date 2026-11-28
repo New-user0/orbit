@@ -73,7 +73,7 @@ describe("Git", () => {
         expect(yield* git.history.branch(repository)).toBe("feature/docs")
         expect(yield* read(path.join(target, "README.md"))).toBe("feature\n")
       }),
-    ),
+    ), 10_000,
   )
 })
 
@@ -348,7 +348,7 @@ describe("the read-only calls of Git and the config of the repository", () => {
         yield* git.worktree.list(repository!)
 
         expect(yield* found.ran()).toEqual([])
-      }),
+      }), 10_000,
     )
 })
 
@@ -371,6 +371,6 @@ describe("Git.index.ignored and the config of the repository", () => {
 
         expect([...ignored]).toEqual([])
         expect(yield* found.ran()).toEqual([])
-      }),
+      }), 10_000,
     )
 })

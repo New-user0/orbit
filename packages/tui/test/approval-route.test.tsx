@@ -148,6 +148,10 @@ async function open(width: number, height: number, asked: Asked | undefined, opt
   await until((frame) => frame.includes("Orbit"))
   // The banner names the model once the models have loaded, which can come after the frame has settled once.
   await until((frame) => frame.includes("Model"))
+  // The startup line ("Loading plugins…", then "Finishing startup…") takes a row of the screen until startup is done, which
+  // on a loaded runner comes after the banner has named the model; a frame read before then has an extra row.
+  const started = (frame: string) => !/Loading plugins…|Finishing startup…/.test(frame)
+  await until(started)
   if (options.queued) await until((frame) => frame.includes("1 queued"))
   if (options.plan) await until((frame) => frame.includes("plan"))
   // The same screen with no question, which every dock row drawn beside one is a row of.
@@ -158,6 +162,7 @@ async function open(width: number, height: number, asked: Asked | undefined, opt
     setup.events.emit({ id: "evt_asked", created: 3, type: "permission.asked", data: question })
     await until((frame) => frame.includes("1 Allow once"))
   }
+  await until(started)
   return {
     setup,
     replies,

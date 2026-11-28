@@ -16,9 +16,10 @@ export const tmpdir = async (prefix = "orbit-core-test-") => {
   }
 }
 
-export const tmpdirScoped = (prefix = "orbit-core-test-") =>
+// `parent` is the folder to make it in, the temporary folder when it is not given.
+export const tmpdirScoped = (prefix = "orbit-core-test-", parent?: string) =>
   Effect.acquireRelease(
-    Effect.tryPromise(() => make(prefix)),
+    Effect.tryPromise(() => make(prefix, parent)),
     (dir) => Effect.tryPromise(() => remove(dir)).pipe(Effect.orDie),
   ).pipe(Effect.map((path) => ({ path })))
 
@@ -29,7 +30,7 @@ export const withTempDir = <A, E, R>(body: (tmp: TempDir) => Effect.Effect<A, E,
     (dir) => Effect.tryPromise(() => remove(dir)).pipe(Effect.orDie),
   )
 
-const make = async (prefix: string) => fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)))
+const make = async (prefix: string, parent = os.tmpdir()) => fs.realpath(await fs.mkdtemp(path.join(parent, prefix)))
 
 // A program the test ran can hold the folder for a moment after it exits on Windows.
 const remove = (dir: string) => removeTree(dir)

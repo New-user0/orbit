@@ -128,6 +128,8 @@ async function drawCompaction(input: {
 }
 
 const running = 31_000
+const figure = /Compaction · [3-9]\d(\.\d)?s · ↓ 1\.2K tokens/
+const drawn = (frame: string) => figure.test(frame)
 
 test("the row's one-second clock stops when the compaction ends", async () => {
   // The clock is a timer, so the only way to see it stop is to watch the timers: a spy on the two functions that
@@ -165,12 +167,13 @@ test("the row's one-second clock stops when the compaction ends", async () => {
   expect(open).toBe(0)
 }, 60_000)
 
-test("a running compaction shows its elapsed time and estimated tokens after 30 seconds, never its reply", async () => {
+const NAME = "a running compaction shows its elapsed time and estimated tokens after 30 seconds, never its reply"
+
+test(NAME, async () => {
+  // The row reads the clock at 30 s or more, never at a fixed 3x s, which a loaded runner passes before it draws.
   // The figure appears once the delta is handled, which a loaded runner does after the fixed wait (Linux CI drew
   // "Compaction · 31.0s" with no figure yet), so the rows that expect it read once it is drawn. A row that never draws
   // it still fails, at the bound.
-  const figure = /Compaction · 3\d(\.\d)?s · ↓ 1\.2K tokens/
-  const drawn = (frame: string) => figure.test(frame)
   // (a) after 30 s with a count: elapsed time and characters / 4 as tokens (4800 -> 1200 -> "1.2K").
   const after = await drawCompaction({ width: 120, age: running, deltas: [{ characters: 4800 }], until: drawn })
   expect(after).toContain("Compaction")
@@ -184,18 +187,25 @@ test("a running compaction shows its elapsed time and estimated tokens after 30 
 
   // (c) a zero count shows the elapsed time and no token figure.
   const zero = await drawCompaction({ width: 120, age: running, deltas: [{ characters: 0 }] })
-  expect(zero).toMatch(/Compaction · 3\d(\.\d)?s/)
+  expect(zero).toMatch(/Compaction · [3-9]\d(\.\d)?s/)
   expect(zero).not.toContain("tokens")
 
+}, 60_000)
+
+// Each case below opens its own app, so a loaded runner gives each its own limit and not one shared by all of them.
+test(`${NAME}: a narrow width`, async () => {
   // (d) a width the whole header does not fit drops the token figure first, then the elapsed time.
   const narrow = await drawCompaction({ width: 40, age: running, deltas: [{ characters: 4800 }] })
-  expect(narrow).toMatch(/Compaction · 3\d(\.\d)?s/)
+  expect(narrow).toMatch(/Compaction · [3-9]\d(\.\d)?s/)
   expect(narrow).not.toContain("tokens")
   const narrower = await drawCompaction({ width: 24, age: running, deltas: [{ characters: 4800 }] })
   expect(narrower).toContain("Compaction")
   expect(narrower).not.toMatch(/Compaction ·/)
   expect(narrower).not.toContain("tokens")
 
+}, 60_000)
+
+test(`${NAME}: an older server and a held summary`, async () => {
   // (e) an older server sends the reply text and no count: the reply is never drawn and no figure appears.
   const old = await drawCompaction({ width: 120, age: running, deltas: [{ text: "HOSTILE-REPLY" }] })
   expect(old).toContain("Compaction")
@@ -207,8 +217,12 @@ test("a running compaction shows its elapsed time and estimated tokens after 30 
   expect(held).toContain("Compaction")
   expect(held).not.toContain("HELD-SUMMARY")
 
+}, 60_000)
+
+test(`${NAME}: the clock keeps running`, async () => {
   // (g) the clock keeps running: a row 1.5 s short of 30 seconds shows its time once it passes them.
-  const early = await drawCompaction({ width: 120, age: 28_500, deltas: [{ characters: 4800 }] })
+  // The control is drawn 10 s short, so a loaded runner that draws it late still draws it before 30 s.
+  const early = await drawCompaction({ width: 120, age: 20_000, deltas: [{ characters: 4800 }] })
   expect(early).not.toMatch(/Compaction ·/)
   const ticked = await drawCompaction({
     width: 120,
@@ -219,6 +233,9 @@ test("a running compaction shows its elapsed time and estimated tokens after 30 
   })
   expect(ticked).toMatch(figure)
 
+}, 60_000)
+
+test(`${NAME}: the completed row draws the stored summary`, async () => {
   // Trusted control: the completed row draws the stored summary.
   const done = await drawCompaction({ width: 120, age: running, deltas: [{ characters: 4800 }], status: "completed" })
   expect(done).toContain("Plain summary")

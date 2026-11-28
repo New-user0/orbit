@@ -15,6 +15,9 @@ const pty = spawn(
   ],
   { name: "xterm-256color", cols: 160, rows: 24, env: { ...process.env, TERM: "xterm-256color" } },
 )
+// Every wait ends by one deadline for the whole run, inside the 30 s that the test gives this process. A wait of its own
+// 5 s ended before a loaded runner's PowerShell had drawn its first prompt (run 46041471233, Windows core 2/3).
+const deadline = Date.now() + 25_000
 const output = { text: "", cursor: 0 }
 const listeners = new Set<() => void>()
 const exited = Promise.withResolvers<number>()
@@ -54,7 +57,7 @@ function waitFor(text: string) {
     const timeout = setTimeout(() => {
       listeners.delete(check)
       reject(new Error(`Timed out waiting for ${JSON.stringify(text)}: ${output.text}`))
-    }, 5_000)
+    }, deadline - Date.now())
     const check = () => {
       const index = output.text.indexOf(text, output.cursor)
       if (index === -1) return

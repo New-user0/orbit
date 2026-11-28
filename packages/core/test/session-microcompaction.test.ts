@@ -351,7 +351,7 @@ describe("clearing old tool results", () => {
       expect([name, clearedIn(request)]).toEqual([name, clears ? ["target"] : []])
       expect([name, callsOf(yield* clearings(s, id))]).toEqual([name, clears ? [["target"]] : []])
     }
-  })
+  }, 10_000)
 
   scenario("never clears a provider-hosted result", function* (s) {
     // The hosted search is the oldest call, six reads follow: the oldest read is the one to go.

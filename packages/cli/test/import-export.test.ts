@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { ORBIT_VERSION } from "../src/version"
+import { runOrb } from "./fixture/orb"
 
 const info = {
   id: "ses_export_test",
@@ -54,16 +55,14 @@ const trusted = (url: URL) =>
     changed: [],
   })
 
-function run(args: string[], stdin?: string) {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
-    cwd: path.join(import.meta.dir, ".."),
-    stdin: stdin === undefined ? undefined : new Blob([stdin]),
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  return Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+async function run(args: string[], stdin?: string) {
+  const result = await runOrb(args, { stdin })
+  return [result.stdout, result.stderr, result.exitCode] as const
 }
 
+// Two `orb` starts one after the other. Limit 70 s: over 50 loaded runs (4 cores, busy loops, three files at once, cold
+// transpiler cache) the row took p50 15.4 s, p95 26.4 s and at most 35.1 s, and a start of `orb` from source cannot be
+// made faster than that on a loaded runner. The earlier 15 s failed on a runner (45902385785).
 test("export is raw by default and supports explicit sanitization", async () => {
   const sanitization: string[] = []
   const server = Bun.serve({
@@ -101,8 +100,10 @@ test("export is raw by default and supports explicit sanitization", async () => 
   } finally {
     await server.stop(true)
   }
-}, 15_000)
+}, 70_000)
 
+// Limit 30 s: at most 13.4 s over 50 loaded runs (4 cores, busy loops, three files at once, cold transpiler cache; p50
+// 6.0 s, p95 11.6 s): one start of `orb`.
 test("export requires a session outside an interactive terminal", async () => {
   const server = Bun.serve({
     port: 0,
@@ -129,7 +130,7 @@ test("export requires a session outside an interactive terminal", async () => {
   } finally {
     await server.stop(true)
   }
-})
+}, 30_000)
 
 test("export reports a missing session without a stack trace", async () => {
   const sessionID = "ses_missing"

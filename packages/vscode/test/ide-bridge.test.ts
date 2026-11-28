@@ -192,6 +192,9 @@ test("sends one selection for a burst of changes, with the positions counted fro
 test("sends a cleared selection when no file editor remains", async () => {
   const { bridge } = await start(await folder())
   bridge.select(editing)
+  // The 20 ms debounce of that selection ends first, as a timer set before this one; a frame it sent after the hello
+  // would read as the answer below (FU-M4-226).
+  await Bun.sleep(60)
   const client = await connect(bridge, (await lock(bridge)).authToken)
   await until(() => client.frames.length >= 2, "the selection")
   client.frames.length = 0

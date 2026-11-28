@@ -6,8 +6,8 @@ import { tmpdirScoped } from "./tmpdir"
 
 // Programs for tests about which file Windows starts when Orbit asks for a program by its name. A decoy is a real .exe
 // that writes ran.txt next to itself, with its own file name and its arguments, so a test can tell whether something
-// started it and which one. Bun compiles a script into an .exe without a compiler in well under a second, and the
-// folder of the test owns the result, so nothing is left behind when the test removes its folder.
+// started it and which one. Bun compiles a script into an .exe without a compiler in well under a second. The decoy in
+// the test's folder goes with that folder, and the one build a run shares (see `sharedBuild`) goes with the run's own.
 const source = `
 import { appendFileSync } from "node:fs"
 import path from "node:path"
@@ -23,22 +23,49 @@ appendFileSync(
  */
 export async function plant(directory: string, first: string, ...others: ReadonlyArray<string>) {
   const original = path.join(directory, `${first}.exe`)
+  const shared = process.env.ORBIT_TEST_PROGRAMS
+  if (!shared) await build(original)
+  if (shared) {
+    // A build makes the folder it writes to, so a caller may name one that is not there yet; a link needs it first.
+    await fs.mkdir(directory, { recursive: true })
+    await linkOrCopy(await sharedBuild(shared), original)
+  }
+  await Promise.all(others.map((name) => linkOrCopy(original, path.join(directory, `${name}.exe`))))
+  return ranIn(directory)
+}
+
+// A decoy is a copy of the Bun runtime, about 110 MB. Built for every row, a Windows core run wrote tens of gigabytes to
+// the runner's system disk, and while one was written the other worker's file and SQLite work waited on that disk: in
+// the ci-measure runs the rows that stalled together in both workers, with their event loops held for seconds, fell in
+// the seconds of heavy paging that the builds made. A run of the test runner (tools/test/watchdog.ts) keeps one build
+// in its ORBIT_TEST_PROGRAMS folder for every worker and file, and each decoy is a link to it, which still writes its
+// ran.txt beside the path it was started by. A file run without the runner builds its own.
+async function sharedBuild(folder: string) {
+  const program = path.join(folder, `decoy-${Bun.version}-${Bun.hash(source).toString(16)}.exe`)
+  if (await Bun.file(program).exists()) return program
+  // Workers may build at the same time: each writes a file of its own, and the first one linked to the name is kept.
+  const own = path.join(folder, `build-${process.pid}-${crypto.randomUUID()}.exe`)
+  await build(own)
+  await fs.link(own, program).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "EEXIST") throw error
+  })
+  await fs.rm(own, { force: true })
+  return program
+}
+
+async function build(outfile: string) {
   const result = await Bun.build({
     entrypoints: ["/decoy.ts"],
     files: { "/decoy.ts": source },
     // A decoy must not read a bunfig.toml or .env of the folder it runs in, which is the folder under test.
-    compile: { outfile: original, autoloadBunfig: false, autoloadDotenv: false },
+    compile: { outfile, autoloadBunfig: false, autoloadDotenv: false },
   })
   if (!result.success) throw new AggregateError(result.logs, "Could not build the decoy program")
-  await Promise.all(
-    others.map((name) => {
-      const target = path.join(directory, `${name}.exe`)
-      // A link takes no room and no time. A volume that cannot link gets a copy.
-      return fs.link(original, target).catch(() => fs.copyFile(original, target))
-    }),
-  )
-  return ranIn(directory)
 }
+
+// A link takes no room and no time. A volume that cannot link gets a copy.
+const linkOrCopy = (original: string, target: string) =>
+  fs.link(original, target).catch(() => fs.copyFile(original, target))
 
 /**
  * `plant` for a test that needs many folders with the same program: compiling one costs a copy of the Bun runtime, which
@@ -47,8 +74,7 @@ export async function plant(directory: string, first: string, ...others: Readonl
  * beside the path it was started by, so each folder keeps its own record.
  */
 export async function plantFrom(original: string, directory: string, name: string) {
-  const target = path.join(directory, `${name}.exe`)
-  await fs.link(original, target).catch(() => fs.copyFile(original, target))
+  await linkOrCopy(original, path.join(directory, `${name}.exe`))
   return ranIn(directory)
 }
 

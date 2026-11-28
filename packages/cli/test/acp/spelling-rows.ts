@@ -2,10 +2,11 @@
 // rows through each of them, which permission-spellings.subprocess.test.ts and spelling-matrix-*.subprocess.test.ts share.
 import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
-import os from "node:os"
 import path from "node:path"
+import { junctionSpellings, junctionTemporary } from "../../../core/test/fixture/legacy-junction"
 import { runProgram } from "../../../core/test/fixture/run-program"
 import {
+  APPROVAL_ROW_LIMIT,
   approval,
   canLinkDirectory,
   globMarker,
@@ -20,25 +21,13 @@ import {
 // `orb acp` in an untrusted folder, a call under such a spelling meets the same folder question and the same rules as
 // the plain spelling, and the link of the repository below it is followed in none of them; a share or device spelling is
 // refused with no question. The trusted rows are the controls (class 3, class 4, class 8, class 12; permissions-23).
-const temporary = os.tmpdir()
-const junctions = (
-  process.platform === "win32"
-    ? [
-        {
-          name: "Documents and Settings",
-          temporary: temporary.replace(/^([A-Za-z]:)\\Users\\/i, "$1\\Documents and Settings\\"),
-        },
-        {
-          name: "Local Settings",
-          temporary: temporary.replace(/^(.*?\\Users\\[^\\]+)\\AppData\\Local\\/i, "$1\\Local Settings\\"),
-        },
-      ]
-    : []
-).filter((item) => item.temporary !== temporary)
+// Windows' legacy junctions name a folder only below a profile's AppData\Local, so the rows through them make their run
+// folder there (`base`), which on Windows CI is the runner's own temporary folder on C: (fixture/legacy-junction.ts).
+const temporary = junctionTemporary()
 const present = await Promise.all(
-  junctions.map((item) =>
-    fs.stat(item.temporary).then(
-      () => [item],
+  (temporary === undefined ? [] : junctionSpellings(temporary)).map((item) =>
+    fs.stat(item.spelled).then(
+      () => [{ name: item.name, temporary: item.spelled, base: temporary }],
       () => [],
     ),
   ),
@@ -57,10 +46,16 @@ const shortWorkspace = async (root: string) => {
     throw new Error("this volume makes no 8.3 short names")
   return short
 }
-export const realSpellings = [
+// `base` is the folder a row's run folder is made in, the temporary folder when it is not given.
+export const realSpellings: ReadonlyArray<{
+  name: string
+  base?: string
+  spelled: (root: string) => string | Promise<string>
+}> = [
   { name: "a link to the project", spelled: (root: string) => path.join(root, "wsalias") },
   ...present.flat().map((item) => ({
     name: item.name,
+    base: item.base,
     spelled: (root: string) => path.join(item.temporary, path.basename(root), "workspace"),
   })),
   ...(process.platform === "win32"
@@ -120,8 +115,26 @@ const spellingModes = [
   { trusted: true, reply: "once" },
 ] as const
 
+/**
+ * Registers a Windows row that fails when the rows cannot make their folder below a profile's AppData\Local, where the
+ * legacy junctions lead, rather than registering fewer rows (fixture/legacy-junction.ts; class 3, class 4). CI runs the
+ * files that register rows from `realSpellings` in different jobs, so each of them registers this row.
+ */
+export function spellingPresence() {
+  ;(process.platform === "win32" ? test : test.skip)(
+    "the rows go through the Documents and Settings and Local Settings spellings of the workspace folder",
+    () => {
+      expect(realSpellings.map((item) => item.name).filter((name) => name.endsWith(" Settings"))).toEqual([
+        "Documents and Settings",
+        "Local Settings",
+      ])
+    },
+  )
+}
+
 /** Registers the matrix for the given link rows: each through every real spelling, answered each way and under a deny. */
 export function spellingMatrix(rows: typeof linkRows) {
+  spellingPresence()
   for (const row of rows)
     for (const spelling of realSpellings) {
       for (const mode of spellingModes)
@@ -136,11 +149,12 @@ export function spellingMatrix(rows: typeof linkRows) {
                 trusted: mode.trusted,
                 reply: mode.reply,
                 args: async (root) => spellArgs(row.args, await spelling.spelled(root)),
+                base: spelling.base,
                 setup: spellingLinks,
               },
               linkCheck(row, mode),
             ),
-          90_000,
+          APPROVAL_ROW_LIMIT,
         )
       test.concurrent(
         `an untrusted ${row.name} through ${spelling.name} and the repository's link under the person's deny of the config folder is denied with no question`,
@@ -160,6 +174,7 @@ export function spellingMatrix(rows: typeof linkRows) {
               ],
               reply: "once",
               args: async (root) => spellArgs(row.args, await spelling.spelled(root)),
+              base: spelling.base,
               setup: spellingLinks,
             },
             async (run) => {
@@ -167,7 +182,7 @@ export function spellingMatrix(rows: typeof linkRows) {
               expect(await row.acted(run.root, run.bodies)).toBe(false)
             },
           ),
-        90_000,
+        APPROVAL_ROW_LIMIT,
       )
     }
 }
@@ -232,7 +247,7 @@ export function shareMatrix(rows: typeof linkRows) {
             },
             (run) => refusedAsShare(run, row),
           ),
-        90_000,
+        APPROVAL_ROW_LIMIT,
       )
       if (share !== shareTargets[0]) continue
       test.concurrent(
@@ -257,7 +272,7 @@ export function shareMatrix(rows: typeof linkRows) {
             },
             (run) => refusedAsShare(run, row),
           ),
-        90_000,
+        APPROVAL_ROW_LIMIT,
       )
       // The owner trusted the folder (2026-10-13: a trusted folder asks before a tool touches a link to a share): no
       // spelling refuses the call, and one folder question names the share. A reject keeps everything unopened.
@@ -287,7 +302,7 @@ export function shareMatrix(rows: typeof linkRows) {
                 if (reply === "reject") expect(await row.acted(run.root, run.bodies)).toBe(false)
               },
             ),
-          90_000,
+          APPROVAL_ROW_LIMIT,
         )
     }
 }

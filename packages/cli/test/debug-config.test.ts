@@ -4,10 +4,11 @@ import os from "node:os"
 import path from "node:path"
 import { ORBIT_VERSION } from "../src/version"
 import { redactConfig } from "../src/commands/handlers/debug/redact"
+import { runOrb } from "./fixture/orb"
 
 describe("debug config command", () => {
   test("is included in troubleshooting help", async () => {
-    const [debug, config] = await Promise.all([cli(["debug", "--help"]), cli(["debug", "config", "--help"])])
+    const [debug, config] = await Promise.all([runOrb(["debug", "--help"]), runOrb(["debug", "config", "--help"])])
 
     expect(debug.exitCode).toBe(0)
     expect(debug.stdout).toContain("config")
@@ -70,7 +71,7 @@ describe("debug config command", () => {
         registration,
         JSON.stringify({ version: ORBIT_VERSION, url: server.url.toString(), pid: process.pid, password: "secret" }),
       )
-      const result = await cli(["debug", "config"], project, { XDG_STATE_HOME: path.join(root, "state") })
+      const result = await runOrb(["debug", "config"], { cwd: project, env: { XDG_STATE_HOME: path.join(root, "state") } })
 
       expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" })
       expect(JSON.parse(result.stdout)).toEqual(redactConfig(entries))
@@ -115,18 +116,3 @@ test("redacts URL credentials and credential environment variables without mutat
   })
   expect(input.mcp.remote.url).toBe("https://user:pass@example.com/mcp")
 })
-
-async function cli(args: string[], cwd = path.join(import.meta.dir, ".."), env?: Record<string, string>) {
-  const child = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "../src/index.ts"), ...args], {
-    cwd,
-    env: { ...process.env, ...env },
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  return { stdout, stderr, exitCode }
-}

@@ -343,6 +343,8 @@ describe("an Edit or Write through a link names where it leads, and says whether
             }),
           (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
         ),
+        // Measured: rows of this table reached the 5 s default on Windows under CI-like load (4 cores, 2 workers).
+        20_000,
       )
 })
 
@@ -391,6 +393,8 @@ describe("an Edit or Write in a project folder that is itself reached through a 
             }),
           (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
         ),
+        // Measured: rows of this table reached the 5 s default on Windows under CI-like load (4 cores, 2 workers).
+        20_000,
       )
 })
 
@@ -560,6 +564,8 @@ describe("every kind of file change names the link it is reached through, by eve
             }),
           (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
         ),
+        // Measured: rows of this table reached the 5 s default on Windows under CI-like load (4 cores, 2 workers).
+        20_000,
       )
 })
 
@@ -710,6 +716,8 @@ describe("a Patch or NotebookEdit at the edges of what a link is", () => {
             }),
           (root) => Effect.promise(() => root[Symbol.asyncDispose]()),
         ),
+        // Measured: rows of this table reached the 5 s default on Windows under CI-like load (4 cores, 2 workers).
+        20_000,
       )
 })
 

@@ -25,6 +25,8 @@ import { git, repository } from "../fixture/git"
 import { keys, planted } from "../fixture/git-keys"
 import { traced } from "../fixture/git-trace"
 import { location } from "../fixture/location"
+import { processNative } from "../fixture/native-watcher"
+import { runProgram } from "../fixture/run-program"
 import { tmpdir, tmpdirScoped, withTempDir } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
 import { host } from "../plugin/host"
@@ -235,9 +237,12 @@ describe("Watcher lifecycle", () => {
 function fakeParcel(options?: { held?: Promise<void> }) {
   const watches: { dir: string; fn: ParcelWatcher.SubscribeCallback; queued: boolean }[] = []
   const counts = { subscribes: 0, unsubscribes: 0, unsafe: 0 }
+  // The ignore list of each subscribe, in order: the real binding joins a watch to one of the same folder and list.
+  const ignores: (readonly string[])[] = []
   const binding: Pick<typeof ParcelWatcher, "subscribe"> = {
-    subscribe: async (dir, fn) => {
+    subscribe: async (dir, fn, settings) => {
       counts.subscribes++
+      ignores.push(settings?.ignore ?? [])
       const watch = { dir, fn, queued: true }
       watches.push(watch)
       await options?.held
@@ -257,7 +262,7 @@ function fakeParcel(options?: { held?: Promise<void> }) {
         if (error || events.some((event) => event.type === "delete" && event.path === dir)) watch.queued = false
         watch.fn(error, events)
       })
-  return { binding, counts, emit }
+  return { binding, counts, emit, ignores }
 }
 
 describe("Watcher native directory watches", () => {
@@ -393,8 +398,10 @@ describe("Watcher native directory watches", () => {
   })
 
   // The real binding keeps a watch on a folder that is moved, without an event, and joins a new
-  // watch of the same path to it; reusing it would watch the moved folder instead of the new one.
-  it.effect("on Windows a parked watch whose folder was moved away is not reused", () => {
+  // watch of the same path to it; reusing it would watch the moved folder instead of the new one. Its
+  // read is still queued, so ending it would meet #262: it is retired, and the next watch names one
+  // more ignored path so that the binding gives it a watch of its own.
+  it.effect("on Windows a parked watch whose folder was moved away is not reused and not ended", () => {
     const parcel = fakeParcel()
     return rooted((root) =>
       Effect.gen(function* () {
@@ -413,7 +420,67 @@ describe("Watcher native directory watches", () => {
           await fs.mkdir(watched)
         })
         yield* native.subscribe({ type: "directory", target: watched, ignore: [], publish: () => {} })
-        expect(parcel.counts).toEqual({ subscribes: 2, unsubscribes: 1, unsafe: 1 })
+        expect(parcel.counts).toEqual({ subscribes: 2, unsubscribes: 0, unsafe: 0 })
+        expect(parcel.ignores).toEqual([[], ["<orbit-watch-1>"]])
+      }),
+    )
+  })
+
+  // A folder that keeps a retired watch keeps the name apart for every watch after it, also once the watch that took
+  // the first name has ended; each name is new, so no two native watches of the folder share a list.
+  it.effect("on Windows every later watch of a folder with a retired watch is set apart from it", () => {
+    const parcel = fakeParcel()
+    return rooted((root) =>
+      Effect.gen(function* () {
+        const native = yield* Watcher.makeNative(() => parcel.binding, "windows")
+        const watched = path.join(root.path, "watched")
+        const watch = () => native.subscribe({ type: "directory", target: watched, ignore: ["x"], publish: () => {} })
+        // The folder is moved away, not removed, so the new one cannot get the old one's file ID back.
+        const moved = { count: 0 }
+        const replace = Effect.promise(async () => {
+          await fs.rename(watched, path.join(root.path, `moved-${moved.count++}`))
+          await fs.mkdir(watched)
+        })
+        yield* Effect.promise(() => fs.mkdir(watched))
+        const first = yield* watch()
+        yield* Effect.promise(() => first!.unsubscribe())
+        yield* replace
+        const second = yield* watch()
+        // The second watch reports its folder's deletion, so its release ends it.
+        parcel.emit(watched, [{ path: watched, type: "delete" }])
+        yield* Effect.promise(() => second!.unsubscribe())
+        yield* replace
+        yield* watch()
+        expect(parcel.ignores).toEqual([["x"], ["x", "<orbit-watch-1>"], ["x", "<orbit-watch-2>"]])
+        expect(parcel.counts).toEqual({ subscribes: 3, unsubscribes: 1, unsafe: 0 })
+      }),
+    )
+  })
+
+  // The retired watches end with the native watches, as the parked ones do (a host that closes Orbit must be able to
+  // exit); that close is the one place that still meets #262 (FU-M5-022).
+  it.effect("on Windows closing the native watches ends the retired ones", () => {
+    const parcel = fakeParcel()
+    return rooted((root) =>
+      Effect.gen(function* () {
+        const watched = path.join(root.path, "watched")
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const native = yield* Watcher.makeNative(() => parcel.binding, "windows")
+            yield* Effect.promise(() => fs.mkdir(watched))
+            const watch = () => native.subscribe({ type: "directory", target: watched, ignore: [], publish: () => {} })
+            const first = yield* watch()
+            yield* Effect.promise(() => first!.unsubscribe())
+            yield* Effect.promise(async () => {
+              await fs.rename(watched, path.join(root.path, "moved"))
+              await fs.mkdir(watched)
+            })
+            const second = yield* watch()
+            yield* Effect.promise(() => second!.unsubscribe())
+            expect(parcel.counts.unsubscribes).toBe(0)
+          }),
+        )
+        expect(parcel.counts).toEqual({ subscribes: 2, unsubscribes: 2, unsafe: 2 })
       }),
     )
   })
@@ -421,7 +488,7 @@ describe("Watcher native directory watches", () => {
   // A folder whose identity cannot be read might no longer be the folder the watch follows. A path
   // with a NUL byte is one that every system refuses to stat, so the release and the next subscribe
   // both fail to read it.
-  it.effect("on Windows a parked watch whose folder cannot be read is not reused", () => {
+  it.effect("on Windows a parked watch whose folder cannot be read is not reused and not ended", () => {
     const parcel = fakeParcel()
     return rooted((root) =>
       Effect.gen(function* () {
@@ -434,7 +501,8 @@ describe("Watcher native directory watches", () => {
         yield* native.subscribe({ type: "directory", target, ignore: [], publish: (update) => seen.push(update) })
         parcel.emit(target, [root.file])
         expect(seen).toEqual([root.file])
-        expect(parcel.counts).toEqual({ subscribes: 2, unsubscribes: 1, unsafe: 1 })
+        expect(parcel.counts).toEqual({ subscribes: 2, unsubscribes: 0, unsafe: 0 })
+        expect(parcel.ignores).toEqual([[], ["<orbit-watch-1>"]])
       }),
     )
   })
@@ -507,6 +575,93 @@ describe("Watcher native directory watches", () => {
       }),
     )
   })
+
+  // The close above meets parcel-bundler/watcher#262, which crashed core test workers on Windows (FU-M5-022), because
+  // each test builds and closes a runtime of its own. A test process does not need the close: bun ends its workers with
+  // live watches still open. So the tests take their native watches from one set that lives as long as the process
+  // (test/fixture/native-watcher.ts), and a runtime that closes ends none of them.
+  it.effect(
+    "in a test process the native watches outlive each runtime: a closed one ends none, the next reuses it",
+    () => {
+      const parcel = fakeParcel()
+      const binding = () => parcel.binding
+      return rooted((root) =>
+        Effect.gen(function* () {
+          for (const _ of [1, 2]) {
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                const subscription = yield* root.subscribe(processNative(binding, "windows"))
+                yield* Effect.promise(() => subscription!.unsubscribe())
+              }),
+            )
+          }
+          expect(parcel.counts).toEqual({ subscribes: 1, unsubscribes: 0, unsafe: 0 })
+        }),
+      )
+    },
+  )
+
+  // Nor does the file's end: the pool is never closed, so a test process ends no live watch, which on Windows can meet
+  // #262. The rows keep what a watch follows to folders of their own (test/fixture/native-watcher.ts), so a watch left
+  // open here wakes for no later file.
+  it.live("a test file ends none of its native watches, also after its last row", () =>
+    Effect.promise(async () => {
+      await using dir = await tmpdir()
+      const marks = path.join(dir.path, "marks.txt")
+      const file = path.join(dir.path, "pool.test.ts")
+      await Bun.write(
+        file,
+        [
+          `import { appendFileSync } from "node:fs"`,
+          `import { afterAll, test } from "bun:test"`,
+          // A folder outside the package resolves no bare package name, so the child imports Effect by its path.
+          `import { Effect } from ${JSON.stringify(Bun.resolveSync("effect", import.meta.dir))}`,
+          `import { processNative } from ${JSON.stringify(path.join(import.meta.dir, "..", "fixture", "native-watcher.ts"))}`,
+          `const mark = (line: string) => appendFileSync(${JSON.stringify(marks)}, line + "\\n")`,
+          `const binding = () => ({`,
+          `  subscribe: async () => {`,
+          `    mark("subscribe")`,
+          `    return { unsubscribe: async () => mark("unsubscribe") }`,
+          `  },`,
+          `})`,
+          `test("first row", async () => {`,
+          `  const native = processNative(binding, "windows")`,
+          `  const watch = { type: "directory" as const, target: ${JSON.stringify(dir.path)}, ignore: [], publish: () => {} }`,
+          `  const subscription = await Effect.runPromise(native.subscribe(watch))`,
+          `  await subscription!.unsubscribe()`,
+          `  mark("first row ended")`,
+          `})`,
+          `test("last row", () => mark("last row ran"))`,
+          `afterAll(() => mark("file ended"))`,
+        ].join("\n"),
+      )
+      const run = await runProgram([process.execPath, "test", file], { cwd: path.join(import.meta.dir, "..", "..") })
+      expect({ code: run.exitCode, stderr: run.exitCode === 0 ? "" : run.stderr.toString() }).toEqual({
+        code: 0,
+        stderr: "",
+      })
+      expect((await Bun.file(marks).text()).trim().split(/\r?\n/)).toEqual([
+        "subscribe",
+        "first row ended",
+        "last row ran",
+        "file ended",
+      ])
+    }),
+  )
+
+  // The reach of that set: every runtime a row builds, through the app graph or its own Effect.provide, gets the same
+  // native watches, which no runtime's close ends (test/lib/effect.ts runs each row with the fixture's memo map).
+  it.effect("every runtime a row builds takes the native watches of the process", () =>
+    Effect.gen(function* () {
+      const native = Effect.gen(function* () {
+        return yield* Watcher.Native
+      })
+      const graph = AppNodeBuilder.build(LayerNode.group([Watcher.nativeNode]))
+      const first = yield* native.pipe(Effect.provide(graph))
+      expect(yield* native.pipe(Effect.provide(Watcher.nativeLayer))).toBe(first)
+      expect(yield* native.pipe(Effect.provide(graph))).toBe(first)
+    }),
+  )
 
   it.effect("on Windows a subscribe that resolves after the native watches closed is unsubscribed", () => {
     const held = Promise.withResolvers<void>()

@@ -283,11 +283,15 @@ describe("runTests", () => {
   )
 
   test(
-    "gives each run fresh folders for its start slots and its transpiler cache, in place of inherited ones, and removes them at the end",
+    "gives each run fresh folders for its start slots, its transpiler cache and its shared programs, in place of inherited ones, and removes them at the end",
     async () => {
       await using dir = await tmpdir()
       const seen = path.join(dir.path, "seen.json")
-      const names = { ORBIT_TEST_START_SLOTS: "orbit-starts-", ORBIT_TEST_TRANSPILER_CACHE: "orbit-transpiled-" }
+      const names = {
+        ORBIT_TEST_START_SLOTS: "orbit-starts-",
+        ORBIT_TEST_TRANSPILER_CACHE: "orbit-transpiled-",
+        ORBIT_TEST_PROGRAMS: "orbit-programs-",
+      }
       await suite(dir.path, {
         "folders.test.ts": [
           `import { test } from "bun:test"`,
@@ -301,9 +305,10 @@ describe("runTests", () => {
       const code = await runTests(args(dir.path), quiet(outer), dir.path, captured().output)
       expect(code).toBe(0)
       const run = (await Bun.file(seen).json()) as { folder: string; exists: boolean }[]
-      expect(run.map((entry) => entry.exists)).toEqual([true, true])
+      expect(run.map((entry) => entry.exists)).toEqual([true, true, true])
       expect(run.map((entry) => entry.folder)).not.toContain(outer.ORBIT_TEST_START_SLOTS)
       expect(run.map((entry) => entry.folder)).not.toContain(outer.ORBIT_TEST_TRANSPILER_CACHE)
+      expect(run.map((entry) => entry.folder)).not.toContain(outer.ORBIT_TEST_PROGRAMS)
       expect(run.map((entry) => path.basename(entry.folder).replace(/-[^-]+$/, "-"))).toEqual(Object.values(names))
       for (const entry of run) expect(await fs.stat(entry.folder).catch(() => undefined)).toBeUndefined()
     },

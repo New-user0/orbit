@@ -5,20 +5,26 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { startSlot } from "./fixture/start-gate"
 
 test("standalone server exits when its owner is killed", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-cli-standalone-"))
-  const owner = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixture/standalone-owner.ts")], {
-    cwd: path.join(import.meta.dir, ".."),
-    env: isolatedEnv(root, { ORBIT_SERVER_USERNAME: "custom" }),
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
+  // The start gate admits the owner before it starts, so the 10 s below measures its start and not the queue behind
+  // other files' children.
+  const { owner, line } = await startSlot(async () => {
+    const owner = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixture/standalone-owner.ts")], {
+      cwd: path.join(import.meta.dir, ".."),
+      env: isolatedEnv(root, { ORBIT_SERVER_USERNAME: "custom" }),
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const line = await Promise.race([
+      readLine(owner.stdout, "STANDALONE_READY "),
+      Bun.sleep(10_000).then(() => undefined),
+    ])
+    return { owner, line }
   })
-  const line = await Promise.race([
-    readLine(owner.stdout, "STANDALONE_READY "),
-    Bun.sleep(10_000).then(() => undefined),
-  ])
   const [, rawPID, url, status] = line?.split(" ") ?? []
   const pid = Number(rawPID)
 

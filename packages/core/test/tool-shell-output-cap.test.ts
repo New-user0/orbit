@@ -259,7 +259,8 @@ const lowered = (outcome: Tool.NormalizedResult, root: string) => {
     [],
     { toolOutput: root },
   ).flatMap((message) => (message.role === "tool" ? message.content : []))[0]
-  if (part?.type !== "tool-result" || typeof part.result.value !== "string") throw new Error("Expected a text tool result")
+  if (part?.type !== "tool-result" || typeof part.result.value !== "string")
+    throw new Error("Expected a text tool result")
   return part.result.value
 }
 
@@ -818,10 +819,13 @@ describe("ShellTool output cap", () => {
 })
 
 // A folder on another volume than the test's temporary folder, where the machine has one: tmpfs on Linux, or on Windows
-// the drive of the checkout (its ignored `tmp` folder).
+// the folder ORBIT_TEST_OTHER_VOLUME names (Windows CI keeps the temporary folder on D:, the checkout's drive, and names
+// the runner's own temporary folder on C:) or else the drive of the checkout (its ignored `tmp` folder).
 const otherVolume = await (async () => {
   const device = (await fs.stat(os.tmpdir())).dev
-  const candidate = isWindows ? path.join(import.meta.dir, "..", "tmp") : "/dev/shm"
+  const candidate = isWindows
+    ? (process.env.ORBIT_TEST_OTHER_VOLUME ?? path.join(import.meta.dir, "..", "tmp"))
+    : "/dev/shm"
   if (isWindows) await fs.mkdir(candidate, { recursive: true })
   const stat = await fs.stat(candidate).catch(() => undefined)
   return stat?.isDirectory() && stat.dev !== device ? candidate : undefined
@@ -862,7 +866,8 @@ const linkedShellGlobal = (volume: string) =>
 
 // The shell file is on another volume than the session's tool-output folder, so no hard link can be made and the saved
 // copy is a copy. Fails when a failed link saves nothing, which sends the head whole. Runs where the machine has a second
-// volume: Linux CI, the Docker gate and Windows CI (the checkout's drive is not the temporary folder's).
+// volume: Linux CI, the Docker gate and Windows CI (ORBIT_TEST_OTHER_VOLUME names a folder on C:, and the temporary
+// folder is on D:).
 if (otherVolume !== undefined)
   it.live(
     "copies the output to the session's folder when the shell file is on another volume",

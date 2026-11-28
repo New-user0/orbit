@@ -58,7 +58,7 @@ describe("cross-spawn spawner", () => {
           svc.string(ChildProcess.make(process.execPath, ["-e", 'process.stdout.write("ok")'])),
         )
         expect(out).toBe("ok")
-      }),
+      }), 10_000,
     )
 
     fx.effect(

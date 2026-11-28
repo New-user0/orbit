@@ -95,10 +95,13 @@ jobs:
       - uses: ./.github/actions/setup-bun
       # Orbit does not download ripgrep; the search tools and their tests use the one on PATH.
       - name: Install ripgrep
-        # A mirror that answers an error is retried with a growing pause before the job fails.
+        # A mirror that answers an error is retried with a growing pause before the job fails. The update's exit code is
+        # not what decides: a third-party list of the image that fails (packages.microsoft.com answered 403 in run
+        # 45956226249) fails the whole update though Ubuntu's own lists, which hold ripgrep, were read.
         run: |
           for attempt in 1 2 3 4 5; do
-            sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y -o Acquire::Retries=3 ripgrep && exit 0
+            sudo apt-get update -o Acquire::Retries=3 || echo "apt-get update reported an error; installing from the lists it read" >&2
+            sudo apt-get install -y -o Acquire::Retries=3 ripgrep && exit 0
             echo "ripgrep install attempt $attempt failed, retrying in $((attempt * 10)) s" >&2
             sleep $((attempt * 10))
           done
@@ -115,7 +118,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage --reporter=junit --reporter-outfile=junit.xml 2>&1 | tee "$RUNNER_TEMP/test.log" || {
             echo "::group::Failures"
             grep -E '^\(fail\)|^error:|Unhandled error|^Test file stuck' "$RUNNER_TEMP/test.log" | tail -60
             echo "::endgroup::"
@@ -128,6 +131,16 @@ jobs:
         with:
           name: lcov-linux-${{ matrix.package }}${{ matrix.part }}
           path: packages/${{ matrix.package }}/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
+      # Each test's own time (bun's JUnit report), from which a measured limit is set: at least twice the worst time the
+      # row took on a loaded runner (AGENTS.md, Testing).
+      - name: Upload test durations
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: junit-linux-${{ matrix.package }}${{ matrix.part }}
+          path: packages/${{ matrix.package }}/junit.xml
           if-no-files-found: warn
           retention-days: 14
       # What each job measured (`--update-timings`). `bun tools/test/timings.ts --run <id>` merges a run's artifacts into
@@ -193,14 +206,38 @@ jobs:
       # The tests compare file contents byte for byte, so checkouts keep the line endings agents wrote.
       - name: Configure git
         run: git config --global core.autocrlf false
-      # The runner's TEMP is an 8.3 short name (C:\Users\RUNNER~1\...). Tests compare the folders they make under it
-      # with the real paths Orbit resolves, which use the long name, as TEMP does on a developer's machine.
-      - name: Use the long name of the temp folder
+      # The tests keep every folder they make on the runner's D: drive. The runner's own TEMP is on C:, its system disk,
+      # which stops answering for seconds at a time: in the typeperf logs of 103 traced Windows test jobs (about 181,000
+      # seconds), C: held queued requests and moved no byte for 305 seconds, 25 times for 3 s or more and at most 7 s,
+      # and D: never did. Such a stall holds every row then waiting on the disk, and 12 of the 19 rows that timed out in
+      # those jobs ran inside one. C: stays the other volume that a test of a copy across volumes needs, and the runner's
+      # own temp folder there (ORBIT_TEST_OTHER_VOLUME) is where the class 3 and 4 rows that spell a path through the
+      # legacy junctions `Documents and Settings` and `Local Settings` make their folders, as those lead only below a
+      # profile's AppData\Local (packages/core/test/fixture/legacy-junction.ts).
+      # What the tests need of the temp folder stays as it was on C:. Its volume makes 8.3 short names, which the class 3
+      # and 4 spelling gates take apart (D: makes none until fsutil turns them on, and the step fails if it still makes
+      # none). Its path holds no character that Markdown escapes (RUNNER_TEMP is D:\a\_temp), as the approval titles
+      # the ACP rows compare show a path as plain text only then. Bun runs from the same volume, as a test that
+      # hard-links the running image into a temp folder needs (a hard link cannot cross volumes).
+      # Tests compare the folders they make under TEMP with the real paths Orbit resolves, which use the long name, as
+      # TEMP does on a developer's machine.
+      - name: Keep the temp folder and Bun on the D drive
         shell: bash
         run: |
-          long="$(cygpath -w -l "$TEMP")"
+          fsutil.exe 8dot3name set 0
+          mkdir -p /d/orbit-test-temp/short-name-check-folder
+          short="$(cygpath -s -w /d/orbit-test-temp/short-name-check-folder)"
+          echo "short name: $short"
+          case "$short" in *"~"*) ;; *) echo "D: makes no 8.3 short names"; exit 1 ;; esac
+          rmdir /d/orbit-test-temp/short-name-check-folder
+          long="$(cygpath -w -l /d/orbit-test-temp)"
           echo "TEMP=$long" >> "$GITHUB_ENV"
           echo "TMP=$long" >> "$GITHUB_ENV"
+          echo "ORBIT_TEST_OTHER_VOLUME=$(cygpath -w -l "$TEMP")" >> "$GITHUB_ENV"
+          mkdir -p /d/orbit-bun
+          cp "$(command -v bun)" /d/orbit-bun/bun.exe
+          if command -v bunx > /dev/null; then cp "$(command -v bunx)" /d/orbit-bun/bunx.exe; fi
+          cygpath -w /d/orbit-bun >> "$GITHUB_PATH"
           echo "$long"
       # Git Bash exports SHELL when a developer opens it, and Orbit's session shell on Windows follows SHELL; without it
       # the session shell is PowerShell and the tests' scripted Bash calls find no Bash tool. The runner's bash steps do
@@ -260,7 +297,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage --reporter=junit --reporter-outfile=junit.xml 2>&1 | tee "$RUNNER_TEMP/test.log" || {
             echo "::group::Failures"
             grep -E '^\(fail\)|^error:|Unhandled error|^Test file stuck' "$RUNNER_TEMP/test.log" | tail -60
             echo "::endgroup::"
@@ -272,6 +309,16 @@ jobs:
         with:
           name: lcov-windows-${{ matrix.package }}${{ matrix.part }}
           path: packages/${{ matrix.package }}/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
+      # Each test's own time (bun's JUnit report), from which a measured limit is set: at least twice the worst time the
+      # row took on a loaded runner (AGENTS.md, Testing).
+      - name: Upload test durations
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: junit-windows-${{ matrix.package }}${{ matrix.part }}
+          path: packages/${{ matrix.package }}/junit.xml
           if-no-files-found: warn
           retention-days: 14
       - name: Check timings

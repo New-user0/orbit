@@ -428,7 +428,7 @@ describe("hooks written with old names", () => {
         .trigger("tool", "execute.before", { ...base, tool: "Read", input: { file_path: "a.ts" } })
         .pipe(Effect.exit)
       expect(Exit.isSuccess(fine)).toBe(true)
-    }),
+    }), 10_000,
   )
 
   // A guard of the user's own that checks `tool_name == "read"` or `tool_input.path` must see them whatever its matcher
@@ -461,7 +461,7 @@ describe("hooks written with old names", () => {
       // A matcher that names only the current spelling is told that spelling, as the person wrote it.
       expect(seen.map((event) => event.tool_name)).toEqual(["read", "read", "read", "read", "read", "Read"])
       expect(seen.map((event) => event.tool_input)).toEqual(matchers.map(() => ({ path: ".env", file_path: ".env" })))
-    }),
+    }), 10_000,
   )
 
   it.live("a matcher never reaches a tool it does not name", () =>

@@ -191,6 +191,16 @@ export const toolResult = (run: Run) =>
     (JSON.parse(run.bodies.at(-1) ?? "{}").messages ?? []).filter((message: any) => message.role === "tool"),
   )
 
+// The limit of every row that runs through `approval` (spelling-rows.ts, permission-files and permission-spellings). A
+// row's time is its wait for a start slot (fixture/start-gate.ts) and its own work: a CI job's two workers each run up to
+// four rows of a file against the job's three slots, so on a loaded runner most of a slow row is the queue. The limit
+// is measured. The JUnit of ten CI runs of these files (45985076463 to 46056315294) holds 4,274 Windows rows with a p50
+// of 11.35 s, a p95 of 24.91 s and the slowest at 54.89 s, and 1,150 Linux rows, the slowest 17.09 s. Twice the slowest,
+// rounded up to a whole 5 s, is 110 s. The rows take 120 s, which the slowest kind of row (two tool calls) already had,
+// so one limit covers all of them and the slowest row seen stays under half of it (approval-limit.test.ts).
+export const approvalRowTimes = { rows: 4_274, p50: 11.35, p95: 24.91, slowest: 54.89 }
+export const APPROVAL_ROW_LIMIT = 120_000
+
 export type Run = {
   readonly root: string
   readonly workspace: string
@@ -212,12 +222,14 @@ export async function approval(
     trusted?: boolean
     reply?: "once" | "reject"
     setup?: (root: string) => Promise<unknown>
+    // The folder the run's folder is made in, the temporary folder when it is not given.
+    base?: string
     // A second tool call, made once the first one has been answered: a file is read before it is edited.
     then?: { tool: string; args: (root: string) => Record<string, unknown> | Promise<Record<string, unknown>> }
   },
   check: (run: Run) => unknown,
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-acp-files-"))
+  const root = await fs.mkdtemp(path.join(input.base ?? os.tmpdir(), "orbit-acp-files-"))
   const workspace = path.join(root, "workspace")
   const config = path.join(root, "config")
   const models = path.join(root, "models.json")

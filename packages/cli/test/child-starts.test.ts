@@ -3,7 +3,9 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { approval } from "./acp/approval-harness"
+import { createAcpFixture, initialize } from "./acp/subprocess"
 import { isolatedEnv } from "./fixture/environment"
+import { runOrb } from "./fixture/orb"
 import { held, startSlot, takeStartSlot } from "./fixture/start-gate"
 
 // How the cli tests start `orb` children from source. The start gate (fixture/start-gate.ts) limits how many start at
@@ -156,6 +158,72 @@ describe("the start gate", () => {
         // Given the slot, the row starts its child, which answers, refuses the untrusted folder, and gives the slot back.
         await fs.rm(path.join(folder.path, "0"))
         await row
+        expect(await fs.readdir(folder.path)).toEqual([])
+      })
+    },
+    120_000,
+  )
+})
+
+describe("an `orb` child that only prints (fixture/orb.ts)", () => {
+  test(
+    "starts only once it holds a slot, gives it back, and runs in a folder of its own, not the parent's",
+    async () => {
+      await using folder = await slots()
+      await withGate(folder.path, 1, async () => {
+        // The only slot is held, so the child must wait before it starts.
+        await Bun.write(path.join(folder.path, "0"), String(process.pid))
+        const run = runOrb(["debug", "paths"])
+        expect(await within(3_000, run)).toBeUndefined()
+        await fs.rm(path.join(folder.path, "0"))
+        const result = await run
+        expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" })
+        expect(await fs.readdir(folder.path)).toEqual([])
+        const paths = Object.fromEntries(
+          result.stdout
+            .trim()
+            .split("\n")
+            .map((line) => line.trim().split(/\s+/, 2)),
+        )
+        // isolatedEnv puts the data folder at <root>/data/orbit, in a root the helper made and has removed again.
+        const root = path.dirname(path.dirname(paths.data!))
+        expect(path.relative(root, paths.data!).split(path.sep)).toEqual(["data", "orbit"])
+        expect(path.basename(root)).toStartWith("orbit-cli-test-")
+        await expect(fs.stat(root)).rejects.toThrow()
+      })
+    },
+    60_000,
+  )
+})
+
+// A child whose environment is the parent's with a few overrides reads the runner's own config and data folders, holds
+// no start slot and, given a cache folder of its own, transpiles the source from nothing on every start (debug-config
+// and debug-paths did so until fix loop 3 of ci-always-green). Such a child starts through runOrb instead.
+test("no cli test starts a child with the parent's environment and a few overrides", async () => {
+  const shaped = await Promise.all(
+    [...new Bun.Glob("**/*.{ts,tsx}").scanSync(import.meta.dir)].map(async (file) =>
+      /\.\.\.process\.env,\s*\.\.\.env\s*\}/.test(await Bun.file(path.join(import.meta.dir, file)).text()) ? [file] : [],
+    ),
+  )
+  expect(shaped.flat()).toEqual([])
+})
+
+describe("an `orb acp` child of the subprocess fixture", () => {
+  test(
+    "starts only once initialize holds a slot, not when it is spawned",
+    async () => {
+      await using folder = await slots()
+      await using fixture = await createAcpFixture()
+      await withGate(folder.path, 1, async () => {
+        await Bun.write(path.join(folder.path, "0"), String(process.pid))
+        const acp = fixture.spawn()
+        const answered = initialize(acp)
+        await Bun.sleep(4_000)
+        // The only slot is held: the child has not been started (its pid is 0 until it is).
+        expect(acp.pid).toBe(0)
+        await fs.rm(path.join(folder.path, "0"))
+        expect((await answered).protocolVersion).toBe(1)
+        expect(acp.pid).toBeGreaterThan(0)
         expect(await fs.readdir(folder.path)).toEqual([])
       })
     },

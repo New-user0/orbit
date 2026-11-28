@@ -88,6 +88,9 @@ for (const selection of ["explicit", "default"] as const) {
         expect(requests[0]?.model).toMatchObject({ provider: "custom", id: "fictional-chat" })
       }),
     ),
+    // Measured limit (50 whole-file runs, 2 test processes at once on 4 cores, isolated home, Windows): explicit selection p50 5.3 s, p95 8.1 s, max 8.5 s;
+    // twice the maximum, rounded up to 5 s. The work is a cold Location boot plus a model call.
+    20_000,
   )
 }
 
@@ -196,7 +199,9 @@ it.live(
         expect(missingMessage._tag).toBe("MessageNotFoundError")
       }),
     ),
-  10_000,
+  // Measured limit (50 whole-file runs, 2 test processes at once on 4 cores, isolated home, Windows):
+  // p50 2.6 s, p95 5.3 s, max 6.0 s; twice the maximum, rounded up to 5 s.
+  15_000,
 )
 
 for (const implicit of [false, true]) {
@@ -237,9 +242,12 @@ for (const implicit of [false, true]) {
           expect(document.info.hooks).toBeDefined()
         }),
       ),
+    10_000,
   )
 }
 
+// Rows that boot a Location at the default 5 s were measured (50 runs, 2 test processes at once on 4 cores): web search max 4.0 s,
+// trust on max 3.7 s, workspace providers max 4.2 s; twice the maximum, rounded up to 5 s, is 10 s.
 it.live("embedded client exposes plugin-backed web search", () =>
   withEmbedded("orbit-embedded-websearch-", (fixture) =>
     Effect.gen(function* () {
@@ -277,6 +285,7 @@ it.live("embedded client exposes plugin-backed web search", () =>
       })
     }),
   ),
+  10_000,
 )
 
 type Embedded = Effect.Success<ReturnType<Sdk["Orbit"]["create"]>>
@@ -597,14 +606,20 @@ const prepareFirstAnswer = (fixture: Fixture) =>
   })
 
 for (const row of firstAnswers) {
-  it.live(`the first request to a fresh Location: ${row.name}`, () =>
-    withEmbedded("orbit-embedded-first-answer-", (fixture) =>
-      Effect.gen(function* () {
-        const orbit = yield* prepareFirstAnswer(fixture)
-        // No retry and no wait: the request below is the one that boots the Location.
-        expect(yield* row.ask(orbit, fixture)).toEqual(row.expected)
-      }),
-    ),
+  it.live(
+    `the first request to a fresh Location: ${row.name}`,
+    () =>
+      withEmbedded("orbit-embedded-first-answer-", (fixture) =>
+        Effect.gen(function* () {
+          const orbit = yield* prepareFirstAnswer(fixture)
+          // No retry and no wait: the request below is the one that boots the Location.
+          expect(yield* row.ask(orbit, fixture)).toEqual(row.expected)
+        }),
+      ),
+    // Measured limit (50 whole-file runs, 2 test processes at once on 4 cores, isolated home, Windows): the 24 first-request rows boot a Location, and the
+    // slowest, mcp.connect (it also starts a program), took p50 2.9 s, p95 5.0 s, max 6.3 s (model.list max 5.0 s, which ran
+    // out the 5 s limit once); twice the maximum, rounded up to 5 s. One limit, because they share the boot.
+    15_000,
   )
 
   // The control: the same set-up answers with the contribution once activation has had time, so the row above fails
@@ -759,6 +774,7 @@ it.live("configures workspace providers through the SDK facade", () =>
       expect(calls.map((call) => call.operation)).toEqual(["create", "destroy"])
     }),
   ),
+  10_000,
 )
 
 const workspaceModelScenario = (fixture: Fixture, policy: "eager" | "lazy") =>
@@ -873,10 +889,12 @@ it.live(
         let toolIssued = false
         const llm = yield* TestLLM.Test.pipe(Effect.provide(TestLLM.testLayer()))
         yield* llm.serve((request) => {
-          const wantsTool = !toolIssued && request.tools.some((tool) => tool.name === "Bash")
-          if (!wantsTool) return TestLLM.text("done", "answer")
+          // The shell tool is offered as `PowerShell` when the session shell is PowerShell, which on Windows is whatever
+          // `SHELL` and the PATH select, so the row asks for the name it was offered under.
+          const shell = request.tools.find((tool) => tool.name === "Bash" || tool.name === "PowerShell")
+          if (toolIssued || !shell) return TestLLM.text("done", "answer")
           toolIssued = true
-          return TestLLM.tool("call-shell", "Bash", { command: "echo hi" })
+          return TestLLM.tool("call-shell", shell.name, { command: "echo hi" })
         })
         const models = Layer.mock(SessionRunnerModel.Service, {
           resolve: () =>

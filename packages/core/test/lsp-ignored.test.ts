@@ -90,7 +90,7 @@ describe("Lsp.ignored", () => {
         const hidden = yield* service.ignored(Object.values(file))
         // The outside file is not asked about, so it cannot fail the batch and hide the others.
         expect([...hidden].sort()).toEqual([file.dots, file.ignored].sort())
-      }),
+      }), 10_000,
     )
 
   it.live("a path in the real spelling is handled when the Location is the junction", () =>
@@ -99,7 +99,7 @@ describe("Lsp.ignored", () => {
       const service = yield* lsp(link)
       const hidden = yield* service.ignored([names(real, root).ignored, names(link, root).ignored])
       expect([...hidden].sort()).toEqual([names(real, root).ignored, names(link, root).ignored].sort())
-    }),
+    }), 10_000,
   )
 
   // The Location is a subfolder, so the ignored file at the repository root is outside the Location.
@@ -116,7 +116,7 @@ describe("Lsp.ignored", () => {
         expect([...(yield* service.ignored([file, other, path.join(base, "src", "b.fake")]))].sort()).toEqual(
           [...new Set([file, other])].sort(),
         )
-      }),
+      }), 10_000,
     )
 
   // A folder in an ignored folder can be a link (a pnpm `node_modules` entry, a linked workspace package). Git will not

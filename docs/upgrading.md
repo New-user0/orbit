@@ -820,6 +820,19 @@ at the moment of the grant now starts as well; before, it kept waiting until the
 
 **What to do:** connect the server when you want it, for example with `/mcp`.
 
+### A skills folder made in another product's folder loads without a restart
+
+A `skills` folder made inside another agent product's folder that is already there, such as `.agents`, now loads its
+skills while Orbit runs. On Linux nothing reported that folder before: Orbit watched only the product folder's own
+entry beside it, so its skills waited for the next config change or a restart (Windows reported it through the
+folder's change time). The skills folder is also listed only once its watch is in place, so a skill written while the
+watch is being made is found (`packages/core/test/config/reload.test.ts`, 'loads skills when ... is there at startup
+and its skills folder comes later' and 'lists a compatibility skills folder after its watch is in place').
+
+**Affects:** people who add a `skills` folder to `.agents` or a vendor's dot-directory while Orbit runs.
+
+**What to do:** Nothing.
+
 ## Clients
 
 Changes to the terminal UI, the `orb` command line, the client libraries and SDK, and the VS Code extension.
@@ -3234,6 +3247,33 @@ the answer filled in.
 
 **What to do:** Nothing. A retry loop that waited for a model, provider or other plugin entry to appear can go.
 
+### A plugin folder with a broken link named like an entry is not loaded
+
+A plugin folder is no longer loaded, by the server or by the terminal UI, when it holds a link that loops or leads out
+of the folder and that the runtime could take as an entry, even when the runtime would have loaded a different entry.
+Both ask the same check of every local plugin folder, the user's own and a project's, before they read or import an
+entry, so a folder with only a `tui` entry is left out too, and so is a global folder whose `tui.ts` links to a file
+outside it. That covers a link named `server`, `index`, `tui` or `rpc` with any extension (`index.md` too), for
+example a looping `server.mjs` beside a good `server.ts`. The names match in any case on every platform, so `TUI.ts`, `Server.mjs` and `INDEX.js` count too: the
+runtime takes them on Windows and macOS. Inside a folder with one of those names, such as `server/`, it also covers a
+link named `index` with any extension, a `package.json` that is a link, and a link on the way of the `main` that the
+folder's `package.json` names (each step of that path, with or without an extension, and the `index` of a folder a step
+names). Such a folder can itself be a link to a folder (a junction on Windows), and so can a folder a step of `main`
+names: what is behind the link is checked the same way. A `..` in `main` is followed both from the link and from the
+folder the link leads to. Until now only the entry files the runtime picked were checked, and Bun 1.4.5 passes over a link that loops as
+if the file were not there, so such a folder could be loaded from its other entries. Both also check every entry the
+runtime picked, so a folder whose `server/package.json` or `tui/package.json` `main` climbs out of it with `..` is left
+out by both; the terminal UI used to look only at the tui entry, and only in a project's folder. The folder's own
+plugin is the only one left out; the other plugins load as before
+(`packages/core/test/config/plugin-source-bad-entry.test.ts` for the server, and the "a plugin folder with a looping
+link named like a tui entry" and "a plugin folder whose package.json main climbs out with .." rows of
+`packages/tui/test/plugin-trust.test.ts` for the terminal UI).
+
+**Affects:** plugin folders that keep a link with one of those names, or in one of those places, that loops or points
+outside the folder.
+
+**What to do:** Remove the link, rename it, or point it at a file inside the plugin folder.
+
 ## Agent loop
 
 Changes to how a turn runs: what a response may call, and how its failures are told apart.
@@ -5083,6 +5123,22 @@ and warned that the file had changed. The diff is now the file's own, so it appl
 
 **What to do:** Nothing. A client that wants the shared indentation removed for display trims it itself.
 
+### A slow or failed first read of the Ollama model list is tried again soon
+
+When the first read of the Ollama server's model list fails or takes longer than its 1 second limit, Orbit now asks
+again after 1 second, then after 2, 4 and so on up to the refresh interval, until the server answers. It used to wait
+for the whole interval, and it kept the failed read as a fresh answer for 30 seconds, so every location that started in
+that time, and every node of a workflow that named an Ollama model, found no Ollama models ("Provider ollama has no
+models here"). A read that fails is no longer kept, so the next location asks the server itself. Once the server has
+answered, the list is read again only at the interval, as before, and a failure then keeps the models already listed.
+A configuration change that points Orbit at another Ollama server, or changes its key, starts over: when the first read
+of the new server fails, Orbit asks it again after 1 second, then 2, 4 and so on, instead of only at the interval.
+
+**Affects:** people who run Ollama on the same machine, for example one that is still starting or busy when Orbit
+starts.
+
+**What to do:** Nothing.
+
 ## System prompt
 
 ### The base system prompt is rewritten, with a fixed list of sections
@@ -5805,3 +5861,17 @@ figures under new wording and names, and the usage line of `/cost` has a new for
 `reason`, and every session's first request after the upgrade (prompt caches are cold once).
 
 **What to do:** Update matches on the old wording and on the old reason names. Nothing else.
+
+## Building Orbit
+
+### Building and pushing Orbit needs Bun 1.4.5
+
+The repository now pins Bun 1.4.5 (`packageManager` in the root `package.json`, the `bun-types` override, `bun.lock`
+and `tools/linux-test/Dockerfile`), up from 1.4.2. Bun 1.4.2 could crash a long-lived parallel test worker on Windows
+when a finished test file's global was collected while a FinalizationRegistry cleanup was still queued
+(oven-sh/bun#44279, fixed in 1.4.3). The pre-push hook (`.husky/pre-push`) now refuses a Bun older than 1.4.5, and
+CI's `setup-bun` installs the pinned version.
+
+**Affects:** people who build Orbit or run its tests from a checkout, and anyone who pushes to the repository.
+
+**What to do:** Upgrade Bun with `bun upgrade` (or install 1.4.5), then run `bun install` again.

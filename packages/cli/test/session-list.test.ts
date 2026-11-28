@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
-import path from "node:path"
 import { ORBIT_VERSION } from "../src/version"
+import { runOrb } from "./fixture/orb"
 
 const status = () => Response.json({ version: ORBIT_VERSION, pid: process.pid, urls: [], paths: { tmp: "/tmp/orbit" } })
 
@@ -20,13 +20,9 @@ const sessions = [
   location: { directory: "/project" },
 }))
 
-function run(args: string[]) {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
-    cwd: path.join(import.meta.dir, ".."),
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  return Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+async function run(args: string[]) {
+  const result = await runOrb(args)
+  return [result.stdout, result.stderr, result.exitCode] as const
 }
 
 async function list(...args: string[]) {

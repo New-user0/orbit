@@ -2,6 +2,7 @@ import { test, type TestOptions } from "bun:test"
 import { Cause, Effect, Exit, Fiber, Layer, type Scope } from "effect"
 import { TestClock, TestConsole } from "effect/testing"
 import { FetchHttpClient } from "effect/unstable/http"
+import { processMemoMap } from "../fixture/native-watcher"
 
 type Body<A, E, R> = Effect.Effect<A, E, R> | (() => Effect.Effect<A, E, R>)
 
@@ -62,6 +63,9 @@ const row = <A, E, R, E2>(value: Body<A, E, R | Scope.Scope>, layer: Layer.Layer
       Effect.scoped,
       Effect.provide(layer),
       Effect.provideService(FetchHttpClient.Fetch, refuseNetwork(violations)),
+      // Every runtime a row builds, here or in its own Effect.provide, takes the process's native watches, so no row
+      // ends a live Windows directory watch when it closes (test/fixture/native-watcher.ts).
+      Effect.provideService(Layer.CurrentMemoMap, processMemoMap),
       Effect.exit,
     )
     if (Exit.isFailure(exit)) {

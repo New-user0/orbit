@@ -337,6 +337,14 @@ async function compactApp(width: number, serverCommands: Array<{ name: string; d
   }
 }
 
+// The forced case of that run: a request that comes after 6 s is still waited for.
+test("the wait for a compaction request is not cut short before the row's own limit", async () => {
+  const arrived = { done: false }
+  setTimeout(() => (arrived.done = true), 6_000)
+  await waitUntil(() => arrived.done)
+  expect(arrived.done).toBe(true)
+})
+
 test.each([70, 120])("/compact with text sends its instructions and no prompt at %i columns", async (width) => {
   const app = await compactApp(width)
   try {
@@ -350,8 +358,35 @@ test.each([70, 120])("/compact with text sends its instructions and no prompt at
     expect(frame).not.toContain("focus on tests")
 
     // The bare control carries no instructions key.
+    // A bare /compact is coalesced onto a request that is still in flight (the client has not yet read the first
+    // answer), so it is pressed again until a second request goes out.
+    while (app.compacts.length < 2) {
+      await app.submit("/compact")
+      await Bun.sleep(50)
+    }
+    expect(app.compacts[1]).not.toHaveProperty("instructions")
+    expect(app.prompts).toEqual([])
+  } finally {
+    await app.close()
+  }
+})
+
+// The forced case of the second press in the row above: a loaded runner reads the first answer late on its own, so here the
+// answer is held until the test lets it go. A bare /compact pressed meanwhile adds no request of its own (the client
+// coalesces it onto the one in flight), so the row presses again after the answer, and that press goes out with no
+// instructions and no prompt. A row that pressed once and waited would wait for ever, which is what failed on a loaded runner.
+test("a bare /compact pressed again after a held first answer is sent without instructions", async () => {
+  const app = await compactApp(120)
+  try {
+    app.hold.first = Promise.withResolvers<void>()
     await app.submit("/compact")
-    await waitUntil(() => app.compacts.length === 2)
+    await waitUntil(() => app.compacts.length === 1)
+    await app.submit("/compact")
+    app.hold.first.resolve()
+    while (app.compacts.length < 2) {
+      await app.submit("/compact")
+      await Bun.sleep(50)
+    }
     expect(app.compacts[1]).not.toHaveProperty("instructions")
     expect(app.prompts).toEqual([])
   } finally {
@@ -423,8 +458,13 @@ test("a location command named compact keeps its place when typed with text", as
   }
 })
 
+
+// The wait lasts as long as the row may run (the package's --timeout of 30 s). Its own 5 s deadline ran out first on a
+// loaded Windows runner, when the request came 5.9 s after the submit (run 45902385785), though the row had time left.
+const rowLimit = 30_000
+
 async function waitUntil(done: () => boolean) {
-  const deadline = Date.now() + 5_000
+  const deadline = Date.now() + rowLimit
   while (!done()) {
     if (Date.now() > deadline) throw new Error("Timed out waiting for the compaction request")
     await Bun.sleep(20)

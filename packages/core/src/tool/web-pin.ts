@@ -3,8 +3,19 @@ export * as WebPin from "./web-pin.js"
 import { isIP } from "node:net"
 import { checkServerIdentity, type PeerCertificate } from "node:tls"
 
-// What fetch fails with when it could not connect to an address, so that nothing was sent to it.
-const NOT_CONNECTED = new Set(["ConnectionRefused", "FailedToOpenSocket"])
+// What fetch fails with when it could not connect to an address, so that nothing was sent to it. Bun 1.4.5 names a
+// failed connect by its errno (`ECONNREFUSED`, or the reason the address could not be reached) and a socket it could
+// not open by that errno or `FailedToOpenSocket`; Bun 1.4.2 said `ConnectionRefused` for every failed connect. A closed
+// connection (`ECONNRESET`) and a timeout (`ETIMEDOUT`, which a request that was already sent can end with too) are not
+// on the list.
+const NOT_CONNECTED = new Set([
+  "ECONNREFUSED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EADDRNOTAVAIL",
+  "FailedToOpenSocket",
+  "ConnectionRefused",
+])
 
 /**
  * The places a request to `url` connects to, in order, given the addresses that `AddressGuard` checked for its host.

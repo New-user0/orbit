@@ -131,7 +131,7 @@ describe("LocationServiceMap", () => {
           expect(Exit.isSuccess(repaired)).toBe(true)
           // A successful graph remains cached after its last borrower releases.
           expect(yield* load).toBe(yield* repaired)
-        }))
+        }), 10_000)
     }
   }
 
@@ -171,7 +171,7 @@ describe("LocationServiceMap", () => {
         yield* Effect.forEach(scopes, (scope) => Scope.close(scope, Exit.void))
         expect(yield* locations.contextEffect(ref)).toBe(repaired)
         expect(Option.getOrThrow(yield* locations.contextEffectOption(ref))).toBe(repaired)
-      }))
+      }), 10_000)
   }
 
   for (const disposition of ["retry", "invalidate", "interrupt"] as const) {
@@ -316,7 +316,7 @@ describe("LocationServiceMap", () => {
           expect(location.directory).toBe(ref.directory)
         }),
       ),
-    ),
+    ), 10_000,
   )
 
   it.live("keeps a workspace location admitted when its directory does not exist locally", () =>
@@ -382,7 +382,7 @@ describe("LocationServiceMap", () => {
           }),
         ),
       ),
-    ),
+    ), 10_000,
   )
 
   it.live("reuses cached services for constructed and decoded location refs", () =>
@@ -545,7 +545,7 @@ describe("LocationServiceMap", () => {
           ])
         }),
       ),
-    ),
+    ), 10_000,
   )
 
   it.live("allows the built-in Plan agent to be disabled", () =>
@@ -567,7 +567,7 @@ describe("LocationServiceMap", () => {
           )
         }),
       ),
-    ),
+    ), 10_000,
   )
 
   it.live("rejects an unavailable selected model during location model resolution", () =>

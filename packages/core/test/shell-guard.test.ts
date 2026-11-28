@@ -714,12 +714,18 @@ describe("ShellGuard.authorize", () => {
     }),
   )
   for (const command of ["Set-Location .", "cd ..", "Push-Location sub", "Pop-Location", "Set-Location -Path:sub", "sl sub"])
-    real(`a plain location change makes no shell request: ${command}`, () =>
-      Effect.gen(function* () {
-        const exit = yield* run(command, anyBash, { shell: host!, real: true })
-        expect(Exit.isFailure(exit)).toBe(false)
-        expect(asked.filter(anyBash)).toEqual([])
-      }),
+    // A measured limit: in 50 runs of Windows core 3/3 on a real runner (ci-measure 45943098053) these rows took at most
+    // 0.86 s (p95 0.82 s), and 'Push-Location sub' timed out at 5 s once in run 46004257173 while its PowerShell child
+    // stood still. By the rule for a row that timed out, twice its p95 plus the longest stall seen (7.2 s), rounded up.
+    real(
+      `a plain location change makes no shell request: ${command}`,
+      () =>
+        Effect.gen(function* () {
+          const exit = yield* run(command, anyBash, { shell: host!, real: true })
+          expect(Exit.isFailure(exit)).toBe(false)
+          expect(asked.filter(anyBash)).toEqual([])
+        }),
+      10_000,
     )
 
   // Declarations that print every variable (and so the environment's credentials) are commands a Bash rule must see; the
@@ -876,6 +882,7 @@ describe("ShellGuard.authorize", () => {
         expect(command.length).toBeGreaterThan(10_000)
         expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
       }),
+      15_000,
     )
   for (const [name, spelling] of spellings)
     real(`asks for the same folder with PowerShell's parser, short: ${name}`, () =>
@@ -1136,6 +1143,7 @@ console.log("done")`,
       clearTimeout(timer)
       expect(out.trim()).toBe("done")
     }),
+    20_000,
   )
   it.live("does not fail the call for block-commented code that holds a refused spelling", () =>
     Effect.gen(function* () {

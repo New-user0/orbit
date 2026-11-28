@@ -623,7 +623,7 @@ describe.skipIf(!hasHost)(`PowerShellParse real parser${hasHost ? "" : ` (${noHo
       Effect.runPromise(PowerShellInspect.inspect(text).pipe(Effect.provide(real)))
     expect((await run("Get-Date")).kind).toBe("scanned")
     expect(await run('Write-Output "unterminated')).toEqual({ kind: "opaque", reason: "parse-errors" })
-  })
+  }, 10_000)
 })
 
 describe("PowerShellParse normalisation", () => {

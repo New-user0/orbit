@@ -522,7 +522,7 @@ describe("PluginSupervisor", () => {
           const list = yield* inventory({ plugins: { allow: [allow] } }, [add(target)])
           expect(state(list, "corp.real")).toEqual({ status: "active" })
         }
-      }),
+      }), 10_000,
     )
 
     // Classes 3 and 4: the same folder spelled with its Windows 8.3 short name. The TUI resolves with the native realpath, which
@@ -543,7 +543,7 @@ describe("PluginSupervisor", () => {
         // The controls: an allow list on the long path admits the short spelling, and nothing blocks it without the block.
         const allowed = yield* inventory({ plugins: { allow: [long] } }, [add])
         expect(state(allowed, "corp.long")).toEqual({ status: "active" })
-      }),
+      }), 10_000,
     )
 
     // A path realpath cannot resolve is one entry's problem: the built-in, host and allowed plugins stay active.

@@ -10,6 +10,8 @@ import { Project } from "@orbit/core/project"
 import { AbsolutePath } from "@orbit/core/schema"
 import { tmpdir } from "../../fixture/tmpdir"
 import { testEffect } from "../../lib/effect"
+import { Watcher } from "@orbit/core/filesystem/watcher"
+import { processNativeLayer } from "../../fixture/native-watcher"
 
 class Value extends Context.Service<Value, { readonly value: string }>()("test/TagValue") {}
 class Result extends Context.Service<Result, { readonly value: string }>()("test/TagResult") {}
@@ -108,6 +110,8 @@ describe("node build", () => {
     const ref = Location.Ref.make({ directory: AbsolutePath.make(tmp.path) })
     const layer = AppNodeBuilder.build(LayerNode.group([LocationServiceMap.node, Project.node]), [
       Project.node.replace(projectLayer),
+      // A plain test, so the node names the process's native watches itself (test/fixture/native-watcher.ts).
+      Watcher.nativeNode.replace(processNativeLayer),
     ])
     const program = Effect.gen(function* () {
       yield* Project.Service

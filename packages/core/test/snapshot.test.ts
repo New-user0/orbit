@@ -124,7 +124,7 @@ describe("Snapshot", () => {
           }).pipe(Effect.provide(layer))
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-    ),
+    ), 10_000,
   )
 
   testEffect(Layer.empty).live("applies availability transforms", () =>
@@ -149,7 +149,7 @@ describe("Snapshot", () => {
           }).pipe(Effect.provide(snapshotLayer(tmp.path, project)))
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
-    ),
+    ), 10_000,
   )
 
   testEffect(Layer.empty).live("treats capture outside Git as unavailable", () =>

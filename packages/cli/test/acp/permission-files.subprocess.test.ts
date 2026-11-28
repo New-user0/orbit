@@ -6,6 +6,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { runProgram } from "../../../core/test/fixture/run-program"
 import {
+  APPROVAL_ROW_LIMIT,
   approval,
   canLinkDirectory,
   linkCheck,
@@ -47,7 +48,7 @@ test.concurrent(
         expect(call?.content ?? []).toHaveLength(0)
       },
     ),
-  90_000,
+  APPROVAL_ROW_LIMIT,
 )
 
 // Bash declares `workdir`, not `cwd`: the command runs in the workspace whatever folder a `cwd` key names.
@@ -63,7 +64,7 @@ test.concurrent(
         expect(JSON.stringify(call)).not.toContain("my-tools")
       },
     ),
-  90_000,
+  APPROVAL_ROW_LIMIT,
 )
 
 // The tools read a leading `~` as the home folder, which is `root` here, so `~/config` is the person's global config
@@ -139,7 +140,7 @@ for (const row of home)
             expect(await row.acted(run.root, run.bodies)).toBe(true)
           },
         ),
-      90_000,
+      APPROVAL_ROW_LIMIT,
     )
 
 // The rows of a repository's link into the person's global config folder (approval-harness.ts), through a junction and,
@@ -167,7 +168,7 @@ for (const row of linkRows)
           },
           linkCheck(row, mode),
         ),
-      90_000,
+      APPROVAL_ROW_LIMIT,
     )
 
 // Under the default rules (no rule of the person's) nothing but the folder question asks about a call through a link, and
@@ -226,7 +227,7 @@ for (const row of defaultRows)
             for (const update of located) expect(shownAt(update.locations)).toEqual([place])
           },
         ),
-      90_000,
+      APPROVAL_ROW_LIMIT,
     )
 
 // On Windows a data stream (`.env::$DATA`, `new.sh:x`), an 8.3 short name (`ENV~1`) and trailing periods (`new.sh.`)
@@ -371,7 +372,7 @@ if (process.platform === "win32")
           },
           row.check,
         ),
-      90_000,
+      APPROVAL_ROW_LIMIT,
     )
 
 // Grep keyed its rules on its pattern, so a Read deny of `*.env` did not cover a Grep of `.env`, and the search sent the
@@ -397,7 +398,7 @@ if (Bun.which("rg"))
             expect(run.bodies.some((body) => body.includes("README-MARKER"))).toBe(row.sent)
           },
         ),
-      90_000,
+      APPROVAL_ROW_LIMIT,
     )
 
 // Windows starts a process in `cfg.` or `cfg ` as in `cfg`, while Bun's own `stat` finds neither, so the link was not
@@ -422,5 +423,5 @@ if (process.platform === "win32")
             expect(await moved(run.root)).toBe(false)
           },
         ),
-      90_000,
+      APPROVAL_ROW_LIMIT,
     )

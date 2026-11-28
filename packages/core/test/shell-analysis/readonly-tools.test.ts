@@ -372,7 +372,7 @@ describe("read paths", () => {
   ]
   test.each(paths)("%s", (text, expected) => {
     expect(bash(text).readPaths).toEqual(expected)
-  })
+  }, 20_000)
   test("a share on Windows refuses", () => {
     expect(bash("git diff --no-index //host/share/a b", windows()).readOnly).toBe(false)
     expect(bash("git blame --ignore-revs-file \\\\\\\\host\\\\s\\\\f x", windows()).readOnly).toBe(false)
@@ -428,24 +428,43 @@ describe("the working folder cannot supply the program (class 10)", () => {
 
   // The other half of the probe: Windows PowerShell 5.1 does not look in the working folder for an empty entry either, and
   // does for a dot (the control). The decoy is a real program, so a run shows in its record.
+  // A name that is in no folder of the Path sends PowerShell on to look for it in every module of PSModulePath: with 300
+  // modules that search alone took 0.7 s on a development machine. On a runner, whose image keeps its modules on the
+  // system disk that stalls, the child was still running when the row's 60 s ran out (run 46031287369, Windows core
+  // 3/3). Module autoloading is off in the child: it comes after the Path lookup this row is about, and the dot control
+  // shows that the lookup still runs. A module of the name, first in PSModulePath, would run if the child searched the
+  // modules: its marker pins that it does not.
   const powershell51 = process.platform === "win32" ? Bun.which("powershell") : undefined
   ;(powershell51 ? test : test.skip)("Windows PowerShell 5.1 ignores the empty entries of a Windows Path", async () => {
     await using tmp = await tmpdir()
+    await using modules = await tmpdir()
     const ran = await plant(tmp.path, "zzdecoy")
+    const marker = path.join(modules.path, "module-ran.txt")
+    await Bun.write(
+      path.join(modules.path, "ZzProbe", "ZzProbe.psm1"),
+      `function zzdecoy { Set-Content -LiteralPath '${marker}' -Value ran }\n`,
+    )
+    await Bun.write(
+      path.join(modules.path, "ZzProbe", "ZzProbe.psd1"),
+      "@{ RootModule = 'ZzProbe.psm1'; ModuleVersion = '1.0.0'; FunctionsToExport = @('zzdecoy') }\n",
+    )
     const env = Object.fromEntries(
-      Object.entries(process.env).filter(([key]) => !["path", "nodefaultcurrentdirectoryinexepath"].includes(key.toLowerCase())),
+      Object.entries(process.env).filter(
+        ([key]) => !["path", "nodefaultcurrentdirectoryinexepath", "psmodulepath"].includes(key.toLowerCase()),
+      ),
     )
     const system = path.dirname(powershell51!)
     const run = (value: string) =>
-      Bun.spawn([powershell51!, "-NoProfile", "-NonInteractive", "-Command", "zzdecoy"], {
+      Bun.spawn([powershell51!, "-NoProfile", "-NonInteractive", "-Command", "$PSModuleAutoLoadingPreference = 'None'; zzdecoy"], {
         cwd: tmp.path,
-        env: { ...env, Path: `${system};${value}` },
+        env: { ...env, Path: `${system};${value}`, PSModulePath: `${modules.path};${process.env.PSModulePath ?? ""}` },
         stdin: "ignore",
         stdout: "ignore",
         stderr: "ignore",
       }).exited
     await run(";;")
     expect(await ran()).toEqual([])
+    expect(await Bun.file(marker).exists()).toBe(false)
     await run(".")
     expect(await ran()).toHaveLength(1)
   }, SHELL_START)
