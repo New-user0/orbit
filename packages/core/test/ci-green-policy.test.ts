@@ -78,4 +78,14 @@ describe("CI is green on every run", () => {
       expect(step.run).not.toMatch(/--rerun-each|--retry|\|\| *bun run test/)
     }
   })
+
+  // The milestone pull request's head is its integration branch, so a push run there is a second run of the same commit.
+  test("the CI workflow runs on push to main only, so a commit is checked once", async () => {
+    const workflow = Bun.YAML.parse(await read(".github/workflows/check.yml")) as {
+      on: { push: { branches: string[] }; pull_request: unknown; workflow_dispatch: unknown }
+    }
+    expect(workflow.on.push.branches).toEqual(["main"])
+    expect("pull_request" in workflow.on).toBe(true)
+    expect("workflow_dispatch" in workflow.on).toBe(true)
+  })
 })

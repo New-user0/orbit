@@ -1,9 +1,10 @@
 name: check
 
 on:
-  # A pull request's branch is checked by its pull_request run alone; running push too doubled every run.
+  # An integration branch is checked by its milestone pull request's pull_request run, and each task pull request's
+  # pull_request run checks it merged onto that branch, so a push run on the branch would test the same commit twice.
   push:
-    branches: [main, "m*-integration"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
