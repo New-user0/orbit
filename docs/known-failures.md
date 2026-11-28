@@ -143,7 +143,7 @@ it:
   `node-build`, and the two skill folders of the checkout in `config/reload`; during rows: the four replaced roots of
   `config/reload`) and none after. FU-M5-022 keeps only the close of the native layer as a server or an SDK host
   shuts down.
-- core, `config/reload.test.ts` "loads skills when home/.claude appears after startup" timing out at 30 s once on Linux
+- core, `config/reload.test.ts` "loads skills when a home compatibility root appears after startup" timing out at 30 s once on Linux
   (push run 46097880990, the pull_request run of the same commit passed): the reload row's own cause is not proven. What
   was found on the way is a defect of the watch layer, which the row's sequence can reach: Parcel shares one native watch
   per folder and ignore list, and a subscribe that starts while the last one of that folder is still being ended joins the
