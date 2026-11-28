@@ -260,3 +260,49 @@ describe("a file written right after a directory watch is ready", () => {
   )
 })
 
+
+// What a directory watch reports, whichever backend makes it (Windows uses fs.watch, the others Parcel): a path below a folder
+// that is ignored, by name or by pattern, is left out, and what is made, changed and removed arrives as create, update and
+// delete.
+describe("a directory watch reports updates and leaves out ignored paths", () => {
+  it.live("create, update and delete, and nothing below an ignored folder", () =>
+    withTempDir((tmp) =>
+      Effect.gen(function* () {
+        const service = yield* Watcher.Service
+        yield* Effect.promise(() => Promise.all([fs.mkdir(path.join(tmp.path, "node_modules")), fs.mkdir(path.join(tmp.path, "deep", "cache"), { recursive: true })]))
+        const seen: Watcher.Update[] = []
+        const ready = yield* Deferred.make<void>()
+        const watch = yield* service
+          .subscribe(
+            { path: tmp.path, type: "directory", ignore: ["node_modules", "**/cache/**"] },
+            Deferred.succeed(ready, undefined),
+          )
+          .pipe(
+            Effect.flatMap(Stream.runForEach((item) => Effect.sync(() => seen.push(item)))),
+            Effect.forkChild({ startImmediately: true }),
+          )
+        yield* Deferred.await(ready)
+        const note = path.join(tmp.path, "deep", "note.txt")
+        yield* Effect.promise(async () => {
+          await Bun.write(path.join(tmp.path, "node_modules", "ignored.txt"), "x")
+          await Bun.write(path.join(tmp.path, "deep", "cache", "ignored.txt"), "x")
+          await Bun.write(note, "one")
+        })
+        const heard = (type: Watcher.Update["type"]) => seen.some((item) => item.path === note && item.type === type)
+        yield* Effect.gen(function* () {
+          while (!heard("create")) yield* Effect.sleep("20 millis")
+        })
+        yield* Effect.promise(() => Bun.write(note, "two"))
+        yield* Effect.gen(function* () {
+          while (!heard("update")) yield* Effect.sleep("20 millis")
+        })
+        yield* Effect.promise(() => fs.rm(note))
+        yield* Effect.gen(function* () {
+          while (!heard("delete")) yield* Effect.sleep("20 millis")
+        })
+        yield* Fiber.interrupt(watch)
+        expect(seen.filter((item) => item.path.includes("ignored.txt"))).toEqual([])
+      }).pipe(Effect.provide(realLayer)),
+    ),
+  )
+})
