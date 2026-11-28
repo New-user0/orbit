@@ -8,7 +8,7 @@ import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Cause, Context, Effect, Layer, PubSub, RcMap, Schema, Stream } from "effect"
 import { lazy } from "../util/lazy.js"
-import { statSync, watch } from "node:fs"
+import { existsSync, statSync, watch } from "node:fs"
 import path from "path"
 import loadBinding from "./watcher-binding.js"
 
@@ -58,7 +58,11 @@ export interface NativeInterface {
   readonly subscribe: (
     input: Target & {
       readonly publish: (update: Update) => void
-      /** The watch ended on its own, after its last update: its folder went away. Consumers watch again. */
+      /**
+       * The watch ended on its own, after its last update, because its folder went away. The stream of every consumer
+       * ends after that update. A consumer that watches again gets a native watch of its own, but nothing watches again
+       * for a consumer: each one that keeps a record of what it watches forgets it when the stream ends.
+       */
       readonly end?: () => void
     },
   ) => Effect.Effect<Subscription | undefined>
@@ -82,6 +86,8 @@ export class Service extends Context.Service<Service, Interface>()("@orbit/Watch
 export interface TestInterface extends Interface {
   /** Delivers one update to every active watch whose target covers `update.path`. */
   readonly emit: (update: Update) => Effect.Effect<void>
+  /** Delivers one update like `emit`, then ends every watch that got it, as a native watch does when its folder goes away. */
+  readonly end: (update: Update) => Effect.Effect<void>
   /** Returns every subscribe call observed so far, in order. */
   readonly subscriptions: () => Effect.Effect<readonly WatchInput[]>
 }
@@ -170,6 +176,7 @@ export const testLayer = Layer.effectContext(
   Effect.gen(function* () {
     const subscriptions: WatchInput[] = []
     const active = new Map<(update: Update) => void, (path: string) => boolean>()
+    const ends = new Map<(update: Update) => void, () => void>()
     const native = Native.of({
       subscribe: (input) =>
         Effect.sync(() => {
@@ -186,6 +193,7 @@ export const testLayer = Layer.effectContext(
           // literal paths. Glob entries resolve to paths nothing lives under, so
           // they are inert here rather than compiled the way parcel compiles them.
           const ignored = input.ignore.map((entry) => path.resolve(input.target, entry))
+          if (input.end) ends.set(input.publish, input.end)
           active.set(input.publish, (target) => {
             if (input.type === "file") return target === input.target
             if (input.type === "entries")
@@ -195,6 +203,7 @@ export const testLayer = Layer.effectContext(
           return {
             unsubscribe: () => {
               active.delete(input.publish)
+              ends.delete(input.publish)
               return Promise.resolve()
             },
           }
@@ -208,6 +217,15 @@ export const testLayer = Layer.effectContext(
           const target = path.resolve(update.path)
           active.forEach((matches, publish) => {
             if (matches(target)) publish(update)
+          })
+        }),
+      end: (update) =>
+        Effect.sync(() => {
+          const target = path.resolve(update.path)
+          active.forEach((matches, publish) => {
+            if (!matches(target)) return
+            publish(update)
+            ends.get(publish)?.()
           })
         }),
       subscriptions: () => Effect.sync(() => [...subscriptions]),
@@ -249,9 +267,13 @@ export const makeNative = Effect.fnUntraced(function* (
             // Bun keeps one watch per path on Linux: while this one stays open after its folder was removed and made
             // again, a new watch of the path hears nothing. So a watch whose folder went away reports it, closes, and
             // ends, and its consumers watch again once it is closed. A removed folder names itself in the event; the
-            // identity also catches one that was made again before the event was read.
+            // identity also catches one that was made again before the event was read. A child named like the folder
+            // (a/a) gives the same event, and is told by being there; one that was removed is told from it by nothing, and
+            // ends the watch for no loss, since the consumers watch again.
             const removed =
-              event === "rename" && (file === path.basename(directory) || folderIdentity(directory) !== identity)
+              event === "rename" &&
+              ((file === path.basename(directory) && !(file && existsSync(path.join(directory, file)))) ||
+                folderIdentity(directory) !== identity)
             if (!removed && file && !names.has(file)) return
             for (const name of removed || !file ? names : [file]) {
               input.publish({ path: path.join(directory, name), type: "update" })
@@ -295,7 +317,8 @@ type Pool = {
   readonly retired: Map<string, ParcelWatcher.AsyncSubscription[]>
   // Every native watch that is still being ended. Parcel shares one backend among all the watches of a process and
   // destroys it when the last one ends, so a watch of any folder that is made while the last one is being ended joins the
-  // backend that is going away and hears nothing for good. A subscribe waits for this.
+  // backend that is going away and hears nothing for good. A subscribe waits for this, so an unsubscribe that never
+  // settles blocks every later directory subscribe of the process, each until its 10 s limit.
   ending: Promise<unknown> | undefined
   generation: number
 }

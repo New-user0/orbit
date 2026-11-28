@@ -995,6 +995,31 @@ describe("LocationWatcher subscriptions", () => {
 // git starts, whatever the config names (`project-git-trust.test.ts` is the table of keys). The oracle is git's trace of
 // every process it starts. The files are the ones git itself wrote, or the Location's store when they cannot be matched
 // to a registered worktree.
+describe("LocationWatcher watches again", () => {
+  // The watch of .git/HEAD ends when the git folder goes away, and the location watcher watches the new folder: a change of
+  // HEAD after the folder was made again is heard.
+  it.live("publishes .git/HEAD events after the git folder was removed and made again", () =>
+    withTmp(
+      (directory) =>
+        Effect.gen(function* () {
+          const head = path.join(directory, ".git", "HEAD")
+          yield* ready(head)
+          yield* Effect.promise(async () => {
+            await fs.rm(path.join(directory, ".git"), { recursive: true })
+            await git(directory, "init", "-q")
+          })
+          // What the removal itself reported is over before the next write is waited for. The location watcher looks again
+          // when the policy changes, as it does when the folder is back.
+          yield* Effect.sleep("1 second")
+          const policy = yield* LocationWatcherPolicy.Service
+          yield* policy.reload()
+          yield* ready(head)
+        }),
+      { vcs: "git" },
+    ),
+  )
+})
+
 describe("LocationWatcher finds the git directory without git", () => {
   const SLOW = 60_000
   /** The folders that the watcher subscribed to for a Location, once it has subscribed or has had time to. */

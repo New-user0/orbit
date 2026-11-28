@@ -57,7 +57,7 @@ const layer = Layer.effect(
     const lock = Semaphore.makeUnsafe(1)
     let stopped = false
     let active: { path: string; scope: Scope.Closeable } | undefined
-    const reconcile = () =>
+    const reconcile = (): Effect.Effect<void> =>
       lock.withPermit(
         Effect.gen(function* () {
           if (stopped) return
@@ -72,11 +72,27 @@ const layer = Layer.effect(
           active = { path: next, scope }
           yield* Effect.gen(function* () {
             const updates = yield* watcher.subscribe({ path: next, type: "file" })
-            yield* Stream.runForEach(updates, publish)
+            let heard = false
+            yield* Stream.runForEach(updates, (update) => ((heard = true), publish(update)))
+            // A watch that ends after an update lost its folder (the folder went away): it is forgotten, and the next
+            // reconcile watches again. One that ends without an update could not be made, and is not made again at once.
+            if (!heard || stopped) return
+            yield* Effect.sync(() => {
+              if (active?.scope === scope) active = undefined
+            })
+            yield* reconcile()
           }).pipe(
             Effect.catchCauseIf(
               (cause) => !Cause.hasInterrupts(cause),
-              (cause) => Effect.logError("location watcher subscription failed", { path: next, cause }),
+              (cause) =>
+                Effect.logError("location watcher subscription failed", { path: next, cause }).pipe(
+                  // A watch that could not be made is forgotten too, so the next reconcile tries again.
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      if (active?.scope === scope) active = undefined
+                    }),
+                  ),
+                ),
             ),
             Effect.forkIn(scope, { startImmediately: true }),
           )

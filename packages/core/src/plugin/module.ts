@@ -27,7 +27,8 @@ export const make = Effect.fn("PluginModule.make")(function* () {
     const updates = yield* watcher.subscribe(target, Deferred.succeed(ready, undefined))
     yield* updates.pipe(
       Stream.runForEach(() => PubSub.publish(changes, undefined)),
-      Effect.ensuring(Deferred.succeed(ready, undefined)),
+      // A watch ends when its folder goes away. The file is forgotten, so the next load watches it again.
+      Effect.ensuring(Deferred.succeed(ready, undefined).pipe(Effect.andThen(Effect.sync(() => watched.delete(file))))),
       Effect.forkIn(scope, { startImmediately: true }),
     )
     yield* Deferred.await(ready)

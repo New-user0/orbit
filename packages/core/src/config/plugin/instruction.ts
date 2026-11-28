@@ -102,10 +102,16 @@ export const Plugin = define({
       const publish = (update: Watcher.Update) => PubSub.publish(changes, update.path).pipe(Effect.asVoid)
       const subscribe = Effect.fnUntraced(function* (path: string) {
         const updates = yield* watcher.subscribe({ path, type: "file" })
-        yield* FiberMap.run(watches, path, updates.pipe(Stream.runForEach(publish)), {
-          onlyIfMissing: true,
-          startImmediately: true,
-        })
+        yield* FiberMap.run(
+          watches,
+          path,
+          updates.pipe(
+            Stream.runForEach(publish),
+            // A watch ends when its folder goes away. The path is forgotten, so the next pass watches it again.
+            Effect.ensuring(Effect.sync(() => (watched.delete(path), watchedImports.delete(path)))),
+          ),
+          { onlyIfMissing: true, startImmediately: true },
+        )
       })
       // A rules folder that is there and may be read is watched as a folder, once: a rule that is edited, added or removed
       // under it, at any depth, starts a new pass.

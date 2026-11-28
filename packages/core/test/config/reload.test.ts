@@ -241,10 +241,8 @@ describe("config plugin reloads", () => {
               })
               yield* Effect.sleep("1500 millis")
               yield* Effect.promise(() => Bun.write(path.join(root, "skills", "probe", "SKILL.md"), probeSkill("Later")))
-              const found = yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "Later"))).pipe(
-                Effect.timeoutOption("10 seconds"),
-              )
-              expect(found._tag).toBe("Some")
+              // A skills folder that is never seen ends in the row's time limit.
+              yield* waitUntil(probes.pipe(Effect.map((items) => items[0]?.description === "Later")))
             }).pipe(
               Effect.provide(
                 liveConfig(

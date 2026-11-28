@@ -55,7 +55,7 @@ describe("a native watch made while the last native watch of the process is bein
                 yield* Effect.promise(() => Bun.write(path.join(next, "after.txt"), "x"))
                 yield* Effect.gen(function* () {
                   while (!seen.some((file) => file.endsWith("after.txt"))) yield* Effect.sleep("20 millis")
-                }).pipe(Effect.timeoutOption("3 seconds"))
+                })
                 yield* Fiber.interrupt(second)
                 // The first try that hears nothing ends the row.
                 expect(seen.some((file) => file.endsWith("after.txt"))).toBe(true)
@@ -162,8 +162,8 @@ describe("a file or entries watch of a folder that is removed and made again", (
             await fs.rm(folder, { recursive: true })
             await fs.mkdir(folder)
           })
-          const ended = yield* Fiber.await(old).pipe(Effect.timeoutOption("5 seconds"))
-          expect(ended._tag).toBe("Some")
+          // The stream ends: the row's time limit bounds the wait.
+          yield* Fiber.join(old)
           expect(seen.length).toBeGreaterThan(0)
           const heard: string[] = []
           const ready = yield* Deferred.make<void>()
@@ -175,11 +175,41 @@ describe("a file or entries watch of a folder that is removed and made again", (
           yield* Effect.promise(() => Bun.write(path.join(folder, "skills"), "x"))
           yield* Effect.gen(function* () {
             while (heard.length === 0) yield* Effect.sleep("20 millis")
-          }).pipe(Effect.timeoutOption("3 seconds"))
+          })
           yield* Fiber.interrupt(fresh)
           expect(heard.length).toBeGreaterThan(0)
         }).pipe(Effect.provide(realLayer)),
       ),
     )
   }
+})
+
+// A child that is named like its folder (myproj/myproj) gives the event of a removed folder. It is told by being there, so
+// the watch stays open and hears the next change.
+describe("a file or entries watch of a folder with a child of its own name", () => {
+  it.live("stays open", () =>
+    withTempDir((tmp) =>
+      Effect.gen(function* () {
+        const service = yield* Watcher.Service
+        const folder = path.join(tmp.path, "myproj")
+        yield* Effect.promise(() => fs.mkdir(folder))
+        const seen: string[] = []
+        const watch = yield* service.subscribe({ path: folder, type: "entries", names: ["myproj", "other"] }).pipe(
+          Effect.flatMap(Stream.runForEach((item) => Effect.sync(() => seen.push(path.basename(item.path))))),
+          Effect.forkChild({ startImmediately: true }),
+        )
+        yield* Effect.sleep("300 millis")
+        yield* Effect.promise(() => fs.mkdir(path.join(folder, "myproj")))
+        yield* Effect.gen(function* () {
+          while (!seen.includes("myproj")) yield* Effect.sleep("20 millis")
+        })
+        yield* Effect.promise(() => Bun.write(path.join(folder, "other"), "x"))
+        yield* Effect.gen(function* () {
+          while (!seen.includes("other")) yield* Effect.sleep("20 millis")
+        })
+        expect(watch.pollUnsafe()).toBeUndefined()
+        yield* Fiber.interrupt(watch)
+      }).pipe(Effect.provide(realLayer)),
+    ),
+  )
 })

@@ -43,9 +43,10 @@ export const layer = Layer.effect(
 
     // Configured local plugins can live outside config roots, where the
     // config change feed cannot see them; watch those targets directly.
-    // Watches start on first sighting and are never torn down individually:
+    // Watches start on first sighting and are not torn down individually:
     // a stale watch after a config edit costs one deduped fs handle and a
-    // no-op activation, and every watch dies with this layer's scope.
+    // no-op activation, and every watch dies with this layer's scope. A watch
+    // that ends on its own (its folder went away) is forgotten and made again.
     const watchConfiguredSources = Effect.fn("ConfigPluginSource.watchConfiguredSources")(function* (
       entries: readonly Entry[],
       operations: readonly Operation[],
@@ -65,6 +66,8 @@ export const layer = Layer.effect(
           Effect.catchCause((cause) =>
             Effect.logError("configured plugin watch failed", { target: operation.target, cause }),
           ),
+          // A watch ends when its folder goes away. The target is forgotten, so the next scan watches it again.
+          Effect.ensuring(Effect.sync(() => watched.delete(operation.target))),
           Effect.forkScoped({ startImmediately: true }),
         )
       }

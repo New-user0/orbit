@@ -154,14 +154,21 @@ it:
     away now reports it, closes, and ends its stream, so its consumers watch again after it is closed
     ("a file or entries watch of a folder that is removed and made again", `test/filesystem/watcher-overlap.test.ts`;
     "loads skills when ... is removed and made again, and its skills folder comes later", `config/reload.test.ts`, which
-    fails on the old code for both vendor roots, and passes for the `.agents` roots, which have no settings watch, as a
-    control).
+    fails on the old code for both vendor roots every time. The `.agents` roots have no settings watch, and lost the
+    skills folder less often on the old code: `home/.agents` 3 of 25 runs under load, the project root none in 3. The
+    second source of that loss was not isolated, and the row passes 25 of 25 with the fix). A watch that ends is forgotten by
+    its consumers (the instruction files, the configured plugin folders, the plugin modules, the location watcher), which
+    watch again on their next pass ("a consumer watches again after the watch of its folder ended", `test/watch-again.test.ts`,
+    and one row each in `instruction-discovery.test.ts` and `filesystem/watcher.test.ts`). A child named like its folder
+    (`a/a`) is told from the folder's own removal by being there. A child that is removed gives the same event and ends the
+    watch for no loss, since the consumers watch again.
   - Parcel shares one backend among all the native watches of a process and destroys it when the last one ends. A native
     watch of any folder that starts while the last one is being ended joins the backend that is going away and hears
     nothing for good (97 of 100 in a script that did not wait for the end). `Watcher.makeNative` now starts a native
     watch only once every watch that is being ended has ended, also one whose subscribe was still pending when it was
     left ("the native watches of a process are made after the ends before them", which fails on the old code by the order of
     the calls, and "a native watch made while the last native watch of the process is being ended").
+  An unsubscribe that never settles now blocks every later directory subscribe of the process, each until its 10 s limit.
   The reload row now records the native watches of the config and the plugin (subscribe, update, end, failed end, with
   the time since the row began) and prints them when the row has run for 20 s, so a recurrence names its cause.
 - cli, the trust-doors control that runs a node with a model and the YAML `permissions:auto` row of `flow.test.ts`: a

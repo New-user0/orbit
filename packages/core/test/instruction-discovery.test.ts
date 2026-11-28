@@ -450,6 +450,50 @@ describe("ConfigInstructionPlugin.Plugin", () => {
     ),
   )
 
+  // A native watch ends when its folder goes away (Watcher.TestInterface.end does what the native one does), and the plugin
+  // forgets it, so the rescan that the end causes watches the file again and a later edit is heard.
+  it.live("watches an instruction file again after its watch ended", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        const global = path.join(tmp.path, "global")
+        const home = path.join(tmp.path, "home")
+        const project = path.join(home, "repo")
+        const projectFile = path.join(project, "AGENTS.md")
+        return Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            await fs.mkdir(global, { recursive: true })
+            await fs.mkdir(project, { recursive: true })
+            await fs.writeFile(projectFile, "project")
+          })
+          yield* start()
+          const watcher = yield* Watcher.Test
+          const watches = () =>
+            Effect.map(watcher.subscriptions(), (items) => items.filter((item) => item.path === projectFile).length)
+          expect(yield* watches()).toBe(1)
+          yield* Effect.promise(() => fs.writeFile(projectFile, "changed"))
+          yield* rescanAfter(watcher.end({ type: "update", path: projectFile }))
+          expect(yield* watches()).toBe(2)
+        }).pipe(
+          Effect.provide(
+            instructionLayer({
+              config: global,
+              home,
+              locationServiceLayer: Layer.succeed(
+                Location.Service,
+                Location.Service.of(
+                  location({ directory: AbsolutePath.make(project) }, { projectDirectory: AbsolutePath.make(project) }),
+                ),
+              ),
+            }),
+          ),
+        )
+      }),
+    ),
+  )
+
   it.live("discovers a newly created instruction file above the project root", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
