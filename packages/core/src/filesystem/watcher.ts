@@ -242,6 +242,7 @@ export const testLayer = Layer.effectContext(
 export const makeNative = Effect.fnUntraced(function* (
   binding: () => Pick<typeof ParcelWatcher, "subscribe"> | undefined,
   backend: ParcelWatcher.BackendType | undefined,
+  directories: DirectoryMode = "parcel",
 ) {
   const pool: Pool = { closed: false, parked: new Map(), retired: new Map(), ending: undefined, generation: 0 }
   yield* Effect.addFinalizer(() =>
@@ -288,6 +289,16 @@ export const makeNative = Effect.fnUntraced(function* (
           return { unsubscribe: () => Promise.resolve(subscription.close()), backend: "node" }
         })
       }
+      if (directories === "fs") {
+        return Effect.try({
+          try: () => watchDirectoryWithFs(input.target, input.ignore, input.publish, input.end),
+          catch: (error) => error,
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logError("failed to subscribe", { directory: input.target, error }).pipe(Effect.as(undefined)),
+          ),
+        )
+      }
       return Effect.suspend(() =>
         subscribeDirectory(binding(), backend, pool, input.target, input.ignore, input.publish),
       )
@@ -295,7 +306,16 @@ export const makeNative = Effect.fnUntraced(function* (
   })
 })
 
-export const nativeLayer = Layer.effect(Native, makeNative(binding, backend()))
+/**
+ * How directory watches are made. Parcel's Windows backend returns from subscribe before the directory read is queued
+ * to its thread, so a file written right after a watch is ready is lost for good (8 of 30 tries with the machine busy,
+ * 0 of 100 without), and ending one of its watches can crash the process (parcel-bundler/watcher#262). Bun's own
+ * recursive `fs.watch` has the watch armed when it returns (0 of 100 lost with the machine busy), so Windows uses it.
+ */
+export type DirectoryMode = "parcel" | "fs"
+export const directoryMode = (): DirectoryMode => (process.platform === "win32" ? "fs" : "parcel")
+
+export const nativeLayer = Layer.effect(Native, makeNative(binding, backend(), directoryMode()))
 
 export const nativeNode = makeGlobalNode({ service: Native, layer: nativeLayer, deps: [] })
 
@@ -434,4 +454,41 @@ function ending<T>(pool: Pool, unsubscribed: Promise<T>) {
   })
   pool.ending = settled
   return unsubscribed
+}
+
+// A recursive directory watch over Bun's fs.watch, with the updates of a Parcel watch: create, update and delete, and the
+// ignored paths left out. A removed folder reports itself as an event named by its own full path, on and on and never as
+// an error, so it is reported once, and the watch closes and ends like the file watches do.
+function watchDirectoryWithFs(
+  directory: string,
+  ignore: readonly string[],
+  publish: (update: Update) => void,
+  end: (() => void) | undefined,
+): Subscription {
+  const ignored = ignore.map((entry) =>
+    /[*?{}[\]!()]/.test(entry)
+      ? (file: string) => new Bun.Glob(entry).match(path.relative(directory, file).split(path.sep).join("/"))
+      : (file: string) => {
+          const relative = path.relative(path.resolve(directory, entry), file)
+          return !relative.startsWith("..") && !path.isAbsolute(relative)
+        },
+  )
+  const same = (left: string, right: string) =>
+    process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right
+  const subscription = watch(directory, { recursive: true }, (event, name) => {
+    if (!name) return
+    const file = path.resolve(directory, name)
+    if (same(file, directory)) {
+      publish({ path: directory, type: "delete" })
+      subscription.close()
+      end?.()
+      return
+    }
+    if (ignored.some((matches) => matches(file))) return
+    publish({ path: file, type: event === "change" ? "update" : existsSync(file) ? "create" : "delete" })
+  })
+  subscription.on("error", (error: unknown) =>
+    Effect.runFork(Effect.logError("watcher callback failed", { path: directory, error })),
+  )
+  return { unsubscribe: () => Promise.resolve(subscription.close()), backend: "node" }
 }

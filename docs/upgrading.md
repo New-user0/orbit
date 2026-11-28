@@ -5875,3 +5875,17 @@ CI's `setup-bun` installs the pinned version.
 **Affects:** people who build Orbit or run its tests from a checkout, and anyone who pushes to the repository.
 
 **What to do:** Upgrade Bun with `bun upgrade` (or install 1.4.5), then run `bun install` again.
+
+## File watching on Windows
+
+### Folders are watched with Bun's own file watcher
+
+On Windows Orbit watched folders (config folders, skill and plugin folders) with Parcel's watcher, whose Windows backend
+answered before it had started to read the folder. A file written right after a watch was ready was then lost for good, in
+12 of 40 tries with the machine busy, so an edit made just after a start could be missed until the next one. Orbit now
+watches folders on Windows with Bun's recursive `fs.watch`, which is armed when it returns, and reports the same create,
+update and delete updates with the same ignored paths. Linux and macOS keep Parcel's watcher.
+
+**Affects:** Windows users who edit config, skills or plugins while Orbit runs.
+
+**What to do:** Nothing.

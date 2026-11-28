@@ -171,6 +171,12 @@ it:
   An unsubscribe that never settles now blocks every later directory subscribe of the process, each until its 10 s limit.
   The reload row now records the native watches of the config and the plugin (subscribe, update, end, failed end, with
   the time since the row began) and prints them when the row has run for 20 s, so a recurrence names its cause.
+- core, a file written right after a directory watch was ready was lost on Windows when the machine was busy (12 of 40 tries
+  with 32 busy processes on 16 CPUs, 0 of 100 idle, a later write was heard). Parcel's Windows backend answers subscribe
+  once the read of the folder is queued to its thread, not once it is armed. Windows now watches folders with Bun's
+  recursive `fs.watch`, which is armed when it returns (0 of 150 lost with the machine busy), mapped to the updates of a
+  Parcel watch ("a file written right after a directory watch is ready is heard, with the machine busy",
+  `test/filesystem/watcher-overlap.test.ts`, which keeps the machine busy itself; on Parcel it failed 2 of 3 runs).
 - cli, the trust-doors control that runs a node with a model and the YAML `permissions:auto` row of `flow.test.ts`: a
   first Ollama `/api/tags` read that ran past its 1 s limit was kept as a fresh answer for 30 s and not tried again
   before the interval (FU-M3-385). A read that fails, times out or is interrupted now leaves the cache as it was, and

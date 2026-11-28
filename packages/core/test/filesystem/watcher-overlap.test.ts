@@ -1,6 +1,7 @@
 import { describe, expect, setDefaultTimeout } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
+import os from "os"
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { Watcher } from "@orbit/core/filesystem/watcher"
 import { processNative } from "../fixture/native-watcher"
@@ -22,9 +23,7 @@ describe("a native watch made while the last native watch of the process is bein
     { name: "of another folder hears its folder, after the end of the last one", wait: true },
     { name: "of another folder hears its folder, while the last one is being ended", wait: false },
   ]) {
-    // On Windows a released watch is parked and never ended, so there is no end to hear a watch made during.
-    const test = process.platform === "win32" ? it.live.skip : it.live
-    test(row.name, () =>
+    it.live(row.name, () =>
       withTempDir((tmp) =>
         Effect.gen(function* () {
           const service = yield* Watcher.Service
@@ -213,3 +212,51 @@ describe("a file or entries watch of a folder with a child of its own name", () 
     ),
   )
 })
+
+// A watch is ready when its subscribe is answered: a file written right after is heard. Parcel's Windows backend answered
+// before it had queued the read of the folder, and lost 12 of 40 such files with the machine busy (and none of 100 with it
+// idle), so Windows watches folders with Bun's fs.watch, which is armed when it returns. The row keeps the machine busy
+// itself, with twice as many loops as it has CPUs, and writes right after each watch is ready.
+describe("a file written right after a directory watch is ready", () => {
+  it.live("is heard, with the machine busy", () =>
+    withTempDir((tmp) =>
+      Effect.gen(function* () {
+        const busy = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            Array.from({ length: os.availableParallelism() * 2 }, () =>
+              Bun.spawn([process.execPath, "-e", "const end = Date.now() + 120000; while (Date.now() < end) {}"], {
+                stdout: "ignore",
+                stderr: "ignore",
+              }),
+            ),
+          ),
+          (children) => Effect.sync(() => children.forEach((child) => child.kill())),
+        )
+        expect(busy.length).toBeGreaterThan(0)
+        const service = yield* Watcher.Service
+        yield* Effect.forEach(
+          Array.from({ length: 60 }, (_, index) => index),
+          (index) =>
+            Effect.gen(function* () {
+              const folder = path.join(tmp.path, `ready-${index}`)
+              yield* Effect.promise(() => fs.mkdir(folder))
+              const heard: string[] = []
+              const ready = yield* Deferred.make<void>()
+              const watch = yield* service.subscribe({ path: folder, type: "directory" }, Deferred.succeed(ready, undefined)).pipe(
+                Effect.flatMap(Stream.runForEach((item) => Effect.sync(() => heard.push(path.basename(item.path))))),
+                Effect.forkChild({ startImmediately: true }),
+              )
+              yield* Deferred.await(ready)
+              yield* Effect.promise(() => Bun.write(path.join(folder, "x.txt"), "x"))
+              // A file that is never heard ends in the row's time limit.
+              yield* Effect.gen(function* () {
+                while (!heard.includes("x.txt")) yield* Effect.sleep("20 millis")
+              })
+              yield* Fiber.interrupt(watch)
+            }),
+        )
+      }).pipe(Effect.provide(realLayer)),
+    ),
+  )
+})
+

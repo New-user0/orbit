@@ -22,10 +22,14 @@ type Binding = () => Pick<typeof ParcelWatcher, "subscribe"> | undefined
 const pools = new Map<Binding, Watcher.NativeInterface>()
 
 /** The file's native watches over `binding`: built on first use, never ended. */
-export function processNative(binding: Binding, backend: ParcelWatcher.BackendType | undefined) {
+export function processNative(
+  binding: Binding,
+  backend: ParcelWatcher.BackendType | undefined,
+  mode: Watcher.DirectoryMode = Watcher.directoryMode(),
+) {
   const found = pools.get(binding)
   if (found) return found
-  const native = Effect.runSync(Watcher.makeNative(binding, backend).pipe(Scope.provide(Effect.runSync(Scope.make()))))
+  const native = Effect.runSync(Watcher.makeNative(binding, backend, mode).pipe(Scope.provide(Effect.runSync(Scope.make()))))
   pools.set(binding, native)
   return native
 }

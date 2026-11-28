@@ -590,7 +590,7 @@ describe("Watcher native directory watches", () => {
           for (const _ of [1, 2]) {
             yield* Effect.scoped(
               Effect.gen(function* () {
-                const subscription = yield* root.subscribe(processNative(binding, "windows"))
+                const subscription = yield* root.subscribe(processNative(binding, "windows", "parcel"))
                 yield* Effect.promise(() => subscription!.unsubscribe())
               }),
             )
@@ -625,7 +625,7 @@ describe("Watcher native directory watches", () => {
           `  },`,
           `})`,
           `test("first row", async () => {`,
-          `  const native = processNative(binding, "windows")`,
+          `  const native = processNative(binding, "windows", "parcel")`,
           `  const watch = { type: "directory" as const, target: ${JSON.stringify(dir.path)}, ignore: [], publish: () => {} }`,
           `  const subscription = await Effect.runPromise(native.subscribe(watch))`,
           `  await subscription!.unsubscribe()`,
@@ -707,7 +707,7 @@ describe("Watcher native directory watches", () => {
           expect(renamed).toBe("EPERM")
           yield* Effect.promise(() => fs.rm(project, { recursive: true }))
           expect(yield* Effect.promise(() => fs.readdir(tmp.path))).toEqual([])
-        }).pipe(Effect.provide(Watcher.nativeLayer)),
+        }).pipe(Effect.provide(Layer.effect(Watcher.Native, Watcher.makeNative(Watcher.binding, Watcher.backend(), "parcel")))),
       ),
   )
 })
