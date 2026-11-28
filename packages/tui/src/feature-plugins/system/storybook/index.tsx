@@ -10,10 +10,12 @@ import { dialogTrustStory } from "./dialog-trust"
 import { trustIndicatorStory } from "./trust-indicator"
 import { historySearchStory } from "./history-search"
 import { costStory } from "./cost"
+import { contextStory } from "./context"
 import { assistantFooterStory } from "./assistant-footer"
 import { agentCreateStory } from "./agent-create"
 import { ideStory } from "./ide"
 import { todosStory } from "./todos"
+import { rewindStory } from "./rewind"
 
 /**
  * A story is a full-screen, fixture-driven simulation of a real production component. Stories own
@@ -34,11 +36,17 @@ const stories: Story[] = [
   trustIndicatorStory,
   historySearchStory,
   costStory,
+  contextStory,
   assistantFooterStory,
   ideStory,
   todosStory,
   agentCreateStory,
+  rewindStory,
 ]
+
+// One key per story, drawn in front of its title: the digits, then the letters but `j` and `k`, which move the
+// selection. A key of two strokes would share its first with another ("1" and "10"), which a layer cannot bind.
+const KEYS = [..."123456789abcdefghilmnopqrstuvwxyz"]
 
 function Commands(props: { context: Plugin.Context }) {
   props.context.keymap.layer(() => ({
@@ -105,7 +113,7 @@ function StorybookIndex(props: { context: Plugin.Context }) {
         run: () => open(stories[selected()]),
       },
       ...stories.map((story, index) => ({
-        bind: String(index + 1),
+        bind: KEYS[index],
         title: `Open ${story.title}`,
         group: "Storybook",
         run: () => open(story),
@@ -128,7 +136,7 @@ function StorybookIndex(props: { context: Plugin.Context }) {
           {(story, index) => (
             <text fg={index() === selected() ? theme.text.base : theme.text.muted}>
               {index() === selected() ? "› " : "  "}
-              {index() + 1} {story.title}
+              {KEYS[index()]} {story.title}
             </text>
           )}
         </For>

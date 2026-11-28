@@ -644,7 +644,12 @@ describe("acp edit previews over the wire", () => {
           id,
           toolStarted(sessionID, "call_edit", "edit"),
           toolCalled(sessionID, "call_edit", { filePath: file, oldString: "before", newString: "after" }),
-          toolSucceeded(sessionID, "call_edit", { files: [{ file }] }, "edited"),
+          toolSucceeded(
+            sessionID,
+            "call_edit",
+            { files: [{ file, patch: "--- file.ts\n+++ file.ts\n@@ -1,1 +1,1 @@\n-before\n+after\n" }] },
+            "edited",
+          ),
         ),
     })
     await acp.initialize({ writeTextFile: true })
@@ -732,7 +737,8 @@ describe("acp approval describes the request, not the calling tool", () => {
         resources: ["https://evil.example/collect", "POST https://evil.example/collect"],
         metadata: { method: "POST", url: "https://evil.example/collect" },
       },
-      title: "POST https://evil.example/collect",
+      // A URL would become a link, so it is in a code span (m5-quality, FU-M5-009).
+      title: "POST `https://evil.example/collect`",
       kind: "fetch",
       locations: [],
     },
@@ -741,7 +747,7 @@ describe("acp approval describes the request, not the calling tool", () => {
       caller: "WebFetch",
       input: { url: "https://ok.example/page" },
       ask: { action: "WebFetch", resources: ["https://ok.example/page"], metadata: {} },
-      title: "https://ok.example/page",
+      title: "`https://ok.example/page`",
       kind: "fetch",
       locations: [],
     },

@@ -58,7 +58,8 @@ project. Values accept `{env:VAR}` and `{file:path}`.
   32768) for Ollama; Orbit's prompt and tools alone need about 5k tokens. Models without native tool calling get their
   tools through the prompt; any model can opt in with `"compatibility": { "toolCalling": "text" }`.
 - **Check:** `orb doctor` reports TLS, proxy, ripgrep and provider settings by name; `orb doctor --probe` sends one
-  short request to one model per available provider, and `--model provider/model` probes one model.
+  short request to one model per available provider, and `--model provider/model` probes one model. A probe needs the
+  current folder trusted, or `--trust` for that run.
 
 ## Workflows
 
@@ -99,10 +100,27 @@ Tests run per package, never from the root: `cd packages/core && bun run test`.
 `bun run test` runs the big packages (core, cli, tui, server, vscode) in parallel, in worker processes: half the logical cores, at
 least two. `ORBIT_TEST_WORKERS=<n>` sets the count, and `ORBIT_TEST_WORKERS=1` gives a serial run for debugging. The other packages
 run serially because their files are small, and a worker costs about a second per file on Windows; setting `ORBIT_TEST_WORKERS`
-runs them in parallel too. Core, cli, tui, server and vscode each keep a `test/timings.json` that starts the slowest files first, and
-`bun run test:timings` refreshes it (ordinary runs never write it). Each core worker gets its own `ORBIT_TEST_HOME`, XDG and temp folders, and its own `HOME` only on Windows (on Linux and macOS `HOME` stays the shared root). The
-ACP approval matrix in cli (`permission-files.subprocess.test.ts`) runs its rows 8 at a time inside its one file; pass
-`--max-concurrency=1` to run them one by one.
+runs them in parallel too. Each core worker gets its own `ORBIT_TEST_HOME`, XDG and temp folders, and its own `HOME` only on
+Windows (on Linux and macOS `HOME` stays the shared root). `ORBIT_TEST_WORKERS=1` still gives each file of those five packages a
+fresh module registry (`--isolate`), as a parallel run does. The ACP approval matrix in cli (`acp/permission-files.subprocess.test.ts`,
+`acp/permission-spellings.subprocess.test.ts`, `acp/spelling-matrix-*` and `acp/share-links-*`) runs its rows 4 at a time inside each
+file; pass `--max-concurrency=1` to run them one by one. Each row starts its `orb acp` child only when the start gate
+(`packages/cli/test/fixture/start-gate.ts`) gives it a slot, and gives the slot back once the child has answered. The runner
+makes the slots files in a folder that all workers of one run share, so a run, and so one CI job, starts at most three such
+children at once (`ORBIT_TEST_STARTS` changes the number). The runner also gives the run one Bun transpiler cache, which every
+`orb` child that a cli test starts from source shares (`packages/cli/test/fixture/environment.ts`), so a child reuses what an
+earlier one transpiled instead of transpiling the whole source tree again.
+
+A parallel run stops a test file that is still running past its deadline, names it on stderr and exits with code 1, instead of
+waiting for it forever. The deadline is `ORBIT_TEST_FILE_DEADLINE_MS` (ten minutes by default) or three times the file's
+measured time, whichever is longer (`tools/test/watchdog.ts`). Test code starts programs with `runProgram`
+(`packages/core/test/fixture/run-program.ts`) and never synchronously.
+
+Core, cli, tui, server and vscode each keep the time each test file took: `test/timings.json` measured on Linux and
+`test/timings.windows.json` measured on Windows. A run starts the slowest files first, and CI's `--shard` jobs split a package by
+them. `bun run test:timings` writes the file of the platform it runs on. Every CI test job uploads what it measured as a
+`timings-<os>-<package><part>` artifact, and `bun tools/test/timings.ts --run <run id>` merges a run's artifacts into the
+committed files.
 
 ## Brand gate
 

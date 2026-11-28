@@ -194,6 +194,7 @@ export const Definitions = {
   "messages.copy": keybind("<leader>y", "Copy message"),
   "session.undo": keybind("<leader>u", "Undo message"),
   "session.redo": keybind("<leader>r", "Redo message"),
+  "session.rewind": keybind("none", "Roll back to an earlier prompt"),
   "session.toggle.thinking": keybind("none", "Toggle thinking blocks visibility"),
 
   "prompt.submit": keybind("none", "Submit prompt"),
@@ -282,6 +283,10 @@ export const Definitions = {
   "prompt.autocomplete.select": keybind("return", "Select autocomplete item"),
   "prompt.autocomplete.complete": keybind("tab", "Complete autocomplete item"),
   "permission.prompt.fullscreen": keybind("ctrl+f", "Toggle permission prompt fullscreen"),
+  "permission.prompt.page.up": keybind("pageup,ctrl+alt+b", "Scroll permission prompt up by one page"),
+  "permission.prompt.page.down": keybind("pagedown,ctrl+alt+f", "Scroll permission prompt down by one page"),
+  "permission.prompt.first": keybind("ctrl+g,home", "Scroll to the start of the permission prompt"),
+  "permission.prompt.last": keybind("ctrl+alt+g,end", "Scroll to the end of the permission prompt"),
   "plugins.toggle": keybind("return", "Toggle plugin"),
   "dialog.mcp.toggle": keybind("space", "Toggle MCP server"),
   "dialog.plugins.error": keybind("space", "View plugin error"),

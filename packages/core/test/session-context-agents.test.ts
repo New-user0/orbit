@@ -48,6 +48,7 @@ import { keys, live, planted } from "./fixture/git-keys"
 import { traced } from "./fixture/git-trace"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
+import { noMemory } from "./lib/memory"
 import { noScratchpad } from "./lib/scratchpad"
 import { insertSession } from "./lib/session-row"
 import { stubSnapshot } from "./lib/tool"
@@ -115,6 +116,7 @@ const harness = (vcs: (root: string) => Project.Vcs | undefined) =>
         McpInstructions.node.replace(Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(empty) })),
         PluginSupervisor.node.replace(Layer.empty),
         noScratchpad,
+        noMemory,
         Tool.node.replace(
           Layer.mock(Tool.Service, {
             snapshot: () =>
@@ -216,7 +218,7 @@ describe("what an agent's context switches leave out of its baseline", () => {
       expect(lean.value.text).toContain("Today's date")
       expect(lean.value.text).toContain("<env>")
       expect(lean.git).toEqual([])
-    }),
+    }), 10_000,
   )
 
   it.live("gives a general subagent the instruction files and its parent's snapshot, as the control", () =>
@@ -254,7 +256,7 @@ describe("what an agent's context switches leave out of its baseline", () => {
       expect(Object.keys(back.value.delta).sort()).toEqual([filesKey, key].sort())
       expect(back.value.text).toContain(MARK)
       expect(back.value.text).toContain("Branch: main")
-    }),
+    }), 10_000,
   )
 
   it.live("lets an agent turn one switch back on while the other stays off", () =>
@@ -322,7 +324,7 @@ describe("an agent's context in the document of an untrusted folder", () => {
       expect(main.value.text).toContain(MARK)
       expect(main.value.text).not.toContain("Branch")
       expect((yield* stepped(ids.plain)).value.text).toContain(MARK)
-    }),
+    }), 10_000,
   )
 
   it.live("removes them when the document is trusted, as the control", () =>

@@ -1,0 +1,1 @@
+Once more: write plain text, the <analysis> block and then the <handoff> block, with no tool call. A tool call is refused, and then no handoff is saved.

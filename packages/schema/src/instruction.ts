@@ -36,7 +36,7 @@ export class StatusFile extends Schema.Class<StatusFile>("Instruction.StatusFile
   paths: Schema.optional(Schema.Array(Schema.String)),
 }) {}
 
-export const WarningType = Schema.Literals(["size", "import-untrusted", "import-external"])
+export const WarningType = Schema.Literals(["size", "import-untrusted", "import-external", "outside"])
 export type WarningType = typeof WarningType.Type
 
 /** Something a person should know about a loaded file. Warnings never reach the model. */
@@ -91,4 +91,74 @@ export class NoteAdded extends Schema.Class<NoteAdded>("Instruction.NoteAdded")(
   created: Schema.Boolean,
   /** Whether the file is among the loaded instruction files after the note. False when a setting excludes it. */
   loaded: Schema.Boolean,
+}) {}
+
+/**
+ * What `/memory` asks the server to make. It names a row of the listing, never a place: the server finds the place again
+ * from what it lists now, so a name or path a client sends is never joined into one.
+ */
+export const MemoryTarget = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("file"),
+    /** A loaded instruction file, exactly as the listing spells it. */
+    path: Schema.String,
+  }).annotate({ identifier: "Instruction.MemoryTarget.File" }),
+  Schema.Struct({ type: Schema.Literal("scope"), scope: NoteScope }).annotate({
+    identifier: "Instruction.MemoryTarget.Scope",
+  }),
+  Schema.Struct({ type: Schema.Literal("memory") }).annotate({ identifier: "Instruction.MemoryTarget.Memory" }),
+  Schema.Struct({ type: Schema.Literal("team") }).annotate({ identifier: "Instruction.MemoryTarget.Team" }),
+  Schema.Struct({ type: Schema.Literal("agent"), agent: Schema.String }).annotate({
+    identifier: "Instruction.MemoryTarget.Agent",
+  }),
+]).annotate({ identifier: "Instruction.MemoryTarget" })
+export type MemoryTarget = typeof MemoryTarget.Type
+
+/** Why a memory target was refused. Nothing is created for any of them. */
+export const MemoryRefusal = Schema.Literals(["unknown", "refused", "disabled", "unavailable", "excluded", "outside"])
+export type MemoryRefusal = typeof MemoryRefusal.Type
+
+/** A row of `/memory` for an instruction file: one that loaded, or the user or project file a person can create. */
+export class MemoryFile extends Schema.Class<MemoryFile>("Instruction.MemoryFile")({
+  path: Schema.String,
+  kind: FileKind,
+  /** The length of the text the model reads; 0 for a file that is not loaded. */
+  chars: Schema.Int,
+  importedBy: Schema.optional(Schema.String),
+  /** Set on the file a note for the user or project scope goes to, loaded or not. */
+  role: Schema.optional(Schema.Literals(["user", "project"])),
+  exists: Schema.Boolean,
+  target: MemoryTarget,
+}) {}
+
+/** A row of `/memory` for a memory folder. `path` is the folder as it is spelled; `ensure` answers where it really is. */
+export class MemoryFolder extends Schema.Class<MemoryFolder>("Instruction.MemoryFolder")({
+  type: Schema.Literals(["memory", "team", "agent"]),
+  agent: Schema.optional(Schema.String),
+  scope: Schema.optional(Schema.Literals(["user", "project", "local"])),
+  path: Schema.String,
+  exists: Schema.Boolean,
+  target: MemoryTarget,
+}) {}
+
+/** What `/memory` shows for a location. */
+export class MemoryListing extends Schema.Class<MemoryListing>("Instruction.MemoryListing")({
+  files: Schema.Array(MemoryFile),
+  warnings: Schema.Array(StatusWarning),
+  /** Empty while memory is off. */
+  folders: Schema.Array(MemoryFolder),
+  /** Whether memory is on now. */
+  enabled: Schema.Boolean,
+  /** Whether the project is a git repository, so its file is checked in. */
+  git: Schema.Boolean,
+  /** False when a source of instruction files could not be read, so the list is incomplete. */
+  available: Schema.Boolean,
+}) {}
+
+/** The place a memory target is at, made when it was not there. */
+export class MemoryEnsured extends Schema.Class<MemoryEnsured>("Instruction.MemoryEnsured")({
+  /** Where the file or folder really is, which is what a client opens. */
+  path: Schema.String,
+  created: Schema.Boolean,
+  type: Schema.Literals(["file", "folder"]),
 }) {}

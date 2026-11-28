@@ -62,7 +62,15 @@ export async function openFile(input: {
   wait?: boolean
 }): Promise<"editor" | "system"> {
   const wanted = process.env.VISUAL || process.env.EDITOR
-  const failure = wanted ? await edit(wanted, input).then(() => undefined, (error: unknown) => error) : undefined
+  const failure = wanted
+    ? await edit(wanted, input).then(
+        (exit) =>
+          input.wait && exit.code !== 0
+            ? new Error(`Editor exited with ${exit.signal ? `signal ${exit.signal}` : `code ${exit.code}`}`)
+            : undefined,
+        (error: unknown) => error,
+      )
+    : undefined
   if (wanted && failure === undefined) return "editor"
   const { openPath } = await import("@orbit/util/open")
   // The editor's own error says more than the system's, so it is the one a caller sees when both fail.
@@ -72,14 +80,37 @@ export async function openFile(input: {
   return "system"
 }
 
+/**
+ * Opens an instruction file in the person's editor and waits for it to close: $VISUAL, then $EDITOR, then the default
+ * of the platform (notepad on Windows; code, vi or nano elsewhere, the first that is on PATH). It is found and started
+ * as `openFile` starts an editor, and rejects when none is found. Unlike `openFile` it never hands the file to the system
+ * opener: an instruction file may be named like a program (`.bat`, `.cmd`, `.ps1`), and the system opener on Windows runs
+ * such a file instead of showing it. A non-zero exit is not an error, as the person may simply have quit the editor.
+ */
+export async function editFile(input: { file: string; renderer: CliRenderer }) {
+  const chosen = await choose()
+  await edit(chosen.editor, { ...input, wait: true })
+  return chosen
+}
+
+async function choose() {
+  const visual = process.env.VISUAL?.trim()
+  if (visual) return { source: "VISUAL" as const, editor: visual }
+  const editor = process.env.EDITOR?.trim()
+  if (editor) return { source: "EDITOR" as const, editor }
+  const { which } = await import("@orbit/util/which")
+  const fallback = (process.platform === "win32" ? ["notepad"] : ["code", "vi", "nano"]).find((name) => which(name))
+  if (fallback === undefined) throw new Error("No editor was found on PATH. Set $VISUAL or $EDITOR to choose one.")
+  return { source: "default" as const, editor: fallback }
+}
+
 async function edit(editor: string, input: { file: string; renderer: CliRenderer; wait?: boolean }) {
   // Look the program up before the terminal is handed over, so that a missing editor leaves the screen alone.
   await program(editor)
   input.renderer.suspend()
   input.renderer.currentRenderBuffer.clear()
   try {
-    const exit = await launch(editor, input.file, { cwd: path.dirname(input.file), wait: input.wait })
-    if (input.wait && exit.code !== 0) throw new Error(`Editor exited with ${exit.signal ? `signal ${exit.signal}` : `code ${exit.code}`}`)
+    return await launch(editor, input.file, { cwd: path.dirname(input.file), wait: input.wait })
   } finally {
     input.renderer.currentRenderBuffer.clear()
     input.renderer.resume()

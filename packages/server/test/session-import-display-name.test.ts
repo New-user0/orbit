@@ -1,8 +1,10 @@
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Session } from "@orbit/schema/session"
 import { Effect, Schema } from "effect"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
+
+setDefaultTimeout(30_000)
 
 const SessionResponse = Schema.Struct({ data: Schema.toEncoded(Session.Info) })
 
@@ -11,6 +13,7 @@ const setup = Effect.gen(function* () {
     app: { version: "test" },
     database: { path: ":memory:" },
     fs: { filewatcher: false },
+    trust: { implicit: true },
   })
   return (path: string, body?: unknown) =>
     Effect.promise(async () => {

@@ -1,5 +1,6 @@
 // The scratchpad in the baseline of a session: where it stands among the sources, and who shares it. The sources are the
 // real ones for the date, the environment, the scratchpad and the entries of the API, on the real session context.
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
@@ -33,6 +34,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
 import { Effect, Layer } from "effect"
 import { tempGlobalLayer } from "./fixture/global"
+import { noMemory } from "./lib/memory"
 import { testEffect } from "./lib/effect"
 import { insertSession } from "./lib/session-row"
 import { stubSnapshot } from "./lib/tool"
@@ -73,8 +75,11 @@ const it = testEffect(
     ]),
     [
       Global.node.replace(tempGlobalLayer),
+      noMemory,
       Config.node.replace(Config.testLayer()),
       SessionRunnerModel.node.replace(models),
+      // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+      SessionRehydration.node.replace(SessionRehydration.noopLayer),
       InstructionDiscovery.node.replace(
         Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
       ),
@@ -131,12 +136,13 @@ describe("the scratchpad among the sources of the baseline", () => {
       yield* entries.put({ sessionID: ids.main, key: InstructionEntry.Key.make("notes"), value: "from the API" })
       const keys: string[] = (yield* select(ids.main)).instructions.map((source) => source.key)
       expect(
-        keys.filter((key) => /^(core\/date|core\/environment|core\/vcs-snapshot|core\/scratchpad|api\/)/.test(key)),
-      ).toEqual(["core/date", "core/environment", "core/vcs-snapshot", "core/scratchpad", "api/notes"])
-      // The git snapshot sits directly after the environment and the scratchpad directly after it, before the entries.
+        keys.filter((key) => /^(core\/date|core\/environment|core\/vcs-snapshot|core\/scratchpad|core\/tool-results|api\/)/.test(key)),
+      ).toEqual(["core/date", "core/environment", "core/vcs-snapshot", "core/scratchpad", "core/tool-results", "api/notes"])
+      // The git snapshot sits directly after the environment and the scratchpad directly after it; the tool-results section follows, before the entries.
       expect(keys[keys.indexOf("core/environment") + 1]).toBe("core/vcs-snapshot")
       expect(keys[keys.indexOf("core/vcs-snapshot") + 1]).toBe("core/scratchpad")
-      expect(keys[keys.indexOf("core/scratchpad") + 1]).toBe("api/notes")
+      expect(keys[keys.indexOf("core/scratchpad") + 1]).toBe("core/tool-results")
+      expect(keys[keys.indexOf("core/tool-results") + 1]).toBe("api/notes")
     }),
   )
 

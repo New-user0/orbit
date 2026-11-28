@@ -72,6 +72,22 @@ describe("WorkspaceTrust", () => {
     }),
   )
 
+  // Another process that serves the same database, such as the background service, ends a stored grant by removing its
+  // record. A grant for this process that the stored one replaced must not keep the folder trusted after that.
+  it.live("a stored grant replaces a grant for this process, so a revoke made by another process ends it", () =>
+    Effect.gen(function* () {
+      const folders = yield* fixture
+      yield* Effect.gen(function* () {
+        const trust = yield* WorkspaceTrust.Service
+        const kv = yield* KV.Service
+        expect(yield* trust.grant(folders.repo, { persist: false, via: "test" })).toMatchObject({ source: "session" })
+        expect(yield* trust.grant(folders.repo, { persist: true, via: "test" })).toMatchObject({ source: "saved" })
+        yield* kv.remove(`trust/${WorkspaceTrust.key(folders.repo)}`)
+        expect(yield* trust.status(folders.repo)).toEqual({ directory: folders.repo, trusted: false, persistent: true })
+      }).pipe(Effect.provide(build(folders)))
+    }),
+  )
+
   it.live("never stores a grant for the home directory or a filesystem root", () =>
     Effect.gen(function* () {
       const folders = yield* fixture

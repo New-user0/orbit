@@ -10,6 +10,13 @@ export const location = { directory: "/work" }
 
 export type Event = Record<string, unknown>
 
+type Pending<A> = {
+  readonly input: unknown
+  readonly answer: (value: A) => void
+  readonly fail: (error: Error) => void
+  readonly signal?: AbortSignal
+}
+
 export function permission(id: string, session = sessionID) {
   return {
     id,
@@ -26,6 +33,13 @@ export function harness(
     turn?: SessionTurnOptions
     // Leave the writer out, so the driver writes to process.stdout itself.
     stdout?: boolean
+    // --tool-labels and --prompt-suggestions: each request waits in `state.labels` or `state.suggestions` until the test
+    // answers it or fails it.
+    labels?: boolean
+    suggestions?: boolean
+    // A server that is going away with this process: an interrupt it never answers, and a wait that fails.
+    interrupt?: () => Promise<unknown>
+    wait?: () => Promise<unknown>
   } = {},
 ) {
   const lines: Array<Record<string, any>> = []
@@ -47,6 +61,15 @@ export function harness(
     prompts: [] as Array<{ id: string; turn?: SessionTurnOptions }>,
     // Commands the server lists as running, as the shell list reports them.
     shells: [] as Array<{ id: string; status: string; metadata: { sessionID: string } }>,
+    // The label and suggestion requests the driver made, in order, each with what it sent, how the test answers or fails
+    // it, and the signal it was sent with.
+    labels: [] as Array<Pending<{ label: string | null; reason?: string }>>,
+    suggestions: [] as Array<Pending<{ suggestion: string | null; reason?: string }>>,
+  }
+  const pending = <A>(list: Array<Pending<A>>, input: unknown, request?: { signal?: AbortSignal }) => {
+    const answer = Promise.withResolvers<A>()
+    list.push({ input, answer: answer.resolve, fail: answer.reject, signal: request?.signal })
+    return answer.promise
   }
   let push: (event: Event | "end") => void = () => {}
   let idle = Promise.withResolvers<void>()
@@ -79,9 +102,10 @@ export function harness(
       interrupt: async () => {
         state.interrupts += 1
         state.calls.push("interrupt")
+        if (options.interrupt) return options.interrupt()
         return {}
       },
-      wait: () => idle.promise,
+      wait: () => (options.wait ? options.wait() : idle.promise),
       inbox: {
         list: async () => [],
         cancel: async (request: { inboxID: string }) => {
@@ -89,6 +113,10 @@ export function harness(
         },
       },
       form: { list: async () => [], cancel: async () => {}, reply: async () => {} },
+      assist: {
+        label: (input: unknown, request?: { signal?: AbortSignal }) => pending(state.labels, input, request),
+        suggestion: (input: unknown, request?: { signal?: AbortSignal }) => pending(state.suggestions, input, request),
+      },
       prompt: async (input: { id: string; turn?: SessionTurnOptions }) => {
         if (state.promptError) throw state.promptError
         state.admitted.push(input.id)
@@ -128,6 +156,8 @@ export function harness(
     auto: false,
     attached: true,
     turn: options.turn,
+    labels: options.labels,
+    suggestions: options.suggestions,
     envelope: { cwd: "/work", version: "test" },
     stdin,
     resolveFile: async () => ({ url: "data:text/plain;base64,", filename: "a", mime: "text/plain" }),

@@ -18,6 +18,15 @@ export interface File {
   readonly patch: string
 }
 
+/** An end of a file change that is reached through a link, as the server found it. */
+export interface Link {
+  /** The place the request names for that end, or where the link leads when it names none. */
+  readonly file: string
+  /** Where the link really leads. */
+  readonly place: string
+  readonly outside: boolean
+}
+
 export interface View {
   /** The files or folders the request acts on, absolute as the server resolved them. */
   readonly places: ReadonlyArray<string>
@@ -29,6 +38,8 @@ export interface View {
   readonly url?: string
   /** One entry per file the request changes, each with its own diff. */
   readonly files: ReadonlyArray<File>
+  /** One per linked end of the request's files, the ones that end outside the project first. */
+  readonly links: ReadonlyArray<Link>
   /** The diff of the whole request, when the server joined one. */
   readonly diff?: string
   /** The arguments of an MCP call, as the tool receives them. */
@@ -63,6 +74,7 @@ export function of(request: Request): View {
     string(metadata.method)?.toUpperCase() ??
     request.resources.find((item) => /^[A-Z][A-Z-]* \S/.test(item))?.split(" ")[0] ??
     (url === undefined ? undefined : "GET")
+  const files: unknown[] = Array.isArray(metadata.files) ? metadata.files : []
   return {
     places:
       places.length > 0
@@ -76,10 +88,67 @@ export function of(request: Request): View {
     pattern: folderActions.has(kind) ? request.resources[0] : undefined,
     method: kind === "webfetch" ? method : undefined,
     url: kind === "webfetch" ? url : undefined,
-    files: (Array.isArray(metadata.files) ? metadata.files : []).flatMap(file),
+    files: files.flatMap(file),
+    links: links(files),
     diff: string(metadata.diff),
     arguments: serialize(metadata.arguments),
   }
+}
+
+/**
+ * The warning of one link. `show` is the client's: it formats a path and writes it out with `plainPath` (class 9). Where
+ * the link ends is said before any path, so a line that is cut still says it.
+ */
+export function linkWarning(link: Link, show: (path: string) => string) {
+  if (link.file === link.place) return `${ending(link)}, at ${show(link.place)}`
+  return `${ending(link)}: ${show(link.file)} leads to ${show(link.place)}`
+}
+
+/** The one line that says a request has links, for where there is no room to name each. */
+export function linkSummary(all: ReadonlyArray<Link>) {
+  if (all.length < 2) return all[0] && ending(all[0])
+  const outside = all.filter((link) => link.outside).length
+  return `${all.length} linked paths, ${outside === 0 ? "all inside" : `${outside} outside`} the project`
+}
+
+/** The summary for a screen too narrow for it. It keeps the word that matters: outside, or inside. */
+export function linkShort(all: ReadonlyArray<Link>) {
+  if (all.length < 2) return all[0] && `Link ends ${side(all[0])}`
+  const outside = all.filter((link) => link.outside).length
+  return `${all.length} links, ${outside === 0 ? "all inside" : `${outside} outside`}`
+}
+
+function ending(link: Link) {
+  return `Link ends ${side(link)} the project`
+}
+
+function side(link: Link) {
+  return link.outside ? "outside" : "inside"
+}
+
+// Read from every entry, also one the diff list drops for having no patch. A bad link costs only itself (class 7).
+function links(files: ReadonlyArray<unknown>) {
+  const ends = files.flatMap((value) => {
+    if (typeof value !== "object" || value === null) return []
+    const item = value as Record<string, unknown>
+    return [...end(item.link, string(item.place) ?? string(item.file)), ...end(item.fromLink, string(item.from))]
+  })
+  const seen = new Set<string>()
+  // Outside comes first, so where two entries disagree about one end the one that is kept says outside (class 3).
+  return [...ends.filter((link) => link.outside), ...ends.filter((link) => !link.outside)].filter((link) => {
+    const key = JSON.stringify([link.file, link.place])
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function end(value: unknown, named: string | undefined): Link[] {
+  if (typeof value !== "object" || value === null) return []
+  const link = value as Record<string, unknown>
+  const place = string(link.place)
+  if (place === undefined || typeof link.outside !== "boolean") return []
+  return [{ file: named ?? place, place, outside: link.outside }]
 }
 
 function file(value: unknown): File[] {

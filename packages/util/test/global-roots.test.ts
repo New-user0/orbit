@@ -2,11 +2,12 @@ import { describe, expect, test } from "bun:test"
 import os from "os"
 import path from "path"
 import { pathToFileURL } from "url"
+import { runProgram } from "../../core/test/fixture/run-program.js"
 
 const module = pathToFileURL(path.join(import.meta.dir, "../src/global-roots.ts")).href
 
 describe("global roots", () => {
-  test("uses XDG overrides", () => {
+  test("uses XDG overrides", async () => {
     const root = path.join(os.tmpdir(), "orbit-xdg-overrides")
     const env = {
       XDG_DATA_HOME: path.join(root, "data"),
@@ -15,7 +16,7 @@ describe("global roots", () => {
       XDG_STATE_HOME: path.join(root, "state"),
     }
 
-    expect(run(env)).toEqual({
+    expect(await run(env)).toEqual({
       data: path.join(env.XDG_DATA_HOME, "orbit"),
       cache: path.join(env.XDG_CACHE_HOME, "orbit"),
       config: path.join(env.XDG_CONFIG_HOME, "orbit"),
@@ -24,11 +25,11 @@ describe("global roots", () => {
     })
   })
 
-  test("empty XDG overrides use home directory defaults", () => {
+  test("empty XDG overrides use home directory defaults", async () => {
     const home = path.join(os.tmpdir(), "orbit-xdg-home")
 
     expect(
-      run({
+      await run({
         XDG_DATA_HOME: "",
         XDG_CACHE_HOME: "",
         XDG_CONFIG_HOME: "",
@@ -45,17 +46,15 @@ describe("global roots", () => {
   })
 })
 
-function run(env: Record<string, string>) {
-  const result = Bun.spawnSync({
-    cmd: [
+async function run(env: Record<string, string>) {
+  const result = await runProgram(
+    [
       process.execPath,
       "-e",
       `const { roots } = await import(${JSON.stringify(module)}); console.log(JSON.stringify(roots("orbit")))`,
     ],
-    env: { ...process.env, ...env },
-    stdout: "pipe",
-    stderr: "pipe",
-  })
+    { env: { ...process.env, ...env } },
+  )
 
   expect(result.exitCode, result.stderr.toString()).toBe(0)
   return JSON.parse(result.stdout.toString())

@@ -10,6 +10,7 @@ import { AbsolutePath } from "@orbit/core/schema"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { FSUtil } from "@orbit/util/fs-util"
 import { git, repository } from "./fixture/git"
+import { runProgram } from "./fixture/run-program"
 import { type Found, folders, forgeries } from "./fixture/git-forged"
 import { searchable, shapes } from "./fixture/git-passed-over"
 import { recordedFileSystem, sharesTouched } from "./fixture/recorded-fs"
@@ -145,7 +146,9 @@ describe("GitLayout.locate, where git makes the layout", () => {
       const root = (yield* tmpdirScoped()).path
       const folder = path.join(root, "repo")
       yield* repository(folder)
-      const commit = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: folder }).stdout.toString().trim()
+      const commit = (yield* Effect.promise(() => runProgram(["git", "rev-parse", "HEAD"], { cwd: folder }))).stdout
+        .toString()
+        .trim()
 
       for (const text of [`${commit}\n`, "ref:refs/heads/main\n", "ref:\trefs/heads/main\n"]) {
         yield* Effect.promise(() => fs.writeFile(path.join(folder, ".git", "HEAD"), text))
@@ -198,7 +201,7 @@ describe("GitLayout.locate, where git makes the layout", () => {
         })
         yield* searchable(path.join(folder, ".git"))
 
-        expect(Bun.spawnSync(["git", "rev-parse", "--git-dir"], { cwd: folder, stderr: "ignore" }).exitCode).not.toBe(0)
+        expect((yield* Effect.promise(() => runProgram(["git", "rev-parse", "--git-dir"], { cwd: folder }))).exitCode).not.toBe(0)
         expect(yield* locate(folder)).toBeUndefined()
       }),
     )

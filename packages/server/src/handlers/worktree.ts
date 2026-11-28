@@ -1,11 +1,12 @@
 import { Git } from "@orbit/core/git"
 import { Worktree } from "@orbit/core/worktree"
 import { Project } from "@orbit/core/project"
-import { ProjectNotFoundError } from "@orbit/protocol/errors"
+import { ProjectNotFoundError, UntrustedFolderError } from "@orbit/protocol/errors"
 import { WorktreeError } from "@orbit/protocol/groups/worktree"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
+import { untrustedFolder } from "./trust-error"
 
 export const WorktreeHandler = HttpApiBuilder.group(Api, "server.worktree", (handlers) =>
   Effect.gen(function* () {
@@ -27,8 +28,11 @@ export const WorktreeHandler = HttpApiBuilder.group(Api, "server.worktree", (han
 function badRequest<A, R>(effect: Effect.Effect<A, Worktree.Error, R>) {
   return effect.pipe(
     Effect.catchTag("Project.NotFoundError", missingProject),
+    // A project whose folder is not trusted is refused with the folder to trust, not as an unavailable directory
+    // (FU-M4-232).
+    Effect.catchTag("Worktree.UntrustedError", (error) => Effect.fail(untrustedFolder(error))),
     Effect.mapError((error) =>
-      error instanceof ProjectNotFoundError
+      error instanceof ProjectNotFoundError || error instanceof UntrustedFolderError
         ? error
         : new WorktreeError({
             name: "WorktreeError",

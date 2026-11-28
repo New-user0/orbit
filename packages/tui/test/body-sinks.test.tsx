@@ -1,5 +1,5 @@
 import { expect, setDefaultTimeout, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { Effect, FileSystem } from "effect"
 import { Global } from "@orbit/util/global"
 import { createEventStream, createFetch, directory, json } from "./fixture/tui-client"
@@ -63,7 +63,7 @@ function assistant(content: unknown[], extra: Record<string, unknown> = {}) {
   }
 }
 
-type App = Awaited<ReturnType<typeof createTestRenderer>> & { events: ReturnType<typeof createEventStream> }
+type App = Awaited<ReturnType<typeof createTestRendererTimed>> & { events: ReturnType<typeof createEventStream> }
 
 // Click the first place `needle` is drawn.
 async function click(app: App, needle: string) {
@@ -270,9 +270,48 @@ const rows: {
     },
     show: [`out ${leftoverWritten}`, `mcp_y${written}`],
   },
+  // A completed Write is drawn from the diff it recorded (what ran), not from the model's `content`: a new file shows its
+  // whole text, a file that was there shows the diff.
   {
     sink: "write content",
-    messages: [user, tool("write", { input: { path: "a.ts", content: `const a = "${hostile}"` } })],
+    messages: [
+      user,
+      tool("write", {
+        input: { path: "a.ts", content: "const a = 1" },
+        metadata: {
+          files: [
+            {
+              file: "a.ts",
+              status: "added",
+              patch: `--- a.ts\n+++ a.ts\n@@ -0,0 +1,1 @@\n+const a = "${hostile}"\n`,
+              additions: 1,
+              deletions: 0,
+            },
+          ],
+        },
+      }),
+    ],
+    show: [written],
+  },
+  {
+    sink: "write diff",
+    messages: [
+      user,
+      tool("write", {
+        input: { path: "a.ts", content: "const a = 1" },
+        metadata: {
+          files: [
+            {
+              file: "a.ts",
+              status: "modified",
+              patch: `--- a.ts\n+++ a.ts\n@@ -1,1 +1,1 @@\n-const a = 0\n+const a = "${hostile}"\n`,
+              additions: 1,
+              deletions: 1,
+            },
+          ],
+        },
+      }),
+    ],
     show: [written],
   },
   {
@@ -364,7 +403,7 @@ const rows: {
 
 async function screen(messages: unknown[], inbox: unknown[] = [], act?: (app: App, text: string) => Promise<void>, text = hostile, until?: string) {
   await using state = await tmpdir()
-  const setup = await createTestRenderer({ width: 110, height: 40, useThread: false, kittyKeyboard: true })
+  const setup = await createTestRendererTimed({ width: 110, height: 40, useThread: false, kittyKeyboard: true })
   setup.renderer.start()
   const events = createEventStream()
   const calls = createFetch((url) => {

@@ -5,6 +5,7 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 // The options of the release build itself, so this test cannot drift from them.
 import { autoload } from "../../cli/script/autoload"
+import { removeTree } from "./fixture/remove-tree"
 
 // A binary made by `bun build --compile` has no node_modules of its own, and Bun looks a name that the binary does not
 // bundle up in the folder it was started in, whatever the autoload options are. That folder can be a repository that is
@@ -48,7 +49,7 @@ beforeAll(async () => {
   binary = built.outputs[0].path
 })
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 const markers = async () => (await fs.readdir(repository)).filter((name) => name.endsWith(".marker")).toSorted()
 

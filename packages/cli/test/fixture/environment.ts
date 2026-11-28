@@ -19,6 +19,17 @@ export function isolatedEnv(root: string, overrides: Record<string, string | und
     XDG_CONFIG_HOME: path.join(root, "xdg-config"),
     XDG_DATA_HOME: path.join(root, "data"),
     XDG_STATE_HOME: path.join(root, "state"),
+    ...sharedTranspilerCache(),
     ...overrides,
   }
+}
+
+/**
+ * Bun keeps its transpiler cache under XDG_CACHE_HOME, so a child with a cache folder of its own transpiled and wrote the
+ * whole source tree (about a thousand files) before it answered, which made each start on a Windows runner several times
+ * slower. The test runner gives its run one cache that every child shares; without the runner, the child keeps its own as
+ * before. A test that builds the environment of a child by hand adds this too.
+ */
+export function sharedTranspilerCache() {
+  return { BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.ORBIT_TEST_TRANSPILER_CACHE }
 }

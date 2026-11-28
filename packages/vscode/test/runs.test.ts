@@ -3,27 +3,21 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { decide, decisionText, decodeNodes, decodeRuns, nodeItem, nodes, orb, runItem, runs } from "../src/runs"
+import { standIn } from "./fixture/orb"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
-// `orb` from source behind a wrapper script. orb reads the working directory from PWD, which the wrapper's own `cd`
-// would change, so it hands on the directory it was called from. `orb flow run` runs a workflow's code only in a trusted
-// folder, so the wrapper trusts the test repository the way the CLI tests' environment does.
+// `orb` from source behind a stand-in, which hands on the folder it was called from. `orb flow run` runs a workflow's
+// code only in a trusted folder, so the stand-in trusts the test repository the way the CLI tests' environment does.
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-runs-"))
-const cli = path.join(import.meta.dir, "..", "..", "cli")
 const executable = path.join(root, "orb")
-await Bun.write(
-  executable,
-  [
-    "#!/bin/sh",
-    `export HOME="${root}" XDG_STATE_HOME="${root}/state" XDG_DATA_HOME="${root}/data"`,
-    `export XDG_CONFIG_HOME="${root}/config" XDG_CACHE_HOME="${root}/cache" ORBIT_DISABLE_FILEWATCHER=true`,
-    "export ORBIT_TRUST_PROJECT=1",
-    `cd "${cli}" && PWD="$OLDPWD" exec "${process.execPath}" run src/index.ts "$@"`,
-  ].join("\n"),
-)
-await fs.chmod(executable, 0o755)
+await standIn(executable, root, { ORBIT_TRUST_PROJECT: "1" })
 const repository = path.join(root, "repo")
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(async () => {
+  // The readers below ask the background service whether the folder is trusted, which starts one under this HOME.
+  await orb(executable, root, ["service", "stop"]).catch(() => undefined)
+  await removeTree(root)
+})
 
 test("lists runs and their nodes, and approves a waiting gate", async () => {
   await fs.mkdir(repository, { recursive: true })
@@ -45,6 +39,10 @@ test("lists runs and their nodes, and approves a waiting gate", async () => {
   ])
     await Bun.spawn(["git", ...args], { cwd: repository, stdout: "ignore", stderr: "ignore" }).exited
   await orb(executable, repository, ["flow", "run", "--standalone", "gate.ts"], 120_000).catch(() => undefined)
+  // The Runs view reads the run store through `orb flow`, whose readers open it only in a folder the background service
+  // trusts (trust-first), and that service trusts no folder on its own. A person who ran a workflow here has trusted the
+  // folder; `orb trust` does that here.
+  await orb(executable, repository, ["trust"])
 
   const listed = await runs(executable, repository)
 

@@ -2,6 +2,7 @@ import { afterAll } from "bun:test"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 // Test preload (bunfig.toml): gives this test process a state folder of its own before any test file loads.
 // `@orbit/util/global` reads XDG_STATE_HOME once, when it is first imported, so setting it inside one test file is too
@@ -11,4 +12,4 @@ import path from "node:path"
 // `afterAll` registered here, which runs at the end of the run (serial) or of each file (parallel).
 const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "orbit-cli-state-"))
 process.env.XDG_STATE_HOME = stateHome
-afterAll(() => fs.promises.rm(stateHome, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(stateHome))

@@ -19,12 +19,14 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Global } from "@orbit/util/global"
 import { which } from "@orbit/util/which"
 import { git, repository } from "./fixture/git"
+import { runProgram } from "./fixture/run-program"
 import { type Found, folders, forgeries } from "./fixture/git-forged"
 import { keys, live, planted } from "./fixture/git-keys"
 import { traced } from "./fixture/git-trace"
 import { tempGlobalLayer } from "./fixture/global"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it, testEffect } from "./lib/effect"
+import { removeTree } from "./fixture/remove-tree"
 
 // Class 1 (register FU-M1-022): `Project.resolve` ran `git rev-parse`, `git remote get-url`, `git rev-list` and
 // `git worktree list` in any folder that holds `.git`, when a client opened it and before anyone was asked, and git applies
@@ -382,15 +384,13 @@ const owner = await (async () => {
   const control = path.join(folder, "control")
   await fs.mkdir(control)
   await git(control, "init", "-q")
-  const plain = Bun.spawnSync(["git", "rev-parse", "--git-dir"], {
+  const plain = await runProgram(["git", "rev-parse", "--git-dir"], {
     cwd: control,
     env: { ...process.env, ...env },
-    stdout: "ignore",
-    stderr: "ignore",
   })
   // Git reads `GIT_TEST_ASSUME_DIFFERENT_OWNER` from 2.37.1 (and its backports), so a git from then on that accepts the
   // control was handed config that names the folder safe, and the row runs and fails rather than being skipped.
-  const version = (Bun.spawnSync(["git", "--version"]).stdout.toString().match(/(\d+)\.(\d+)\.(\d+)/) ?? [])
+  const version = ((await runProgram(["git", "--version"])).stdout.toString().match(/(\d+)\.(\d+)\.(\d+)/) ?? [])
     .slice(1)
     .map(Number)
   const current = version.length === 3 && version[0] * 1_000_000 + version[1] * 1_000 + version[2] >= 2_037_001
@@ -484,11 +484,9 @@ describe("Project.resolve keeps a folder's project across the grant when git or 
             await fs.mkdir(sub, { recursive: true })
           })
           if (row.refused) {
-            const plain = Bun.spawnSync(["git", "rev-parse", "--git-dir"], {
-              cwd: root,
-              env: { ...process.env, ...row.env },
-              stderr: "ignore",
-            })
+            const plain = yield* Effect.promise(() =>
+              runProgram(["git", "rev-parse", "--git-dir"], { cwd: root, env: { ...process.env, ...row.env } }),
+            )
             expect(plain.exitCode).not.toBe(0)
           }
           const project = yield* Project.Service
@@ -553,7 +551,7 @@ describe("Project.resolve keeps a folder's project across the grant when git or 
         expect(result.session).toBe(result.after.id)
         expect(result.trusted).toBe(true)
       } finally {
-        await fs.rm(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+        await removeTree(base)
       }
     },
     SLOW,

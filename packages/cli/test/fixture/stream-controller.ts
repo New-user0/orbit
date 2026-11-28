@@ -3,6 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./environment"
 import { scriptedModel, type ScriptedReply } from "./scripted-model"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 export type Line = Record<string, any>
 
@@ -95,7 +96,11 @@ export function controller(
       while (true) {
         const index = lines.findIndex((line, at) => at >= from && match(line))
         if (index !== -1) return { line: lines[index], next: index + 1 }
-        if (Date.now() > deadline) throw new Error(`No matching line in ${ms} ms. Lines: ${JSON.stringify(lines)}`)
+        if (Date.now() > deadline) {
+          // A child left running keeps the test's temp folder open, and the removal after the test fails with EBUSY.
+          child.kill("SIGKILL")
+          throw new Error(`No matching line in ${ms} ms. Lines: ${JSON.stringify(lines)}`)
+        }
         await Promise.race([new Promise<void>((resolve) => waiters.push(resolve)), Bun.sleep(250)])
       }
     },
@@ -103,7 +108,7 @@ export function controller(
       const code = await Promise.race([
         child.exited,
         Bun.sleep(ms).then(() => {
-          child.kill()
+          child.kill("SIGKILL")
           throw new Error(`The run did not exit. Lines: ${JSON.stringify(lines)}`)
         }),
       ])
@@ -125,7 +130,7 @@ export async function scripted<T>(
     return await run(own, home)
   } finally {
     await own.stop()
-    await fs.rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+    await removeTree(home)
   }
 }
 

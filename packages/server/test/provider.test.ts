@@ -1,14 +1,16 @@
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { Plugin } from "@orbit/plugin/effect"
-import { Context, Deferred, Effect, Fiber, Layer } from "effect"
+import { Context, Deferred, Effect, Fiber, Layer, Option } from "effect"
 import { HttpEffect, HttpRouter, HttpServer } from "effect/unstable/http"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { createRoutes } from "../src/routes"
 
+setDefaultTimeout(30_000)
+
 it.live(
-  "provider reads stay nonblocking while authentication discovery waits for plugins",
+  "provider reads wait for plugins, as authentication discovery does",
   () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped("orbit-provider-endpoints-")
@@ -62,22 +64,26 @@ it.live(
             }),
           )
         })
-      // Config providers activate after SDK plugins; reads must return the current snapshot without waiting.
-      const list = yield* request("GET", "/api/provider").pipe(Effect.timeout("2 seconds"))
+      // Config providers activate after SDK plugins, so the reads wait for that instead of answering without them: the
+      // model routes wait too, and a client that asks for providers and models together would otherwise get models
+      // whose provider it was told does not exist.
+      const list = yield* request("GET", "/api/provider").pipe(Effect.forkScoped)
       yield* Deferred.await(started)
+      const get = yield* request("GET", "/api/provider/custom").pipe(Effect.forkScoped)
       const integrations = yield* request("GET", "/api/integration").pipe(Effect.forkScoped)
-      expect(list.status).toBe(200)
-      expect(yield* Effect.promise(() => list.json())).toMatchObject({
-        location: { directory: tmp.path },
-        data: expect.not.arrayContaining([expect.objectContaining({ id: "custom" })]),
-      })
-      const get = yield* request("GET", "/api/provider/custom").pipe(Effect.timeout("2 seconds"))
-      expect(get.status).toBe(404)
-      expect(yield* Effect.promise(() => get.json())).toMatchObject({
-        _tag: "ProviderNotFoundError",
-        providerID: "custom",
-      })
+      // Still unanswered while the slow plugin holds activation.
+      expect(yield* Fiber.join(list).pipe(Effect.timeoutOption("500 millis"))).toEqual(Option.none())
+      expect(yield* Fiber.join(get).pipe(Effect.timeoutOption("1 millis"))).toEqual(Option.none())
       yield* Deferred.succeed(release, undefined)
+      const listed = yield* Fiber.join(list)
+      expect(listed.status).toBe(200)
+      expect(yield* Effect.promise(() => listed.json())).toMatchObject({
+        location: { directory: tmp.path },
+        data: expect.arrayContaining([expect.objectContaining({ id: "custom" })]),
+      })
+      const found = yield* Fiber.join(get)
+      expect(found.status).toBe(200)
+      expect(yield* Effect.promise(() => found.json())).toMatchObject({ data: { id: "custom" } })
       const discovered = yield* Fiber.join(integrations)
       expect(discovered.status).toBe(200)
       expect(yield* Effect.promise(() => discovered.json())).toMatchObject({

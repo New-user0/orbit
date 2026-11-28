@@ -16,6 +16,7 @@ import { Session } from "@orbit/core/session"
 import { Tool } from "@orbit/core/tool"
 import { Notebook } from "@orbit/core/tool/notebook"
 import { NotebookEditTool } from "@orbit/core/tool/plugin/notebook-edit"
+import { transformEnvironmentFiles } from "./fixture/environment"
 import { location } from "./fixture/location"
 import { withTempDir } from "./fixture/tmpdir"
 import { makeLocationNode } from "@orbit/util/effect/app-node"
@@ -67,6 +68,8 @@ const notebook = {
 
 // Runs inside the permission assert, so it stands for a write that lands while the person is deciding.
 let afterApproval = (): Effect.Effect<void> => Effect.void
+// Runs after each write of the notebook, so it stands for something that changes the file before the tool reads it back.
+let afterWrite = (_target: string): Effect.Effect<void> => Effect.void
 
 const withTool = <A, E, R>(
   directory: string,
@@ -86,6 +89,12 @@ const withTool = <A, E, R>(
             Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make(directory) }))),
           ),
           Permission.node.replace(permissionLayer({ assert: () => Effect.suspend(() => afterApproval()) })),
+          Environment.node.replace(
+            transformEnvironmentFiles((files) => ({
+              write: (target, content) =>
+                files.write(target, content).pipe(Effect.andThen(Effect.suspend(() => afterWrite(target)))),
+            })),
+          ),
         ],
       ),
     ),
@@ -266,6 +275,36 @@ describe("NotebookEditTool", () => {
             "real",
           ),
         ),
+      )
+    }),
+  )
+})
+
+// clients-ux-5: a code rewind learns which files the session's file tools changed from the calls it recorded. A
+// NotebookEdit that fails after it wrote (here the notebook becomes a folder before the tool reads it back) still changed
+// the file, so the failed call names it too.
+describe("NotebookEditTool records the file it changed, for code rewind", () => {
+  it.live("names the file in a call that failed after writing", () =>
+    withTempDir((tmp) => {
+      const target = path.join(tmp.path, "analysis.ipynb")
+      afterWrite = (written) =>
+        Effect.promise(async () => {
+          await fs.rm(written)
+          await fs.mkdir(written)
+        })
+      return Effect.promise(() => fs.writeFile(target, `${JSON.stringify(notebook, null, 1)}\n`)).pipe(
+        Effect.andThen(
+          withTool(tmp.path, (registry) =>
+            registry.snapshot().pipe(
+              Effect.flatMap((tools) =>
+                tools.execute(call({ notebook_path: "analysis.ipynb", mode: "replace", cellId: "calc", source: "x" })),
+              ),
+              Effect.flip,
+            ),
+          ),
+        ),
+        Effect.map((failure) => expect(failure.metadata?.files).toEqual([{ file: "analysis.ipynb" }])),
+        Effect.ensuring(Effect.sync(() => void (afterWrite = () => Effect.void))),
       )
     }),
   )

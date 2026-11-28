@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { onMount } from "solid-js"
 import { ToastProvider, useToast, type ToastContext } from "../../../src/ui/toast"
 
@@ -15,7 +15,7 @@ function captureToast(setToast: (toast: ToastContext) => void) {
 test("activation runs an action and keeps a queued toast paused", async () => {
   let toast: ToastContext | undefined
   const Capture = captureToast((value) => (toast = value))
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <ToastProvider>
       <Capture />
     </ToastProvider>
@@ -55,7 +55,7 @@ test("activation runs an action and keeps a queued toast paused", async () => {
 test("activation dismisses a toast without an action", async () => {
   let toast: ToastContext | undefined
   const Capture = captureToast((value) => (toast = value))
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <ToastProvider>
       <Capture />
     </ToastProvider>

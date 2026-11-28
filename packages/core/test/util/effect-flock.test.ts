@@ -324,8 +324,10 @@ describe("util.effect-flock", () => {
             ),
           )
 
-          expect(out.map((x) => x.code)).toEqual(Array.from({ length: n }, () => 0))
-          expect(out.map((x) => x.stderr.toString()).filter(Boolean)).toEqual([])
+          // Each worker's exit code with what it wrote, so a worker that fails shows its error (class 14).
+          expect(out.map((x) => ({ code: x.code, stderr: x.stderr.toString() }))).toEqual(
+            Array.from({ length: n }, () => ({ code: 0, stderr: "" })),
+          )
 
           const lines = (await fs.readFile(done, "utf8"))
             .split("\n")

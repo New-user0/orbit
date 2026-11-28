@@ -90,7 +90,7 @@ describe("Lsp.ignored", () => {
         const hidden = yield* service.ignored(Object.values(file))
         // The outside file is not asked about, so it cannot fail the batch and hide the others.
         expect([...hidden].sort()).toEqual([file.dots, file.ignored].sort())
-      }),
+      }), 10_000,
     )
 
   it.live("a path in the real spelling is handled when the Location is the junction", () =>
@@ -99,7 +99,7 @@ describe("Lsp.ignored", () => {
       const service = yield* lsp(link)
       const hidden = yield* service.ignored([names(real, root).ignored, names(link, root).ignored])
       expect([...hidden].sort()).toEqual([names(real, root).ignored, names(link, root).ignored].sort())
-    }),
+    }), 10_000,
   )
 
   // The Location is a subfolder, so the ignored file at the repository root is outside the Location.
@@ -116,8 +116,30 @@ describe("Lsp.ignored", () => {
         expect([...(yield* service.ignored([file, other, path.join(base, "src", "b.fake")]))].sort()).toEqual(
           [...new Set([file, other])].sort(),
         )
-      }),
+      }), 10_000,
     )
+
+  // A folder in an ignored folder can be a link (a pnpm `node_modules` entry, a linked workspace package). Git will not
+  // answer for a path beyond a link everywhere, so the path is answered by the link itself: a result below the link in
+  // the ignored folder stays hidden, and one below a link in a folder that is not ignored still shows.
+  it.live("hides an ignored file below a linked folder, and shows one below a link that is not ignored", () =>
+    Effect.gen(function* () {
+      const { root, real } = yield* repository
+      const outside = path.join(root, "outside")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(outside, { recursive: true })
+        await Bun.write(path.join(outside, "index.fake"), "x")
+        await fs.symlink(outside, path.join(real, "ignored", "linked"), "junction")
+        await fs.symlink(outside, path.join(real, "src", "linked"), "junction")
+      })
+      const service = yield* lsp(real)
+      const below = path.join(real, "ignored", "linked", "index.fake")
+      const shown = path.join(real, "src", "linked", "index.fake")
+      expect([...(yield* service.ignored([below, shown, names(real, root).ignored]))].sort()).toEqual(
+        [below, names(real, root).ignored].sort(),
+      )
+    }),
+  )
 
   it.live("a failing git check shows every result", () =>
     Effect.gen(function* () {

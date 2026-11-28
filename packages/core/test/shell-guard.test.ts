@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { beforeAll, describe, expect } from "bun:test"
 import fs from "fs/promises"
 import os from "os"
 import path from "path"
@@ -17,6 +17,8 @@ import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { FSUtil } from "@orbit/util/fs-util"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location } from "./fixture/location"
+import { runProgram } from "./fixture/run-program"
+import { pwshStarted } from "./fixture/pwsh-started"
 import { untrustedProjectNodes } from "./fixture/project-trust"
 import { recordedFileSystem, sharesTouched } from "./fixture/recorded-fs"
 import { tmpdirScoped } from "./fixture/tmpdir"
@@ -203,9 +205,12 @@ describe("ShellGuard.facts: places", () => {
     Effect.gen(function* () {
       const { project, outside } = yield* layout
       yield* Effect.promise(() => fs.writeFile(path.join(outside, "a long file name.txt"), "x"))
-      const short = (file: string) =>
-        Bun.spawnSync(["cmd.exe", "/d", "/c", `for %I in ("${file}") do @echo %~sI`]).stdout.toString().trim()
-      const shortName = short(path.join(outside, "a long file name.txt"))
+      const file = path.join(outside, "a long file name.txt")
+      const shortName = (yield* Effect.promise(() =>
+        runProgram(["cmd.exe", "/d", "/c", `for %I in ("${file}") do @echo %~sI`]),
+      )).stdout
+        .toString()
+        .trim()
       yield* Effect.gen(function* () {
         expect((yield* facts(`cat ${slash(project.toUpperCase())}/a/x`, { cwd: project })).external).toEqual([])
         expect((yield* facts(`cat //?/${slash(project)}/a/x`, { cwd: project })).external).toEqual([])
@@ -591,6 +596,9 @@ describe("ShellGuard.authorize", () => {
   // The rows that read PowerShell's own parse need a host; they skip where there is none.
   const host = Bun.which("pwsh") ?? Bun.which("powershell") ?? undefined
   const real = host ? it.live : it.live.skip
+  beforeAll(async () => {
+    if (host) await pwshStarted(host)
+  }, 150_000)
 
   // Runs the gate over a project with the given deny rule in force. A request that `denied` matches fails when it is
   // asserted, as a rule would; every other one is recorded as a question.
@@ -706,12 +714,18 @@ describe("ShellGuard.authorize", () => {
     }),
   )
   for (const command of ["Set-Location .", "cd ..", "Push-Location sub", "Pop-Location", "Set-Location -Path:sub", "sl sub"])
-    real(`a plain location change makes no shell request: ${command}`, () =>
-      Effect.gen(function* () {
-        const exit = yield* run(command, anyBash, { shell: host!, real: true })
-        expect(Exit.isFailure(exit)).toBe(false)
-        expect(asked.filter(anyBash)).toEqual([])
-      }),
+    // A measured limit: in 50 runs of Windows core 3/3 on a real runner (ci-measure 45943098053) these rows took at most
+    // 0.86 s (p95 0.82 s), and 'Push-Location sub' timed out at 5 s once in run 46004257173 while its PowerShell child
+    // stood still. By the rule for a row that timed out, twice its p95 plus the longest stall seen (7.2 s), rounded up.
+    real(
+      `a plain location change makes no shell request: ${command}`,
+      () =>
+        Effect.gen(function* () {
+          const exit = yield* run(command, anyBash, { shell: host!, real: true })
+          expect(Exit.isFailure(exit)).toBe(false)
+          expect(asked.filter(anyBash)).toEqual([])
+        }),
+      10_000,
     )
 
   // Declarations that print every variable (and so the environment's credentials) are commands a Bash rule must see; the
@@ -785,8 +799,8 @@ describe("ShellGuard.authorize", () => {
     )
 
   // The portable scanner is quadratic on some inputs (`echo a[ a[ ...`); the analysis' length limit keeps such an input
-  // from ever reaching it. The legacy scan and the fragment split still read it for its folders, and the scan alone can
-  // take seconds on this input, so the time bound is generous.
+  // from ever reaching it. Every parse refuses an input over that limit, so the legacy scan gives up on it too, and the
+  // fragment split still names the folder it changes to.
   it.live("asks about a very long unreadable input whole and quickly, in portable mode", () =>
     Effect.gen(function* () {
       const long = `cd ../outside; echo ${"a[ ".repeat(21_000)}`
@@ -868,6 +882,7 @@ describe("ShellGuard.authorize", () => {
         expect(command.length).toBeGreaterThan(10_000)
         expect(folders()).toEqual([expect.stringMatching(/\/outside\/\*$/)])
       }),
+      15_000,
     )
   for (const [name, spelling] of spellings)
     real(`asks for the same folder with PowerShell's parser, short: ${name}`, () =>
@@ -1128,6 +1143,7 @@ console.log("done")`,
       clearTimeout(timer)
       expect(out.trim()).toBe("done")
     }),
+    20_000,
   )
   it.live("does not fail the call for block-commented code that holds a refused spelling", () =>
     Effect.gen(function* () {

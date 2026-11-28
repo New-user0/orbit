@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Fiber, Option, Schema, Stream } from "effect"
-import { asc, eq, sql } from "drizzle-orm"
+import { DateTime, Effect, Fiber, Logger, Option, Schema, Stream } from "effect"
+import { and, asc, eq, sql } from "drizzle-orm"
 import { Database } from "@orbit/core/database/database"
 import { Agent } from "@orbit/core/agent"
 import { LayerNode } from "@orbit/util/effect/layer-node"
@@ -30,12 +30,20 @@ import {
   SessionTable,
 } from "@orbit/core/session/sql"
 import { testEffect } from "./lib/effect"
+import { seedStep } from "./lib/context-history"
 import { Snapshot } from "@orbit/core/snapshot"
 
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([Database.node, Bus.node, SessionProjector.node, SessionInbox.node, SessionStore.node]),
     [Bus.node.replace(Bus.configured({ persist: true }))],
+  ),
+)
+// A layer whose Session service forks through the projector of the same bus.
+const forking = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([Database.node, Bus.node, SessionProjector.node, SessionInbox.node, SessionStore.node, Session.node]),
+    [Bus.node.replace(Bus.configured({ persist: true })), SessionExecution.node.replace(SessionExecution.noopLayer)],
   ),
 )
 const sessionsLayer = AppNodeBuilder.build(Session.node, [SessionExecution.node.replace(SessionExecution.noopLayer)])
@@ -394,7 +402,7 @@ describe("SessionProjector", () => {
       })
       yield* bus.publish(SessionEvent.Compaction.Delta, {
         sessionID,
-        text: "partial",
+        characters: 7,
       })
       expect(
         yield* db
@@ -758,6 +766,226 @@ describe("SessionProjector", () => {
           time: { created },
         }),
       ])
+    }),
+  )
+})
+
+// tool-runtime-9: `session.tool.overridden` sets the override beside a completed result and keeps the result's own
+// content. An event that names a failed result or no result changes nothing (class 7).
+describe("SessionProjector tool overrides", () => {
+  it.effect("sets an override only on the completed result the event names", () =>
+    Effect.gen(function* () {
+      const db = yield* seedSession()
+      const messageID = SessionMessage.ID.make("msg_overridden")
+      const tool = (id: string, state: Record<string, unknown>) => ({
+        type: "tool",
+        id,
+        name: "emit",
+        state: { input: {}, ...state },
+        time: { created: 0, completed: 0 },
+      })
+      const original = Schema.decodeUnknownSync(SessionMessage.Assistant)({
+        id: messageID,
+        type: "assistant",
+        agent: build,
+        model,
+        content: [
+          tool("call_done", { status: "completed", content: [{ type: "text", text: "done" }] }),
+          tool("call_failed", { status: "error", error: { type: "tool.execution", message: "failed" } }),
+        ],
+        time: { created: 0, completed: 0 },
+      })
+      const { id: _, type, ...data } = encodeMessage(original)
+      yield* db
+        .insert(SessionMessageTable)
+        .values({ id: messageID, session_id: sessionID, type, seq: 0, time_created: 0, data })
+        .run()
+        .pipe(Effect.orDie)
+      const bus = yield* Bus.Service
+      const override = (id: string) => ({
+        session: sessionID,
+        name: `msg_overridden-${id}-1a2b3c4d.txt`,
+        format: 1 as const,
+      })
+      // Each event that names no completed result logs one line naming its call (class 7).
+      const refused: unknown[] = []
+      const logger = Logger.make((entry) => {
+        const [message, fields] = Array.isArray(entry.message) ? entry.message : [entry.message]
+        if (message === "a tool override names no completed result, so nothing changes")
+          refused.push((fields as { readonly id?: unknown } | undefined)?.id)
+      })
+      for (const id of ["call_done", "call_failed", "call_missing"])
+        yield* bus
+          .publish(SessionEvent.Tool.Overridden, {
+            sessionID,
+            assistantMessageID: messageID,
+            id,
+            override: override(id),
+          })
+          .pipe(Effect.provide(Logger.layer([logger])))
+      expect(refused).toEqual(["call_failed", "call_missing"])
+
+      const row = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.id, messageID))
+        .get()
+        .pipe(Effect.orDie)
+      if (row === undefined) throw new Error("Expected the assistant row")
+      const projected = Schema.decodeUnknownSync(SessionMessage.Info)({ ...row.data, id: row.id, type: row.type })
+      if (projected.type !== "assistant") throw new Error("Expected the assistant message")
+      expect<unknown>(projected.content).toEqual([
+        { ...original.content[0], override: override("call_done") },
+        original.content[1],
+      ])
+    }),
+  )
+// context-memory-3: the clearing marker is one row at its place in the history, and a fork names its copies.
+  forking.effect("projects session.context.cleared as one context-cleared row and remaps its IDs on a fork", () =>
+    Effect.gen(function* () {
+      const db = yield* seedSession()
+      const bus = yield* Bus.Service
+      const sessions = yield* Session.Service
+      const first = yield* seedStep(bus, sessionID, { id: "msg_cleared_first", calls: [{ id: "call_1", name: "Read" }] })
+      const second = yield* seedStep(bus, sessionID, { id: "msg_cleared_second", calls: [{ id: "call_2", name: "Read" }] })
+
+      yield* bus.publish(SessionEvent.ContextCleared, {
+        sessionID,
+        trigger: "idle",
+        tools: [
+          { assistantMessageID: first, id: "call_1" },
+          { assistantMessageID: second, id: "call_2" },
+        ],
+      })
+      // A marker from an import or an edited store can name messages the fork does not hold: one that names none it
+      // copied is not copied, and one that names some keeps only those.
+      const elsewhere = SessionMessage.ID.make("msg_elsewhere")
+      yield* bus.publish(SessionEvent.ContextCleared, {
+        sessionID,
+        trigger: "pressure",
+        tools: [{ assistantMessageID: elsewhere, id: "call_x" }],
+      })
+      yield* bus.publish(SessionEvent.ContextCleared, {
+        sessionID,
+        trigger: "pressure",
+        tools: [
+          { assistantMessageID: elsewhere, id: "call_y" },
+          { assistantMessageID: second, id: "call_2" },
+        ],
+      })
+      const rows = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "context-cleared")))
+        .orderBy(asc(SessionMessageTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows).toHaveLength(3)
+      const marker = Schema.decodeUnknownSync(SessionMessage.Info)({ ...rows[0]!.data, id: rows[0]!.id, type: rows[0]!.type })
+      expect(marker).toMatchObject({
+        type: "context-cleared",
+        trigger: "idle",
+        tools: [
+          { assistantMessageID: first, id: "call_1" },
+          { assistantMessageID: second, id: "call_2" },
+        ],
+      })
+
+      // A fork past the marker copies it under the IDs its calls' messages were copied to.
+      const past = yield* sessions.fork({ sessionID })
+      const copied = yield* sessions.context(past.id)
+      const assistants = copied.filter((message) => message.type === "assistant").map((message) => message.id)
+      expect(assistants).toHaveLength(2)
+      expect(assistants).not.toContain(first)
+      const copiedMarkers = copied.filter((message) => message.type === "context-cleared")
+      expect(copiedMarkers).toHaveLength(2)
+      expect(copiedMarkers[0]).toMatchObject({
+        trigger: "idle",
+        tools: [
+          { assistantMessageID: assistants[0], id: "call_1" },
+          { assistantMessageID: assistants[1], id: "call_2" },
+        ],
+      })
+      expect(copiedMarkers[0]!.id).not.toBe(marker.id)
+      expect(copiedMarkers[1]).toMatchObject({ trigger: "pressure", tools: [{ assistantMessageID: assistants[1], id: "call_2" }] })
+
+      // A fork that stops before the marker has no row.
+      const before = yield* sessions.fork({ sessionID, before: marker.id })
+      expect((yield* sessions.context(before.id)).map((message) => message.type)).toEqual(["assistant", "assistant"])
+
+    }),
+  )
+
+  // context-memory-4: a checkpoint records the first message it keeps, and a fork names the copy of that message.
+  forking.effect("projects a checkpoint's retain and remaps it on a fork", () =>
+    Effect.gen(function* () {
+      const db = yield* seedSession()
+      const bus = yield* Bus.Service
+      const sessions = yield* Session.Service
+      yield* seedStep(bus, sessionID, { id: "msg_retain_first", calls: [] })
+      const second = yield* seedStep(bus, sessionID, { id: "msg_retain_second", calls: [] })
+      yield* bus.publish(SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "" })
+      yield* bus.publish(SessionEvent.Compaction.Ended, {
+        sessionID,
+        reason: "manual",
+        text: "summary",
+        recent: "",
+        retain: second,
+      })
+      yield* seedStep(bus, sessionID, { id: "msg_retain_third", calls: [] })
+
+      const compactionsOf = (id: Session.ID) =>
+        db
+          .select()
+          .from(SessionMessageTable)
+          .where(and(eq(SessionMessageTable.session_id, id), eq(SessionMessageTable.type, "compaction")))
+          .all()
+          .pipe(
+            Effect.orDie,
+            Effect.map((rows) =>
+              rows.map((row) =>
+                Schema.decodeUnknownSync(SessionMessage.Info)({ ...row.data, id: row.id, type: row.type }),
+              ),
+            ),
+          )
+      expect(yield* compactionsOf(sessionID)).toMatchObject([{ status: "completed", retain: second }])
+
+      // A fork past the checkpoint copies it, and its `retain` follows the kept message to its copy.
+      const past = yield* sessions.fork({ sessionID })
+      const copies = (yield* sessions.messages({ sessionID: past.id, order: "asc" })).filter(
+        (message) => message.type === "assistant",
+      )
+      expect(copies).toHaveLength(3)
+      expect(copies[1]!.id).not.toBe(second)
+      expect(yield* compactionsOf(past.id)).toMatchObject([{ retain: copies[1]!.id }])
+
+      // A fork that stops inside the kept span has no copy of the checkpoint.
+      const inside = yield* sessions.fork({ sessionID, before: second })
+      expect(yield* compactionsOf(inside.id)).toEqual([])
+    }),
+  )
+
+  // The completed row is appended when no running row exists (a compaction that began before the log was kept), and
+  // that path copies `retain` as well.
+  forking.effect("appends a completed checkpoint with its retain when no compaction was running", () =>
+    Effect.gen(function* () {
+      const db = yield* seedSession()
+      const bus = yield* Bus.Service
+      const kept = yield* seedStep(bus, sessionID, { id: "msg_append_kept", calls: [] })
+      yield* bus.publish(SessionEvent.Compaction.Ended, {
+        sessionID,
+        reason: "manual",
+        text: "summary",
+        recent: "",
+        retain: kept,
+      })
+      const rows = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "compaction")))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows.map((row) => row.data)).toMatchObject([{ status: "completed", retain: kept }])
     }),
   )
 })

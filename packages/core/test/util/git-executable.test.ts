@@ -8,6 +8,7 @@ import { resolveGitExecutable } from "@orbit/core/util/git-executable"
 import { which } from "@orbit/util/which"
 import { plant } from "../fixture/decoy"
 import { tmpdir } from "../fixture/tmpdir"
+import { removeTree } from "../fixture/remove-tree"
 
 describe("Git executable", () => {
   test("uses an absolute executable on Windows", () => {
@@ -82,7 +83,7 @@ beforeAll(async () => {
   if (!built.success) throw new AggregateError(built.logs, "Could not bundle the git host for Node")
 }, 60_000)
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 let count = 0
 const folder = async () => {

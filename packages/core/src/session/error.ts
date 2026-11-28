@@ -52,6 +52,16 @@ export class AgentNotFoundError extends Schema.TaggedError<AgentNotFoundError>()
   }
 }
 
+/** An analysis that is for a conversation's main session was asked of a subagent's session, which has a parent. */
+export class MainSessionOnlyError extends Schema.TaggedError<MainSessionOnlyError>()("Session.MainSessionOnlyError", {
+  sessionID: SessionSchema.ID,
+  parentID: SessionSchema.ID,
+}) {
+  override get message() {
+    return `Session ${this.sessionID} belongs to ${this.parentID}; ask for the main session instead`
+  }
+}
+
 export class StepFailedError extends Schema.TaggedError<StepFailedError>()("Session.StepFailedError", {
   error: SessionError.Error,
 }) {
@@ -94,6 +104,23 @@ export class CompactionConflictError extends Schema.TaggedError<CompactionConfli
 export class BusyError extends Schema.TaggedError<BusyError>()("Session.BusyError", {
   sessionID: SessionSchema.ID,
 }) {}
+
+/**
+ * Why a code-only rewind cannot put a prompt's files back: the folder takes no snapshots (`disabled`), the message has
+ * no checkpoint (`no-checkpoint`), or the restore failed (`failed`). The message is a fixed sentence that names no file
+ * and carries no git output (class 9); the cause goes to the log.
+ */
+export class RewindError extends Schema.TaggedError<RewindError>()("Session.RewindError", {
+  sessionID: SessionSchema.ID,
+  messageID: SessionMessage.ID,
+  reason: Schema.Literals(["disabled", "no-checkpoint", "failed"]),
+}) {
+  override get message() {
+    if (this.reason === "disabled") return "Snapshots are not available in this folder, so no files can be rewound."
+    if (this.reason === "no-checkpoint") return "This message has no checkpoint to rewind the files to."
+    return "The files could not be restored. The server log has the details."
+  }
+}
 
 export class InboxConflictError extends Schema.TaggedError<InboxConflictError>()("Session.InboxConflictError", {
   sessionID: SessionSchema.ID,

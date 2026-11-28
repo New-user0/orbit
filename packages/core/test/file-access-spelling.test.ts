@@ -4,7 +4,7 @@
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { spawnSync } from "child_process"
+import { runProgram } from "./fixture/run-program"
 import { Effect, Layer } from "effect"
 import { FileAccess } from "@orbit/core/file-access"
 import { Location } from "@orbit/core/location"
@@ -17,6 +17,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { location } from "./fixture/location"
 import { untrustedProjectNodes } from "./fixture/project-trust"
 import { recordedFileSystem, sharesTouched } from "./fixture/recorded-fs"
+import { junctionSpellings, junctionTemporary } from "./fixture/legacy-junction"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -34,9 +35,10 @@ const provideProject = (directory: string, trusted: boolean, recorded?: ReturnTy
   )
 
 // The project with a folder `secret` and a link `docs` to a folder outside, and the other spellings of its folder that
-// this machine has: a link to it from outside (every platform) and the system junctions of Windows.
-const layout = Effect.gen(function* () {
-  const tmp = (yield* tmpdirScoped()).path
+// this machine has: a link to it from outside (every platform) and the system junctions of Windows. The rows that go
+// through those spellings make the project where the junctions lead to it (`spelled`; fixture/legacy-junction.ts).
+const layout = (spelled = false) => Effect.gen(function* () {
+  const tmp = (yield* tmpdirScoped(undefined, spelled ? junctionTemporary() : undefined)).path
   const project = path.join(tmp, "workspace-project")
   const outside = path.join(tmp, "outside")
   yield* Effect.promise(async () => {
@@ -47,18 +49,8 @@ const layout = Effect.gen(function* () {
     await fs.symlink(outside, path.join(project, "docs"), "junction")
     await fs.symlink(project, path.join(tmp, "alias"), "junction")
   })
-  const windows = [
-    {
-      name: "Documents and Settings",
-      spelled: project.replace(/^[A-Za-z]:\\Users\\/i, "C:\\Documents and Settings\\"),
-    },
-    {
-      name: "Local Settings",
-      spelled: project.replace(/^(.*?\\Users\\[^\\]+)\\AppData\\Local\\/i, "$1\\Local Settings\\"),
-    },
-  ].filter((item) => process.platform === "win32" && item.spelled !== project)
   // The 8.3 short names of the project's folder, and of it and the folders above it. Only where the volume makes them.
-  const shortened = process.platform === "win32" ? shortPath(project) : project
+  const shortened = process.platform === "win32" ? yield* Effect.promise(() => shortPath(project)) : project
   const short =
     shortened === project
       ? []
@@ -66,7 +58,11 @@ const layout = Effect.gen(function* () {
           { name: "the short name of the project's folder", spelled: path.join(tmp, path.basename(shortened)) },
           { name: "the short name of the project's folder and the ones above it", spelled: shortened },
         ]
-  const spellings = [{ name: "a link to the project", spelled: path.join(tmp, "alias") }, ...windows, ...short]
+  const spellings = [
+    { name: "a link to the project", spelled: path.join(tmp, "alias") },
+    ...junctionSpellings(project),
+    ...short,
+  ]
   const existing = yield* Effect.promise(() =>
     Promise.all(
       spellings.map((item) =>
@@ -80,18 +76,23 @@ const layout = Effect.gen(function* () {
   return { project, outside, spellings: existing.flat() }
 })
 
-function shortPath(file: string) {
-  const result = spawnSync("cmd", ["/d", "/c", `for %I in ("${file}") do @echo %~sI`], {
-    encoding: "utf8",
+async function shortPath(file: string) {
+  const result = await runProgram(["cmd", "/d", "/c", `for %I in ("${file}") do @echo %~sI`], {
     windowsVerbatimArguments: true,
   })
-  return result.stdout.trim() || file
+  return result.stdout.toString().trim() || file
 }
+
+// The rows that build their project with `layout(true)` keep it where the legacy junctions lead, which on Windows CI is
+// the runner's C: disk (fixture/legacy-junction.ts). That disk stops answering for up to 7 s at a time (check.yml), so
+// each such row has a measured limit: the slowest, 'decides every spelling ...', took at most 2.70 s in 51 loaded runs
+// (4 CPUs, 2 workers, coverage on), and twice the sum of that and a 7 s stall, rounded up to 5 s, is 20 s.
+const JUNCTION_ROW_LIMIT = 20_000
 
 describe("FileAccess for another spelling of the project's folder", () => {
   it.live("decides every spelling as the project's own name, and follows a repository link below it", () =>
     Effect.gen(function* () {
-      const { project, outside, spellings } = yield* layout
+      const { project, outside, spellings } = yield* layout(true)
       yield* Effect.gen(function* () {
         const access = yield* FileAccess.Service
         for (const spelling of spellings) {
@@ -118,6 +119,7 @@ describe("FileAccess for another spelling of the project's folder", () => {
         }
       }).pipe(provideProject(project, false))
     }),
+    JUNCTION_ROW_LIMIT,
   )
 
   // Fails visibly on a Windows volume that makes no 8.3 names, rather than passing without a check of them.
@@ -125,14 +127,30 @@ describe("FileAccess for another spelling of the project's folder", () => {
     "has 8.3 short-name spellings of the project to decide",
     () =>
       Effect.gen(function* () {
-        const { spellings } = yield* layout
+        const { spellings } = yield* layout(true)
         expect(spellings.filter((item) => item.name.includes("short name")).length).toBe(2)
       }),
+    JUNCTION_ROW_LIMIT,
+  )
+
+  // Fails visibly on Windows when the project cannot be made below a profile's AppData\Local, where the legacy junctions
+  // lead, rather than passing without a check of those spellings (fixture/legacy-junction.ts).
+  ;(process.platform === "win32" ? it.live : it.live.skip)(
+    "has the Documents and Settings and Local Settings spellings of the project to decide",
+    () =>
+      Effect.gen(function* () {
+        const { spellings } = yield* layout(true)
+        expect(spellings.map((item) => item.name).filter((name) => name.endsWith(" Settings"))).toEqual([
+          "Documents and Settings",
+          "Local Settings",
+        ])
+      }),
+    JUNCTION_ROW_LIMIT,
   )
 
   it.live("follows the link of a trusted project as for the plain spelling: the question is for the folder it leads to", () =>
     Effect.gen(function* () {
-      const { project, outside, spellings } = yield* layout
+      const { project, outside, spellings } = yield* layout(true)
       yield* Effect.gen(function* () {
         const access = yield* FileAccess.Service
         for (const spelling of spellings) {
@@ -147,11 +165,12 @@ describe("FileAccess for another spelling of the project's folder", () => {
         }
       }).pipe(provideProject(project, true))
     }),
+    JUNCTION_ROW_LIMIT,
   )
 
   it.live("meets a person's deny and ask rules under the project's own name for every spelling", () =>
     Effect.gen(function* () {
-      const { project, spellings } = yield* layout
+      const { project, spellings } = yield* layout(true)
       const rules = [
         { action: "Read", resource: "*", effect: "allow" },
         { action: "Read", resource: "secret/*", effect: "deny" },
@@ -173,6 +192,7 @@ describe("FileAccess for another spelling of the project's folder", () => {
           }
       }).pipe(provideProject(project, false))
     }),
+    JUNCTION_ROW_LIMIT,
   )
 
   // A link of the repository whose target is a share, in any spelling, is refused as a share given directly is, before
@@ -208,7 +228,7 @@ describe("FileAccess for another spelling of the project's folder", () => {
     "refuses a repository link to a share, in every spelling, with a typed failure and touches no share",
     () =>
       Effect.gen(function* () {
-        const { project, outside } = yield* layout
+        const { project, outside } = yield* layout()
         const links = shareLinks(project, outside)
         // The spelling a link reads back as: the system may write a target as a drive path, which is then no share.
         const reads = yield* Effect.promise(async () =>
@@ -273,7 +293,7 @@ describe("FileAccess for another spelling of the project's folder", () => {
     "refuses a repository link to a share that names the person's denied folder, where a junction to it is denied",
     () =>
       Effect.gen(function* () {
-        const { project, outside } = yield* layout
+        const { project, outside } = yield* layout()
         const rules = [
           { action: "external_directory", resource: "*", effect: "ask" },
           { action: "external_directory", resource: `${outside.replaceAll("\\", "/")}/*`, effect: "deny" },
@@ -330,7 +350,7 @@ describe("FileAccess for another spelling of the project's folder", () => {
     "refuses a share or device spelling with a typed failure, whether or not the project is trusted, and touches no share",
     () =>
       Effect.gen(function* () {
-        const { project } = yield* layout
+        const { project } = yield* layout()
         const drive = project.slice(0, 1)
         const rest = project.slice(3)
         const host = `orbit-probe-${Date.now()}-${Math.random().toString(36).slice(2)}.invalid`
@@ -368,7 +388,7 @@ describe("FileAccess for another spelling of the project's folder", () => {
     "finds a shell word through every spelling that a repository link leads out of, as for the plain spelling",
     () =>
       Effect.gen(function* () {
-        const { project, outside, spellings } = yield* layout
+        const { project, outside, spellings } = yield* layout(true)
         yield* Effect.gen(function* () {
           const access = yield* FileAccess.Service
           const plain = yield* access.escaped([path.join(project, "docs", "notes.md")])
@@ -397,6 +417,7 @@ describe("FileAccess for another spelling of the project's folder", () => {
             expect(yield* access.escaped([path.join(spelling.spelled, "docs", "notes.md")])).toEqual([])
         }).pipe(provideProject(project, true))
       }),
+    JUNCTION_ROW_LIMIT,
   )
 
   // A drive made from the project's folder is the project: the root is the first part that is asked about.
@@ -404,7 +425,7 @@ describe("FileAccess for another spelling of the project's folder", () => {
     "decides a drive made from the project's folder as the project",
     () =>
       Effect.gen(function* () {
-        const { project, outside } = yield* layout
+        const { project, outside } = yield* layout()
         const free = yield* Effect.promise(async () => {
           for (const letter of "QRSTUVWXYZ") {
             if (
@@ -419,8 +440,8 @@ describe("FileAccess for another spelling of the project's folder", () => {
         })
         if (free === undefined) return yield* Effect.die("no free drive letter for subst")
         const drive = `${free}:`
-        expect(Bun.spawnSync(["subst", drive, project]).exitCode).toBe(0)
-        yield* Effect.addFinalizer(() => Effect.sync(() => void Bun.spawnSync(["subst", drive, "/D"])))
+        expect((yield* Effect.promise(() => runProgram(["subst", drive, project]))).exitCode).toBe(0)
+        yield* Effect.addFinalizer(() => Effect.promise(() => runProgram(["subst", drive, "/D"])))
         yield* Effect.gen(function* () {
           const access = yield* FileAccess.Service
           const key = yield* access.resolve({ path: `${drive}\\secret\\key.txt` })

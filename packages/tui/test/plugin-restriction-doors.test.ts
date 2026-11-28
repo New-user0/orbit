@@ -5,6 +5,7 @@ import { createAppFixture, promptReady } from "./fixture/app"
 import { tmpdir } from "./fixture/fixture"
 import { json } from "./fixture/tui-client"
 import type { Config } from "../src/config"
+import { runProgram } from "../../core/test/fixture/run-program"
 
 // The other doors a plugin reaches the TUI by: a package named in cli.json, one the server lists for the TUI, and a
 // folder reached through a link. Each is checked in this process, before the package is prepared or the folder read.
@@ -162,11 +163,13 @@ test("a cli.json entry spelled with its 8.3 short name is blocked by the long pa
   if (process.platform !== "win32") return
   const { fixture, marks, real } = await outside()
   await using _ = fixture
-  const short = Bun.spawnSync(
-    ["powershell", "-NoProfile", "-Command", "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:P).ShortPath"],
-    { env: { ...process.env, P: real } },
-  )
-    .stdout.toString()
+  const short = (
+    await runProgram(
+      ["powershell", "-NoProfile", "-Command", "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:P).ShortPath"],
+      { env: { ...process.env, P: real } },
+    )
+  ).stdout
+    .toString()
     .trim()
   // The volume may not create short names; the row then has nothing to spell.
   if (!short || short.toLowerCase() === real.toLowerCase()) return

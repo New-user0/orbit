@@ -3,10 +3,11 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-doctor-managed-"))
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 async function doctor(managed: string) {
   const child = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "../src/index.ts"), "doctor"], {

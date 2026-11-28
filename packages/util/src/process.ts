@@ -20,6 +20,10 @@ export class AppProcessError extends Schema.TaggedError<AppProcessError>()("AppP
 }
 
 export interface RunOptions {
+  /**
+   * Collect stdout and stderr into `output`, in the order their reads arrive. The two streams come through two pipes, so
+   * each keeps its own order, but a line of one can land before a line of the other that was written earlier.
+   */
   readonly combineOutput?: boolean
   readonly maxOutputBytes?: number
   readonly maxErrorBytes?: number

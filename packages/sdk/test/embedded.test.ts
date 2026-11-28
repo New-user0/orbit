@@ -59,19 +59,16 @@ for (const selection of ["explicit", "default"] as const) {
             },
             models: { fetch: false },
             fs: { filewatcher: false },
+            trust: { implicit: true },
           },
           {
             overrides: [llmClient.replace(Layer.succeed(LLMClient.Service, llm))],
           },
         )
 
-        yield* orbit.model.list({ location: location(fixture) }).pipe(
-          Effect.filterOrFail((page) =>
-            page.data.some((model) => model.providerID === "custom" && model.id === "fictional-chat"),
-          ),
-          Effect.retry(Schedule.spaced("10 millis")),
-          Effect.timeout("2 seconds"),
-        )
+        // model.list answers once the Location's plugins are active, so its first answer already holds the model.
+        const listed = yield* orbit.model.list({ location: location(fixture) })
+        expect(listed.data.some((model) => model.providerID === "custom" && model.id === "fictional-chat")).toBe(true)
 
         const result = yield* orbit.generate.text({
           prompt: "Say ready",
@@ -91,6 +88,9 @@ for (const selection of ["explicit", "default"] as const) {
         expect(requests[0]?.model).toMatchObject({ provider: "custom", id: "fictional-chat" })
       }),
     ),
+    // Measured limit (50 whole-file runs, 2 test processes at once on 4 cores, isolated home, Windows): explicit selection p50 5.3 s, p95 8.1 s, max 8.5 s;
+    // twice the maximum, rounded up to 5 s. The work is a cold Location boot plus a model call.
+    20_000,
   )
 }
 
@@ -99,7 +99,7 @@ it.live(
   () =>
     withEmbedded("orbit-embedded-", (fixture) =>
       Effect.gen(function* () {
-        const orbit = yield* fixture.sdk.Orbit.create({ events: { persist: true } })
+        const orbit = yield* fixture.sdk.Orbit.create({ events: { persist: true } , trust: { implicit: true } })
         const id = sessionID(fixture)
         const model = fixture.sdk.Model.Ref.make({
           id: fixture.sdk.Model.ID.make("embedded"),
@@ -199,12 +199,14 @@ it.live(
         expect(missingMessage._tag).toBe("MessageNotFoundError")
       }),
     ),
-  10_000,
+  // Measured limit (50 whole-file runs, 2 test processes at once on 4 cores, isolated home, Windows):
+  // p50 2.6 s, p95 5.3 s, max 6.0 s; twice the maximum, rounded up to 5 s.
+  15_000,
 )
 
 for (const implicit of [false, true]) {
   it.live(
-    `embedded host ${implicit ? "applies" : "withholds"} a project's executable config with implicit trust ${implicit ? "on" : "off"}`,
+    `embedded host ${implicit ? "applies" : "reads none of"} a project's config with implicit trust ${implicit ? "on" : "off"}`,
     () =>
       withEmbedded("orbit-embedded-trust-", (fixture) =>
         Effect.gen(function* () {
@@ -231,21 +233,32 @@ for (const implicit of [false, true]) {
 
           const entries = yield* orbit.config.get({ location: { directory: project } })
           const document = entries.find((entry) => entry.type === "document" && entry.path === file)
+          // The host decides: a host that sets nothing trusts nothing on its own, and reads nothing of the folder
+          // (trust-first).
+          if (!implicit) return expect(document).toBeUndefined()
           if (document?.type !== "document") throw new Error("Expected the project's config document")
           expect(document.info.username).toBeDefined()
-          // The host decides: a host that sets nothing trusts nothing on its own.
-          expect(document.trusted).toBe(implicit ? undefined : false)
-          expect(document.withheld).toEqual(implicit ? undefined : ["hooks"])
-          expect(document.info.hooks === undefined).toBe(!implicit)
+          expect(document.trusted).toBeUndefined()
+          expect(document.info.hooks).toBeDefined()
         }),
       ),
+    10_000,
   )
 }
 
+// Rows that boot a Location at the default 5 s were measured (50 runs, 2 test processes at once on 4 cores): web search max 4.0 s,
+// trust on max 3.7 s, workspace providers max 4.2 s; twice the maximum, rounded up to 5 s, is 10 s.
 it.live("embedded client exposes plugin-backed web search", () =>
   withEmbedded("orbit-embedded-websearch-", (fixture) =>
     Effect.gen(function* () {
-      const orbit = yield* fixture.sdk.Orbit.create()
+      // The host's config lives in the fixture's folder, so the row reads neither the machine's global config nor its
+      // model catalog.
+      const orbit = yield* fixture.sdk.Orbit.create({
+        config: { directory: fixture.directory, project: false, content: "{}" },
+        models: { fetch: false },
+        fs: { filewatcher: false },
+        trust: { implicit: true },
+      })
       const providerID = fixture.sdk.WebSearch.ID.make("embedded-websearch")
       yield* orbit.plugin({
         id: `embedded-websearch-${crypto.randomUUID()}`,
@@ -272,14 +285,369 @@ it.live("embedded client exposes plugin-backed web search", () =>
       })
     }),
   ),
+  10_000,
 )
+
+type Embedded = Effect.Success<ReturnType<Sdk["Orbit"]["create"]>>
+
+// A Location boots on the first request that names it and activates its plugins in the background. A route that reads
+// what plugins contribute answers from that request on, as the agent, command and skill routes do, so the first answer
+// already holds the contribution: no client has to retry until the activation it cannot see has finished.
+const firstAnswers: ReadonlyArray<{
+  readonly name: string
+  readonly ask: (orbit: Embedded, fixture: Fixture) => Effect.Effect<unknown, unknown>
+  readonly expected: unknown
+}> = [
+  {
+    name: "websearch.providers lists the provider a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.websearch
+        .providers({ location: location(fixture) })
+        .pipe(Effect.map((page) => page.data.map((provider) => provider.id))),
+    expected: expect.arrayContaining(["first-answer-websearch"]),
+  },
+  {
+    name: "websearch.query reaches the provider a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.websearch
+        .query({
+          query: "orbit",
+          providerID: fixture.sdk.WebSearch.ID.make("first-answer-websearch"),
+          location: location(fixture),
+        })
+        .pipe(Effect.map((answer) => answer.data.providerID)),
+    expected: "first-answer-websearch",
+  },
+  {
+    name: "model.list lists the model a configured provider supplies",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.model
+        .list({ location: location(fixture) })
+        .pipe(Effect.map((page) => page.data.map((model) => `${model.providerID}/${model.id}`))),
+    expected: expect.arrayContaining(["custom/fictional-chat"]),
+  },
+  {
+    name: "model.default names the model the config chooses",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.model
+        .default({ location: location(fixture) })
+        .pipe(Effect.map((answer) => answer.data && `${answer.data.providerID}/${answer.data.id}`)),
+    expected: "custom/fictional-chat",
+  },
+  {
+    name: "agent.get finds the agent a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.agent
+        .get({ agentID: fixture.sdk.Agent.ID.make("first-answer-agent"), location: location(fixture) })
+        .pipe(Effect.map((answer) => answer.data.id)),
+    expected: "first-answer-agent",
+  },
+  {
+    name: "provider.list lists the provider the config names",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.provider
+        .list({ location: location(fixture) })
+        .pipe(Effect.map((page) => page.data.map((provider) => provider.id))),
+    expected: expect.arrayContaining(["custom"]),
+  },
+  {
+    name: "provider.get finds the provider the config names",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.provider
+        .get({ providerID: fixture.sdk.Provider.ID.make("custom"), location: location(fixture) })
+        .pipe(Effect.map((answer) => answer.data.id)),
+    expected: "custom",
+  },
+  {
+    name: "integration.get finds the integration a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration
+        .get({ integrationID: fixture.sdk.Integration.ID.make("first-answer"), location: location(fixture) })
+        .pipe(Effect.map((answer) => answer.data.name)),
+    expected: "First answer",
+  },
+  {
+    name: "integration.connect.key stores a key for the integration a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration.connect
+        .key({
+          integrationID: fixture.sdk.Integration.ID.make("first-answer"),
+          key: "first-answer-key",
+          location: location(fixture),
+        })
+        .pipe(Effect.as("stored")),
+    expected: "stored",
+  },
+  {
+    name: "integration.oauth.connect starts the sign-in a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration.oauth
+        .connect({
+          integrationID: fixture.sdk.Integration.ID.make("first-answer"),
+          methodID: fixture.sdk.Integration.MethodID.make("first-answer-browser"),
+          location: location(fixture),
+        })
+        .pipe(Effect.map((answer) => answer.data.url)),
+    expected: "https://example.com/first-answer",
+  },
+  {
+    name: "integration.command.connect starts the command a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration.command
+        .connect({
+          integrationID: fixture.sdk.Integration.ID.make("first-answer"),
+          methodID: fixture.sdk.Integration.MethodID.make("first-answer-command"),
+          location: location(fixture),
+        })
+        .pipe(Effect.map((answer) => typeof answer.data.attemptID)),
+    expected: "string",
+  },
+  {
+    name: "integration.oauth.status finds the integration a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration.oauth
+        .status({
+          integrationID: fixture.sdk.Integration.ID.make("first-answer"),
+          attemptID: fixture.sdk.Integration.AttemptID.make("first-answer-attempt"),
+          location: location(fixture),
+        })
+        .pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        ),
+    // The integration is found, so what is unknown is the attempt this row names.
+    expected: "OAuth attempt not found: first-answer-attempt",
+  },
+  {
+    name: "integration.oauth.complete finds the integration a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration.oauth
+        .complete({
+          integrationID: fixture.sdk.Integration.ID.make("first-answer"),
+          attemptID: fixture.sdk.Integration.AttemptID.make("first-answer-attempt"),
+          code: "first-answer-code",
+          location: location(fixture),
+        })
+        .pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        ),
+    expected: "OAuth attempt not found: first-answer-attempt",
+  },
+  {
+    name: "integration.command.status finds the integration a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.integration.command
+        .status({
+          integrationID: fixture.sdk.Integration.ID.make("first-answer"),
+          attemptID: fixture.sdk.Integration.AttemptID.make("first-answer-attempt"),
+          location: location(fixture),
+        })
+        .pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        ),
+    expected: "Command attempt not found: first-answer-attempt",
+  },
+  {
+    name: "mcp.list lists the server a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.mcp.list({ location: location(fixture) }).pipe(Effect.map((page) => page.data.map((info) => info.name))),
+    expected: expect.arrayContaining(["first-answer-mcp"]),
+  },
+  {
+    name: "mcp.connect finds the server a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.mcp.connect({ server: "first-answer-mcp", location: location(fixture) }).pipe(Effect.as("found")),
+    expected: "found",
+  },
+  {
+    name: "mcp.disconnect finds the server a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.mcp.disconnect({ server: "first-answer-mcp", location: location(fixture) }).pipe(Effect.as("found")),
+    expected: "found",
+  },
+  {
+    name: "mcp.remove finds the server a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.mcp.remove({ server: "first-answer-mcp", location: location(fixture) }).pipe(Effect.as("found")),
+    expected: "found",
+  },
+  {
+    name: "reference.list lists the reference a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.reference
+        .list({ location: location(fixture) })
+        .pipe(Effect.map((page) => page.data.map((reference) => reference.name))),
+    expected: expect.arrayContaining(["first-answer-reference"]),
+  },
+  {
+    name: "vcs.get names the version control a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.vcs.get({ location: location(fixture) }).pipe(Effect.map((answer) => answer.data)),
+    expected: { provider: "first-answer-vcs", branch: { current: "first-answer" } },
+  },
+  {
+    name: "vcs.base asks the version control a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.vcs.base({ location: location(fixture) }).pipe(Effect.map((answer) => answer.data?.ref)),
+    expected: "first-answer-base",
+  },
+  {
+    name: "vcs.status asks the version control a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.vcs.status({ location: location(fixture) }).pipe(Effect.map((page) => page.data.map((row) => row.file))),
+    expected: ["first-answer.txt"],
+  },
+  {
+    name: "vcs.branch.list asks the version control a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.vcs.branch.list({ location: location(fixture) }).pipe(Effect.map((answer) => answer.data)),
+    expected: ["first-answer"],
+  },
+  {
+    name: "vcs.diff asks the version control a plugin adds",
+    ask: (orbit: Embedded, fixture: Fixture) =>
+      orbit.vcs
+        .diff({ mode: "working", location: location(fixture) })
+        .pipe(Effect.map((page) => page.data.map((row) => row.file))),
+    expected: ["first-answer.txt"],
+  },
+]
+
+// An embedded host whose config supplies one model, with a plugin that adds a web search provider, an agent, an
+// integration with a key, a sign-in and a command method, a disabled MCP server, a reference and a version control.
+const prepareFirstAnswer = (fixture: Fixture) =>
+  Effect.gen(function* () {
+    const orbit = yield* fixture.sdk.Orbit.create({
+      config: {
+        directory: fixture.directory,
+        project: false,
+        content: JSON.stringify({
+          model: "custom/fictional-chat",
+          providers: {
+            custom: {
+              package: "aisdk:@ai-sdk/openai-compatible",
+              settings: { baseURL: "https://provider.example/v1" },
+              models: { "fictional-chat": {} },
+            },
+          },
+        }),
+      },
+      models: { fetch: false },
+      fs: { filewatcher: false },
+      trust: { implicit: true },
+    })
+    const changed = [{ file: "first-answer.txt", additions: 1, deletions: 0, status: "modified" as const }]
+    yield* orbit.plugin({
+      id: `first-answer-${crypto.randomUUID()}`,
+      effect: (ctx) =>
+        Effect.gen(function* () {
+          yield* ctx.websearch.transform((editor) => {
+            editor.add({
+              id: fixture.sdk.WebSearch.ID.make("first-answer-websearch"),
+              name: "First answer web search",
+              execute: () => Effect.succeed([{ url: "https://example.com", content: "found", time: {} }]),
+            })
+          })
+          yield* ctx.agent.transform((editor) => editor.update("first-answer-agent", () => {}))
+          yield* ctx.integration.transform((editor) => {
+            editor.update("first-answer", (integration) => (integration.name = "First answer"))
+            editor.method.update({ integrationID: "first-answer", method: { type: "key", label: "Key" } })
+            editor.method.update({
+              integrationID: "first-answer",
+              method: { id: "first-answer-browser", type: "oauth", label: "Browser" },
+              authorize: () =>
+                Effect.succeed({
+                  url: "https://example.com/first-answer",
+                  instructions: "Sign in",
+                  mode: "code" as const,
+                  callback: () => Effect.die("no code is entered in this row"),
+                }),
+            })
+            editor.method.update({
+              integrationID: "first-answer",
+              method: {
+                id: "first-answer-command",
+                type: "command",
+                label: "Command",
+                command: [process.execPath, "-e", "console.log('first-answer-key')"],
+              },
+            })
+          })
+          yield* ctx.mcp.transform((editor) => {
+            // Disabled, so neither activation nor a disconnect or removal starts it; a connect starts a program that
+            // exits at once, which the server records as a failed start.
+            editor.set("first-answer-mcp", {
+              type: "local",
+              command: [process.execPath, "-e", ""],
+              disabled: true,
+            })
+          })
+          yield* ctx.reference.transform((editor) => {
+            editor.add("first-answer-reference", { type: "local", path: fixture.directory })
+          })
+          yield* ctx.vcs.transform((editor) => {
+            editor.add({
+              id: "first-answer-vcs",
+              name: "First answer version control",
+              info: () => Effect.succeed({ branch: { current: "first-answer" } }),
+              base: () =>
+                Effect.succeed({ name: "first-answer", ref: "first-answer-base", source: "default" as const }),
+              branches: () => Effect.succeed(["first-answer"]),
+              status: () => Effect.succeed(changed),
+              diff: () => Effect.succeed(changed.map((row) => ({ ...row, patch: "" }))),
+            })
+            editor.default.set("first-answer-vcs")
+          })
+        }),
+    })
+    return orbit
+  })
+
+for (const row of firstAnswers) {
+  it.live(
+    `the first request to a fresh Location: ${row.name}`,
+    () =>
+      withEmbedded("orbit-embedded-first-answer-", (fixture) =>
+        Effect.gen(function* () {
+          const orbit = yield* prepareFirstAnswer(fixture)
+          // No retry and no wait: the request below is the one that boots the Location.
+          expect(yield* row.ask(orbit, fixture)).toEqual(row.expected)
+        }),
+      ),
+    // Measured limit (50 whole-file runs, 2 test processes at once on 4 cores, isolated home, Windows): the 24 first-request rows boot a Location, and the
+    // slowest, mcp.connect (it also starts a program), took p50 2.9 s, p95 5.0 s, max 6.3 s (model.list max 5.0 s, which ran
+    // out the 5 s limit once); twice the maximum, rounded up to 5 s. One limit, because they share the boot.
+    15_000,
+  )
+
+  // The control: the same set-up answers with the contribution once activation has had time, so the row above fails
+  // only because its answer comes before activation, not because the set-up is wrong.
+  it.live(
+    `control, once the Location has activated its plugins: ${row.name}`,
+    () =>
+      withEmbedded("orbit-embedded-first-answer-", (fixture) =>
+        Effect.gen(function* () {
+          const orbit = yield* prepareFirstAnswer(fixture)
+          // Asked until the answer holds the contribution: a busy runner may take a while to activate.
+          yield* row.ask(orbit, fixture).pipe(
+            Effect.flatMap((value) => Effect.try(() => expect(value).toEqual(row.expected))),
+            Effect.retry(Schedule.spaced("50 millis")),
+            Effect.timeout("20 seconds"),
+          )
+        }),
+      ),
+    30_000,
+  )
+}
 
 it.live(
   "Location-owned runner events reach the ready global client",
   () =>
     withEmbedded("orbit-embedded-events-", (fixture) =>
       Effect.gen(function* () {
-        const orbit = yield* fixture.sdk.Orbit.create()
+        const orbit = yield* fixture.sdk.Orbit.create({ trust: { implicit: true } })
         const id = sessionID(fixture)
         const connected = yield* Latch.make(false)
         const prompted = yield* Deferred.make<Extract<OrbitEvent, { type: "session.inbox.delivered" }>>()
@@ -313,8 +681,8 @@ it.live(
   () =>
     withEmbedded("orbit-embedded-hosts-", (fixture) =>
       Effect.gen(function* () {
-        const first = yield* fixture.sdk.Orbit.create()
-        const second = yield* fixture.sdk.Orbit.create()
+        const first = yield* fixture.sdk.Orbit.create({ trust: { implicit: true } })
+        const second = yield* fixture.sdk.Orbit.create({ trust: { implicit: true } })
         const id = sessionID(fixture)
         const firstReady = yield* Latch.make(false)
         const secondReady = yield* Latch.make(false)
@@ -349,7 +717,7 @@ it.live("embedded client is available as a Layer service", () =>
       const orbit = yield* fixture.sdk.Orbit.Service
       const created = yield* orbit.sessions.create({ id, location: location(fixture) })
       expect(created.id).toBe(id)
-    }).pipe(Effect.provide(fixture.sdk.Orbit.layer()))
+    }).pipe(Effect.provide(fixture.sdk.Orbit.layer({ trust: { implicit: true } })))
   }),
 )
 
@@ -372,7 +740,7 @@ it.live("configures workspace providers through the SDK facade", () =>
           return Effect.void
         },
       })
-      const orbit = yield* fixture.sdk.Orbit.create({ workspaceProviders: { fake: driver } })
+      const orbit = yield* fixture.sdk.Orbit.create({ workspaceProviders: { fake: driver } , trust: { implicit: true } })
       const requestedID = fixture.sdk.Workspace.ID.create()
       const workspaceID = yield* orbit.workspace.create({ id: requestedID, provider: "fake" })
 
@@ -390,6 +758,13 @@ it.live("configures workspace providers through the SDK facade", () =>
         directory: fixture.sdk.AbsolutePath.make("/"),
         workspaceID: workspace.id,
       })
+      // A filesystem root is trusted only by a grant until the host stops, never implicitly; `sessions.create` asks what
+      // the `session.create` route asks (trust-first).
+      yield* orbit.location.trust.update({
+        location: { directory: fixture.sdk.AbsolutePath.make("/") },
+        trust: true,
+        persist: false,
+      })
       const session = yield* orbit.sessions.create({ location: workspaceLocation })
       expect(session.location.workspaceID).toBe(workspace.id)
 
@@ -399,6 +774,7 @@ it.live("configures workspace providers through the SDK facade", () =>
       expect(calls.map((call) => call.operation)).toEqual(["create", "destroy"])
     }),
   ),
+  10_000,
 )
 
 const workspaceModelScenario = (fixture: Fixture, policy: "eager" | "lazy") =>
@@ -447,6 +823,7 @@ const workspaceModelScenario = (fixture: Fixture, policy: "eager" | "lazy") =>
       {
         config: { directory: configDirectory, project: false, content: "{}" },
         workspaceProviders: { fake: driver },
+        trust: { implicit: true },
       },
       {
         overrides: [llmClient.replace(client), SessionRunnerModel.node.replace(models)],
@@ -512,10 +889,12 @@ it.live(
         let toolIssued = false
         const llm = yield* TestLLM.Test.pipe(Effect.provide(TestLLM.testLayer()))
         yield* llm.serve((request) => {
-          const wantsTool = !toolIssued && request.tools.some((tool) => tool.name === "Bash")
-          if (!wantsTool) return TestLLM.text("done", "answer")
+          // The shell tool is offered as `PowerShell` when the session shell is PowerShell, which on Windows is whatever
+          // `SHELL` and the PATH select, so the row asks for the name it was offered under.
+          const shell = request.tools.find((tool) => tool.name === "Bash" || tool.name === "PowerShell")
+          if (toolIssued || !shell) return TestLLM.text("done", "answer")
           toolIssued = true
-          return TestLLM.tool("call-shell", "Bash", { command: "echo hi" })
+          return TestLLM.tool("call-shell", shell.name, { command: "echo hi" })
         })
         const models = Layer.mock(SessionRunnerModel.Service, {
           resolve: () =>
@@ -548,6 +927,7 @@ it.live(
           {
             config: { directory: configDirectory, project: false, content: "{}" },
             workspaceProviders: { fake: driver },
+            trust: { implicit: true },
           },
           {
             overrides: [
@@ -588,7 +968,7 @@ it.live(
 it.live("preserves unknown workspace provider errors", () =>
   withEmbedded("orbit-embedded-workspace-provider-", (fixture) =>
     Effect.gen(function* () {
-      const orbit = yield* fixture.sdk.Orbit.create()
+      const orbit = yield* fixture.sdk.Orbit.create({ trust: { implicit: true } })
       const error = yield* orbit.workspace.create({ provider: "missing" }).pipe(Effect.flip)
       expect(error).toEqual(new WorkspaceDriver.ProviderNotFound({ provider: "missing" }))
     }),

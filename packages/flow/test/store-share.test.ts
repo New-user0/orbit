@@ -42,7 +42,7 @@ test("a run store folder that links to a share is refused and never opened", asy
   )
   if (!made) return
   const started = Date.now()
-  await expect(openStore(project)).rejects.toThrow("network share")
+  await expect(openStore(project, project)).rejects.toThrow("network share")
   expect(connections).toEqual([])
   // Followed, the link takes about 40 seconds to fail.
   expect(Date.now() - started).toBeLessThan(10_000)
@@ -51,7 +51,7 @@ test("a run store folder that links to a share is refused and never opened", asy
 test("a plain run store folder is still opened (control)", async () => {
   const project = path.join(root, "plain")
   await fs.mkdir(project, { recursive: true })
-  const store = await openStore(project)
+  const store = await openStore(project, project)
   expect(store.runs()).toEqual([])
   store.close()
   expect(connections).toEqual([])
@@ -67,7 +67,7 @@ test("a run store folder that links to a folder on the disk is still opened (con
     () => false,
   )
   if (!made) return
-  const store = await openStore(project)
+  const store = await openStore(project, project)
   expect(store.runs()).toEqual([])
   store.close()
 })
@@ -87,7 +87,7 @@ for (const suffix of ["-wal", "-shm", "-journal"])
     await fs.mkdir(path.join(project, ".orbit"), { recursive: true })
     if (!(await linkFile(share(), path.join(project, ".orbit", `runs.db${suffix}`)))) return
     const started = Date.now()
-    await expect(openStore(project)).rejects.toThrow("network share")
+    await expect(openStore(project, project)).rejects.toThrow("network share")
     expect(connections).toEqual([])
     expect(Date.now() - started).toBeLessThan(10_000)
   })

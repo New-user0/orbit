@@ -3,7 +3,7 @@ export * as SessionInbox from "./session-inbox.js"
 import { Schema } from "effect"
 import { Location } from "./location.js"
 import { Project } from "./project.js"
-import { Prompt } from "./prompt.js"
+import { Prompt, PromptCommand } from "./prompt.js"
 import { DateTimeUtcFromMillis, optional, RelativePath } from "./schema.js"
 import { SessionDelivery } from "./session-delivery.js"
 import { SessionID } from "./session-id.js"
@@ -16,6 +16,8 @@ export type Delivery = SessionDelivery.Delivery
 export interface UserPayload extends Schema.Schema.Type<typeof UserPayload> {}
 export const UserPayload = Schema.Struct({
   ...Prompt.fields,
+  /** The slash command the prompt was given as, when it was one; `text` is then the command's expansion. */
+  command: PromptCommand.pipe(optional),
   metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(optional),
   turn: SessionTurn.Options.pipe(optional),
 }).annotate({ identifier: "Session.Inbox.UserPayload" })
@@ -28,7 +30,11 @@ export const SyntheticPayload = Schema.Struct({
 }).annotate({ identifier: "Session.Inbox.SyntheticPayload" })
 
 export interface CompactionPayload extends Schema.Schema.Type<typeof CompactionPayload> {}
-export const CompactionPayload = Schema.Struct({}).annotate({ identifier: "Session.Inbox.CompactionPayload" })
+export const CompactionPayload = Schema.Struct({
+  instructions: Schema.String.annotate({
+    description: "Text from the person, added to this compaction's summary prompt.",
+  }).pipe(optional),
+}).annotate({ identifier: "Session.Inbox.CompactionPayload" })
 
 export interface MovePayload extends Schema.Schema.Type<typeof MovePayload> {}
 export const MovePayload = Schema.Struct({

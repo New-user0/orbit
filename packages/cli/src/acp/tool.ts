@@ -1,11 +1,13 @@
 import { isAbsolute, resolve } from "node:path"
 import type { ToolCall, ToolCallContent, ToolCallLocation, ToolCallUpdate, ToolKind } from "@agentclientprotocol/sdk"
+import { PermissionView } from "@orbit/schema/permission-view"
 import { ToolNames } from "@orbit/schema/tool-names"
 import { readDisplayText } from "@orbit/tui/mini/tool"
 import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { Patch } from "@orbit/util/patch"
 import { Result } from "effect"
+import { literal, literalBlock } from "./markdown"
 
 export type ToolInput = Record<string, unknown>
 
@@ -200,31 +202,32 @@ export function completedToolUpdate(input: {
   readonly places?: ReadonlyArray<string>
 }): ToolCallUpdate {
   const normalized = toolContent(input.content)
-  // Read's model content is a JSON page envelope; show the clean text instead.
+  // Read's model content is a JSON page envelope; show the clean text instead, the file's own, written so Markdown shows
+  // it as it is (classes 6 and 9).
   const firstText = input.content.find((part) => part.type === "text")
   const read = input.toolName.toLocaleLowerCase() === "read" && firstText ? readDisplayText(firstText.text) : undefined
   const images = normalized.filter((part) => part.type === "content" && part.content.type === "image")
   const primary =
     read === undefined
       ? normalized.filter((part) => !images.includes(part))
-      : [{ type: "content" as const, content: { type: "text" as const, text: read } }]
-  // Only a tool that declares the fields (Edit) has an old and a new text; a key the model adds to another tool's input
-  // draws no diff.
-  const declaredInput = declaredFields(input.toolName, input.input)
-  const oldText = stringValue(declaredInput.old_string) ?? stringValue(declaredInput.oldString)
-  const newText = stringValue(declaredInput.new_string) ?? stringValue(declaredInput.newString)
+      : [{ type: "content" as const, content: { type: "text" as const, text: literalBlock(read) } }]
+  // An Edit or Write draws the diff the tool recorded of what it wrote, never its input: an approval answered with the
+  // person's own version writes that version, not the model's old_string and new_string (class 8). A call that recorded
+  // no diff draws none.
+  const ran = ["Edit", "Write"].includes(ToolNames.canonical(input.toolName))
+    ? PermissionView.of({ action: input.toolName, resources: [], metadata: input.metadata }).files[0]
+    : undefined
   // The place the server named, else the declared fields of the input: not a key the model added.
   // A call that has places but none to name draws no diff either: the input's spelling can be a link.
   const path = input.places ? input.places[0] : filePath(declaredFields(input.toolName, input.input))
   const diff: ToolCallContent[] =
-    oldText === undefined || newText === undefined || path === undefined
+    ran === undefined || path === undefined
       ? []
       : [
           {
             type: "diff",
             path: input.places ? resourcePath(path, input.cwd) : absolutePath(path, input.cwd),
-            oldText,
-            newText,
+            ...patchSides(ran.patch),
           },
         ]
   return {
@@ -256,7 +259,7 @@ export function errorToolUpdate(input: {
     title: toolTitle(input.toolName, input.input, undefined),
     locations: toLocations(input.toolName, input.input, input.cwd, input.places),
     rawInput: rawInput(input.toolName, input.input, input.cwd),
-    content: [...toolContent(input.content ?? []), { type: "content", content: { type: "text", text: input.error } }],
+    content: [...toolContent(input.content ?? []), { type: "content", content: { type: "text", text: literalBlock(input.error) } }],
     rawOutput: {
       ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
       error: input.error,
@@ -264,18 +267,23 @@ export function errorToolUpdate(input: {
   }
 }
 
+// What a tool gave back, which a file, a command or a server chose, written so Markdown shows it as it is.
 function toolContent(content: ToolContent): ToolCallContent[] {
   return content.flatMap((part): ToolCallContent[] => {
-    if (part.type === "text") return [{ type: "content", content: { type: "text", text: part.text } }]
+    if (part.type === "text") return [{ type: "content", content: { type: "text", text: literalBlock(part.text) } }]
     const match = /^data:([^;,]+)(?:;[^,]*)*;base64,(.*)$/.exec(part.uri)
     if (!match?.[1]?.startsWith("image/") || match[2] === undefined) return []
     return [{ type: "content", content: { type: "image", mimeType: match[1], data: match[2] } }]
   })
 }
 
+// A shell call's command, which the model wrote, or the call's name: whole and on one line, written so a client that
+// renders the title as Markdown shows it as it is (class 9). `fallback`, an approval's title, is written so where
+// permission.ts builds it.
 function toolTitle(toolName: string, input: ToolInput, fallback: string | undefined) {
-  if (isShell(toolName)) return stringValue(input.command) ?? fallback ?? toolName
-  return fallback || toolName
+  const command = isShell(toolName) ? stringValue(input.command) : undefined
+  if (command !== undefined) return literal(command)
+  return fallback || literal(toolName)
 }
 
 function rawInput(toolName: string, input: ToolInput, cwd: string): ToolInput {
@@ -300,6 +308,30 @@ function locationFrom(cwd: string, ...values: unknown[]): ToolCallLocation[] {
 // Sessions migrated from V1 keep their original `filePath` tool inputs, and sessions recorded before the tool rename keep `path`.
 export function filePath(input: ToolInput) {
   return stringValue(input.file_path) ?? stringValue(input.path) ?? stringValue(input.filePath)
+}
+
+/** The two sides of a unified patch: its removed and context lines against its added and context ones, hunks apart. */
+export function patchSides(patch: string) {
+  const before: string[] = []
+  const after: string[] = []
+  let hunks = 0
+  patch.split("\n").forEach((line) => {
+    if (line.startsWith("@@")) {
+      if (hunks++ === 0) return
+      before.push("...")
+      after.push("...")
+      return
+    }
+    if (hunks === 0) return
+    const text = line.slice(1)
+    if (line.startsWith("-")) before.push(text)
+    else if (line.startsWith("+")) after.push(text)
+    else if (line.startsWith(" ")) {
+      before.push(text)
+      after.push(text)
+    }
+  })
+  return { oldText: before.join("\n"), newText: after.join("\n") }
 }
 
 export function patchHunks(input: ToolInput) {

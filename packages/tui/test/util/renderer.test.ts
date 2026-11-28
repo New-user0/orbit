@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { MarkdownRenderable, SyntaxStyle, TextRenderable, type CliRenderer } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import { bodyText, createMiniTitle, destroyRenderer, outputText, terminalTitle } from "../../src/util/renderer"
 
 // A set-title sequence, one that erases the line, a C1 control sequence introducer and a right-to-left override: what
@@ -16,7 +16,7 @@ const syntaxStyle = SyntaxStyle.fromStyles({
 })
 
 async function frame(draw: (renderer: CliRenderer) => void, ready = " d") {
-  const setup = await createTestRenderer({ width: 60, height: 8, remote: true, useThread: false })
+  const setup = await createTestRendererTimed({ width: 60, height: 8, remote: true, useThread: false })
   try {
     draw(setup.renderer)
     setup.renderer.start()

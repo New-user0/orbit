@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { onMount } from "solid-js"
 import { DialogSessionList } from "../../../src/component/dialog-session-list"
 import { ConfigProvider } from "../../../src/config"
@@ -64,7 +64,7 @@ async function mountList(file: object, options: { initialSearch?: string; title?
   }
 
   const keybindings = KeybindingsFile.decode(JSON.stringify(file))
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts paths={{ state: temporary.path }}>
         <TuiAppProvider value={{ name: "test", version: "test", channel: "test" }}>
@@ -224,7 +224,7 @@ test("scopes sessions to the active session location", async () => {
     return null
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts paths={{ state: temporary.path }}>
         <TuiAppProvider value={{ name: "test", version: "test", channel: "test" }}>

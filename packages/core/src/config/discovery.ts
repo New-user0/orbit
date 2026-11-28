@@ -50,10 +50,14 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
   const globalDirectory = AbsolutePath.make(global.config)
   const globalRoot = yield* fs.resolve(globalDirectory)
   const homeDirectory = yield* fs.resolve(global.home)
+  const start = yield* fs.resolve(location.directory)
+  // As the reference reads a project's settings only from the project it starts in, the walk ends at the project's root
+  // (D7): a folder above it supplies nothing, even one whose grant covers the project. Both ends are real paths, so a
+  // start folder reached through a link walks where it really is, and the case Windows ignores does not count (class 4).
   const directories =
-    (yield* fs.resolve(location.directory)) === globalRoot || options?.project === false
+    start === globalRoot || options?.project === false
       ? []
-      : yield* fs.up({ targets: ["."], start: location.directory }).pipe(Effect.orDie)
+      : projectWalk(start, yield* fs.resolve(location.project.directory))
 
   const probe = (directory: string, targets: readonly string[]) =>
     Effect.gen(function* () {
@@ -131,3 +135,14 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
     compatMcp: mcp.find((candidate) => !reentersGlobal(candidate))?.item,
   } satisfies Sources
 })
+
+/**
+ * The folders from `start` up to and including `top`, innermost first, when `top` is `start` or a folder above it, and
+ * otherwise `start` alone. Both are real paths.
+ */
+function projectWalk(start: string, top: string): string[] {
+  if (!FSUtil.contains(top, start)) return [start]
+  const parent = path.dirname(start)
+  if (path.relative(top, start) === "" || parent === start) return [start]
+  return [start, ...projectWalk(parent, top)]
+}

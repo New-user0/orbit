@@ -1,4 +1,4 @@
-import type { PermissionApi } from "@orbit/client/effect/api"
+import type { PermissionApi, PermissionReplyInput } from "@orbit/client/effect/api"
 import type { Agent } from "@orbit/schema/agent"
 import type { Permission } from "@orbit/schema/permission"
 import type { Session } from "@orbit/schema/session"
@@ -15,6 +15,14 @@ export interface PermissionEvaluation {
    * hook that only inspects `resources` never sees them and decides on the primary spelling alone.
    */
   readonly aliases?: Readonly<Record<string, ReadonlyArray<string>>>
+  /**
+   * The real places a resource leads to through a link, keyed by that resource, one list per place: its real path, its
+   * path as the project spells it (where a link of a project that is not trusted leads out, the resource is the real
+   * place) and each of those relative to the session folder. A hook may refuse on them, deciding the spellings of one
+   * place together. It must not allow on them, as it may on an alias: a policy that allows only a place's spelling never
+   * lifts a deny written for the resource.
+   */
+  readonly leads?: Readonly<Record<string, ReadonlyArray<ReadonlyArray<string>>>>
   readonly metadata?: Record<string, unknown>
   readonly source?: Permission.Source
   effect: Permission.Effect
@@ -25,6 +33,9 @@ export interface PermissionHooks {
   readonly evaluate: PermissionEvaluation
 }
 
-export type PermissionDomain = Pick<PermissionApi<unknown>, "list" | "get" | "reply"> & {
+export type PermissionDomain = Pick<PermissionApi<unknown>, "list" | "get"> & {
+  // A plugin answers a question with the proposal or a reject. Revised content is a person's answer and comes only
+  // through a client's reply route, so the plugin reply has no field for it and the host refuses one (class 12).
+  readonly reply: (input: Omit<PermissionReplyInput, "content">) => ReturnType<PermissionApi<unknown>["reply"]>
   readonly hook: Hooks<PermissionHooks>
 }

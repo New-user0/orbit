@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
-import path from "node:path"
 import type { IntegrationInfo, McpServer } from "@orbit/client"
 import { mcpAuthChoices } from "../src/commands/handlers/mcp/auth"
+import { runOrb } from "./fixture/orb"
 
 const server = (
   name: string,
@@ -43,20 +43,13 @@ test("offers only OAuth-capable MCP servers by their server identity", () => {
 })
 
 test("mcp auth accepts an optional server name and rejects no-name noninteractive calls before connecting", async () => {
-  const cli = (args: string[]) =>
-    Bun.spawn([process.execPath, "run", "src/index.ts", "mcp", "auth", ...args], {
-      cwd: path.join(import.meta.dir, ".."),
-      stdout: "pipe",
-      stderr: "pipe",
-    })
-  const help = cli(["--help"])
-  expect(await new Response(help.stdout).text()).toContain("orb mcp auth [flags] [<name>]")
-  expect(await help.exited).toBe(0)
+  const cli = (args: string[]) => runOrb(["mcp", "auth", ...args])
+  const help = await cli(["--help"])
+  expect(help.stdout).toContain("orb mcp auth [flags] [<name>]")
+  expect(help.exitCode).toBe(0)
 
-  const missing = cli([])
-  expect(await new Response(missing.stdout).text()).toContain(
-    "Pass an MCP server name when running without an interactive terminal",
-  )
-  expect(await new Response(missing.stderr).text()).toBe("")
-  expect(await missing.exited).toBe(1)
+  const missing = await cli([])
+  expect(missing.stdout).toContain("Pass an MCP server name when running without an interactive terminal")
+  expect(missing.stderr).toBe("")
+  expect(missing.exitCode).toBe(1)
 })

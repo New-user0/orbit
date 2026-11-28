@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { ShellParse } from "../../src/shell/parse.js"
 import { ShellScan } from "../../src/shell/scan.js"
+import { runProgram } from "../fixture/run-program"
 
 const contexts = [
   (source: string) => source,
@@ -111,16 +112,16 @@ describe("real-shell compound syntax", () => {
         ...bodies.map((body) => `probe() ${body}; probe`),
         ...bodies.map((body) => `printf '%s' "$(probe() ${body}; probe)"`),
         ...(shell === "zsh" ? loops.map((fixture) => fixture.source) : []),
-      ])(`${shell}: %s`, (source) => {
+      ])(`${shell}: %s`, async (source) => {
       if (!executable) throw new Error(`${shell} is unavailable`)
-      const execution = Bun.spawnSync(
+      const execution = await runProgram(
         [
           executable,
           ...(shell === "bash" ? ["--noprofile", "--norc"] : ["-f"]),
           "-c",
           `scan_probe() { printf 'executed\\n' >&2; }; ${source}; wait`,
         ],
-        { env: { PATH: "/usr/bin:/bin", LC_ALL: "C" }, timeout: 2_000 },
+        { env: { PATH: "/usr/bin:/bin", LC_ALL: "C" }, deadline: 2_000 },
       )
       expect(execution.exitCode).toBe(0)
       expect(execution.stderr.toString()).toEqual(

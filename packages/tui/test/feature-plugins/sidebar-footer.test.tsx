@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { RGBA } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import type { Context } from "@orbit/plugin/tui/context"
 import { createStore, produce } from "solid-js/store"
 import { SidebarOnboarding } from "../../src/feature-plugins/sidebar/footer"
@@ -48,7 +48,7 @@ function context(options?: {
 }
 
 async function render(input: Context, height = 22) {
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <box width={38}>
         <SidebarOnboarding context={input} sessionID="session" />

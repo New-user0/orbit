@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { TextareaRenderable } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
@@ -72,7 +72,7 @@ async function mountPrompt(input: {
     )
   }
 
-  const app = await testRender(() => <Harness />, { kittyKeyboard: true })
+  const app = await testRenderTimed(() => <Harness />, { kittyKeyboard: true })
   app.renderer.start()
   return {
     app,

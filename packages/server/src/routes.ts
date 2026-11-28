@@ -17,7 +17,9 @@ import { Project } from "@orbit/core/project"
 import { Worktree } from "@orbit/core/worktree"
 import { Session } from "@orbit/core/session"
 import { Instance } from "@orbit/core/instance/service"
+import { SessionRecap } from "@orbit/core/session/recap"
 import { SessionTransfer } from "@orbit/core/session/transfer"
+import { SessionAssist } from "@orbit/core/session/assist"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { Job } from "@orbit/core/job"
 import { Mcp } from "@orbit/core/mcp/index"
@@ -27,6 +29,7 @@ import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { LocationActivity } from "@orbit/core/location-activity"
 import { ModelsDev } from "@orbit/core/models-dev"
 import { SessionRestart } from "@orbit/core/session/execution/restart"
+import { SessionRetention } from "@orbit/core/session/retention"
 import { PluginUpdate } from "@orbit/core/plugin/update"
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { WellKnown } from "@orbit/core/wellknown"
@@ -66,6 +69,8 @@ const applicationServiceNodes = [
   Session.node,
   Instance.node,
   SessionTransfer.node,
+  SessionRecap.node,
+  SessionAssist.node,
   SdkPlugins.node,
   PluginUpdate.node,
   PermissionSaved.node,
@@ -78,6 +83,7 @@ const applicationServiceNodes = [
   LocationServiceMap.node,
   LocationActivity.node,
   SessionRestart.node,
+  SessionRetention.node,
   Workspace.node,
   // Listing grants needs no location, so the handler reads the store the locations share.
   WorkspaceTrust.node,

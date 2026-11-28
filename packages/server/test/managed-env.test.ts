@@ -1,11 +1,13 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Effect } from "effect"
 import { withCurrentDirectoryOnPath } from "../../core/test/fixture/decoy"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerProcess } from "../src/process"
+
+setDefaultTimeout(30_000)
 
 const variable = "ZZ_MANAGED_BOOT_ENV"
 

@@ -14,6 +14,22 @@ export interface Interface {
   readonly awaitActivation: Effect.Effect<void>
   /** Keep readiness pending while preparing an update. Run the returned Effect to release it. */
   readonly hold: () => Effect.Effect<Effect.Effect<void>>
+  /**
+   * Activate again now, as when a source of the plugins changes, and wait until that activation has applied every
+   * plugin that is available locally. A change reaches the supervisor through an event it reads later, so a caller that
+   * has just changed what the plugins read (a trust grant or revoke that reloaded the config) asks here, and what it
+   * reads next is the new activation's. It does not wait for packages that still have to be installed: those apply
+   * later, as they do at startup. Without a supervisor it waits as `awaitActivation` does.
+   */
+  readonly refresh: () => Effect.Effect<void>
+  /**
+   * Wait until the changes announced so far have been applied as far as what is available locally: unlike
+   * `awaitActivation`, it does not wait for a package that still has to be installed. Without a supervisor it waits as
+   * `awaitActivation` does.
+   */
+  readonly awaitApplied: Effect.Effect<void>
+  /** Set by the supervisor: what `refresh` and `awaitApplied` run. */
+  readonly supervise: (input: { readonly refresh: Effect.Effect<void>; readonly applied: Effect.Effect<void> }) => Effect.Effect<void>
 }
 
 export type Failure = Plugin.Info & { readonly state: Extract<Plugin.State, { readonly status: "failed" }> }
@@ -32,3 +48,6 @@ export class Service extends Context.Service<Service, Interface>()("@orbit/Plugi
  * early request observes an empty registry and admits or fails work the plugins would have shaped.
  */
 export const awaitActivation = Service.use((plugins) => plugins.awaitActivation)
+
+/** `awaitActivation` for what is available locally; see `Interface.awaitApplied`. */
+export const awaitApplied = Service.use((plugins) => plugins.awaitApplied)

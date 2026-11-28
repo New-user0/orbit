@@ -404,16 +404,19 @@ describe("ConfigInstructionRules.scan", () => {
       const listed = yield* scan(tmp.path)
       expect(listed).toHaveLength(ConfigInstructionRules.MAX_FILES)
       expect(listed[0]).toBe("0000.md")
-    }),
+    }), 10_000,
   )
 
   // A repository chooses how many folders it holds, empty ones too, and each one costs a walk of its path and the gate's
-  // questions. The cost is counted in the calls made, which does not depend on how fast the host is.
+  // questions. The cost is counted in the calls made, which does not depend on how fast the host is. Twice the cap shows
+  // it as well as more would: without the cap every folder is entered. Eight times the cap made 2,048 folders to create
+  // and remove, and in 150 loaded Windows CI runs the row passed its 5 s limit twice (p50 1.7 s) while its worker's event
+  // loop never stalled, waiting on the disk (runs 45943098053, 45955987228; it did so again in 45980423574).
   it.live("enters at most MAX_FOLDERS folders, however many empty ones a rules folder holds", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
       const fsUtil = yield* FSUtil.Service
-      const total = 8 * ConfigInstructionRules.MAX_FOLDERS
+      const total = 2 * ConfigInstructionRules.MAX_FOLDERS
       yield* Effect.promise(() =>
         Promise.all(Array.from({ length: total }, (_, index) => fs.mkdir(path.join(tmp.path, `r${String(index).padStart(5, "0")}`), { recursive: true }))),
       )

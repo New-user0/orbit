@@ -12,6 +12,9 @@ import path from "node:path"
 import { runNonInteractivePrompt } from "../../src/run/noninteractive"
 import { reportRunError } from "../../src/run/run"
 import { UI } from "../../src/run/ui"
+import { isolatedEnv } from "../fixture/environment"
+import { startSlot } from "../fixture/start-gate"
+import { tmpdir } from "../fixture/tmpdir"
 
 type V2Event = EventSubscribeOutput
 type FormInfo = Extract<V2Event, { type: "form.created" }>["data"]["form"]
@@ -2088,12 +2091,19 @@ describe("runNonInteractivePrompt output channels", () => {
   test("writes out the result for an error that comes before a session exists the same way", async () => {
     const source = `import { reportRunError } from ${JSON.stringify(path.join(import.meta.dir, "../../src/run/run.ts"))}
 reportRunError({ format: "result" }, ${JSON.stringify(hostile)}, "ses_1")`
-    const child = Bun.spawn([process.execPath, "-e", source], { stdout: "pipe", stderr: "pipe" })
-    const [code, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ])
+    // The child shares the run's transpiler cache and folders of its own (`isolatedEnv`) and holds a start slot, as every
+    // child of the cli tests does: with its own cache it transpiled and wrote the whole import graph of run.ts first, and
+    // it did not end within 30 s once on a Windows runner (run 46009156809) though it takes about a second.
+    await using root = await tmpdir()
+    const [code, stdout, stderr] = await startSlot(async () => {
+      const child = Bun.spawn([process.execPath, "-e", source], {
+        env: isolatedEnv(root.path),
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+      return Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+    })
     expect({ code, stderr }).toEqual({ code: 1, stderr: "" })
     expect(acting(stdout)).toEqual([])
     expect(JSON.parse(stdout)).toEqual({
@@ -2295,6 +2305,7 @@ describe("runNonInteractivePrompt limits and results", () => {
     ["limit.cost", "error_max_cost"],
     ["limit.cost-unknown", "error"],
     ["limit.tokens-unknown", "error"],
+    ["context.limit", "error"],
   ])("a %s failure carries the subtype %s on its error line in json and stream-json", async (type, subtype) => {
     for (const format of ["json", "stream-json"] as const) {
       const lines = await capture({ format, turn: limitFailure(type, "Reached it.") })
@@ -2350,6 +2361,7 @@ describe("runNonInteractivePrompt limits and results", () => {
             ["limit.cost", "error_max_cost"],
             ["limit.cost-unknown", "error"],
             ["limit.tokens-unknown", "error"],
+            ["context.limit", "error"],
           ] as const
         ).map(([type, subtype]) => ({
           name: type,

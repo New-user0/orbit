@@ -14,6 +14,17 @@
 export const plain = (text: string) => escaped(text.trim())
 
 /**
+ * A path or a file's name as an approval shows it, where a name must not pass for a line of Orbit's own: what `plain`
+ * writes out, and also what is blank without being one space between two words. That is a run of spaces, which could
+ * pad the line to where it wraps, a space at either end, which `plain` trims away, every other space, the line and
+ * paragraph separators, and the characters that draw nothing (the fillers, the blank Braille pattern).
+ */
+export const plainPath = (text: string) =>
+  text.replace(/\r?\n|[\p{C}\p{Default_Ignorable_Code_Point}\u2800]|[^\S ]|^ | $| {2,}/gu, (match) =>
+    match.endsWith("\n") ? "\\n" : Array.from(match, escapedCharacter).join(""),
+  )
+
+/**
  * A line of what a run says as it goes, which names the nodes, tasks and models that a workflow, a suite or a run store
  * chose, escaped as `plain` does. A line keeps its indentation, which the lines of a team's conversation start with,
  * and takes anything that a workflow passes to `ctx.log`, which is not always text.

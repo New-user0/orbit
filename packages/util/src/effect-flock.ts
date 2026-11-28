@@ -4,6 +4,7 @@ import { randomUUID } from "crypto"
 import { Context, Effect, Function, Layer, Option, Schedule, Schema } from "effect"
 import type { FileSystem, Scope } from "effect"
 import type { PlatformError } from "effect/PlatformError"
+import { Flock } from "./flock.js"
 import { FSUtil } from "./fs-util.js"
 import { Global } from "./global.js"
 import { makeGlobalNode } from "./effect/app-node.js"
@@ -101,6 +102,21 @@ export namespace EffectFlock {
 
   const isPathGone = (e: PlatformError) => e.reason._tag === "NotFound" || e.reason._tag === "Unknown"
 
+  // Windows answers EPERM to a mkdir while a folder of that name is still being deleted, as the folder of a lock that
+  // its holder just released is until every handle to it closes. The lock is then as good as held: wait and try again.
+  // A denial that lasts ends at the timeout, with the error that names the key.
+  const releasing = (e: PlatformError) => process.platform === "win32" && causeCode(e) === "EPERM"
+
+  // Windows refuses to delete a file that another handle has open without sharing deletion (EBUSY), and a scanner or a
+  // contender reading the lock holds one for a moment; a folder whose deletion is still pending answers EPERM or EACCES.
+  const busy = (e: PlatformError) => process.platform === "win32" && ["EBUSY", "EPERM", "EACCES"].includes(causeCode(e))
+
+  // The file system names no reason for EPERM or EBUSY, so the code is read from the cause.
+  const causeCode = (e: PlatformError) =>
+    typeof e.reason.cause === "object" && e.reason.cause !== null && "code" in e.reason.cause
+      ? String(e.reason.cause.code)
+      : ""
+
   const layer: Layer.Layer<Service, never, Global.Service | FSUtil.Service> = Layer.effect(
     Service,
     Effect.gen(function* () {
@@ -120,7 +136,10 @@ export namespace EffectFlock {
 
       const forceRemove = (target: string) => fs.remove(target, { recursive: true }).pipe(Effect.ignore)
 
-      /** Atomic mkdir — returns true if created, false if already exists, dies on other errors. */
+      /**
+       * Atomic mkdir — returns true if created, false if already exists, NotAcquired while a folder of that name is
+       * still being deleted on Windows, dies on other errors.
+       */
       const atomicMkdir = (dir: string) =>
         fs.makeDirectory(dir, { mode: 0o700 }).pipe(
           Effect.as(true),
@@ -128,7 +147,7 @@ export namespace EffectFlock {
             (e) => e.reason._tag === "AlreadyExists",
             () => Effect.succeed(false),
           ),
-          Effect.orDie,
+          Effect.catch((e) => (releasing(e) ? Effect.fail(new NotAcquired()) : Effect.die(e))),
         )
 
       /** Write with exclusive create — compromised error if file already exists. */
@@ -265,7 +284,19 @@ export namespace EffectFlock {
 
           if (parsed.token !== handle.token) return yield* Effect.die(new ReleaseError({ detail: "token mismatch" }))
 
-          yield* forceRemove(handle.lockDir)
+          // The holder's release removes the folder; a handle that lingers on Windows delays it, and the work already
+          // ran, so the release waits for the handle (as Flock's does) rather than leaving a folder with a fresh
+          // heartbeat that the next acquirer would wait out until it is stale. A handle that is never let go fails the
+          // release at the deadline with the removal's error.
+          yield* fs.remove(handle.lockDir, { recursive: true, force: true }).pipe(
+            Effect.retry({
+              while: busy,
+              schedule: Schedule.min([Schedule.exponential(10, 2), Schedule.spaced(200)]).pipe(
+                Schedule.while((meta) => meta.elapsed < Flock.RELEASE_DEADLINE_MS),
+              ),
+            }),
+            Effect.orDie,
+          )
         })
 
       // -- build service --

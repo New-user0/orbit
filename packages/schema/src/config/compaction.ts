@@ -9,6 +9,10 @@ export class Keep extends Schema.Class<Keep>("Config.Compaction.Keep")({
 
 export class Info extends Schema.Class<Info>("Config.Compaction")({
   auto: Schema.Boolean.pipe(optional),
+  clear: Schema.Boolean.annotate({
+    description:
+      "Whether old tool results are left out of the model's context after an hour idle or when automatic compaction is due, keeping the newest five. The transcript keeps them. Default true.",
+  }).pipe(optional),
   keep: Keep.pipe(optional),
   buffer: NonNegativeInt.pipe(optional),
 }) {}

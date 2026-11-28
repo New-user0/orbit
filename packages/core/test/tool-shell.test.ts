@@ -2,7 +2,7 @@ import fs from "fs/promises"
 import { realpathSync, watch } from "node:fs"
 import os from "os"
 import path from "path"
-import { describe, expect } from "bun:test"
+import { beforeAll, describe, expect } from "bun:test"
 import { TestClock } from "effect/testing"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Scope, Stream } from "effect"
 import { Money } from "@orbit/schema/money"
@@ -41,6 +41,7 @@ import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { define } from "@orbit/plugin/effect/plugin"
 import { PowerShellParse } from "@orbit/core/shell/powershell-parse"
 import { ShellAnalysis } from "@orbit/core/shell/analysis"
+import { ShellGuard } from "@orbit/core/shell/guard"
 import { ShellSelect } from "@orbit/core/shell/select"
 import { ToolNames } from "@orbit/core/tool/names"
 import { ToolScheduler } from "@orbit/core/session/runner/tool-scheduler"
@@ -56,12 +57,21 @@ import { ManagedPolicy } from "@orbit/core/managed-policy"
 import { which } from "@orbit/util/which"
 import type { ConfigManaged } from "@orbit/schema/config/managed"
 import { offlineModels } from "./fixture/models"
+import { runProgram } from "./fixture/run-program"
+import { pwshStarted } from "./fixture/pwsh-started"
+import { installPolicy } from "./fixture/policy"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
 import { Expected } from "./lib/session-message"
 import { toolIdentity, executeTool, registerToolPlugin, toolDefinitions, toolTraits } from "./lib/tool"
 
 type ManagedNetwork = NonNullable<ConfigManaged.Restrictions["network"]>
+
+// Whether bubblewrap runs here, decided at load so a host without it reports the sandbox rows as skipped.
+const bwrapWorks =
+  process.platform === "linux" &&
+  which("bwrap") !== null &&
+  (await runProgram(["bwrap", "--dev-bind", "/", "/", "true"])).exitCode === 0
 
 const sessionID = Session.ID.make("ses_shell_tool_test")
 const sessionModel = Model.Ref.make({ id: Model.ID.make("test"), providerID: Provider.ID.make("test") })
@@ -208,8 +218,9 @@ const permissionIt = testEffect(
 )
 
 // The real job registry, with `block` and `cancel` held back for a set time, so a test can land the deadline in the window
-// between a job settling and the call looking at it.
-const slow = { block: 0, cancel: 0, stale: false }
+// between a job settling and the call looking at it. With `settle` set, `block` holds the call until the job has ended,
+// so the command ends in that window however long its shell takes to start.
+const slow = { block: 0, cancel: 0, stale: false, settle: false }
 const slowJobs = makeGlobalNode({
   service: Job.Service,
   layer: Layer.effect(
@@ -223,7 +234,11 @@ const slowJobs = makeGlobalNode({
             jobs.get(id).pipe(
               Effect.map((info) => (slow.stale && info?.status === "running" ? { ...info, status: "completed" as const } : info)),
             ),
-          block: (input) => jobs.block(input).pipe(Effect.tap(() => Effect.sleep(Duration.millis(slow.block)))),
+          block: (input) =>
+            jobs.block(input).pipe(
+              Effect.tap(() => Effect.sleep(Duration.millis(slow.block))),
+              Effect.tap(() => (slow.settle ? ended(jobs, input.id) : Effect.void)),
+            ),
           cancel: (id) => jobs.cancel(id).pipe(Effect.tap(() => Effect.sleep(Duration.millis(slow.cancel)))),
         }),
       ),
@@ -231,6 +246,14 @@ const slowJobs = makeGlobalNode({
   ),
   deps: [KV.node],
 })
+const ended = (jobs: Job.Interface, id: string): Effect.Effect<void> =>
+  jobs
+    .get(id)
+    .pipe(
+      Effect.flatMap((info) =>
+        info?.status === "running" ? Effect.sleep("20 millis").pipe(Effect.andThen(ended(jobs, id))) : Effect.void,
+      ),
+    )
 const slowIt = testEffect(
   AppNodeBuilder.build(nodes, [
     ...replacements,
@@ -1052,6 +1075,11 @@ describe("ShellTool ordinary shell syntax", () => {
 
   const pwsh = process.env.SHELL_SCAN_PWSH ?? Bun.which("pwsh") ?? Bun.which("powershell")
   const test = pwsh ? permissionIt.live : permissionIt.live.skip
+  // The rows below read the real parser, which gets five seconds from the spawn of its host: the first start of
+  // PowerShell on a runner is waited for here, not counted against the parser (test/fixture/pwsh-started.ts).
+  beforeAll(async () => {
+    if (pwsh) await pwshStarted(pwsh)
+  }, 150_000)
   for (const portable of [false, true]) {
     // A statement that is not a pipeline of commands (an assignment, a conditional, a loop, a definition) is asked about by
     // its own text, which no saved grant for the commands inside it covers.
@@ -1125,7 +1153,7 @@ describe("ShellTool ordinary shell syntax", () => {
             pwsh ?? "pwsh",
           ),
         // The first command pays for PowerShell's cold start, which alone can exceed the default five seconds.
-        { timeout: 15_000 },
+        { timeout: 20_000 },
       )
     }
   }
@@ -2496,14 +2524,70 @@ describe("ShellTool", () => {
     ),
   )
 
+  // tool-runtime-8: a command that prints nothing returns no text of its own, so the step's empty marker names the tool,
+  // as the reference's empty shell result does. Control: a command that prints keeps its text.
+  it.live("gives no text for a command that prints nothing", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const silent = yield* executeTool(registry, call({ command: "exit 0" }, "call-silent"))
+            expect(silent.status).toBe("completed")
+            expect(silent.metadata).toMatchObject({ exit: 0 })
+            expect(silent.content?.every((item) => item.type === "text" && item.text.trim() === "")).toBe(true)
+            const spoken = yield* executeTool(registry, call({ command: helloCommand }, "call-spoken"))
+            expect(spoken.content?.[0]).toEqual({ type: "text", text: "hello" })
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+    10_000,
+  )
+
+  // shell-safety-6: the head that stands for output that did not fit starts at its first line that is not blank and has no
+  // trailing space. Output that fits keeps both, which is the control.
   it.live(
-    "truncates the model view and points at the saved output file when output overflows",
+    "trims the blank lines and trailing space of a head that did not fit",
     () =>
       Effect.acquireUseRelease(
         Effect.promise(() => tmpdir()),
         (tmp) => {
           reset()
-          const bytes = ToolOutput.MAX_BYTES + 1024
+          const command = isWindows ? '[Console]::Out.Write("`n `n`nabc   def")' : "printf '\\n \\n\\nabc   def'"
+          const head = (maxBytes: number) =>
+            Effect.gen(function* () {
+              yield* Effect.promise(() =>
+                Bun.write(path.join(tmp.path, "orbit.json"), JSON.stringify({ tool_output: { max_bytes: maxBytes } })),
+              )
+              const settled = yield* withSession(tmp.path, (registry) =>
+                executeTool(registry, call({ command }, `call-trim-${maxBytes}`)),
+              )
+              const content = settled.content?.[0]
+              if (!content || content.type !== "text") throw new Error("Expected text content")
+              return content.text
+            })
+          return Effect.gen(function* () {
+            expect(yield* head(9)).toBe("abc")
+            expect(yield* head(100)).toBe("\n \n\nabc   def")
+          })
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  // shell-safety-6: output past the head limit keeps its head, not its tail.
+  it.live(
+    "keeps the head of output that overflows",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          const bytes = Shell.HEAD_BYTES + 1024
           return withSession(tmp.path, (registry) =>
             executeTool(registry, call({ command: overflowCommand(bytes) }, "call-overflow")),
           ).pipe(
@@ -2512,9 +2596,8 @@ describe("ShellTool", () => {
                 expect(settled.metadata).toMatchObject({ exit: 0, truncated: true })
                 const content = settled.content?.[0]
                 if (!content || content.type !== "text") throw new Error("Expected text content")
-                expect(content.text.includes("output-start")).toBe(false)
-                expect(content.text.includes("output-end")).toBe(true)
-                expect(content).toMatchObject(Expected.text(expect.stringContaining("full output saved to ")))
+                expect(content.text).toStartWith("output-start")
+                expect(content.text.includes("output-end")).toBe(false)
               }),
             ),
           )
@@ -2524,7 +2607,51 @@ describe("ShellTool", () => {
     { timeout: 15_000 },
   )
 
-  it.live("uses configured line limits", () =>
+  // shell-safety-6: a head limit raised past the declared 30,000 characters lets output that fits the head but not the
+  // limit reach the step, which saves it like any other result.
+  it.live(
+    "leaves output past the declared limit to the step when the head limit is raised",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          return Effect.gen(function* () {
+            yield* Effect.promise(() =>
+              Bun.write(path.join(tmp.path, "orbit.json"), JSON.stringify({ tool_output: { max_bytes: 100_000 } })),
+            )
+            return yield* withSession(tmp.path, (registry) =>
+              Effect.gen(function* () {
+                const input = { command: overflowCommand(60_000) }
+                const traits = yield* toolTraits(registry, "Bash", input)
+                const tools = yield* registry.snapshot()
+                const result = yield* tools.execute(call(input, "call-raised"))
+                const toolOutput = yield* ToolOutput.Service
+                const settled = yield* toolOutput.settle({
+                  sessionID,
+                  messageID: SessionMessage.ID.create(),
+                  callID: "call-raised",
+                  tool: "Bash",
+                  limit: ToolOutput.threshold(traits.maxResultChars, undefined),
+                  result,
+                })
+                expect(traits.maxResultChars).toBe(30_000)
+                expect(settled.metadata?.truncated).toBe(false)
+                expect(settled.metadata?.persisted).toMatchObject({
+                  size: "output-start".length + 60_000 + "output-end".length,
+                })
+                expect(settled.metadata?.persisted).not.toHaveProperty("parts")
+              }),
+            )
+          })
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
+    { timeout: 15_000 },
+  )
+
+  // shell-safety-6: `max_lines` no longer bounds a result; `max_bytes` alone does, from the start of the output.
+  it.live("reads the head by bytes and ignores max_lines", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => {
@@ -2533,7 +2660,7 @@ describe("ShellTool", () => {
           yield* Effect.promise(() =>
             Bun.write(
               path.join(tmp.path, "orbit.json"),
-              JSON.stringify({ tool_output: { max_lines: 2, max_bytes: 1_000 } }),
+              JSON.stringify({ tool_output: { max_lines: 2, max_bytes: 6 } }),
             ),
           )
           const settled = yield* withSession(tmp.path, (registry) =>
@@ -2542,10 +2669,8 @@ describe("ShellTool", () => {
           expect(settled.metadata).toMatchObject({ exit: 0, truncated: true })
           const content = settled.content?.[0]
           if (!content || content.type !== "text") throw new Error("Expected text content")
-          expect(content.text).not.toContain("one")
-          // Windows shells emit CRLF; the assertion targets line limits, not line endings.
-          expect(content.text.replaceAll("\r\n", "\n")).toStartWith("two\nthree")
-          expect(content.text).toContain("full output saved to ")
+          // The first six bytes; Windows shells end a line with CRLF.
+          expect(["one\ntw", "one\r\nt"]).toContain(content.text)
         })
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
@@ -2565,7 +2690,7 @@ describe("ShellTool", () => {
             Effect.gen(function* () {
               const observed = yield* Deferred.make<string>()
               yield* executeTool(registry, {
-                ...call({ command: progressOverflowCommand(ToolOutput.MAX_BYTES + 1024, release) }, "call-progress"),
+                ...call({ command: progressOverflowCommand(Shell.HEAD_BYTES + 1024, release) }, "call-progress"),
                 progress: (update) =>
                   Effect.gen(function* () {
                     if (typeof update.shellID !== "string") return
@@ -2734,7 +2859,7 @@ describe("ShellTool", () => {
               {
                 id: settled.metadata?.shellID,
                 status: "completed",
-                output: "(no output)\n\nExited with code 7",
+                output: "Exited with code 7",
               },
             ])
           }),
@@ -2958,6 +3083,7 @@ describe("ShellTool", () => {
         },
         (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
       ),
+      10_000,
     )
   }
 
@@ -3135,10 +3261,7 @@ describe("ShellTool", () => {
 
   // Runs the real thing where bubblewrap works. The sandbox mounts its own /proc, so the interfaces listed there are those
   // of the sandbox's network namespace: only the loopback means the network is off.
-  const bwrapTest =
-    process.platform === "linux" && which("bwrap") !== null && Bun.spawnSync(["bwrap", "--dev-bind", "/", "/", "true"]).exitCode === 0
-      ? it.live
-      : it.live.skip
+  const bwrapTest = bwrapWorks ? it.live : it.live.skip
   bwrapTest("has no network interface but the loopback when domain settings force the network off", () =>
     Effect.gen(function* () {
       const tmp = yield* tmpdirScoped()
@@ -3440,11 +3563,14 @@ describe("ShellTool timeouts", () => {
         Effect.sync(() => {
           expect(configured.input.properties.timeout.maximum).toBe(300_000)
           expect(configured.input.properties.timeout.description).toContain("300000")
-          expect(configured.tool?.description).toContain("up to 300000 ms (5 minutes)")
-          expect(configured.tool?.description).toContain("waits 90000 ms (1.5 minutes)")
+          // The whole sentence: the unit, which commands get the default, the default and the maximum.
+          expect(configured.tool?.description).toContain(
+            "The timeout is optional and given in milliseconds. Without one, a foreground command gets 90000 ms (1.5 minutes); no timeout may be longer than 300000 ms (5 minutes). A foreground command still running at its timeout",
+          )
         }),
       ),
     ),
+    10_000,
   )
 
   productionIt.live("advertises the built-in numbers without config, and leaves the shared input alone", () =>
@@ -3452,12 +3578,14 @@ describe("ShellTool timeouts", () => {
       Effect.tap((defaults) =>
         Effect.sync(() => {
           expect(defaults.input.properties.timeout.maximum).toBe(600_000)
-          expect(defaults.tool?.description).toContain("up to 600000 ms (10 minutes)")
-          expect(defaults.tool?.description).toContain("waits 120000 ms (2 minutes)")
+          expect(defaults.tool?.description).toContain(
+            "The timeout is optional and given in milliseconds. Without one, a foreground command gets 120000 ms (2 minutes); no timeout may be longer than 600000 ms (10 minutes). A foreground command still running at its timeout",
+          )
           expect(shared.properties.timeout).not.toHaveProperty("maximum")
         }),
       ),
     ),
+    10_000,
   )
 
   it.live("keeps the registry schema static", () =>
@@ -3489,23 +3617,27 @@ describe("ShellTool timeouts", () => {
           }
         }),
       ),
-    { timeout: 120_000 },
+    { timeout: 125_000 },
   )
 
+  // The command outlives its 200 ms deadline, so the timer moves it, and it ends before the call looks at the move. The
+  // window used to be a fixed 1.5 s from the deadline, which a PowerShell that took that long to start on a stalled
+  // Windows runner missed (run 46017939770, Windows core 3/3): the call then saw the command still running.
   slowIt.live(
     "returns a command that exits as the deadline passes inline, with no notification and no marker",
     () =>
       inFolder(undefined, ({ registry, notifications }) =>
         Effect.gen(function* () {
-          slow.block = 1500
+          slow.block = 0
           slow.cancel = 0
-          const settled = yield* executeTool(registry, call({ command: briefThenDone(50), timeout: 200 }))
+          slow.settle = true
+          const settled = yield* executeTool(registry, call({ command: briefThenDone(400), timeout: 200 }))
           expect(settled.metadata).toMatchObject({ status: "completed" })
           expect(text(settled)).toBe("done")
           yield* Effect.promise(() => Bun.sleep(500))
           expect(notifications()).toEqual([])
           expect(yield* pending).toEqual([])
-        }).pipe(Effect.ensuring(Effect.sync(() => void (slow.block = 0)))),
+        }).pipe(Effect.ensuring(Effect.sync(() => void (slow.settle = false)))),
       ),
     { timeout: 30_000 },
   )
@@ -3735,6 +3867,20 @@ describe("ShellTool timeouts", () => {
         return yield* Effect.fail(new Error("The command printed nothing"))
       })
 
+    // Output that grows after the watcher's first check starts its quiet count again, and the clock moves only where a
+    // test moves it, so a test whose command writes in parts waits for the last part before it moves the clock.
+    const untilPrompt = (shellID: string) =>
+      Effect.gen(function* () {
+        const shell = yield* Shell.Service
+        for (let attempt = 0; attempt < 500; attempt++) {
+          const size = (yield* shell.output(ID.make(shellID), { cursor: Number.MAX_SAFE_INTEGER })).size
+          const tail = (yield* shell.output(ID.make(shellID), { cursor: Math.max(0, size - 64) })).output
+          if (tail.includes("Continue? [y/N]")) return
+          yield* realWait(20)
+        }
+        return yield* Effect.fail(new Error("The command did not print its prompt"))
+      })
+
     /** Moves the test clock in 5 second checks, letting the watcher and the notification run after each. */
     const advance = (seconds: number) =>
       Effect.forEach(Array.from({ length: seconds / 5 }), () =>
@@ -3912,13 +4058,16 @@ describe("ShellTool timeouts", () => {
           Effect.gen(function* () {
             const seen = yield* collect
             const shell = yield* Shell.Service
+            // The command writes the start, pauses, then writes the rest, as a loaded runner wrote the earlier one-line
+            // form; `start` returns once the first part is there, so the test waits for the prompt.
             const shellID = yield* start(
               registry,
               isWindows
-                ? "[Console]::Out.Write('HEAD' + 'MARKER' + ('x' * 3000) + \"`nContinue? [y/N] \"); Start-Sleep -Seconds 600"
-                : "printf HEAD; printf MARKER; head -c 3000 /dev/zero | tr '\\0' x; printf '\\nContinue? [y/N] '; sleep 600",
+                ? "[Console]::Out.Write('HEAD' + 'MARKER'); [Console]::Out.Flush(); Start-Sleep -Seconds 1; [Console]::Out.Write(('x' * 3000) + \"`nContinue? [y/N] \"); Start-Sleep -Seconds 600"
+                : "printf HEAD; printf MARKER; sleep 1; head -c 3000 /dev/zero | tr '\\0' x; printf '\\nContinue? [y/N] '; sleep 600",
               "call-long",
             )
+            yield* untilPrompt(shellID)
             yield* advance(50)
             yield* settle(seen, 1)
             expect(seen[0]?.text).toContain("Continue? [y/N]")
@@ -4194,6 +4343,9 @@ describe("ShellTool guard", () => {
 describe("ShellTool guard (PowerShell)", () => {
   const pwsh = process.env.SHELL_SCAN_PWSH ?? Bun.which("pwsh") ?? Bun.which("powershell")
   const test = pwsh ? permissionIt.live : permissionIt.live.skip
+  beforeAll(async () => {
+    if (pwsh) await pwshStarted(pwsh)
+  }, 150_000)
   // Rule matching is case-insensitive only on Windows (Orbit's wildcard), so the rows that write a rule in one case for a
   // command written in another run there.
   const windows = pwsh && isWindows ? permissionIt.live : permissionIt.live.skip
@@ -4661,6 +4813,280 @@ describe("ShellTool: a location cmdlet spelled as a path", () => {
               expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(false)
             }).pipe(Effect.scoped),
           pwsh ?? "powershell",
+        ),
+      { timeout: 120_000 },
+    )
+})
+
+// The shell checks the person's Read and Edit rules against the files a command names before it asks anything. Until a
+// folder is trusted, the request of a path that a link of the project leads out names the place it leads to, so the path
+// as the project spells it is checked too: a deny written for it, relative, absolute or as a pattern, stops the command
+// through the link as it does in a trusted folder (class 3). The gate runs without starting the command, so the rows run
+// on every platform; with no deny, the same call passes it.
+describe("ShellGuard: a deny for the spelling of a path a link leads out of", () => {
+  const pwsh = Bun.which("pwsh") ?? Bun.which("powershell")
+  // The real Permission and PowerShell parser, in a folder the core tests trust and in one that nothing trusts.
+  const guardIt = (trusted: boolean) =>
+    testEffect(
+      AppNodeBuilder.build(LayerNode.group([nodes, PermissionSaved.node, PowerShellParse.node]), [
+        SessionExecution.node.replace(executionNode),
+        Global.node.replace(tempGlobalLayer),
+        PluginSupervisor.node.replace(shellPluginSupervisor),
+        ...(trusted ? [] : [WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false }))]),
+        offlineModels,
+      ]),
+    )
+  const rows = [
+    { command: "cat cfg/s", shell: "sh", action: "Read" },
+    { command: "echo x > cfg/s", shell: "sh", action: "Edit" },
+    { command: "rm cfg/s", shell: "sh", action: "Edit" },
+    { command: "bash -c 'cat cfg/s'", shell: "sh", action: "Read" },
+    ...(pwsh
+      ? [
+          { command: "Get-Content cfg/s", shell: pwsh, action: "Read" },
+          { command: "Set-Content cfg/s x", shell: pwsh, action: "Edit" },
+        ]
+      : []),
+  ]
+  for (const trusted of [true, false])
+    guardIt(trusted).live(
+      `decides cat, a redirect, rm, bash -c and PowerShell through the link (${trusted ? "trusted" : "untrusted"})`,
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) =>
+            Effect.gen(function* () {
+              const active = path.join(tmp.path, "active")
+              const outside = path.join(tmp.path, "outside")
+              const real = yield* Effect.promise(async () => {
+                await fs.mkdir(active)
+                await fs.mkdir(outside)
+                await fs.writeFile(path.join(outside, "s"), "secret")
+                await fs.symlink(outside, path.join(active, "cfg"), isWindows ? "junction" : "dir")
+                return fs.realpath(path.join(outside, "s"))
+              })
+              // The relative and absolute spellings in the project, a pattern, and the place the link leads to.
+              const spellings = [
+                undefined,
+                "cfg/s",
+                path.join(active, "cfg", "s").replaceAll("\\", "/"),
+                "cfg/*",
+                real.replaceAll("\\", "/"),
+              ]
+              const decided = yield* withSession(active, () =>
+                Effect.gen(function* () {
+                  const access = yield* FileAccess.Service
+                  const cwd = yield* access.resolve({ path: active, kind: "directory" })
+                  return yield* Effect.forEach(rows, (row) =>
+                    Effect.forEach(spellings, (spelling) =>
+                      Effect.gen(function* () {
+                        yield* permissions([
+                          { action: "Bash", resource: "*", effect: "allow" },
+                          { action: "external_directory", resource: "*", effect: "allow" },
+                          ...(spelling === undefined
+                            ? []
+                            : [{ action: row.action, resource: spelling, effect: "deny" as const }]),
+                        ])
+                        const exit = yield* ShellGuard.prepare({
+                          command: row.command,
+                          shell: row.shell,
+                          cwd,
+                          env: {},
+                          portable: false,
+                          base: { sessionID, agent: toolIdentity.agent },
+                        }).pipe(Effect.flatMap(ShellGuard.denyPass), Effect.exit)
+                        const refusal = Exit.isFailure(exit)
+                          ? exit.cause.reasons.flatMap((reason) =>
+                              Cause.isFailReason(reason) && reason.error instanceof Permission.BlockedError
+                                ? [reason.error]
+                                : [],
+                            )[0]
+                          : undefined
+                        const blocked = refusal !== undefined
+                        // The refusal names the path as a trusted folder names it, with forward slashes on Windows too.
+                        const named = refusal?.resources.includes("cfg/s") ?? false
+                        return {
+                          command: row.command,
+                          spelling,
+                          blocked,
+                          named,
+                          settled: blocked || Exit.isSuccess(exit),
+                        }
+                      }),
+                    ),
+                  ).pipe(Effect.map((items) => items.flat()))
+                }),
+              )
+              expect(decided).toEqual(
+                rows.flatMap((row) =>
+                  spellings.map((spelling) => ({
+                    command: row.command,
+                    spelling,
+                    blocked: spelling !== undefined,
+                    named: spelling !== undefined,
+                    settled: true,
+                  })),
+                ),
+              )
+              // Nothing ran: the file the link leads to is as it was.
+              expect(yield* Effect.promise(() => fs.readFile(path.join(outside, "s"), "utf8"))).toBe("secret")
+            }),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+        ),
+      { timeout: 120_000 },
+    )
+
+  // From a session folder below the worktree the project spells the file `../cfg/s`. The shell keeps that spelling, and
+  // so do the file tools since fix loop 11 (edit-link.test.ts, "a rule for the ../ spelling"), so one rule decides both.
+  for (const trusted of [true, false])
+    guardIt(trusted).live(
+      `decides cat ../cfg/s from a session folder below the worktree (${trusted ? "trusted" : "untrusted"})`,
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) =>
+            Effect.gen(function* () {
+              const active = path.join(tmp.path, "active")
+              const below = path.join(active, "plain")
+              const outside = path.join(tmp.path, "outside")
+              yield* Effect.promise(async () => {
+                await fs.mkdir(below, { recursive: true })
+                await fs.mkdir(outside)
+                await fs.writeFile(path.join(outside, "s"), "secret")
+                await fs.symlink(outside, path.join(active, "cfg"), isWindows ? "junction" : "dir")
+              })
+              yield* Effect.promise(() => runProgram(["git", "init", "-q", active]))
+              const spellings = [undefined, "../cfg/s", "../cfg/*"]
+              const decided = yield* withSession(below, () =>
+                Effect.gen(function* () {
+                  const access = yield* FileAccess.Service
+                  const cwd = yield* access.resolve({ path: below, kind: "directory" })
+                  return yield* Effect.forEach(spellings, (spelling) =>
+                    Effect.gen(function* () {
+                      yield* permissions([
+                        { action: "Bash", resource: "*", effect: "allow" },
+                        { action: "external_directory", resource: "*", effect: "allow" },
+                        ...(spelling === undefined ? [] : [{ action: "Read", resource: spelling, effect: "deny" as const }]),
+                      ])
+                      const exit = yield* ShellGuard.prepare({
+                        command: "cat ../cfg/s",
+                        shell: "sh",
+                        cwd,
+                        env: {},
+                        portable: false,
+                        base: { sessionID, agent: toolIdentity.agent },
+                      }).pipe(Effect.flatMap(ShellGuard.denyPass), Effect.exit)
+                      const blocked =
+                        Exit.isFailure(exit) &&
+                        exit.cause.reasons.some(
+                          (reason) => Cause.isFailReason(reason) && reason.error instanceof Permission.BlockedError,
+                        )
+                      return { spelling, blocked, settled: blocked || Exit.isSuccess(exit) }
+                    }),
+                  )
+                }),
+              )
+              expect(decided).toEqual(
+                spellings.map((spelling) => ({ spelling, blocked: spelling !== undefined, settled: true })),
+              )
+            }),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+        ),
+      { timeout: 120_000 },
+    )
+})
+
+// m5-quality, item 12 (classes 3 and 8): the shell's deny-only Read and Edit probes consult the configuration policies
+// too, as the tools' own requests do, though a probe runs no plugin hook: the policy plugin's own decision is installed
+// for it. Here an organization statement for the path as the project spells it, a plain file and one through a folder
+// link out, stops `cat` and a redirect in a trusted and an untrusted folder; a statement for another file is the
+// control. The gate runs without starting the command, so the rows run on every platform.
+describe("ShellGuard: a policy for the path a command names", () => {
+  const guardIt = (trusted: boolean) =>
+    testEffect(
+      AppNodeBuilder.build(LayerNode.group([nodes, PermissionSaved.node, PowerShellParse.node]), [
+        SessionExecution.node.replace(executionNode),
+        Global.node.replace(tempGlobalLayer),
+        PluginSupervisor.node.replace(shellPluginSupervisor),
+        ...(trusted ? [] : [WorkspaceTrust.node.replace(WorkspaceTrust.configured({ implicit: false }))]),
+        offlineModels,
+      ]),
+    )
+  const rows = [
+    { command: "cat plain/s", action: "Read", named: "plain/s" },
+    { command: "echo x > plain/s", action: "Edit", named: "plain/s" },
+    { command: "cat cfg/s", action: "Read", named: "cfg/s" },
+    { command: "echo x > cfg/s", action: "Edit", named: "cfg/s" },
+  ]
+  for (const trusted of [true, false])
+    guardIt(trusted).live(
+      `refuses cat and a redirect of a plain file and through a link (${trusted ? "trusted" : "untrusted"})`,
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) =>
+            Effect.gen(function* () {
+              const active = path.join(tmp.path, "active")
+              const outside = path.join(tmp.path, "outside")
+              yield* Effect.promise(async () => {
+                await fs.mkdir(path.join(active, "plain"), { recursive: true })
+                await fs.mkdir(outside)
+                await fs.writeFile(path.join(outside, "s"), "secret")
+                await fs.writeFile(path.join(active, "plain", "s"), "secret")
+                await fs.symlink(outside, path.join(active, "cfg"), isWindows ? "junction" : "dir")
+              })
+              const decided = yield* withSession(active, () =>
+                Effect.gen(function* () {
+                  const access = yield* FileAccess.Service
+                  const managed = yield* ManagedPolicy.Service
+                  const cwd = yield* access.resolve({ path: active, kind: "directory" })
+                  // The real policy plugin, which reads the organization's statements as each row sets them.
+                  yield* installPolicy("organization", [])
+                  yield* permissions([
+                    { action: "Bash", resource: "*", effect: "allow" },
+                    { action: "external_directory", resource: "*", effect: "allow" },
+                    { action: "Read", resource: "*", effect: "allow" },
+                    { action: "Edit", resource: "*", effect: "allow" },
+                  ])
+                  return yield* Effect.forEach(rows, (row) =>
+                    Effect.forEach([`${row.action}:other.txt`, `${row.action}:${row.named}`], (resource) =>
+                      Effect.gen(function* () {
+                        yield* managed.set("connection", {
+                          statements: [{ action: "permission", resource, effect: "deny" }],
+                        })
+                        const exit = yield* ShellGuard.prepare({
+                          command: row.command,
+                          shell: "sh",
+                          cwd,
+                          env: {},
+                          portable: false,
+                          base: { sessionID, agent: toolIdentity.agent },
+                        }).pipe(Effect.flatMap(ShellGuard.denyPass), Effect.exit)
+                        const blocked =
+                          Exit.isFailure(exit) &&
+                          exit.cause.reasons.some(
+                            (reason) => Cause.isFailReason(reason) && reason.error instanceof Permission.BlockedError,
+                          )
+                        return { command: row.command, resource, blocked, settled: blocked || Exit.isSuccess(exit) }
+                      }),
+                    ),
+                  ).pipe(
+                    Effect.map((items) => items.flat()),
+                    Effect.ensuring(managed.set("connection", { statements: [] })),
+                  )
+                }),
+              )
+              expect(decided).toEqual(
+                rows.flatMap((row) => [
+                  { command: row.command, resource: `${row.action}:other.txt`, blocked: false, settled: true },
+                  { command: row.command, resource: `${row.action}:${row.named}`, blocked: true, settled: true },
+                ]),
+              )
+              // Nothing ran: the files are as they were.
+              expect(yield* Effect.promise(() => fs.readFile(path.join(outside, "s"), "utf8"))).toBe("secret")
+              expect(yield* Effect.promise(() => fs.readFile(path.join(active, "plain", "s"), "utf8"))).toBe("secret")
+            }),
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
         ),
       { timeout: 120_000 },
     )

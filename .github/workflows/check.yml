@@ -1,7 +1,9 @@
 name: check
 
 on:
+  # A pull request's branch is checked by its pull_request run alone; running push too doubled every run.
   push:
+    branches: [main, "m*-integration"]
   pull_request:
   workflow_dispatch:
 
@@ -53,73 +55,287 @@ jobs:
           }
 
   test:
-    name: test (${{ matrix.package }})
+    name: test (${{ matrix.package }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ubuntu-latest
-    # A stopped or hung worker must fail the job instead of holding it for hours.
-    # The cli job took 29.7 min on 2 CPUs in Docker, and CI runners are 1.25x to 1.5x slower; 90 leaves headroom.
-    timeout-minutes: 90
+    # In the parallel packages (core, cli, tui, server, vscode) a stuck test file fails the run within its deadline
+    # (tools/test/watchdog.ts, ten minutes by default). A serial package's run has no watchdog, so a stuck file there
+    # holds the job until this limit.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         # sdk holds the contract-identity tests (SDK, Core, Server and Client must share one set of contracts);
-        # theme holds the theme resolution tests; compat holds the compatibility switch and root discovery tests.
-        package: [ai, cli, client, codemode, compat, core, flow, plugin, protocol, schema, sdk, server, theme, tui, util, vscode]
+        # theme holds the theme resolution tests; compat holds the compatibility switch and root discovery tests;
+        # http-recorder holds the cassette store, whose append waits for a reader of the cassette on Windows.
+        # cli runs as three jobs. `bun test --shard` splits a package's files by the Linux timings it keeps
+        # (test/timings.json); `part` names the shard's coverage and timings artifacts. The sharded jobs are listed
+        # first, because GitHub starts jobs in this order when the concurrency limit queues some.
+        include:
+          - { package: cli, shard: "1/3", part: "-1of3" }
+          - { package: cli, shard: "2/3", part: "-2of3" }
+          - { package: cli, shard: "3/3", part: "-3of3" }
+          - { package: core }
+          - { package: tui }
+          - { package: server }
+          - { package: vscode }
+          - { package: flow }
+          - { package: ai }
+          - { package: client }
+          - { package: codemode }
+          - { package: compat }
+          - { package: plugin }
+          - { package: protocol }
+          - { package: schema }
+          - { package: sdk }
+          - { package: theme }
+          - { package: util }
+          - { package: http-recorder }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
       # Orbit does not download ripgrep; the search tools and their tests use the one on PATH.
       - name: Install ripgrep
-        run: sudo apt-get install -y ripgrep
+        # A mirror that answers an error is retried with a growing pause before the job fails. The update's exit code is
+        # not what decides: a third-party list of the image that fails (packages.microsoft.com answered 403 in run
+        # 45956226249) fails the whole update though Ubuntu's own lists, which hold ripgrep, were read.
+        run: |
+          for attempt in 1 2 3 4 5; do
+            sudo apt-get update -o Acquire::Retries=3 || echo "apt-get update reported an error; installing from the lists it read" >&2
+            sudo apt-get install -y -o Acquire::Retries=3 ripgrep && exit 0
+            echo "ripgrep install attempt $attempt failed, retrying in $((attempt * 10)) s" >&2
+            sleep $((attempt * 10))
+          done
+          exit 1
       - name: Test
         working-directory: packages/${{ matrix.package }}
         # cli includes the egress test: an idle server must make no outbound connection for two minutes.
         env:
           ORBIT_EGRESS_IDLE_MS: "120000"
+          SHARD: ${{ matrix.shard }}
         # Each package's own test script, which sets up what its tests need (core's isolates home and config).
         # The log ends with the failing tests' names, which the full output buries.
+        # The run also writes line coverage, which the changed-line coverage gate reads from the artifact below.
         shell: bash
         run: |
           set -o pipefail
-          bun run test 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage --reporter=junit --reporter-outfile=junit.xml 2>&1 | tee "$RUNNER_TEMP/test.log" || {
             echo "::group::Failures"
-            grep -E '^\(fail\)|^error:|Unhandled error' "$RUNNER_TEMP/test.log" | tail -60
+            grep -E '^\(fail\)|^error:|Unhandled error|^Test file stuck' "$RUNNER_TEMP/test.log" | tail -60
             echo "::endgroup::"
             exit 1
           }
+      # Uploaded even when tests fail: a failure on a known row still leaves the coverage the gate needs.
+      - name: Upload coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lcov-linux-${{ matrix.package }}${{ matrix.part }}
+          path: packages/${{ matrix.package }}/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
+      # Each test's own time (bun's JUnit report), from which a measured limit is set: at least twice the worst time the
+      # row took on a loaded runner (AGENTS.md, Testing).
+      - name: Upload test durations
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: junit-linux-${{ matrix.package }}${{ matrix.part }}
+          path: packages/${{ matrix.package }}/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+      # What each job measured (`--update-timings`). `bun tools/test/timings.ts --run <id>` merges a run's artifacts into
+      # the committed timings files. A package that runs serially writes none, and a run that was stopped writes none, so
+      # its unchanged copy of the committed file is not uploaded.
+      - name: Check timings
+        id: timings
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          file="packages/${{ matrix.package }}/test/timings.json"
+          if [ -f "$file" ] && [ -n "$(git status --porcelain -- "$file")" ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Upload timings
+        if: ${{ !cancelled() && steps.timings.outputs.changed == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: timings-linux-${{ matrix.package }}${{ matrix.part }}
+          path: packages/${{ matrix.package }}/test/timings.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   windows:
-    name: test on Windows (flow)
+    name: test on Windows (${{ matrix.package }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: windows-latest
+    # Windows runners are slower than Linux ones. As on Linux, only the parallel packages' runs stop a stuck file at its
+    # deadline; a serial package's run ends at this limit.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # cli, core and tui run as six, three and two jobs. `bun test --shard` splits a package's files by the Windows
+        # timings it keeps (test/timings.windows.json); `part` names the shard's coverage and timings artifacts. As on
+        # Linux, the sharded jobs come first so that GitHub starts them before the short ones.
+        include:
+          - { package: cli, shard: "1/6", part: "-1of6" }
+          - { package: cli, shard: "2/6", part: "-2of6" }
+          - { package: cli, shard: "3/6", part: "-3of6" }
+          - { package: cli, shard: "4/6", part: "-4of6" }
+          - { package: cli, shard: "5/6", part: "-5of6" }
+          - { package: cli, shard: "6/6", part: "-6of6" }
+          - { package: core, shard: "1/3", part: "-1of3" }
+          - { package: core, shard: "2/3", part: "-2of3" }
+          - { package: core, shard: "3/3", part: "-3of3" }
+          - { package: tui, shard: "1/2", part: "-1of2" }
+          - { package: tui, shard: "2/2", part: "-2of2" }
+          - { package: server }
+          - { package: vscode }
+          - { package: flow }
+          - { package: ai }
+          - { package: client }
+          - { package: codemode }
+          - { package: compat }
+          - { package: plugin }
+          - { package: protocol }
+          - { package: schema }
+          - { package: sdk }
+          - { package: theme }
+          - { package: util }
+          - { package: http-recorder }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: ./.github/actions/setup-bun
       # The tests compare file contents byte for byte, so checkouts keep the line endings agents wrote.
       - name: Configure git
         run: git config --global core.autocrlf false
-      # The Windows image has no ripgrep, and the Grep and Glob rows of the cli step search with it. Chocolatey puts a
-      # shim in its bin folder, which is already on PATH. Printing the version fails the step when the shim is missing.
-      - name: Install ripgrep
+      # The tests keep every folder they make on the runner's D: drive. The runner's own TEMP is on C:, its system disk,
+      # which stops answering for seconds at a time: in the typeperf logs of 103 traced Windows test jobs (about 181,000
+      # seconds), C: held queued requests and moved no byte for 305 seconds, 25 times for 3 s or more and at most 7 s,
+      # and D: never did. Such a stall holds every row then waiting on the disk, and 12 of the 19 rows that timed out in
+      # those jobs ran inside one. C: stays the other volume that a test of a copy across volumes needs, and the runner's
+      # own temp folder there (ORBIT_TEST_OTHER_VOLUME) is where the class 3 and 4 rows that spell a path through the
+      # legacy junctions `Documents and Settings` and `Local Settings` make their folders, as those lead only below a
+      # profile's AppData\Local (packages/core/test/fixture/legacy-junction.ts).
+      # What the tests need of the temp folder stays as it was on C:. Its volume makes 8.3 short names, which the class 3
+      # and 4 spelling gates take apart (D: makes none until fsutil turns them on, and the step fails if it still makes
+      # none). Its path holds no character that Markdown escapes (RUNNER_TEMP is D:\a\_temp), as the approval titles
+      # the ACP rows compare show a path as plain text only then. Bun runs from the same volume, as a test that
+      # hard-links the running image into a temp folder needs (a hard link cannot cross volumes).
+      # Tests compare the folders they make under TEMP with the real paths Orbit resolves, which use the long name, as
+      # TEMP does on a developer's machine.
+      - name: Keep the temp folder and Bun on the D drive
+        shell: bash
         run: |
-          choco install ripgrep --yes --no-progress
-          rg --version
-      - name: Flow package
-        working-directory: packages/flow
-        run: bun test
-      # Windows semantics (path.win32, .exe heads, UNC paths, aliases) are exercised here as well as on Linux.
-      - name: Shell analysis
+          fsutil.exe 8dot3name set 0
+          mkdir -p /d/orbit-test-temp/short-name-check-folder
+          short="$(cygpath -s -w /d/orbit-test-temp/short-name-check-folder)"
+          echo "short name: $short"
+          case "$short" in *"~"*) ;; *) echo "D: makes no 8.3 short names"; exit 1 ;; esac
+          rmdir /d/orbit-test-temp/short-name-check-folder
+          long="$(cygpath -w -l /d/orbit-test-temp)"
+          echo "TEMP=$long" >> "$GITHUB_ENV"
+          echo "TMP=$long" >> "$GITHUB_ENV"
+          echo "ORBIT_TEST_OTHER_VOLUME=$(cygpath -w -l "$TEMP")" >> "$GITHUB_ENV"
+          mkdir -p /d/orbit-bun
+          cp "$(command -v bun)" /d/orbit-bun/bun.exe
+          if command -v bunx > /dev/null; then cp "$(command -v bunx)" /d/orbit-bun/bunx.exe; fi
+          cygpath -w /d/orbit-bun >> "$GITHUB_PATH"
+          echo "$long"
+      # Git Bash exports SHELL when a developer opens it, and Orbit's session shell on Windows follows SHELL; without it
+      # the session shell is PowerShell and the tests' scripted Bash calls find no Bash tool. The runner's bash steps do
+      # not export it, so it is set to Git Bash here.
+      - name: Use Git Bash as the session shell
+        shell: bash
+        run: |
+          shell="$(cygpath -m "$(command -v bash)")"
+          echo "SHELL=$shell" >> "$GITHUB_ENV"
+          echo "$shell"
+      # The Windows image has no ripgrep, and the search tools and their tests use the one on PATH. The step downloads a
+      # pinned release from GitHub (Chocolatey's feed answered 503 and failed 18 jobs at once) and checks its SHA-256
+      # against the value pinned here, which is the release's published .sha256. The folder is cached between runs and
+      # the download retries with a growing pause. The folder holds the real rg.exe, not a shim, which a test may copy
+      # into another folder. Printing the version fails the step when the program is missing.
+      - name: Cache ripgrep
+        id: ripgrep-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/ripgrep
+          key: ripgrep-14.1.1-windows-x64-d0f53402
+      - name: Install ripgrep
+        if: steps.ripgrep-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          RG_VERSION: "14.1.1"
+          RG_SHA256: d0f534024c42afd6cb4d38907c25cd2b249b79bbe6cc1dbee8e3e37c2b6e25a1
+        run: |
+          set -eu
+          name="ripgrep-$RG_VERSION-x86_64-pc-windows-msvc"
+          zip="$RUNNER_TEMP/$name.zip"
+          for attempt in 1 2 3 4 5 6; do
+            if curl --silent --show-error --fail --location --connect-timeout 20 --max-time 120 \
+              --output "$zip" "https://github.com/BurntSushi/ripgrep/releases/download/$RG_VERSION/$name.zip" \
+              && echo "$RG_SHA256 *$zip" | sha256sum --check --status; then
+              break
+            fi
+            test "$attempt" -lt 6 || { echo "ripgrep download failed after $attempt attempts" >&2; exit 1; }
+            echo "ripgrep download attempt $attempt failed, retrying in $((attempt * 10)) s" >&2
+            sleep $((attempt * 10))
+          done
+          powershell -NoProfile -Command "Expand-Archive -LiteralPath '$(cygpath -w "$zip")' -DestinationPath '$(cygpath -w "$RUNNER_TEMP/ripgrep-unpacked")' -Force"
+          mkdir -p "$RUNNER_TEMP/ripgrep"
+          cp "$RUNNER_TEMP/ripgrep-unpacked/$name/rg.exe" "$RUNNER_TEMP/ripgrep/rg.exe"
+      - name: Put ripgrep on PATH
+        shell: bash
+        run: |
+          cygpath -w "$RUNNER_TEMP/ripgrep" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/ripgrep/rg.exe" --version
+      # The full suite, as on Linux: Windows semantics (path.win32, .exe heads, UNC paths, junctions, program lookup in
+      # the working folder) are only exercised here. Git Bash runs it, as the core tests expect.
+      - name: Test
+        working-directory: packages/${{ matrix.package }}
+        env:
+          ORBIT_EGRESS_IDLE_MS: "120000"
+          SHARD: ${{ matrix.shard }}
+        shell: bash
+        run: |
+          set -o pipefail
+          bun run test ${SHARD:+--shard=$SHARD} --update-timings --coverage --coverage-reporter=lcov --coverage-dir=coverage --reporter=junit --reporter-outfile=junit.xml 2>&1 | tee "$RUNNER_TEMP/test.log" || {
+            echo "::group::Failures"
+            grep -E '^\(fail\)|^error:|Unhandled error|^Test file stuck' "$RUNNER_TEMP/test.log" | tail -60
+            echo "::endgroup::"
+            exit 1
+          }
+      - name: Upload coverage
         if: ${{ !cancelled() }}
-        working-directory: packages/core
-        run: bun run test test/shell-analysis
-      # Instruction file patterns are matched as forward-slash paths, and a pattern written through a junction must match
-      # the folder it leads to; both are Windows behavior that the Linux job cannot show.
-      - name: Instruction files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lcov-windows-${{ matrix.package }}${{ matrix.part }}
+          path: packages/${{ matrix.package }}/coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
+      # Each test's own time (bun's JUnit report), from which a measured limit is set: at least twice the worst time the
+      # row took on a loaded runner (AGENTS.md, Testing).
+      - name: Upload test durations
         if: ${{ !cancelled() }}
-        working-directory: packages/core
-        run: bun run test test/config/instruction-file.test.ts
-      - name: orb flow, the workflow tool and orb -p end to end
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: junit-windows-${{ matrix.package }}${{ matrix.part }}
+          path: packages/${{ matrix.package }}/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Check timings
+        id: timings
         if: ${{ !cancelled() }}
-        working-directory: packages/cli
-        run: bun test --timeout 60000 test/flow.test.ts test/flow-verify.test.ts test/flow-team.test.ts test/workflow-tool.test.ts test/argv.test.ts test/print.test.ts test/config-overlay-flags.test.ts
+        shell: bash
+        run: |
+          file="packages/${{ matrix.package }}/test/timings.windows.json"
+          if [ -f "$file" ] && [ -n "$(git status --porcelain -- "$file")" ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Upload timings
+        if: ${{ !cancelled() && steps.timings.outputs.changed == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: timings-windows-${{ matrix.package }}${{ matrix.part }}
+          path: packages/${{ matrix.package }}/test/timings.windows.json
+          if-no-files-found: ignore
+          retention-days: 14
 
   artifact:
     name: build and scan binary and extension

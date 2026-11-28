@@ -25,6 +25,7 @@ function host(): MiniHost {
     terminal: { stdin: process.stdin },
     platform: "linux",
     stdout: { write() {} },
+    stderr: { write() {} },
     files: { readText: async () => "" },
     editor: { open: async () => undefined },
     paths: { home: "/home/test" },
@@ -314,6 +315,212 @@ describe("run interactive runtime", () => {
     expect(settled.some((item) => item.formID === "frm_invalid")).toBe(false)
 
     api.close()
+    await task
+  })
+
+  // clients-ux-27: the lifecycle's away-summary request reaches the recap route for Mini's session, with its signal, and
+  // the session's running state read by the transport reaches the lifecycle.
+  test("asks the recap route for its own session and hands the lifecycle its running state", async () => {
+    const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
+    const api = footer()
+    const streamStarted = defer<void>()
+    let lifecycle!: LifecycleInput
+    let onActive: ((active: boolean) => void) | undefined
+    const running: boolean[] = []
+    stubCatalogLists(sdk)
+    const recap = spyOn(sdk.session, "recap").mockImplementation(() => ok({ recorded: true }))
+
+    const task = runInteractiveDeferredMode(
+      {
+        host: host(),
+        sdk,
+        directory: "/tmp",
+        target: async () => ({
+          sessionID: "ses_root",
+          location: { directory: "/tmp", project: { id: "pro-1", directory: "/tmp", canonical: "/tmp" } },
+          agent: "build",
+          model: { providerID: "test", modelID: "model" },
+          variant: undefined,
+          resume: false,
+        }),
+        agent: "build",
+        model: { providerID: "test", modelID: "model" },
+        variant: undefined,
+        files: [],
+        thinking: false,
+      },
+      {
+        createRuntimeLifecycle: async (input) => {
+          lifecycle = input
+          return {
+            footer: api,
+            onResize: () => () => {},
+            refreshTheme: () => {},
+            setTitle: () => {},
+            resetForReplay: () => Promise.resolve(),
+            close: () => Promise.resolve(),
+            setRunning: (active) => running.push(active),
+          }
+        },
+        streamTransport: Promise.resolve({
+          createSessionTransport: async (input) => {
+            onActive = input.onActive
+            streamStarted.resolve()
+            return {
+              runPromptTurn: async () => {},
+              admitPromptTurn: async () => {},
+              waitForIdle: async () => {},
+              interruptActiveTurn: async () => {},
+              selectSubagent: () => {},
+              settleForm: () => {},
+              replayOnResize: async () => false,
+              close: async () => {},
+            }
+          },
+          formatUnknownError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        }),
+      },
+    )
+    await streamStarted.promise
+
+    const signal = new AbortController().signal
+    await lifecycle.recap?.(signal)
+    expect(recap).toHaveBeenCalledWith({ sessionID: "ses_root" }, { signal })
+    onActive?.(true)
+    expect(running).toEqual([true])
+
+    api.close()
+    await task
+  })
+
+  // clients-ux-37: the lifecycle's next-prompt request reaches the suggestion route for the session it names, with its
+  // signal, and hands back the route's answer.
+  test("asks the suggestion route for the session the lifecycle names", async () => {
+    const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
+    const api = footer()
+    const lifecycleStarted = defer<void>()
+    let lifecycle!: LifecycleInput
+    stubCatalogLists(sdk)
+    const answer = { suggestion: "run the tests" }
+    const suggestion = spyOn(sdk.session.assist, "suggestion").mockImplementation(() => ok(answer))
+
+    const task = runInteractiveDeferredMode(
+      {
+        host: host(),
+        sdk,
+        directory: "/tmp",
+        target: async () => ({
+          sessionID: "ses_root",
+          location: { directory: "/tmp", project: { id: "pro-1", directory: "/tmp", canonical: "/tmp" } },
+          agent: "build",
+          model: { providerID: "test", modelID: "model" },
+          variant: undefined,
+          resume: false,
+        }),
+        agent: "build",
+        model: { providerID: "test", modelID: "model" },
+        variant: undefined,
+        files: [],
+      },
+      {
+        createRuntimeLifecycle: async (input) => {
+          lifecycle = input
+          lifecycleStarted.resolve()
+          return {
+            footer: api,
+            onResize: () => () => {},
+            refreshTheme: () => {},
+            setTitle: () => {},
+            resetForReplay: () => Promise.resolve(),
+            close: () => Promise.resolve(),
+          }
+        },
+        streamTransport: Promise.resolve({
+          createSessionTransport: async () => ({
+            runPromptTurn: async () => {},
+            admitPromptTurn: async () => {},
+            waitForIdle: async () => {},
+            interruptActiveTurn: async () => {},
+            selectSubagent: () => {},
+            replayOnResize: async () => false,
+            close: async () => {},
+          }),
+          formatUnknownError: (error: unknown) => String(error),
+        }),
+      },
+    )
+    await lifecycleStarted.promise
+
+    const signal = new AbortController().signal
+    expect(await lifecycle.suggestion?.("ses_next", signal)).toBe(answer)
+    expect(suggestion).toHaveBeenCalledWith({ sessionID: "ses_next" }, { signal })
+
+    api.close()
+    await task
+  })
+
+  test("sends the text after /compact to the compact route as its instructions", async () => {
+    const sdk = Orbit.make({ baseUrl: "https://orbit.test" })
+    const ui = createFooterApiFixture()
+    stubCatalogLists(sdk)
+    const compacted = defer<void>()
+    const compact = spyOn(sdk.session, "compact").mockImplementation(() => {
+      compacted.resolve()
+      return ok({ id: "inb_1" } as never)
+    })
+
+    const task = runInteractiveDeferredMode(
+      {
+        host: host(),
+        sdk,
+        directory: "/tmp",
+        target: async () => ({
+          sessionID: "ses_root",
+          location: { directory: "/tmp", project: { id: "pro-1", directory: "/tmp", canonical: "/tmp" } },
+          agent: "build",
+          model: { providerID: "test", modelID: "model" },
+          variant: undefined,
+          resume: false,
+        }),
+        agent: "build",
+        model: { providerID: "test", modelID: "model" },
+        variant: undefined,
+        files: [],
+        thinking: false,
+      },
+      {
+        createRuntimeLifecycle: async () => ({
+          footer: ui.api,
+          onResize: () => () => {},
+          refreshTheme: () => {},
+          setTitle: () => {},
+          resetForReplay: () => Promise.resolve(),
+          close: () => Promise.resolve(),
+          setRunning: () => {},
+        }),
+        streamTransport: Promise.resolve({
+          createSessionTransport: async () => ({
+            runPromptTurn: async () => {},
+            admitPromptTurn: async () => {},
+            waitForIdle: async () => {},
+            interruptActiveTurn: async () => {},
+            selectSubagent: () => {},
+            settleForm: () => {},
+            replayOnResize: async () => false,
+            close: async () => {},
+          }),
+          formatUnknownError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        }),
+      },
+    )
+    await ui.promptReady
+    ui.submit("/compact focus on tests")
+    await compacted.promise
+
+    expect(compact).toHaveBeenCalledTimes(1)
+    expect(compact.mock.calls[0]?.[0]).toEqual({ sessionID: "ses_root", instructions: "focus on tests" })
+
+    ui.api.close()
     await task
   })
 

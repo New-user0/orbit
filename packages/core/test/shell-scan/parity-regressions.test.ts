@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { ShellParse } from "../../src/shell/parse.js"
 import { ShellScan } from "../../src/shell/scan.js"
+import { runProgram } from "../fixture/run-program"
 
 const conditions = ["[[ -n <(scan_probe) ]]", "[[ -n >(scan_probe) ]]"]
 const contexts = [
@@ -30,7 +31,12 @@ describe("legacy-accepted shell syntax regressions", () => {
     "preserves deeply indented function definitions: %s",
     async (source) => {
       const command = `( ${" ".repeat(32_000)}${source} )`
-      const legacy = await Effect.runPromise(ShellParse.scan(command, "zsh", "/workspace"))
+      // The legacy scan reads no input over ShellParse.MAX_LENGTH, since a long one can abort its WebAssembly parser
+      // (shell-parse-state.test.ts), so the portable scanner is held to what it reads of the same command unindented.
+      expect(command.length).toBeGreaterThan(ShellParse.MAX_LENGTH)
+      expect((await Effect.runPromise(Effect.exit(ShellParse.scan(command, "zsh", "/workspace"))))._tag).toBe("Failure")
+      const legacy = await Effect.runPromise(ShellParse.scan(`( ${source} )`, "zsh", "/workspace"))
+      expect(legacy.commands.some((item) => item.resource === "scan_probe")).toBe(true)
       expect(await Effect.runPromise(ShellParse.scanPortable(command, "zsh", "/workspace"))).toEqual(legacy)
     },
   )
@@ -89,9 +95,9 @@ describe("legacy-accepted shell syntax regressions", () => {
         "probe \\\n() \\\n{ scan_probe; }; probe",
         "function \\\nprobe() # ignored \\\n{ scan_probe; }; probe",
         ...(shell === "bash" ? conditions : ["() { scan_probe; }"]),
-      ])(`${shell} really executes the extracted command: %s`, (source) => {
+      ])(`${shell} really executes the extracted command: %s`, async (source) => {
       if (!executable) throw new Error(`${shell} is unavailable`)
-      const execution = Bun.spawnSync(
+      const execution = await runProgram(
         [
           executable,
           ...(shell === "bash" ? ["--noprofile", "--norc"] : ["-f"]),

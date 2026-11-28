@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import path from "node:path"
 import { Readable } from "node:stream"
 import { pathToFileURL } from "node:url"
@@ -154,6 +154,25 @@ describe("Mini CLI host", () => {
     expect(await input.files.readText(pathToFileURL(file).href)).toBe("attachment contents")
     expect(typeof input.startup.showTiming).toBe("boolean")
     expect(typeof input.startup.now()).toBe("number")
+  })
+
+  // The Mini writes a refusal, such as for a folder that is not trusted, to stderr through the host, so that stdout
+  // carries nothing a script would take for the Mini's output.
+  test("writes what the frontend sends to stderr to the process's stderr, not its stdout", async () => {
+    await using directory = await tmpdir()
+    const input = host({ stdin: stream(true), cleanup() {} }, directory.path)
+    const out: string[] = []
+    const err: string[] = []
+    const stdout = spyOn(process.stdout, "write").mockImplementation(((text: string) => (out.push(text), true)) as never)
+    const stderr = spyOn(process.stderr, "write").mockImplementation(((text: string) => (err.push(text), true)) as never)
+    try {
+      input.stderr.write("/projects/app is not trusted\n")
+    } finally {
+      stdout.mockRestore()
+      stderr.mockRestore()
+    }
+    expect(err).toEqual(["/projects/app is not trusted\n"])
+    expect(out).toEqual([])
   })
 
   test("delegates model variant preferences", async () => {

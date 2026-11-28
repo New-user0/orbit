@@ -34,6 +34,8 @@ function render(state: string, config: Record<string, unknown> = {}) {
       if (url.pathname === "/api/provider") return json({ location, data: [{ id: "provider", name: "Provider" }] })
       if (url.pathname === "/api/model")
         return json({ location, data: [{ id: "model", providerID: "provider", name: "Model", variants: [] }] })
+      if (url.pathname === "/api/location/memory")
+        return json({ data: { files: [], warnings: [], folders: [], enabled: false, git: false, available: true } })
     },
   })
 }
@@ -58,6 +60,13 @@ test.each([
   await using setup = await render(state.path)
   await command(setup, slash)
   await setup.waitForFrame((frame) => frame.includes(title))
+})
+
+test("/memory opens the memory dialog with what the server lists", async () => {
+  await using state = await tmpdir()
+  await using setup = await render(state.path)
+  await command(setup, "/memory")
+  await setup.waitForFrame((frame) => frame.includes("Memory across sessions: off"))
 })
 
 test("/todos on the home route says there is no session", async () => {
@@ -202,14 +211,19 @@ test.each([
     await using setup = await render(state.path)
     await command(setup, "/editor")
     // The toast wraps inside its box, so the row looks for the part that stays on one line.
-    // The editor is looked up and run before the toast shows, which the frame wait alone does not outlast.
-    await Bun.sleep(1500)
-    await setup.renderOnce()
-    expect(setup.captureCharFrame()).toContain(message.slice(0, 32))
+    // The editor is looked up and run before the toast shows, and a cold `bun` start on a loaded Windows runner took
+    // longer than the fixed 1.5 s this row once waited, so it draws until the toast is there, within the row's limit.
+    const shown = message.slice(0, 32)
+    const deadline = Date.now() + 25_000
+    while (!setup.captureCharFrame().includes(shown) && Date.now() < deadline) {
+      await Bun.sleep(50)
+      await setup.renderOnce()
+    }
+    expect(setup.captureCharFrame()).toContain(shown)
   } finally {
     for (const [name, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[name]
       else process.env[name] = value
     }
   }
-})
+}, 30_000)

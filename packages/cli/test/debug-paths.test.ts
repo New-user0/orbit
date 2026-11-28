@@ -2,10 +2,11 @@ import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { runOrb } from "./fixture/orb"
 
 describe("debug paths command", () => {
   test("is included in troubleshooting help", async () => {
-    const [debug, paths] = await Promise.all([cli(["debug", "--help"]), cli(["debug", "paths", "--help"])])
+    const [debug, paths] = await Promise.all([runOrb(["debug", "--help"]), runOrb(["debug", "paths", "--help"])])
 
     expect(debug.exitCode).toBe(0)
     expect(debug.stdout).toContain("paths")
@@ -18,11 +19,17 @@ describe("debug paths command", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-debug-paths-"))
 
     try {
-      const result = await cli(["debug", "paths"], {
-        XDG_DATA_HOME: path.join(root, "data"),
-        XDG_CONFIG_HOME: path.join(root, "config"),
-        XDG_CACHE_HOME: path.join(root, "cache"),
-        XDG_STATE_HOME: path.join(root, "state"),
+      // The child's home is `root`, as its isolated environment names it (fixture/orb.ts). The config folder comes from
+      // XDG_CONFIG_HOME only without the ORBIT_CONFIG_DIR that environment sets.
+      const result = await runOrb(["debug", "paths"], {
+        home: root,
+        env: {
+          ORBIT_CONFIG_DIR: undefined,
+          XDG_DATA_HOME: path.join(root, "data"),
+          XDG_CONFIG_HOME: path.join(root, "config"),
+          XDG_CACHE_HOME: path.join(root, "cache"),
+          XDG_STATE_HOME: path.join(root, "state"),
+        },
       })
       const paths = Object.fromEntries(
         result.stdout
@@ -33,7 +40,7 @@ describe("debug paths command", () => {
 
       expect({ exitCode: result.exitCode, stderr: result.stderr }).toEqual({ exitCode: 0, stderr: "" })
       expect(paths).toMatchObject({
-        home: os.homedir(),
+        home: root,
         data: path.join(root, "data", "orbit"),
         config: path.join(root, "config", "orbit"),
         cache: path.join(root, "cache", "orbit"),
@@ -55,7 +62,7 @@ describe("debug paths managed", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-debug-managed-"))
     try {
       const managed = path.join(root, "managed")
-      const listed = await cli(["debug", "paths"], { ORBIT_MANAGED_DIR: managed })
+      const listed = await runOrb(["debug", "paths"], { env: { ORBIT_MANAGED_DIR: managed } })
       const paths = Object.fromEntries(
         listed.stdout
           .trim()
@@ -64,7 +71,7 @@ describe("debug paths managed", () => {
       )
       expect({ exitCode: listed.exitCode, managed: paths.managed }).toEqual({ exitCode: 0, managed })
 
-      const only = await cli(["debug", "paths", "managed"], { ORBIT_MANAGED_DIR: managed })
+      const only = await runOrb(["debug", "paths", "managed"], { env: { ORBIT_MANAGED_DIR: managed } })
       expect(only.stdout.trim()).toBe(managed)
       await expect(fs.stat(managed)).rejects.toThrow()
     } finally {
@@ -73,7 +80,7 @@ describe("debug paths managed", () => {
   })
 
   test("falls back to the per-OS default without the override", async () => {
-    const only = await cli(["debug", "paths", "managed"], { ORBIT_MANAGED_DIR: "" })
+    const only = await runOrb(["debug", "paths", "managed"], { env: { ORBIT_MANAGED_DIR: "" } })
     const expected =
       process.platform === "win32"
         ? path.win32.join(process.env.ProgramFiles || "C:\\Program Files", "Orbit")
@@ -83,18 +90,3 @@ describe("debug paths managed", () => {
     expect(only.stdout.trim()).toBe(expected)
   })
 })
-
-async function cli(args: string[], env?: Record<string, string>) {
-  const child = Bun.spawn([process.execPath, "run", path.join(import.meta.dir, "../src/index.ts"), ...args], {
-    cwd: path.join(import.meta.dir, ".."),
-    env: { ...process.env, ...env },
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  return { stdout, stderr, exitCode }
-}

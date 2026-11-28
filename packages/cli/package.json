@@ -18,8 +18,8 @@
   "scripts": {
     "build": "bun run script/build.ts",
     "dev": "bun run src/index.ts",
-    "test": "bun ../../tools/test/run.ts --timeout 30000 --max-concurrency=8 --only-failures",
-    "test:timings": "bun ../../tools/test/run.ts --timeout 30000 --max-concurrency=8 --only-failures --update-timings",
+    "test": "bun ../../tools/test/run.ts --timeout 30000 --max-concurrency=4 --only-failures",
+    "test:timings": "bun ../../tools/test/run.ts --timeout 30000 --max-concurrency=4 --only-failures --update-timings",
     "typecheck": "tsgo -b"
   },
   "dependencies": {
@@ -55,6 +55,7 @@
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
     "@typescript/native-preview": "catalog:",
+    "marked": "catalog:",
     "@lydell/node-pty-darwin-arm64": "1.2.0-beta.12",
     "@lydell/node-pty-darwin-x64": "1.2.0-beta.12",
     "@lydell/node-pty-linux-arm64": "1.2.0-beta.12",

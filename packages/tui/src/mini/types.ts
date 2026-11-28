@@ -127,6 +127,9 @@ export type MiniHost = {
   stdout: {
     write(value: string): void
   }
+  stderr: {
+    write(value: string): void
+  }
   files: {
     readText(url: string): Promise<string>
   }

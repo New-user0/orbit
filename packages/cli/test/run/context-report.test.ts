@@ -1,0 +1,262 @@
+import { expect, test } from "bun:test"
+import path from "node:path"
+import type { SessionContextUsage } from "@orbit/schema/session-context-usage"
+import { contextMarkdown, contextUsageLine } from "../../src/run/context-report"
+
+// clients-ux-23: the Markdown report `orb run "/context"` and `orb -p "/context"` print, and the JSON line of the JSON
+// formats. The report has the reference's sections, every one of them for everyone (the reference keeps some for its own
+// staff); every string from the payload is a file's, a config's or a server's, so each cell goes through `plain` and a
+// pipe is escaped so it cannot add a column (classes 5 and 9).
+
+type Info = SessionContextUsage.Info
+
+function fixture(input: { readonly auto: boolean; readonly window?: number; readonly name?: string }): Info {
+  const name = (text: string) => (input.name === undefined ? text : `${text}${input.name}`)
+  const reserve = input.auto
+    ? { kind: "auto-buffer" as const, tokens: 33_000 }
+    : { kind: "compact-buffer" as const, tokens: 3_000 }
+  const known = input.window !== undefined
+  return {
+    model: { providerID: name("provider"), id: name("model") } as Info["model"],
+    ...(known ? { window: input.window, percentage: 25, threshold: 167_000 } : {}),
+    total: 50_000,
+    measured: true,
+    auto: input.auto,
+    categories: [
+      { kind: "system", tokens: 4_000 },
+      { kind: "tools", tokens: 12_000 },
+      { kind: "mcp", tokens: 2_000 },
+      { kind: "mcp-deferred", tokens: 1_500 },
+      { kind: "tools-deferred", tokens: 900 },
+      { kind: "agents", tokens: 600 },
+      { kind: "instructions", tokens: 3_400 },
+      { kind: "skills", tokens: 700 },
+      { kind: "messages", tokens: 27_400 },
+      ...(known ? [reserve, { kind: "free" as const, tokens: 200_000 - 50_000 - reserve.tokens }] : []),
+    ],
+    files: [{ path: name("/repo/ORBIT.md"), type: name("file"), tokens: 3_400 }],
+    mcp: [
+      { name: name("docs_search"), server: name("docs"), tokens: 2_000, deferred: false },
+      { name: name("docs_fetch"), server: name("docs"), tokens: 1_500, deferred: true },
+    ],
+    agents: [{ id: name("reviewer"), scope: name("project"), tokens: 600 }],
+    skills: [{ id: name("release"), tokens: 700 }],
+    systemTools: [{ name: name("Read"), tokens: 12_000 }],
+    deferredTools: [{ name: name("lsp.hover"), tokens: 900 }],
+    sections: [{ name: name("Environment"), tokens: 4_000 }],
+    messages: {
+      toolCalls: 3_000,
+      toolResults: 15_000,
+      attachments: 2_000,
+      assistant: 4_000,
+      user: 3_300,
+      tools: [{ name: name("Bash"), calls: 2_000, results: 10_000 }],
+      attachmentKinds: [{ name: name("todo"), tokens: 2_000 }],
+    },
+  }
+}
+
+const lines = (text: string) => text.split("\n")
+
+// A table row's cells, split as a GitHub Markdown table splits them: a backslash keeps the character after it in the cell.
+function cells(row: string) {
+  let count = 0
+  for (let index = 0; index < row.length; index++) {
+    if (row[index] === "\\") index++
+    else if (row[index] === "|") count++
+  }
+  return count - 1
+}
+
+// Each table: its header row, the line under it and its rows, until the first line that is not a row.
+function tables(text: string) {
+  const all = lines(text)
+  return all.flatMap((line, index) =>
+    line.startsWith("|") && all[index + 1]?.startsWith("|-") && !all[index - 1]?.startsWith("|")
+      ? [all.slice(index, index + 2 + all.slice(index + 2).findIndex((next) => !next.startsWith("|")))]
+      : [],
+  )
+}
+
+// CR1: the reference's report, top to bottom, with every section shown to everyone and no suggestions.
+test("the report has the reference's sections in order, every one for everyone", () => {
+  const auto = contextMarkdown(fixture({ auto: true, window: 200_000 }))
+  const order = [
+    "## Context window",
+    "**Model:** provider/model",
+    "**In use:** 50,000 of 200,000 (25%)",
+    "### Breakdown",
+    "### MCP tool schemas",
+    "### Tools outside MCP",
+    "### Base prompt parts",
+    "### Agent definitions",
+    "### Instructions",
+    "### Skill listings",
+    "### Conversation by kind",
+    "### Heaviest tools",
+    "### Heaviest added context",
+  ]
+  // Every line outside a table, so that advice under any name is a line too many. The dialog's section, which the
+  // report has none of, may not come as a table row either.
+  expect(lines(auto).filter((line) => line !== "" && !line.startsWith("|"))).toEqual(order)
+  expect(auto.toLowerCase()).not.toContain("ways to free room")
+
+  // The category table: every counted row, deferred ones with their percentage, then free space, then the autocompact
+  // buffer.
+  const categories = tables(auto)[0]!.slice(2)
+  expect(categories.map((row) => row.split("|")[1]!.trim())).toEqual([
+    "Base prompt",
+    "Tools outside MCP",
+    "MCP tool schemas",
+    "MCP tool schemas (on demand)",
+    "Tools outside MCP (on demand)",
+    "Agent definitions",
+    "Instructions",
+    "Skill listings",
+    "Conversation",
+    "Room left",
+    "Auto-compaction reserve",
+  ])
+  expect(categories[3]).toBe("| MCP tool schemas (on demand) | 1,500 | 0.8% |")
+  expect(categories[8]).toBe("| Conversation | 27,400 | 13.7% |")
+
+  // Each table's header, so that no column can be renamed or change places with its neighbour.
+  expect(tables(auto).map((table) => table[0])).toEqual([
+    "| Part | Tokens | Share |",
+    "| Tool | From server | Tokens |",
+    "| Tool | Tokens |",
+    "| Part | Tokens |",
+    "| Agent | Defined in | Tokens |",
+    "| Source | File | Tokens |",
+    "| Skill | Tokens |",
+    "| Kind | Tokens |",
+    "| Tool | In calls | In results |",
+    "| What was added | Tokens |",
+  ])
+
+  // With automatic compaction off the reserve is a category like the others, before free space.
+  const manual = tables(contextMarkdown(fixture({ auto: false, window: 200_000 })))[0]!.slice(2)
+  expect(manual.map((row) => row.split("|")[1]!.trim()).slice(-2)).toEqual(["Compaction headroom", "Room left"])
+
+  // Each section's rows.
+  expect(auto).toContain("| docs_search | docs | 2,000 |")
+  expect(auto).toContain("| docs_fetch | docs | 1,500 (on demand) |")
+  expect(auto).toContain("| Read | 12,000 |")
+  expect(auto).toContain("| lsp.hover | 900 (on demand) |")
+  expect(auto).toContain("| Environment | 4,000 |")
+  expect(auto).toContain("| reviewer | project | 600 |")
+  expect(auto).toContain("| file | /repo/ORBIT.md | 3,400 |")
+  expect(auto).toContain("| release | 700 |")
+  expect(auto).toContain("| Calls to tools | 3,000 |")
+  expect(auto).toContain("| What tools returned | 15,000 |")
+  expect(auto).toContain("| Added context | 2,000 |")
+  expect(auto).toContain("| Replies | 4,000 |")
+  expect(auto).toContain("| Prompts | 3,300 |")
+  expect(auto).toContain("| Bash | 2,000 | 10,000 |")
+  expect(auto).toContain("| todo | 2,000 |")
+})
+
+// What the report called each heading, column and row before the M5 rewording, then now.
+const RENAMED = [
+  ["Context usage", "Context window"],
+  ["Usage by category", "Breakdown"],
+  ["System prompt", "Base prompt"],
+  ["System tools", "Tools outside MCP"],
+  ["MCP tools", "MCP tool schemas"],
+  ["MCP tools (deferred)", "MCP tool schemas (on demand)"],
+  ["System tools (deferred)", "Tools outside MCP (on demand)"],
+  ["Custom agents", "Agent definitions"],
+  ["Instruction files", "Instructions"],
+  ["Skills", "Skill listings"],
+  ["Messages", "Conversation"],
+  ["Autocompact buffer", "Auto-compaction reserve"],
+  ["Compact buffer", "Compaction headroom"],
+  ["Free space", "Room left"],
+  ["System prompt sections", "Base prompt parts"],
+  ["Message breakdown", "Conversation by kind"],
+  ["Top tools", "Heaviest tools"],
+  ["Top attachments", "Heaviest added context"],
+  ["Category", "Part"],
+  ["Percentage", "Share"],
+  ["Server", "From server"],
+  ["Section", "Part"],
+  ["Scope", "Defined in"],
+  ["Type", "Source"],
+  ["Path", "File"],
+  ["Call tokens", "In calls"],
+  ["Result tokens", "In results"],
+  ["Attachment", "What was added"],
+  ["Tool calls", "Calls to tools"],
+  ["Tool results", "What tools returned"],
+  ["Attachments", "Added context"],
+  ["Assistant text", "Replies"],
+  ["User text", "Prompts"],
+] as const
+
+// Class 15: a script that parses the report finds in the upgrade note each cell it matched on, and the list above holds
+// every fixed label the report draws, apart from the five column names that stayed.
+test("the upgrade note lists every renamed heading, column and row of the report, old to new", async () => {
+  const notes = (await Bun.file(path.join(import.meta.dir, "../../../../docs/upgrading.md")).text()).replace(/\s+/g, " ")
+  for (const [before, now] of [...RENAMED, ["**Tokens:**", "**In use:**"], ["(deferred)", "(on demand)"]] as const)
+    expect(notes).toContain(`\`${before}\` → \`${now}\``)
+
+  const auto = contextMarkdown(fixture({ auto: true, window: 200_000 }))
+  const manual = contextMarkdown(fixture({ auto: false, window: 200_000 }))
+  const first = (table: string[] | undefined) => table!.slice(2).map((row) => row.split("|")[1]!.trim())
+  const drawn = [
+    ...[...auto.matchAll(/^##+ (.+)$/gm)].map((match) => match[1]!),
+    ...tables(auto).flatMap((table) => table[0]!.split("|").slice(1, -1).map((label) => label.trim())),
+    ...first(tables(auto)[0]),
+    ...first(tables(manual)[0]),
+    ...first(tables(auto)[7]),
+  ]
+  const kept = ["Tool", "Tokens", "Agent", "Skill", "Kind"]
+  expect([...new Set(drawn.filter((label) => !kept.includes(label)))].toSorted()).toEqual(
+    [...new Set<string>(RENAMED.map(([, now]) => now))].toSorted(),
+  )
+})
+
+// CR2, classes 5 and 9: every string is a label, written through `plain`, and a pipe (with or without a backslash before
+// it) stays inside its cell.
+test("every cell is escaped and a pipe cannot add a column", () => {
+  const hostile = "a|b\\|c\x1b]0;x\x07\x1b[2K\u009b\u202ed\ne"
+  const text = contextMarkdown(fixture({ auto: true, window: 200_000, name: hostile }))
+
+  expect(/\p{C}/u.test(text.replaceAll("\n", ""))).toBe(false)
+  expect(text).not.toContain("\x1b")
+  const found = tables(text)
+  expect(found.length).toBe(10)
+  for (const table of found) {
+    const columns = cells(table[0]!)
+    for (const row of table) expect({ row, columns: cells(row) }).toEqual({ row, columns })
+  }
+  // Every name reached the report, escaped.
+  for (const label of ["docs_search", "docs_fetch", "reviewer", "release", "Read", "lsp.hover", "Environment", "Bash", "todo", "ORBIT.md"])
+    expect(text).toContain(`${label}a\\|b`)
+})
+
+// CR3: with no window, nothing is a share of it.
+test("an unknown window prints no percentage", () => {
+  const text = contextMarkdown(fixture({ auto: true }))
+
+  expect(text).not.toContain("%")
+  expect(text).toContain("**In use:** 50,000\n")
+  expect(text).not.toContain("Room left")
+  expect(text).not.toContain("Auto-compaction reserve")
+  expect(tables(text)[0]![0]).toBe("| Part | Tokens |")
+
+  // A window of 0 is as unknown as no window: nothing is a share of it (D9).
+  const zero = contextMarkdown({ ...fixture({ auto: true }), window: 0 })
+  expect(zero).not.toContain("%")
+  expect(zero).toContain("**In use:** 50,000\n")
+  expect(tables(zero)[0]![0]).toBe("| Part | Tokens |")
+})
+
+// CR4, class 9: the JSON line keeps every string as it came, and holds no raw control or line separator character.
+test("the JSON line keeps every string and has no raw control or line-separator character", () => {
+  const info = fixture({ auto: true, window: 200_000, name: "a\x1b]0;x\x07\u009b\u202e\u2028\u2029\nb" })
+  const line = contextUsageLine("ses_context", info)
+
+  expect(/[\p{C}\u2028\u2029]/u.test(line)).toBe(false)
+  expect(JSON.parse(line)).toEqual({ type: "context_usage", sessionID: "ses_context", usage: info })
+})

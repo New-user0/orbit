@@ -10,7 +10,9 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { makeGlobalNode } from "@orbit/util/effect/app-node"
 import { Bus } from "@orbit/core/bus"
 import { EventTable } from "@orbit/core/event/sql"
-import { Location } from "@orbit/schema/location"
+import { FileAccess } from "@orbit/core/file-access"
+import { Location } from "@orbit/core/location"
+import { Permission } from "@orbit/core/permission"
 import { SessionEvent } from "@orbit/core/session/event"
 import { Model } from "@orbit/core/model"
 import { Provider } from "@orbit/core/provider"
@@ -33,6 +35,10 @@ import { Snapshot } from "@orbit/core/snapshot"
 import { Skill } from "@orbit/core/skill"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
+import { Watcher } from "@orbit/core/filesystem/watcher"
+import { trustedProject } from "./fixture/project-trust"
+import { processNativeLayer } from "./fixture/native-watcher"
+import { permissionLayer } from "./lib/permission"
 
 const executionCalls: Session.ID[] = []
 const interruptCalls: Session.ID[] = []
@@ -68,11 +74,19 @@ const locations = makeGlobalNode({
     Effect.gen(function* () {
       const bus = yield* Bus.Service
       return yield* LayerMap.make(
-        (_ref: Location.Ref) =>
+        (ref: Location.Ref) =>
           // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
           Layer.mergeAll(
-            LayerNode.compile(LayerNode.group([PluginHooks.node, Skill.node]), {
-              replacements: [Bus.node.replace(Layer.succeed(Bus.Service, bus))],
+            // A mentioned file is resolved with the read tool's resolver and checked against the read rules at
+            // admission; no rule denies one here (session-prompt-editor.test.ts holds the rules' rows).
+            LayerNode.compile(LayerNode.group([PluginHooks.node, Skill.node, FileAccess.node, Permission.node]), {
+              replacements: [
+                Bus.node.replace(Layer.succeed(Bus.Service, bus)),
+                Location.node.replace(Location.boundNode(ref)),
+                Permission.node.replace(permissionLayer()),
+                // Layer.fresh builds apart from the row's memo map, so the node names the process's watches itself.
+                Watcher.nativeNode.replace(processNativeLayer),
+              ],
             }),
             Layer.mock(Image.Service, {
               normalize: (_resource, content) =>
@@ -89,6 +103,8 @@ const locations = makeGlobalNode({
               restore: () => Effect.void,
             }),
             Layer.mock(Plugin.Service, { awaitActivation: Effect.void }),
+            // A drain starts only in a trusted folder (trust-first).
+            trustedProject,
           ).pipe(Layer.fresh) as unknown as Layer.Layer<LocationServices>,
       )
     }),
@@ -347,6 +363,28 @@ describe("Session.prompt", () => {
       yield* session.revert.commit(sessionID)
 
       expect(yield* SessionInbox.find(db, completion.id)).toBeUndefined()
+    }),
+  )
+
+  // Only a person's item settles a staged revert when it is delivered; a notice is not new work, so /redo stays.
+  it.effect("delivers a waiting notice over a staged revert and keeps the revert staged", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+      const boundary = yield* session.prompt({ sessionID, text: "boundary", resume: false })
+      yield* SessionInbox.promote(db, bus, sessionID, "steer")
+      yield* bus.publish(SessionEvent.RevertEvent.Staged, {
+        sessionID,
+        revert: { messageID: boundary.id, files: [] },
+      })
+      const completion = yield* session.synthetic({ sessionID, text: "stale completion" })
+
+      expect(yield* SessionInbox.promote(db, bus, sessionID, "steer")).toBe(1)
+
+      expect(yield* SessionInbox.find(db, completion.id)).toBeUndefined()
+      expect((yield* session.get(sessionID)).revert?.messageID).toBe(boundary.id)
     }),
   )
 

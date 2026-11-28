@@ -23,6 +23,7 @@ import { Database } from "../../src/database/database"
 import { Bus } from "../../src/bus"
 import { tempGlobalLayer } from "../fixture/global"
 import { offlineModels } from "../fixture/models"
+import { runProgram } from "../fixture/run-program"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { advance } from "../lib/clock"
 import { testEffect } from "../lib/effect"
@@ -251,23 +252,22 @@ describe("PluginSupervisor", () => {
     )
   }
 
-  // The memory index activates late so it renders last, but the Memory tool itself stays an early built-in that
-  // SDK, instance and package plugins can remove or replace.
+  // A built-in tool is an early plugin that SDK, instance and package plugins can remove or replace.
   for (const mode of ["remove", "replace"] as const) {
-    it.effect(`lets an SDK plugin ${mode} the built-in Memory tool`, () =>
+    it.effect(`lets an SDK plugin ${mode} the built-in Glob tool`, () =>
       Effect.gen(function* () {
         const sdk = yield* SdkPlugins.Service
         yield* sdk.register(
           define({
-            id: `memory-${mode}`,
+            id: `glob-${mode}`,
             effect: (ctx) =>
               ctx.tool
                 .transform((editor) => {
-                  if (mode === "remove") return editor.remove("Memory")
+                  if (mode === "remove") return editor.remove("Glob")
                   editor.add({
-                    name: "Memory",
+                    name: "Glob",
                     options: { codemode: false },
-                    description: "plugin memory",
+                    description: "plugin glob",
                     input: Schema.Struct({}),
                     execute: () => Effect.succeed({ content: "ok" }),
                   })
@@ -277,17 +277,17 @@ describe("PluginSupervisor", () => {
         )
         const directory = yield* tmpdirScoped()
         const locations = yield* LocationServiceMap.Service
-        const memory = yield* Effect.gen(function* () {
+        const tool = yield* Effect.gen(function* () {
           const plugins = yield* Plugin.Service
           yield* plugins.awaitActivation
           const tools = yield* Tool.Service
-          return (yield* tools.list()).find((tool) => tool.name === "Memory")
+          return (yield* tools.list()).find((tool) => tool.name === "Glob")
         }).pipe(
           Effect.scoped,
           Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
         )
-        if (mode === "remove") return expect(memory).toBeUndefined()
-        expect(memory?.description).toBe("plugin memory")
+        if (mode === "remove") return expect(tool).toBeUndefined()
+        expect(tool?.description).toBe("plugin glob")
       }),
     )
   }
@@ -335,8 +335,8 @@ describe("PluginSupervisor", () => {
         return root
       })
     // The 8.3 short name of an existing folder, or undefined when this machine cannot report one.
-    const shortName = (folder: string) => {
-      const result = Bun.spawnSync(
+    const shortName = async (folder: string) => {
+      const result = await runProgram(
         ["powershell", "-NoProfile", "-Command", "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:P).ShortPath"],
         { env: { ...process.env, P: folder } },
       )
@@ -522,7 +522,7 @@ describe("PluginSupervisor", () => {
           const list = yield* inventory({ plugins: { allow: [allow] } }, [add(target)])
           expect(state(list, "corp.real")).toEqual({ status: "active" })
         }
-      }),
+      }), 10_000,
     )
 
     // Classes 3 and 4: the same folder spelled with its Windows 8.3 short name. The TUI resolves with the native realpath, which
@@ -533,7 +533,7 @@ describe("PluginSupervisor", () => {
         if (process.platform !== "win32") return
         const tmp = (yield* tmpdirScoped()).path
         const long = yield* plugin(tmp, "longpluginname", "corp.long")
-        const short = shortName(long)
+        const short = yield* Effect.promise(() => shortName(long))
         // The volume may not create short names; the row then has nothing to spell.
         if (short === undefined || short.toLowerCase() === long.toLowerCase()) return
         const add = { type: "add" as const, target: short, options: {} }
@@ -543,7 +543,7 @@ describe("PluginSupervisor", () => {
         // The controls: an allow list on the long path admits the short spelling, and nothing blocks it without the block.
         const allowed = yield* inventory({ plugins: { allow: [long] } }, [add])
         expect(state(allowed, "corp.long")).toEqual({ status: "active" })
-      }),
+      }), 10_000,
     )
 
     // A path realpath cannot resolve is one entry's problem: the built-in, host and allowed plugins stay active.

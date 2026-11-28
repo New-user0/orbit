@@ -6,7 +6,32 @@ import {
   primitiveInputSummary,
   toolDisplayMetadata,
   webSearchProviderLabel,
+  writtenFile,
 } from "../../src/util/tool-display"
+
+// A completed Write's text comes from the diff it recorded, so each way a new file's diff can end reads back exactly.
+test.each([
+  { name: "ends with a line break", patch: "--- a\n+++ a\n@@ -0,0 +1,2 @@\n+one\n+two\n", text: "one\ntwo\n" },
+  {
+    name: "has no final line break",
+    patch: "--- a\n+++ a\n@@ -0,0 +1,1 @@\n+one\n\\ No newline at end of file\n",
+    text: "one",
+  },
+  { name: "is empty", patch: "--- a\n+++ a\n", text: "" },
+])("a new file's written text is read from its recorded diff when it $name", (row) => {
+  expect(writtenFile({ files: [{ file: "a", status: "added", patch: row.patch }] })?.text).toBe(row.text)
+})
+
+test("a Write's recorded diff that is missing or malformed gives nothing, and an overwrite gives only its diff", () => {
+  expect(
+    [{}, { files: [] }, { files: [{ file: "", patch: "" }] }, { files: [{ file: "a" }] }].map(writtenFile),
+  ).toEqual([undefined, undefined, undefined, undefined])
+  expect(writtenFile({ files: [{ file: "a", status: "modified", patch: "@@ -1 +1 @@\n-x\n+y\n" }] })).toEqual({
+    file: "a",
+    patch: "@@ -1 +1 @@\n-x\n+y\n",
+    text: undefined,
+  })
+})
 
 test("normalizes shared tool primitives", () => {
   expect(["bash", "task", "apply_patch", "plugin_tool"].map(canonicalToolName)).toEqual([

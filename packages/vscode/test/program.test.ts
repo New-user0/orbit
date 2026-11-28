@@ -3,8 +3,9 @@ import { execFile } from "node:child_process"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { currentDirectoryOnPath, plant } from "../../core/test/fixture/decoy"
+import { currentDirectoryOnPath, plant, plantFrom } from "../../core/test/fixture/decoy"
 import { configured, find, launch, missing } from "../src/program"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // The program the extension starts is `orb`, found on PATH and started by its full path. The workspace is the folder that
 // a repository chooses, and a program that is started by a bare name is looked for there first on Windows, by Node's
@@ -16,7 +17,7 @@ const windows = process.platform === "win32"
 const file = windows ? "orb.exe" : "orb"
 const node = Bun.which("node")
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 let count = 0
 // A fresh workspace and a folder on PATH, each holding a program named `orb`, and a reader of what each one has run.
@@ -32,8 +33,16 @@ async function plantAll() {
 // A program named `orb` in `directory` that leaves the arguments it was started with in `ran.txt` beside itself, and a
 // reader of them, one entry for each start. Windows gets a compiled `.exe`, which is what a lookup by name finds there.
 async function decoy(directory: string) {
-  const lines = windows ? await plant(directory, "orb") : await script(directory)
+  const lines = windows ? await plantFrom(await compiled(), directory, "orb") : await script(directory)
   return async () => (await lines()).map((line) => line.replace(/^orb(\.exe)? ?/, ""))
+}
+
+// Compiling a program copies the Bun runtime, which takes seconds on a loaded runner, and every case made two. One
+// program is compiled for the whole file and each folder gets a link to it.
+let template: Promise<string> | undefined
+function compiled() {
+  template ??= plant(path.join(root, "template"), "orb").then(() => path.join(root, "template", "orb.exe"))
+  return template
 }
 
 async function script(directory: string) {

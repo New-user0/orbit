@@ -71,6 +71,60 @@ test("preserves the schema in an existing cli.json", async () => {
   expect(await Bun.file(file).json()).toEqual(config)
 })
 
+// clients-ux-27, class 8: when the away summary runs is a spend choice, so it comes from the person's own cli.json and
+// never from the folder Orbit starts in. The project's marker files set a value that would show if they were read.
+test("session.recap.after_minutes is read from the person's cli.json and from no project folder", async () => {
+  await using config = await tmpdir()
+  await using project = await tmpdir()
+  await Bun.write(path.join(config.path, "cli.json"), JSON.stringify({ session: { recap: { after_minutes: 7 } } }))
+  await Bun.write(path.join(project.path, "cli.json"), JSON.stringify({ session: { recap: { after_minutes: 0.001 } } }))
+  await Bun.write(
+    path.join(project.path, ".orbit", "cli.json"),
+    JSON.stringify({ session: { recap: { after_minutes: 0.001 } } }),
+  )
+  const cwd = process.cwd()
+  process.chdir(project.path)
+  try {
+    const read = await run(
+      config.path,
+      Effect.gen(function* () {
+        const service = yield* Config.Service
+        return yield* service.get()
+      }),
+    )
+    expect(read.session?.recap?.after_minutes).toBe(7)
+  } finally {
+    process.chdir(cwd)
+  }
+})
+
+// clients-ux-37 part 2, class 8: asking the model for a next-prompt suggestion spends tokens, so the switch comes from the
+// person's own cli.json and never from the folder Orbit starts in.
+test("prompt.suggestions is read from the person's cli.json and from no project folder", async () => {
+  await using config = await tmpdir()
+  await using empty = await tmpdir()
+  await using project = await tmpdir()
+  await Bun.write(path.join(config.path, "cli.json"), JSON.stringify({ prompt: { suggestions: true } }))
+  await Bun.write(path.join(project.path, "cli.json"), JSON.stringify({ prompt: { suggestions: true } }))
+  await Bun.write(path.join(project.path, ".orbit", "cli.json"), JSON.stringify({ prompt: { suggestions: true } }))
+  const cwd = process.cwd()
+  process.chdir(project.path)
+  try {
+    const read = (directory: string) =>
+      run(
+        directory,
+        Effect.gen(function* () {
+          const service = yield* Config.Service
+          return yield* service.get()
+        }),
+      )
+    expect((await read(config.path)).prompt?.suggestions).toBe(true)
+    expect((await read(empty.path)).prompt?.suggestions).toBeUndefined()
+  } finally {
+    process.chdir(cwd)
+  }
+})
+
 test("merges inline CLI config content over the global config", async () => {
   await using directory = await tmpdir()
   const file = path.join(directory.path, "cli.json")
@@ -439,13 +493,13 @@ test("serializes migration and updates across processes", async () => {
   })
 
   try {
-    await waitForFile(started, migrate.exited)
+    await waitForFile(started, migrate)
     const update = Bun.spawn([process.execPath, worker, "update", directory.path, started, release, updateReady], {
       stdout: "ignore",
       stderr: "pipe",
     })
     try {
-      await waitForFile(updateReady, update.exited)
+      await waitForFile(updateReady, update)
       await Bun.write(release, "")
       const [migrateCode, updateCode] = await Promise.all([migrate.exited, update.exited])
       expect(await new Response(migrate.stderr).text()).toBe("")
@@ -576,14 +630,15 @@ test("updates a config draft while preserving JSONC comments", async () => {
   expect(await Bun.file(path.join(directory.path, "cli.json")).text()).toContain("// Keep this comment")
 })
 
-async function waitForFile(file: string, exited: Promise<number>) {
-  const found = await Promise.race([
-    (async () => {
-      while (!(await Bun.file(file).exists())) await Bun.sleep(10)
-      return true
-    })(),
-    exited.then(() => false),
-    Bun.sleep(5000).then(() => false),
-  ])
-  if (!found) throw new Error(`timed out waiting for ${file}`)
+// Waits for the file a child writes once it has got that far, for as long as the row's limit allows: a fixed five
+// seconds here was shorter than a loaded Windows runner took to start the child and load the config (Windows cli 3/6 of
+// run 45771612425). A child that exits first fails the row with its exit code and what it wrote to stderr.
+async function waitForFile(file: string, child: { exited: Promise<number>; stderr: ReadableStream<Uint8Array> }) {
+  const state = { exited: false }
+  const exited = child.exited.then(() => {
+    state.exited = true
+  })
+  while (!state.exited && !(await Bun.file(file).exists())) await Promise.race([Bun.sleep(10), exited])
+  if (await Bun.file(file).exists()) return
+  throw new Error(`the child exited with ${await child.exited} before it wrote ${file}: ${await new Response(child.stderr).text()}`)
 }

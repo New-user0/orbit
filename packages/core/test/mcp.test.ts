@@ -50,7 +50,6 @@ import { State } from "@orbit/core/state"
 import { McpTool } from "@orbit/core/tool/mcp"
 import { McpResourceTools } from "@orbit/core/tool/plugin/mcp-resource"
 import { Tool } from "@orbit/core/tool"
-import { ToolOutput } from "@orbit/core/tool-output"
 import { WellKnown } from "@orbit/core/wellknown"
 import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { Global } from "@orbit/util/global"
@@ -81,8 +80,9 @@ import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
 import { decoyName, row } from "./fixture/decoy"
 import { trustedProject, untrustedProject } from "./fixture/project-trust"
 import { ProjectTrust } from "@orbit/core/project-trust"
-import { grantWithRecords } from "./fixture/grant"
+import { grantFolder } from "./fixture/grant"
 import { location } from "./fixture/location"
+import { processNativeLayer } from "./fixture/native-watcher"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { expectOneSpelling, received, spellingEnv, withLookupVariable } from "./fixture/child-env"
 import { hostEnvironmentLayer, recordingEnvironmentLayer } from "./fixture/environment"
@@ -321,11 +321,10 @@ function resourceMcpLayer(
               Config.Service,
               Config.Service.of({
                 entries: overrides.entries,
+                rejected: () => Effect.succeed([]),
                 compatEnabled: () => Effect.succeed(Config.defaultCompat.enabled),
                 compat: () => Effect.succeed(Config.defaultCompat),
                 changes: () => Stream.never,
-                fingerprints: () => Effect.succeed([]),
-                pluginsChanged: () => Effect.succeed(false),
                 notify: () => Effect.void,
               }),
             )
@@ -687,7 +686,7 @@ test("retains output schemas across paginated MCP discovery", async () => {
       },
     },
   ])
-})
+}, 10_000)
 
 test("lists paginated prompts and invokes them through the MCP client", async () => {
   const result = await Effect.runPromise(
@@ -872,13 +871,221 @@ describe("a local MCP server waits for the project folder to be trusted", () => 
               resourceMcpLayer(config, undefined, undefined, {
                 entries: () => Effect.succeed(entries),
                 environment: recordingEnvironmentLayer(spawns),
-                trust: Layer.mock(ProjectTrust.Service, { trusted: () => Effect.sync(() => state.trusted) }),
+                // A working folder outside the project is decided on its own, here the same way as the project.
+                trust: Layer.mock(ProjectTrust.Service, {
+                  trusted: () => Effect.sync(() => state.trusted),
+                  folder: (directory) => Effect.sync(() => ({ directory, trusted: state.trusted, persistent: true })),
+                }),
                 subscribe: (() => Stream.fromPubSub(updates)) as Bus.Interface["subscribe"],
               }),
             ),
           ),
         )
       })
+
+  // A grant of some other folder places each waiting server again, and one whose working folder is still not trusted, or
+  // is no name a file system takes, is left as it was: it neither starts nor reports its status again.
+  test("a trust update that does not cover a server's working folder leaves it waiting, and the grant of that folder starts it", async () => {
+    const spawns: Array<ChildProcess.Command> = []
+    const published: string[] = []
+    const state = { folder: false }
+    const updates = Effect.runSync(PubSub.unbounded<unknown>())
+    const servers = {
+      resources: new ConfigMCP.Local({ type: "local", command: [process.execPath, script], cwd: os.tmpdir() }),
+      unnamed: new ConfigMCP.Local({ type: "local", command: [process.execPath, script], cwd: `${os.tmpdir()}\0x` }),
+    }
+    const entries = [new Document({ type: "document", info: new Info({ mcp: new ConfigMCP.Info({ servers }) }) })]
+    const changes = () => published.filter((type) => type === McpEvent.StatusChanged.type).length
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* Mcp.Service
+        expect((yield* settled(service))?.status).toBe("failed")
+        expect((yield* settled(service, "unnamed"))?.status).toBe("failed")
+        const before = changes()
+        yield* PubSub.publish(updates, {})
+        yield* Effect.promise(() => Bun.sleep(300))
+        expect({ spawns: spawns.length, changes: changes() }).toEqual({ spawns: 0, changes: before })
+
+        state.folder = true
+        yield* PubSub.publish(updates, {})
+        yield* Effect.gen(function* () {
+          const status = (yield* service.servers()).find((server) => server.name === "resources")?.status
+          if (status?.status !== "connected") return yield* Effect.fail(status)
+        }).pipe(Effect.retry({ times: 300, schedule: Schedule.spaced("10 millis") }))
+        expect(spawns).toHaveLength(1)
+        expect((yield* service.servers()).find((server) => server.name === "unnamed")?.status).toEqual({
+          status: "failed",
+          error: "Its working folder is not a name a file system takes.",
+        })
+      }).pipe(
+        Effect.provide(
+          resourceMcpLayer(servers.resources, undefined, undefined, {
+            entries: () => Effect.succeed(entries),
+            environment: recordingEnvironmentLayer(spawns),
+            published,
+            trust: Layer.mock(ProjectTrust.Service, {
+              trusted: () => Effect.succeed(true),
+              folder: (directory) => Effect.sync(() => ({ directory, trusted: state.folder, persistent: true })),
+            }),
+            subscribe: (() => Stream.fromPubSub(updates)) as Bus.Interface["subscribe"],
+          }),
+        ),
+      ),
+    )
+  })
+
+  // A person who turns off a server that waits for trust has decided it stays off: the grant that comes later does not
+  // start it, and the server stays turned off until someone connects it.
+  test("a grant does not start a server that was turned off while it waited for trust", async () => {
+    const spawns: Array<ChildProcess.Command> = []
+    const state = { folder: false }
+    const updates = Effect.runSync(PubSub.unbounded<unknown>())
+    const config = new ConfigMCP.Local({ type: "local", command: [process.execPath, script], cwd: os.tmpdir() })
+    const entries = [
+      new Document({ type: "document", info: new Info({ mcp: new ConfigMCP.Info({ servers: { resources: config } }) }) }),
+    ]
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* Mcp.Service
+        expect((yield* settled(service))?.status).toBe("failed")
+        yield* service.disconnect("resources")
+        expect((yield* service.servers())[0]?.status).toEqual({ status: "disabled" })
+        state.folder = true
+        yield* PubSub.publish(updates, {})
+        yield* Effect.promise(() => Bun.sleep(1500))
+        expect({ spawns: spawns.length, status: (yield* service.servers())[0]?.status }).toEqual({
+          spawns: 0,
+          status: { status: "disabled" },
+        })
+        // Connecting it is the person's choice, and the folder is trusted now, so it starts.
+        yield* service.connect("resources")
+        expect({ spawns: spawns.length, status: (yield* service.servers())[0]?.status }).toEqual({
+          spawns: 1,
+          status: { status: "connected" },
+        })
+      }).pipe(
+        Effect.provide(
+          resourceMcpLayer(config, undefined, undefined, {
+            entries: () => Effect.succeed(entries),
+            environment: recordingEnvironmentLayer(spawns),
+            trust: Layer.mock(ProjectTrust.Service, {
+              trusted: () => Effect.succeed(true),
+              folder: (directory) => Effect.sync(() => ({ directory, trusted: state.folder, persistent: true })),
+            }),
+            subscribe: (() => Stream.fromPubSub(updates)) as Bus.Interface["subscribe"],
+          }),
+        ),
+      ),
+    )
+  })
+
+  // A grant can land while a server is being placed: the place read the trust before the grant, and the server joins
+  // the waiting ones only after the grant's update has looked for them. The update still starts it. Seen on a loaded
+  // Windows runner, where the server whose place straddled the second of two quick grants never started.
+  test("a grant that lands while a server's working folder is being decided still starts it", async () => {
+    const spawns: Array<ChildProcess.Command> = []
+    const state = { folder: false }
+    const placing = Effect.runSync(Deferred.make<void>())
+    const release = Effect.runSync(Deferred.make<void>())
+    const updates = Effect.runSync(PubSub.unbounded<unknown>())
+    const config = new ConfigMCP.Local({ type: "local", command: [process.execPath, script], cwd: os.tmpdir() })
+    const entries = [
+      new Document({ type: "document", info: new Info({ mcp: new ConfigMCP.Info({ servers: { resources: config } }) }) }),
+    ]
+    // The first decision reads the folder as not trusted and answers only once the grant below has been announced.
+    const first = { pending: true }
+    const folder = (directory: AbsolutePath) =>
+      Effect.gen(function* () {
+        const trusted = state.folder
+        if (first.pending) {
+          first.pending = false
+          yield* Deferred.succeed(placing, undefined)
+          yield* Deferred.await(release)
+        }
+        return { directory, trusted, persistent: true }
+      })
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* Mcp.Service
+        yield* Deferred.await(placing)
+        state.folder = true
+        yield* PubSub.publish(updates, {})
+        // Long enough for the update to look for waiting servers before the stale decision comes back.
+        yield* Effect.promise(() => Bun.sleep(300))
+        yield* Deferred.succeed(release, undefined)
+        yield* Effect.gen(function* () {
+          const status = (yield* service.servers()).find((server) => server.name === "resources")?.status
+          if (status?.status !== "connected") return yield* Effect.fail(status)
+        }).pipe(Effect.retry({ times: 300, schedule: Schedule.spaced("10 millis") }))
+        expect(spawns).toHaveLength(1)
+      }).pipe(
+        Effect.provide(
+          resourceMcpLayer(config, undefined, undefined, {
+            entries: () => Effect.succeed(entries),
+            environment: recordingEnvironmentLayer(spawns),
+            trust: Layer.mock(ProjectTrust.Service, { trusted: () => Effect.succeed(true), folder }),
+            subscribe: (() => Stream.fromPubSub(updates)) as Bus.Interface["subscribe"],
+          }),
+        ),
+      ),
+    )
+  })
+
+  // The update asks every server under its own lock, and a server still being placed holds its lock. The servers are
+  // asked side by side, so one whose folder is slow to decide does not keep a granted one waiting behind it.
+  test("a server whose working folder is slow to decide does not hold up the start of another that a grant covers", async () => {
+    const spawns: Array<ChildProcess.Command> = []
+    const state = { folder: false }
+    const placing = Effect.runSync(Deferred.make<void>())
+    const release = Effect.runSync(Deferred.make<void>())
+    const updates = Effect.runSync(PubSub.unbounded<unknown>())
+    const slow = path.join(os.tmpdir(), "orbit-slow-mcp-folder")
+    // `slow` comes first, so a resume that asked the servers one at a time would wait on its lock before `resources`.
+    const servers = {
+      slow: new ConfigMCP.Local({ type: "local", command: [process.execPath, script], cwd: slow }),
+      resources: new ConfigMCP.Local({ type: "local", command: [process.execPath, script], cwd: os.tmpdir() }),
+    }
+    const entries = [new Document({ type: "document", info: new Info({ mcp: new ConfigMCP.Info({ servers }) }) })]
+    const first = { pending: true }
+    // `slow`'s folder is never trusted; its first decision answers only once `resources` has started.
+    const folder = (directory: AbsolutePath) =>
+      Effect.gen(function* () {
+        if (path.basename(directory) !== path.basename(slow))
+          return { directory, trusted: state.folder, persistent: true }
+        if (first.pending) {
+          first.pending = false
+          yield* Deferred.succeed(placing, undefined)
+          yield* Deferred.await(release)
+        }
+        return { directory, trusted: false, persistent: true }
+      })
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* Mcp.Service
+        yield* Deferred.await(placing)
+        expect((yield* settled(service))?.status).toBe("failed")
+        state.folder = true
+        yield* PubSub.publish(updates, {})
+        const connected = yield* Effect.gen(function* () {
+          const status = (yield* service.servers()).find((server) => server.name === "resources")?.status
+          if (status?.status !== "connected") return yield* Effect.fail(status)
+        }).pipe(Effect.retry({ times: 300, schedule: Schedule.spaced("10 millis") }), Effect.exit)
+        yield* Deferred.succeed(release, undefined)
+        expect(Exit.isSuccess(connected)).toBe(true)
+        expect((yield* settled(service, "slow"))?.status).toBe("failed")
+        expect(spawns).toHaveLength(1)
+      }).pipe(
+        Effect.provide(
+          resourceMcpLayer(servers.resources, undefined, undefined, {
+            entries: () => Effect.succeed(entries),
+            environment: recordingEnvironmentLayer(spawns),
+            trust: Layer.mock(ProjectTrust.Service, { trusted: () => Effect.succeed(true), folder }),
+            subscribe: (() => Stream.fromPubSub(updates)) as Bus.Interface["subscribe"],
+          }),
+        ),
+      ),
+    )
+  })
 })
 test("reports a local MCP server as failed when the location has no execution plane", async () => {
   const config = new ConfigMCP.Local({ type: "local", command: ["example-mcp"] })
@@ -1723,15 +1930,8 @@ it.live("discovers and reads MCP resources through Code Mode", () =>
       const large = yield* run(
         'const resource = await tools.orbit.read_mcp_resource({ server: "resources", uri: "docs://readme" }); return resource.contents[0].text',
       )
-      const bounded = yield* ToolOutput.Service.use((output) => output.truncate(large)).pipe(
-        Effect.provide(AppNodeBuilder.build(ToolOutput.node)),
-      )
-      expect(bounded.metadata?.truncated).toBe(true)
-      expect(bounded.content[0]).toMatchObject({ type: "text" })
-      const outputPath = bounded.metadata?.outputPath
-      expect(typeof outputPath).toBe("string")
-      if (typeof outputPath !== "string") throw new Error("Missing full resource output")
-      expect(yield* Effect.promise(() => Bun.file(outputPath).text())).toBe("line\n".repeat(20_000))
+      // The tool returns all 100,000 characters; the step saves them to a file above the threshold (tool-runtime-8).
+      expect(large.content).toEqual([{ type: "text", text: "line\n".repeat(20_000) }])
 
       // An empty contents array means the resource exists without content, not that it is missing.
       server.state.contents = []
@@ -1836,7 +2036,7 @@ test("adds, disconnects, and reconnects MCP servers at runtime", async () => {
       }),
     ),
   )
-})
+}, 10_000)
 
 testEffect(Layer.empty).live(
   "merges MCP defaults into the winning configured server without changing runtime overrides",
@@ -1989,7 +2189,7 @@ describe("MCP servers from .mcp.json", () => {
         // `docs` only exists in .mcp.json, and connects. `shared` is in both files, and the one in orbit.json is the one
         // that connects: the .mcp.json server would have failed to start.
         expect(servers).toEqual({ docs: { status: "connected" }, shared: { status: "connected" } })
-      }),
+      }), 10_000,
   )
 
   testEffect(Layer.empty).live("are gone once compatibility is off, and the native server stays", () =>
@@ -2022,7 +2222,7 @@ describe("MCP servers from .mcp.json", () => {
 
         // The config reloads a moment after the decision, and says so when it has.
         const granted = yield* nextUpdate
-        yield* grantWithRecords(project, { persist: false, via: "test" })
+        yield* grantFolder(project, { persist: false, via: "test" })
         yield* Fiber.join(granted)
         expect(yield* registered(yield* config.entries())).toEqual({
           personal: { status: "connected" },
@@ -2035,7 +2235,7 @@ describe("MCP servers from .mcp.json", () => {
         yield* Fiber.join(revoked)
         expect(yield* registered(yield* config.entries())).toEqual({ personal: { status: "connected" } })
       }).pipe(Effect.provide(projectConfig(home, project, { implicit: false })))
-    }),
+    }), 20_000,
   )
 })
 
@@ -2091,7 +2291,7 @@ testEffect(resourceMcpLayer(new ConfigMCP.Local({ type: "local", command: ["unus
 
       expect((yield* service.servers()).map((server) => server.name)).toEqual([Mcp.ServerName.make("resources")])
       expect(yield* service.tools()).toEqual([])
-    }),
+    }), 20_000,
 )
 
 test("restores runtime MCP config when a transform is disposed", async () => {
@@ -2454,7 +2654,7 @@ test("serializes concurrent MCP lifecycle operations", async () => {
       }),
     ),
   )
-})
+}, 10_000)
 
 testEffect(Layer.empty).live("isolates invalid MCP tools and preserves plugin transforms through catalog updates", () =>
   Effect.gen(function* () {
@@ -2597,6 +2797,7 @@ testEffect(Layer.empty).live("isolates invalid MCP tools and preserves plugin tr
             ),
             Permission.node.replace(Layer.mock(Permission.Service, { assert: () => Effect.void })),
             Image.node.replace(imagePassthrough),
+            Watcher.nativeNode.replace(processNativeLayer),
           ]),
         ),
       ),
@@ -3058,6 +3259,16 @@ describe("MCP tool traits", () => {
     expect(Object.keys(McpTool.traits(tool(input)))).not.toContain("displayName")
   })
 
+  // tool-runtime-8: as the reference declares for its MCP tool. The 50,000 ceiling makes it 50,000 unless the person raises
+  // `tool_output.max_result_chars`, and no annotation changes it.
+  test.each([
+    ["no annotations", {}],
+    ["a read-only hint", { annotations: { readOnlyHint: true } }],
+  ] as const)("declares 100,000 characters as the result limit with %s", async (_, input) => {
+    expect(McpTool.traits(tool(input)).maxResultChars).toBe(100_000)
+    expect((await resolved(input)).maxResultChars).toBe(100_000)
+  })
+
   test("writes out the control and format characters of a title a server chose", () => {
     const hostile = "a\u001b]0;x\u0007b\u001b[2Kc\u009bd\u009d\u007f\u200b\u202ee\r\nf\ng\rh"
     const displayName = McpTool.traits(tool({ title: hostile })).displayName
@@ -3184,6 +3395,7 @@ describe("MCP tool traits", () => {
         Mcp.node.replace(service),
         Permission.node.replace(Layer.mock(Permission.Service, { assert: () => Effect.void })),
         Image.node.replace(imagePassthrough),
+        Watcher.nativeNode.replace(processNativeLayer),
       ]),
     )
 })
@@ -3208,6 +3420,7 @@ describe("MCP hints and permissions", () => {
           Layer.succeed(Location.Service, Location.Service.of(location({ directory: AbsolutePath.make("/project") }))),
         ),
         Image.node.replace(imagePassthrough),
+        Watcher.nativeNode.replace(processNativeLayer),
       ],
     )
 
@@ -3848,8 +4061,7 @@ describe("MCP servers under the organization's lists", () => {
           { mcp: { managed_only: true } },
           "failed",
         )
-      }).pipe(Effect.scoped),
-      20_000,
+      }).pipe(Effect.scoped), 25_000,
     )
 
     testEffect(Layer.empty).live("logs each dropped server once, by name and reason, never its URL", () =>

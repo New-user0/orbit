@@ -1,4 +1,5 @@
 import { HttpRecorder } from "@orbit/http-recorder"
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import { OpenAIChat } from "@orbit/ai/protocols/openai-chat"
 import { Auth, LLMClient, type LLMClientService, RequestExecutor } from "@orbit/ai/route"
 import { Model } from "@orbit/core/model"
@@ -45,6 +46,7 @@ import { testEffect } from "./lib/effect"
 import { LocationServiceMap } from "@orbit/core/location-service-map"
 import { promptLocationNode } from "./fixture/prompt-location"
 import { permissionLayer } from "./lib/permission"
+import { noMemory } from "./lib/memory"
 import { noScratchpad } from "./lib/scratchpad"
 import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { agentHost, modelHost, host, noProviders } from "./plugin/host"
@@ -79,6 +81,7 @@ const models = Layer.mock(SessionRunnerModel.Service)({
 const systemContext = Layer.mock(InstructionBuiltIns.Service, {
   load: () => Effect.succeed(Instructions.empty),
   preferences: () => Effect.succeed(Instructions.empty),
+  toolResults: () => Instructions.empty,
 })
 const instructionContext = Layer.mock(InstructionDiscovery.Service, {
   project: true,
@@ -104,8 +107,11 @@ const runnerLayer = (llmClient: Layer.Layer<LLMClientService>) =>
     LayerNodePlatform.llmClient.replace(llmClient),
     SessionRunnerModel.node.replace(models),
     InstructionBuiltIns.node.replace(systemContext),
+    // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+    SessionRehydration.node.replace(SessionRehydration.noopLayer),
     InstructionDiscovery.node.replace(instructionContext),
     noScratchpad,
+    noMemory,
     noVcsSnapshot,
     Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
     SkillInstructions.node.replace(skillInstructions),
@@ -163,8 +169,11 @@ const testLayer = (llmClient: Layer.Layer<LLMClientService>) =>
       Model.node.replace(promptModels),
       SessionRunnerModel.node.replace(models),
       InstructionBuiltIns.node.replace(systemContext),
+      // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+      SessionRehydration.node.replace(SessionRehydration.noopLayer),
       InstructionDiscovery.node.replace(instructionContext),
       noScratchpad,
+      noMemory,
       noVcsSnapshot,
       Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
       SkillInstructions.node.replace(skillInstructions),

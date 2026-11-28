@@ -4,12 +4,13 @@ import { Database } from "bun:sqlite"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { createSignal } from "solid-js"
 import { EditorContextProvider, useEditorContext, type EditorIntegration } from "../../src/context/editor"
 import { IdeLock } from "@orbit/util/ide-lock"
 import { tmpdir } from "../fixture/fixture"
 import { TestTuiContexts } from "../fixture/tui-environment"
+import { removeTree } from "../../../core/test/fixture/remove-tree"
 
 // The variables the editor context and the Zed reader read, so each test starts from none of them and leaves none behind.
 const variables = ["ORBIT_EDITOR_SSE_PORT", "ORBIT_ZED_DB", "ZED_TERM", "TERM_PROGRAM"]
@@ -55,7 +56,7 @@ async function renderEditor(
     return <box />
   }
 
-  const setup = await testRender(() => (
+  const setup = await testRenderTimed(() => (
     <TestTuiContexts cwd={input.cwd} paths={input.state ? { state: input.state } : undefined}>
       <EditorContextProvider
         integration={input.integration}
@@ -182,7 +183,7 @@ test("reads the selection from Zed's database through the compat reader", async 
       setup.destroy()
     }
   } finally {
-    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    await removeTree(directory)
   }
 })
 
@@ -313,7 +314,8 @@ test("sends hello with version 1 and its pid, and counts as connected only after
     await wait(() => editor.frames.length > 0, 3_000, "the hello")
     await Bun.sleep(100)
 
-    expect(editor.frames[0]).toEqual({ type: "hello", version: 1, pid: process.pid })
+    // The features name what this terminal UI can do beyond version 1's messages (clients-ux-15 part 3).
+    expect(editor.frames[0]).toEqual({ type: "hello", version: 1, pid: process.pid, features: ["diff"] })
     expect(setup.editor.connected()).toBe(false)
 
     editor.send({ type: "hello", version: 1, editor: "Test Editor" })

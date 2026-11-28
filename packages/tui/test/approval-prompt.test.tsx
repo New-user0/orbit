@@ -7,7 +7,7 @@ import path from "node:path"
 import os from "node:os"
 import type { PermissionRequest } from "@orbit/client"
 import type { JsonValue } from "@orbit/client/promise"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import { expect, test } from "bun:test"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
@@ -54,6 +54,12 @@ const kinds = [
   "NotebookEdit/relative path/untrusted",
   "Patch/relative path/untrusted",
   "Patch (move)/relative path/untrusted",
+  // m5-link-warning: every kind of file change through a link, out of the project and inside it.
+  ...["Edit", "Write", "NotebookEdit", "Patch", "Patch (add over)", "Patch (move)", "Patch (move onto)"].flatMap((tool) =>
+    ["link", "link inside"].flatMap((spelling) =>
+      ["trusted", "untrusted"].map((trust) => `${tool}/${spelling}/${trust}`),
+    ),
+  ),
   "Glob/folder",
   "Grep/folder",
   "Bash/folder",
@@ -86,7 +92,7 @@ async function draw(request: Omit<PermissionRequest, "id" | "sessionID">, width:
         },
       })
   }, createEventStream())
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts directory={tmp.path} paths={{ home: tmp.path, state: tmp.path, worktree: tmp.path }}>
         <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
@@ -135,7 +141,9 @@ const flat = squash
 
 for (const row of rows)
   test(`the session prompt for ${row.id} draws the request's values on the screen`, async () => {
-    const frame = flat(await draw(row.request, 220, 60))
+    // A linked change has its warnings above its diffs, so what follows them is read by scrolling.
+    const warned = row.id.includes("/link")
+    const frame = flat(await draw(row.request, 220, 60, warned ? 24 : 0))
     expect(frame).toContain("Allowonce")
     expect(frame).not.toContain("DECOY")
     // A path may be shown relative to the project or the home folder, so the last two parts of it are what is compared.
@@ -147,6 +155,14 @@ for (const row of rows)
     if (row.truth.arguments) expect(frame).toContain(squash(row.truth.arguments))
     if (["Bash", "PowerShell", "Glob", "Grep"].includes(row.tool))
       for (const resource of row.request.resources.filter((item) => item !== "*")) expect(frame).toContain(squash(resource))
+    const entries = (row.request.metadata?.files ?? []) as {
+      link?: { place: string; outside: boolean }
+      fromLink?: { place: string; outside: boolean }
+    }[]
+    for (const link of entries.flatMap((file) => [file.link, file.fromLink]).filter((item) => item !== undefined)) {
+      expect(frame.replaceAll("│", "")).toContain(`Linkends${link.outside ? "outside" : "inside"}theproject`)
+      expect(frame).toContain(tail(link.place))
+    }
     for (const file of (row.request.metadata?.files ?? []) as { from?: string; patch: string }[]) {
       if (file.from) expect(frame).toContain(tail(file.from))
       // The diff view clips a very long line and scrolls past the first screen, so the first changed lines are compared

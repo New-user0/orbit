@@ -2,7 +2,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { mkdir, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { EditorContextProvider, useEditorContext } from "../../src/context/editor"
 import { IdeLock } from "@orbit/util/ide-lock"
 import { tmpdir } from "../fixture/fixture"
@@ -34,7 +34,7 @@ async function renderEditor(input: { cwd: string; state: string; connect?: numbe
     editor = useEditorContext()
     return <box />
   }
-  const setup = await testRender(() => (
+  const setup = await testRenderTimed(() => (
     <TestTuiContexts cwd={input.cwd} paths={{ state: input.state }}>
       <EditorContextProvider
         compat={() => false}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import path from "node:path"
+import { runOrb } from "../fixture/orb"
 
 describe("acp command", () => {
   test("is registered", async () => {
@@ -9,16 +9,6 @@ describe("acp command", () => {
   })
 })
 
-async function cli(args: string[]) {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
-    cwd: path.join(import.meta.dir, "../.."),
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  return { stdout, stderr, exitCode }
+function cli(args: string[]) {
+  return runOrb(args)
 }

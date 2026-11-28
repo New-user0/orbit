@@ -6,6 +6,7 @@ import type { Context } from "@orbit/plugin/effect/plugin"
 import { Effect, Ref, Schema, Semaphore } from "effect"
 import { Agent } from "../../agent.js"
 import { CodeModeTool } from "../../codemode/tool.js"
+import { Config } from "../../config.js"
 import { Job } from "../../job.js"
 import { Session } from "../../session.js"
 import { SessionSchema } from "../../session/schema.js"
@@ -89,6 +90,7 @@ export const Plugin = {
     const sessions = yield* Session.Service
     const jobs = yield* Job.Service
     const agents = yield* Agent.Service
+    const config = yield* Config.Service
     const subagents = yield* SubagentJob.make
     const spawn = yield* SubagentTool.spawner()
 
@@ -181,9 +183,11 @@ export const Plugin = {
                         description: call.description,
                       }
                       yield* subagents.start(recovery)
-                      const result = yield* jobs
-                        .block({ id: child.id, sessionID: context.sessionID })
-                        .pipe(
+                      const result = yield* SubagentJob.waitFor(
+                        jobs,
+                        { id: child.id, sessionID: context.sessionID },
+                        Config.latest(yield* config.entries(), "background_tasks") !== false,
+                      ).pipe(
                           Effect.onInterrupt(() =>
                             Effect.all([sessions.interrupt(child.id), jobs.cancel(child.id)], { discard: true }),
                           ),

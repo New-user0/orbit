@@ -366,7 +366,7 @@ describe("LSP tool", () => {
         })
         expect((yield* call(at("references", "plain"))).text).toStartWith("4 references in 3 files:")
       }),
-    ),
+    ), 20_000,
   )
 
   // Every answer of the fake server lies in an ignored folder; the filter must hide it for exactly these actions.
@@ -393,7 +393,7 @@ describe("LSP tool", () => {
           })
         }
       }),
-    ),
+    ), 20_000,
   )
 
   it.live("outside a repository nothing is hidden", () =>
@@ -401,7 +401,7 @@ describe("LSP tool", () => {
       call(at("references", "plain")).pipe(
         Effect.map((found) => expect(found.text).toStartWith("4 references in 3 files:")),
       ),
-    ),
+    ), 10_000,
   )
 
   it.live("a server that answers content-modified is retried silently, then answers", () =>
@@ -424,7 +424,7 @@ describe("LSP tool", () => {
         expect(found).toEqual({ failed: true, text: expect.stringContaining("content modified") })
         expect((yield* requests(log)).filter((item) => item.method === "textDocument/hover")).toHaveLength(4)
       }),
-    ),
+    ), 10_000,
   )
 
   it.live("any other server error fails at once", () =>

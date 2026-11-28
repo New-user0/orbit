@@ -68,7 +68,26 @@ const BridgeHelloSchema = Schema.Struct({
   type: Schema.Literal("hello"),
   version: Schema.Number,
   editor: Schema.optional(Schema.String),
+  // What the bridge can do beyond version 1's messages. Read loosely: a list this terminal UI does not understand only
+  // means fewer features, never a lost link.
+  features: Schema.optional(Schema.Unknown),
 })
+
+// How the person answered a review in the editor, or why none opened. A save carries the text as saved.
+const BridgeDiffAnswerSchema = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("diff.answer"),
+    id: Schema.String,
+    answer: Schema.Literal("saved"),
+    content: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("diff.answer"),
+    id: Schema.String,
+    answer: Schema.Literals(["closed", "rejected", "dismissed", "unavailable"]),
+    reason: Schema.optional(Schema.String),
+  }),
+])
 
 const BridgeSelectionSchema = Schema.Struct({
   type: Schema.Literal("selection"),
@@ -87,9 +106,22 @@ const BridgeMentionSchema = Schema.Struct({
 const BridgeFrameSchema = Schema.Union([BridgeHelloSchema, BridgeSelectionSchema, BridgeMentionSchema])
 
 const decodeEditorSelection = Schema.decodeUnknownOption(EditorSelectionSchema)
-const decodeFrame = Schema.decodeUnknownOption(Schema.fromJsonString(BridgeFrameSchema))
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
+const decodeFrame = Schema.decodeUnknownOption(BridgeFrameSchema)
+const decodeDiffAnswer = Schema.decodeUnknownOption(BridgeDiffAnswerSchema)
 
 export type EditorSelection = Schema.Schema.Type<typeof EditorSelectionSchema>
+/** A review of an approval to open in the editor: every value is the permission request's own. */
+export type EditorDiff = {
+  id: string
+  place: string
+  patch: string
+  status: "added" | "modified"
+  /** The folders the session's file tools work in, as its server named them. */
+  roots: string[]
+}
+/** How a review in the editor ended for the terminal UI: the editor's answer, or `lost` when the link went away. */
+export type EditorDiffEvent = Schema.Schema.Type<typeof BridgeDiffAnswerSchema> | { answer: "lost" }
 /** A file the person mentioned in the editor, with 1-based inclusive lines when a selection came with it. */
 export type EditorMention = { filePath: string; lineStart?: number; lineEnd?: number }
 export type EditorLabelState = "pending" | "sent" | "none"
@@ -122,7 +154,11 @@ const defaultTiming: EditorTiming = {
   connect: 35_000,
 }
 
-export const { use: useEditorContext, provider: EditorContextProvider } = createSimpleContext({
+export const {
+  use: useEditorContext,
+  provider: EditorContextProvider,
+  context: EditorContext,
+} = createSimpleContext({
   name: "EditorContext",
   init: (props: {
     integration?: EditorIntegration
@@ -149,8 +185,8 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       status: "disabled" | "connecting" | "connected"
       selection: EditorSelection | undefined
       selectionSent: boolean
-      /** The display name of the editor, once it has said hello. */
-      server: { name?: string; port?: number } | undefined
+      /** The display name of the editor, once it has said hello, and whether it reviews diffs. */
+      server: { name?: string; port?: number; diff?: boolean } | undefined
     }>({
       status: "disabled",
       selection: undefined,
@@ -159,6 +195,9 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
     })
 
     let socket: WebSocket | undefined
+    // The reviews open in the editor, by request, each with the link it was opened over. The context holds the handler,
+    // so an answer that arrives while a prompt is drawn again is not lost.
+    const reviews = new Map<string, { link: WebSocket; handler: (event: EditorDiffEvent) => void }>()
     let closed = false
     let timer: ReturnType<typeof setTimeout> | undefined
     // Starting again makes every search and connection of an earlier start stale.
@@ -218,6 +257,34 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       if (zedTerminal && editor.selection) pollZed(current)
     }
 
+    // An answer from the editor reaches the review it names. One that does not decode, or names no review open over this
+    // link, is dropped with one line (class 7).
+    const answered = (value: Record<string, unknown>, link: WebSocket) => {
+      const answer = Option.getOrUndefined(decodeDiffAnswer(value))
+      if (!answer) return log.warn("dropped a diff answer from the editor that does not have its shape")
+      const review = reviews.get(answer.id)
+      if (!review || review.link !== link) return log.warn("dropped a diff answer for a review that is not open")
+      // Each review is answered once; a later answer for it names nothing open.
+      reviews.delete(answer.id)
+      review.handler(answer)
+    }
+
+    const lose = (link: WebSocket) => {
+      const lost = [...reviews].filter(([, review]) => review.link === link)
+      lost.forEach(([id]) => reviews.delete(id))
+      lost.forEach(([, review]) => review.handler({ answer: "lost" }))
+    }
+
+    // Sends a frame over the link once the editor said hello. A frame larger than the cap is not sent.
+    const sendFrame = (frame: Record<string, unknown>) => {
+      const link = socket
+      if (!link || store.status !== "connected") return undefined
+      const text = JSON.stringify(frame)
+      if (Buffer.byteLength(text) > IdeLock.frameCap) return undefined
+      link.send(text)
+      return link
+    }
+
     const dial = (
       found: Editor,
       current: number,
@@ -234,12 +301,16 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
 
       link.addEventListener("open", () => {
         if (socket !== link) return link.close()
-        link.send(JSON.stringify({ type: "hello", version: IdeLock.version, pid: process.pid }))
+        link.send(
+          JSON.stringify({ type: "hello", version: IdeLock.version, pid: process.pid, features: [...IdeLock.features] }),
+        )
       })
 
       link.addEventListener("message", (event) => {
         if (socket !== link) return
-        const frame = parse(event.data, () => log.warn("dropped a frame from the editor that is too large"))
+        const value = parse(event.data, () => log.warn("dropped a frame from the editor that is too large"))
+        if (isRecord(value) && value.type === "diff.answer") return void (ready && answered(value, link))
+        const frame = Option.getOrUndefined(decodeFrame(value))
         if (!frame) return
         if (frame.type === "hello") {
           if (frame.version !== IdeLock.version) {
@@ -249,7 +320,12 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
           }
           ready = true
           // The editor chose its name, so it is escaped before it reaches a person.
-          setStore("server", { name: frame.editor === undefined ? found.name : plain(frame.editor), port: found.port })
+          setStore("server", {
+            name: frame.editor === undefined ? found.name : plain(frame.editor),
+            port: found.port,
+            // A bridge from before diffs names none, and would close the link on a frame as large as a diff.
+            diff: Array.isArray(frame.features) && frame.features.includes("diff"),
+          })
           setStore("status", "connected")
           settle?.("connected")
           return
@@ -286,6 +362,8 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       })
 
       link.addEventListener("close", (event) => {
+        // The reviews opened over this link are gone with it, whether it dropped or another link replaced it.
+        lose(link)
         if (socket !== link) return
         socket = undefined
         setStore("server", undefined)
@@ -426,6 +504,35 @@ export const { use: useEditorContext, provider: EditorContextProvider } = create
       server() {
         return store.server
       },
+      /**
+       * Reviews of approvals in the editor's diff, for a bridge whose hello named the `diff` feature. Nothing here reads
+       * or writes a file: the editor reads it behind its own checks, and the answer becomes a reply to the server.
+       */
+      diff: {
+        available() {
+          return store.status === "connected" && store.server?.diff === true
+        },
+        /**
+         * Asks the editor to open `review`, and calls `handler` once with how it ended. False when nothing was sent: no
+         * bridge that reviews diffs, or a frame larger than the cap.
+         */
+        open(review: EditorDiff, handler: (event: EditorDiffEvent) => void) {
+          if (store.server?.diff !== true) return false
+          const link = sendFrame({ type: "diff.open", ...review })
+          if (!link) return false
+          reviews.set(review.id, { link, handler })
+          return true
+        },
+        /** Closes the review's tab, which answers nothing; its handler hears nothing more either. */
+        close(id: string) {
+          reviews.delete(id)
+          if (store.server?.diff === true) sendFrame({ type: "diff.close", id })
+        },
+        /** Closes every Orbit diff tab in the editor; a review of this terminal UI's that was open hears `dismissed`. */
+        closeAll() {
+          if (store.server?.diff === true) sendFrame({ type: "diff.closeAll" })
+        },
+      },
       reconnect(directory?: string) {
         reconnectWithDirectory(directory)
       },
@@ -513,9 +620,9 @@ function hostile(filePath: string) {
   return /[\p{Cc}\u200B\u200E\u200F\u061C\u2028-\u202E\u2066-\u2069\uFEFF]/u.test(filePath)
 }
 
+// The frame as JSON. Whether it fits a message is decided by its type; a type from a later version is ignored.
 function parse(value: unknown, dropped: () => void) {
   if (typeof value !== "string") return
   if (Buffer.byteLength(value) > IdeLock.frameCap) return void dropped()
-  // A frame that does not fit, such as a type from a later version, is ignored.
-  return Option.getOrUndefined(decodeFrame(value))
+  return Option.getOrUndefined(decodeJson(value))
 }

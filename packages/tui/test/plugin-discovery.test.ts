@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdir, symlink } from "node:fs/promises"
 import path from "node:path"
 import { localPluginDirectories, mergePluginTargets, trustedPluginDirectories } from "../src/plugin/discovery"
+import { themeDirectories } from "../src/util/config-directories"
 import { tmpdir } from "./fixture/fixture"
 
 test("deduplicates equivalent local plugin targets while retaining the final source", () => {
@@ -24,58 +25,66 @@ test("a project's plugin directories wait for its folder to be trusted and the u
   const directories = {
     global: ["/config/plugins"],
     project: ["/project/.orbit/plugins", "/project/packages/app/.orbit/plugins"],
+    start: "/project/packages/app",
   }
 
-  expect(trustedPluginDirectories(directories, false, [])).toEqual(["/config/plugins"])
-  expect(trustedPluginDirectories(directories, true, [])).toEqual([
+  expect(trustedPluginDirectories(directories, false)).toEqual(["/config/plugins"])
+  expect(trustedPluginDirectories(directories, true)).toEqual([
     "/config/plugins",
     "/project/.orbit/plugins",
     "/project/packages/app/.orbit/plugins",
   ])
 })
 
-test("a plugin directory in a folder above the project waits for that folder's own decision", () => {
-  // The terminal UI finds its project's root on its own, and here that is /code, while the server's project is the
-  // folder the terminal UI was started in, /code/app. The server holds /code back, as a folder above its project.
+// Class 3: the terminal UI finds its project's root on its own, and here that is /code, while the server decided the
+// trust for the folder the terminal UI was started in, /code/app (it rejects a marker the walk accepts). Nothing above the
+// server's root is read (D7), so the stricter of the two roots wins.
+test("a plugin directory above the folder the server decided the trust for is left out", () => {
   const directories = {
     global: ["/config/plugins"],
     project: ["/code/.orbit/plugins", "/code/app/.orbit/plugins", "/code/app/packages/ui/.orbit/plugins"],
+    start: "/code/app/packages/ui",
   }
 
-  expect(trustedPluginDirectories(directories, true, ["/code"])).toEqual([
+  expect(trustedPluginDirectories(directories, true, "/code/app")).toEqual([
     "/config/plugins",
     "/code/app/.orbit/plugins",
     "/code/app/packages/ui/.orbit/plugins",
   ])
-  // The project's own directories are not named by what is held back above it, and neither is a folder that only
-  // starts with the same letters.
-  expect(trustedPluginDirectories(directories, true, ["/code/ap", "/co"])).toEqual([
-    "/config/plugins",
-    ...directories.project,
-  ])
-  // Once that folder is trusted the server stops listing it, and the plugins in it load.
-  expect(trustedPluginDirectories(directories, true, [])).toEqual(["/config/plugins", ...directories.project])
-  // And an untrusted project loads none of its own, whatever is held back.
-  expect(trustedPluginDirectories(directories, false, ["/code"])).toEqual(["/config/plugins"])
+  // The control: a server root that is the terminal UI's own leaves the walk as it is.
+  expect(trustedPluginDirectories(directories, true, "/code")).toEqual(["/config/plugins", ...directories.project])
+  // A root that only starts with the same letters bounds nothing, and nor does one that is not above the start folder,
+  // such as the main checkout of a linked worktree.
+  expect(trustedPluginDirectories(directories, true, "/code/ap")).toEqual(["/config/plugins", ...directories.project])
+  expect(trustedPluginDirectories(directories, true, "/main")).toEqual(["/config/plugins", ...directories.project])
+  // And an untrusted project loads none of its own.
+  expect(trustedPluginDirectories(directories, false, "/code/app")).toEqual(["/config/plugins"])
 })
 
-test("a directory whose plugins changed since the folder was trusted waits, and the folder's other directories load", () => {
-  const directories = {
-    global: ["/config/plugins"],
-    project: ["/project/.orbit/plugins", "/project/packages/app/.orbit/plugins"],
-  }
+// Class 3, end to end on the disk: a `.git` file that names no repository is a marker to the terminal UI's walk, while the
+// server takes the start folder as its project (core `project-git-trust.test.ts`, "stops at a .git file that is no
+// good"). With that answer, neither the plugins nor the themes of the folder that holds the `.git` file are read.
+test("a .git file that the server rejects does not widen the walk past the server's project", async () => {
+  await using root = await tmpdir()
+  const project = path.join(root.path, "project")
+  const app = path.join(project, "app")
+  await mkdir(path.join(project, ".orbit", "plugins"), { recursive: true })
+  await mkdir(path.join(app, ".orbit", "plugins"), { recursive: true })
+  await Bun.write(path.join(project, ".git"), "garbage\n")
+  const folders = { config: path.join(root.path, "config"), home: path.join(root.path, "home") }
 
-  expect(trustedPluginDirectories(directories, true, [], ["/project/packages/app/.orbit"])).toEqual([
-    "/config/plugins",
-    "/project/.orbit/plugins",
+  const found = await localPluginDirectories(app, folders)
+  // The terminal UI's own walk takes the folder with the `.git` file as the root.
+  expect(found.root).toBe(project)
+  expect(trustedPluginDirectories(found, true, app)).toEqual([
+    path.join(folders.config, "plugins"),
+    path.join(app, ".orbit", "plugins"),
   ])
-  // Only the directory named is held, not one whose path merely starts the same way.
-  expect(trustedPluginDirectories(directories, true, [], ["/project/.orb"])).toEqual([
-    "/config/plugins",
-    ...directories.project,
-  ])
-  // Once the changes are trusted the server stops listing it.
-  expect(trustedPluginDirectories(directories, true, [], [])).toEqual(["/config/plugins", ...directories.project])
+  const themes = await themeDirectories({ ...folders, cwd: app, project: { decided: app } })
+  expect(themes).not.toContain(path.join(project, ".orbit"))
+  expect(themes).toContain(path.join(app, ".orbit"))
+  // The control: without the server's answer, the walk reaches the folder with the `.git` file.
+  expect(await themeDirectories({ ...folders, cwd: app, project: {} })).toContain(path.join(project, ".orbit"))
 })
 
 test("plugin directories are the user's global config directory and the project's own .orbit directories", async () => {
@@ -93,6 +102,7 @@ test("plugin directories are the user's global config directory and the project'
     // when it exists, and packages has none.
     project: [path.join(project, ".orbit", "plugins"), path.join(app, ".orbit", "plugins")],
     root: project,
+    start: app,
   })
 })
 
@@ -106,6 +116,7 @@ test("the .orbit directory in the home directory is the user's own, even inside 
     global: [path.join(root.path, "config", "plugins"), path.join(home, ".orbit", "plugins")],
     project: [path.join(root.path, ".orbit", "plugins")],
     root: root.path,
+    start: home,
   })
 })
 

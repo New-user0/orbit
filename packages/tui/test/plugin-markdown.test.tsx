@@ -6,13 +6,13 @@ import {
   TextRenderable,
   type MarkdownCodeBlockRenderer,
 } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "./fixture/render"
 import { render } from "@opentui/solid"
 import { createRoot, createSignal } from "solid-js"
 import { createMarkdownRenderer } from "../src/plugin/markdown"
 
 test("unrelated plugin toggles preserve mounted Markdown blocks", async () => {
-  const output = await createTestRenderer({ width: 80, height: 12, remote: true, useThread: false })
+  const output = await createTestRendererTimed({ width: 80, height: 12, remote: true, useThread: false })
   const handler: MarkdownCodeBlockRenderer = () =>
     new TextRenderable(output.renderer, { content: "Custom fence", height: 1 })
   const [sources, setSources] = createSignal<ReadonlyArray<Readonly<Record<string, MarkdownCodeBlockRenderer>>>>([
@@ -80,7 +80,7 @@ test("effective mappings preserve identity through reordered and shadowed contri
 })
 
 test("changing and removing a Markdown handler refreshes existing messages", async () => {
-  const output = await createTestRenderer({ width: 80, height: 12, remote: true, useThread: false })
+  const output = await createTestRendererTimed({ width: 80, height: 12, remote: true, useThread: false })
   const first: MarkdownCodeBlockRenderer = () =>
     new TextRenderable(output.renderer, { content: "First renderer", height: 1 })
   const second: MarkdownCodeBlockRenderer = () =>

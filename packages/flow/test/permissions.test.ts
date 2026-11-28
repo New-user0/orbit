@@ -5,10 +5,11 @@ import os from "node:os"
 import path from "node:path"
 import { loadWorkflow, workflowApprovals } from "../src/load"
 import { run } from "../src/runner"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-flow-permissions-"))
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 type Reply = {
   readonly sessionID?: string

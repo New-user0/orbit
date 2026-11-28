@@ -34,6 +34,8 @@ export interface SessionContext extends SessionRequest {
   readonly agent: Agent.ID
   /** The configured `output_token_cap`, set only on a primary request, and only when the user configured one that lowered the model's own maximum. */
   readonly outputTokenCap?: number
+  /** Set when the request is only measured (the context usage analysis) and will never be sent, so a hook with side effects skips it. */
+  readonly analysis?: true
   tools: Record<string, { description: string; input: JsonSchema.JsonSchema }>
 }
 

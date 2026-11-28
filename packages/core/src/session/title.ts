@@ -80,7 +80,7 @@ export const layer = Layer.effect(
                 })
               : undefined)
           return spent
-            ? bus.publish(SessionEvent.UsageRecorded, { sessionID: input.session.id, source: "title", ...spent })
+            ? bus.publish(SessionEvent.UsageRecorded, { sessionID: input.session.id, source: "title", model: input.model.ref, ...spent })
             : Effect.void
         })
       yield* llm.stream(prepared.request, prepared.options).pipe(

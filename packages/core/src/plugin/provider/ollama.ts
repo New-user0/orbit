@@ -1,6 +1,6 @@
 import { define } from "@orbit/plugin/effect/plugin"
 import type { Entry } from "@orbit/schema/config"
-import { Duration, Effect, Schedule, Schema, Semaphore, Stream } from "effect"
+import { Clock, Duration, Effect, FiberHandle, Schema, Semaphore, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Config } from "../../config.js"
 import { Model } from "../../model.js"
@@ -120,15 +120,18 @@ export function make(
         const marks: { prior?: Discovery; written?: Discovery } = {}
         return yield* discoveryLock.withPermit(
           Effect.gen(function* () {
+            // The time comes from the Effect clock, the one the refresh loop sleeps on, so a test that moves that clock
+            // moves the freshness of a cached discovery with it.
+            const now = yield* Clock.currentTimeMillis
             const cached = discovery.get(current.tagsEndpoint)
             marks.prior = cached
-            if (cached && cached.apiKey === current.apiKey && Date.now() - cached.checked < Duration.toMillis(interval))
+            if (cached && cached.apiKey === current.apiKey && now - cached.checked < Duration.toMillis(interval))
               return { source: current, models: cached.models }
             const previous: Discovery =
               cached && cached.apiKey === current.apiKey
                 ? cached
                 : { checked: 0, apiKey: current.apiKey, shows: new Map() }
-            marks.written = { ...previous, checked: Date.now(), apiKey: current.apiKey }
+            marks.written = { ...previous, checked: now, apiKey: current.apiKey }
             discovery.set(current.tagsEndpoint, marks.written)
             const tagsRequest = current.apiKey
               ? HttpClientRequest.get(current.tagsEndpoint).pipe(
@@ -169,14 +172,16 @@ export function make(
                 model !== undefined && (model.show.capabilities?.includes("completion") ?? false),
             )
             discovery.set(current.tagsEndpoint, {
-              checked: Date.now(),
+              checked: yield* Clock.currentTimeMillis,
               apiKey: current.apiKey,
               models: filtered,
               shows,
             })
             return { source: current, models: filtered }
           }).pipe(
-            Effect.onInterrupt(() =>
+            // A discovery that was interrupted, timed out or failed leaves the cache as it was before it began, so the
+            // next one asks again instead of answering "no models" until the interval ends (FU-M3-385).
+            Effect.onError(() =>
               Effect.sync(() => {
                 if (!marks.written || discovery.get(current.tagsEndpoint) !== marks.written) return
                 if (marks.prior) discovery.set(current.tagsEndpoint, marks.prior)
@@ -200,9 +205,19 @@ export function make(
 
       // The first run is awaited, so a session that starts right after the location resolves its default model from
       // the discovered catalog instead of finding it empty. Each request has its own 1 second limit.
-      yield* refresh().pipe(Effect.ignore)
-      // Keep the last successful inventory through transient outages instead of flickering model availability.
-      yield* refresh().pipe(Effect.ignore, Effect.repeat(Schedule.spaced(interval)), Effect.forkScoped)
+      const first = yield* refresh().pipe(Effect.as(true), Effect.orElseSucceed(() => false))
+      // Keep the last successful inventory through transient outages instead of flickering model availability. While
+      // nothing was discovered yet, a failed discovery is tried again after 1 second, doubling up to the interval.
+      const keep = (answered: boolean, backoff: number): Effect.Effect<void> => {
+        const wait = answered || loaded.models.length > 0 ? Duration.toMillis(interval) : backoff
+        return Effect.sleep(wait).pipe(
+          Effect.andThen(refresh().pipe(Effect.as(true), Effect.orElseSucceed(() => false))),
+          Effect.flatMap((ok) => keep(ok, Math.min(backoff * 2, Duration.toMillis(interval)))),
+        )
+      }
+      const firstPause = Math.min(1_000, Duration.toMillis(interval))
+      const loop = yield* FiberHandle.make<void>()
+      yield* FiberHandle.run(loop, keep(first, firstPause))
       const reload = Effect.fn("OllamaPlugin.reload")(function* () {
         const next = configured(yield* config.entries(), origin)
         if (
@@ -216,7 +231,10 @@ export function make(
         loaded.hash = "[]"
         yield* ctx.integration.reload()
         yield* ctx.provider.reload()
-        yield* refresh().pipe(Effect.ignore)
+        const answered = yield* refresh().pipe(Effect.as(true), Effect.orElseSucceed(() => false))
+        // A new source is a first read again: the old loop ends here and its pauses start over at 1 second, instead of
+        // going on from the pause the old source's loop had doubled to.
+        yield* FiberHandle.run(loop, keep(answered, firstPause))
       })
       yield* ctx.event.subscribe().pipe(
         Stream.filter((event) => event.type === "config.updated"),

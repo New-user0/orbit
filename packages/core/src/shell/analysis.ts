@@ -152,7 +152,7 @@ export type Analysis = {
 /** A parse the caller already made: a tree-sitter root for bash ("aborted" when a limit stopped it), or PowerShell's. */
 export type Parse = Node | "aborted" | PowerShellParse.Result
 
-const MAX_LENGTH = 10_000
+const MAX_LENGTH = ShellParse.MAX_LENGTH
 const MAX_NODES = 50_000
 const DEADLINE_MS = 50
 
@@ -1344,7 +1344,6 @@ function expand(outer: Analysis, ctx: Context) {
       Effect.gen(function* () {
         const cache = new Map<string, Parse>()
         const key = (script: Script) => `${script.dialect}\u0000${script.text}`
-        const parsers = yield* Effect.promise(ShellParse.parsers)
         for (let round = 0; round < NESTING + 2; round++) {
           const missing = new Map<string, Script>()
           const result = nest(outer, ctx, (script) => {
@@ -1359,8 +1358,7 @@ function expand(outer: Analysis, ctx: Context) {
               cache.set(name, yield* parser.parse(script.text))
               continue
             }
-            const deadline = performance.now() + DEADLINE_MS
-            const tree = script.text.length > MAX_LENGTH ? null : parsers.bash.parse(script.text, null, { progressCallback: () => performance.now() > deadline })
+            const tree = yield* ShellParse.read("bash", script.text, DEADLINE_MS)
             if (tree) trees.push(tree)
             cache.set(name, tree ? tree.rootNode : "aborted")
           }
@@ -1380,9 +1378,7 @@ const inspectOne = Effect.fn("ShellAnalysis.inspectOne")(function* (command: str
     return analyze(command, withLocal, yield* parser.parse(command))
   }
   if (command.length > MAX_LENGTH || /^[ \t\n]*$/.test(command)) return analyze(command, withLocal)
-  const parsers = yield* Effect.promise(ShellParse.parsers)
-  const deadline = performance.now() + DEADLINE_MS
-  const tree = parsers.bash.parse(command, null, { progressCallback: () => performance.now() > deadline })
+  const tree = yield* ShellParse.read("bash", command, DEADLINE_MS)
   if (!tree) return analyze(command, withLocal, "aborted")
   return yield* Effect.acquireUseRelease(
     Effect.succeed(tree),

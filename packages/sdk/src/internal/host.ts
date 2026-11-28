@@ -2,9 +2,11 @@ export * as EmbeddedHost from "./host"
 
 import { SdkPlugins } from "@orbit/core/plugin/sdk"
 import { SessionRestart } from "@orbit/core/session/execution/restart"
+import { Project } from "@orbit/core/project"
 import { Session } from "@orbit/core/session"
 import { Workspace } from "@orbit/core/workspace"
 import { WorkspaceDriver } from "@orbit/core/workspace/driver"
+import { WorkspaceTrust } from "@orbit/core/workspace-trust"
 import { createEmbeddedRoutes } from "@orbit/server/routes"
 import type { ServerOptions } from "@orbit/server/options"
 import type { LayerNode } from "@orbit/util/effect/layer-node"
@@ -57,12 +59,30 @@ export const create = Effect.fn("EmbeddedHost.create")(function* <R = never>(
       context(services),
     )(Context.get(services, HttpRouter.HttpRouter).asHttpEffect())
     const transport = OwnedFetch.make(handler, runtime.dispose)
+    const sessions = Context.get(services, Session.Service)
+    const projects = Context.get(services, Project.Service)
+    const trust = Context.get(services, WorkspaceTrust.Service)
+    // The Effect SDK creates a session through core, past the `session.create` route and its check, so it asks what the
+    // route asks: whether the folder the session will work in (the one named, or the parent's) is trusted, decided by its
+    // project's canonical folder (trust-first, class 12). A move is checked in core `SessionMove` itself.
+    const create = Effect.fn("EmbeddedHost.sessions.create")(function* (
+      input: Parameters<Session.Interface["create"]>[0],
+    ) {
+      const directory =
+        input.parentID === undefined
+          ? input.location.directory
+          : (yield* sessions.get(input.parentID)).location.directory
+      const state = yield* trust.status((yield* projects.resolve(directory)).canonical)
+      if (!state.trusted)
+        return yield* new WorkspaceTrust.UntrustedError({ directory: state.directory, persistent: state.persistent })
+      return yield* sessions.create(input)
+    })
 
     return {
       runtime,
       fetch: transport.fetch,
       plugins: Context.get(services, SdkPlugins.Service),
-      sessions: Context.get(services, Session.Service),
+      sessions: { ...sessions, create },
       workspace: Context.get(services, Workspace.Service),
       close: transport.close,
     }

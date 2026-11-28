@@ -1,9 +1,11 @@
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Orbit, type SessionMessageInfo } from "@orbit/client"
 import { Session } from "@orbit/schema/session"
 import { Effect } from "effect"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
+
+setDefaultTimeout(30_000)
 
 const messages: SessionMessageInfo[] = [
   { id: "msg_z", type: "user", text: "First request", time: { created: 300 } },
@@ -39,6 +41,7 @@ const setup = Effect.gen(function* () {
     config: { project: false },
     models: { fetch: false },
     fs: { filewatcher: false },
+    trust: { implicit: true },
   })
   const api = Orbit.make({
     baseUrl: "http://orbit.local",

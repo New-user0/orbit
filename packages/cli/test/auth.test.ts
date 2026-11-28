@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import path from "node:path"
 import { ORBIT_VERSION } from "../src/version"
 import type { FormFields } from "@orbit/client"
+import { runOrb } from "./fixture/orb"
 
 const consoleForm = [
   { type: "string", key: "server", hidden: true, format: "uri", default: "https://orbit.invalid/console" },
 ] satisfies FormFields
 
 describe("auth command", () => {
+  // Limit 70 s: four starts of `orb` through the start gate. Over 50 loaded runs (4 cores, busy loops, cold transpiler
+  // cache) p50 14.5 s, p95 25.3 s, at most 32.7 s.
   test("registers authentication commands", async () => {
     const [auth, list, login, logout] = await Promise.all([
       cli(["auth", "--help"]),
@@ -36,7 +38,7 @@ describe("auth command", () => {
     expect(login.stdout).toContain("--answer")
     expect(logout.exitCode).toBe(0)
     expect(logout.stdout).toContain("orb auth logout [flags] [<target>] [<credential>]")
-  })
+  }, 70_000)
 
   test("lists stored and environment connections", async () => {
     const requests: string[] = []
@@ -333,16 +335,6 @@ function located<T>(data: T) {
   }
 }
 
-async function cli(args: string[]) {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
-    cwd: path.join(import.meta.dir, ".."),
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  return { stdout, stderr, exitCode }
+function cli(args: string[]) {
+  return runOrb(args)
 }

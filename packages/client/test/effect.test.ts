@@ -125,6 +125,230 @@ test("session instructions methods use the public HTTP contract", async () => {
   ])
 })
 
+// clients-ux-37: a label names the assistant message and its calls; a suggestion sends nothing but the session. Both
+// answers decode as text or as null with the reason.
+test("session.assist methods use the public HTTP contract and decode both answers", async () => {
+  const requests: Array<{ method: string; url: string; body?: unknown }> = []
+  const httpClient = HttpClient.make((request) => {
+    requests.push({
+      method: request.method,
+      url: request.url,
+      body: request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined,
+    })
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        Response.json({
+          data: request.url.endsWith("/label") ? { label: "Read notes.txt" } : { suggestion: null, reason: "busy" },
+        }),
+      ),
+    )
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    const label = yield* client.session.assist.label({
+      sessionID: Session.ID.make("ses_test"),
+      messageID: SessionMessage.ID.make("msg_a"),
+      toolCallIDs: ["call_1", "call_2"],
+    })
+    const suggestion = yield* client.session.assist.suggestion({ sessionID: Session.ID.make("ses_test") })
+    return { label, suggestion }
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result).toEqual({ label: { label: "Read notes.txt" }, suggestion: { suggestion: null, reason: "busy" } })
+  expect(requests).toEqual([
+    {
+      method: "POST",
+      url: "http://localhost:3000/api/session/ses_test/assist/label",
+      body: { messageID: "msg_a", toolCallIDs: ["call_1", "call_2"] },
+    },
+    { method: "POST", url: "http://localhost:3000/api/session/ses_test/assist/suggestion", body: undefined },
+  ])
+})
+
+// clients-ux-5: a code rewind's dry run and a prompt's own diff reach the server as the HTTP contract says.
+test("session.revert.files sends a dry run and decodes its result; session.diff sends the prompt scope", async () => {
+  const requests: Array<{ method: string; url: string; query: unknown; body?: unknown }> = []
+  const dry = { canRewind: true, filesChanged: ["/repo/a.txt"], insertions: 0, deletions: 1 }
+  const httpClient = HttpClient.make((request) => {
+    requests.push({
+      method: request.method,
+      url: request.url,
+      query: Object.fromEntries(request.urlParams.params),
+      body: request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined,
+    })
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(request, Response.json({ data: request.method === "POST" ? dry : [] })),
+    )
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    const rewound = yield* client.session.revert.files({
+      sessionID: Session.ID.make("ses_test"),
+      messageID: SessionMessage.ID.make("msg_prompt"),
+      dryRun: true,
+    })
+    const diff = yield* client.session.diff({ sessionID: Session.ID.make("ses_test"), scope: "prompt" })
+    return { rewound, diff }
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result).toEqual({ rewound: dry, diff: [] })
+  expect(requests).toEqual([
+    {
+      method: "POST",
+      url: "http://localhost:3000/api/session/ses_test/revert/files",
+      query: {},
+      body: { messageID: "msg_prompt", dryRun: true },
+    },
+    {
+      method: "GET",
+      url: "http://localhost:3000/api/session/ses_test/diff",
+      query: { scope: "prompt" },
+      body: undefined,
+    },
+  ])
+})
+
+// A grant names the location and how long it lasts, and nothing else: the trust is decided for the location's project.
+test("location.trust.update sends the trust and its persistence, and decodes the status", async () => {
+  const requests: Array<{ method: string; url: URL; body: unknown }> = []
+  const status = { directory: "/repo", trusted: true, persistent: true, source: "saved", withheld: [] }
+  const httpClient = HttpClient.make((request) => {
+    requests.push({
+      method: request.method,
+      url: new URL(request.url),
+      body: request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined,
+    })
+    return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(status)))
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    return yield* client.location.trust.update({
+      location: { directory: AbsolutePath.make("/repo") },
+      trust: true,
+      persist: false,
+    })
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result).toEqual(status)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]!.method).toBe("POST")
+  expect(requests[0]!.url.pathname).toBe("/api/location/trust")
+  expect(requests[0]!.body).toEqual({ trust: true, persist: false })
+})
+
+// clients-ux-42: `/memory` lists rows and names one to make by its target, never by a place; the toggle's patch carries
+// `memory.enabled`.
+test("location.memory and the memory toggle use the public HTTP contract and decode the answers", async () => {
+  const requests: Array<{ method: string; url: URL; body: unknown }> = []
+  const listing = {
+    files: [{ path: "/repo/AGENTS.md", kind: "project", chars: 4, role: "project", exists: true, target: { type: "file", path: "/repo/AGENTS.md" } }],
+    warnings: [{ path: "/repo/ORBIT.local.md", type: "outside", message: "left out" }],
+    folders: [{ type: "agent", agent: "review", scope: "project", path: "/repo/.orbit/agent-memory/review", exists: false, target: { type: "agent", agent: "review" } }],
+    enabled: true,
+    git: true,
+    available: true,
+  }
+  const ensured = { path: "/repo/.orbit/agent-memory/review", created: true, type: "folder" }
+  const httpClient = HttpClient.make((request) => {
+    requests.push({
+      method: request.method,
+      url: new URL(request.url),
+      body: request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined,
+    })
+    if (request.method === "PATCH") return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 204 })))
+    return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ data: request.method === "GET" ? listing : ensured })))
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    const listed = yield* client.location.memory.list({ location: { directory: "/repo" } })
+    const made = yield* client.location.memory.ensure({
+      location: { directory: "/repo" },
+      target: { type: "agent", agent: "review" },
+    })
+    // The Effect client puts every key of the patch in the body, and one left undefined does not encode, so each is named.
+    yield* client.config.update({ shell: null, output_style: null, language: null, memory: { enabled: false } })
+    return { listed, made }
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result.listed).toEqual(listing)
+  expect(result.made).toEqual(ensured)
+  expect(requests.map((request) => [request.method, request.url.pathname])).toEqual([
+    ["GET", "/api/location/memory"],
+    ["POST", "/api/location/memory"],
+    ["PATCH", "/api/experimental/config"],
+  ])
+  expect(requests[1]!.body).toEqual({ target: { type: "agent", agent: "review" } })
+  expect(requests[2]!.body).toEqual({ shell: null, output_style: null, language: null, memory: { enabled: false } })
+})
+
+// clients-ux-23: `/context` reads the session's context usage from `GET /api/session/:sessionID/context/usage`.
+test("session.contextUsage uses the public HTTP contract and decodes the payload", async () => {
+  const usage = {
+    model: { providerID: "provider", id: "model" },
+    window: 100_000,
+    percentage: 20,
+    threshold: 90_000,
+    total: 20_000,
+    measured: true,
+    auto: false,
+    categories: [
+      { kind: "messages", tokens: 20_000 },
+      { kind: "compact-buffer", tokens: 3_000 },
+      { kind: "free", tokens: 77_000 },
+    ],
+    files: [{ path: "/repo/ORBIT.md", type: "file", tokens: 100 }],
+    mcp: [{ name: "search", server: "docs", tokens: 50, deferred: true }],
+    agents: [{ id: "review", scope: "project", tokens: 10 }],
+    skills: [{ id: "release", tokens: 20 }],
+    systemTools: [{ name: "Read", tokens: 300 }],
+    deferredTools: [],
+    sections: [{ name: "Environment", tokens: 40 }],
+    messages: {
+      toolCalls: 1,
+      toolResults: 2,
+      attachments: 3,
+      assistant: 4,
+      user: 5,
+      tools: [{ name: "Read", calls: 1, results: 2 }],
+      attachmentKinds: [{ name: "todo", tokens: 3 }],
+    },
+  }
+  const requests: Array<{ method: string; url: URL }> = []
+  const httpClient = HttpClient.make((request) => {
+    requests.push({ method: request.method, url: new URL(request.url) })
+    return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ data: usage })))
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    return yield* client.session.contextUsage({ sessionID: Session.ID.make("ses_usage") })
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result).toEqual(usage as unknown as typeof result)
+  expect(requests.map((request) => [request.method, request.url.pathname])).toEqual([
+    ["GET", "/api/session/ses_usage/context/usage"],
+  ])
+})
+
+// clients-ux-23 part 2: `/cost` reads the whole session's cost from `GET /api/session/:sessionID/cost`.
+test("session.cost uses the public HTTP contract and decodes the payload", async () => {
+  const cost = { cost: 0.75, own: 0.5, subagents: 0.25, rows: [] }
+  const requests: Array<{ method: string; url: URL }> = []
+  const httpClient = HttpClient.make((request) => {
+    requests.push({ method: request.method, url: new URL(request.url) })
+    return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ data: cost })))
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    return yield* client.session.cost({ sessionID: Session.ID.make("ses_cost") })
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result).toEqual(cost as unknown as typeof result)
+  expect(requests.map((request) => [request.method, request.url.pathname])).toEqual([
+    ["GET", "/api/session/ses_cost/cost"],
+  ])
+})
+
 test("event.subscribe exposes and decodes the native Effect event stream", async () => {
   const httpClient = HttpClient.make((request) =>
     Effect.succeed(
@@ -318,6 +542,40 @@ test("session.log retains the typed SessionNotFoundError", async () => {
   }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
 
   expect(error._tag).toBe("SessionNotFoundError")
+})
+
+test("session.recap posts to the session's recap route and decodes whether a recap was recorded", async () => {
+  const requests: Array<{ method: string; url: string }> = []
+  const answers = [
+    Response.json({ recorded: true }),
+    Response.json({ recorded: false }),
+    Response.json({ _tag: "SessionNotFoundError", sessionID: "ses_missing", message: "Session not found" }, { status: 404 }),
+    // An answer that does not decode is a client error, not a recap.
+    Response.json({ recorded: "yes" }),
+  ]
+  const httpClient = HttpClient.make((request) => {
+    requests.push({ method: request.method, url: request.url })
+    return Effect.succeed(HttpClientResponse.fromWeb(request, answers.shift() ?? new Response(null, { status: 500 })))
+  })
+  const result = await Effect.gen(function* () {
+    const client = yield* Orbit.make({ baseUrl: "http://localhost:3000" })
+    const recorded = yield* client.session.recap({ sessionID: Session.ID.make("ses_test") })
+    const skipped = yield* client.session.recap({ sessionID: Session.ID.make("ses_test") })
+    const missing = yield* client.session.recap({ sessionID: Session.ID.make("ses_missing") }).pipe(Effect.flip)
+    const malformed = yield* client.session.recap({ sessionID: Session.ID.make("ses_test") }).pipe(Effect.flip)
+    return { recorded, skipped, missing, malformed }
+  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
+
+  expect(result.recorded).toEqual({ recorded: true })
+  expect(result.skipped).toEqual({ recorded: false })
+  expect(result.missing._tag).toBe("SessionNotFoundError")
+  expect(result.malformed._tag).toBe("ClientError")
+  expect(requests).toEqual([
+    { method: "POST", url: "http://localhost:3000/api/session/ses_test/recap" },
+    { method: "POST", url: "http://localhost:3000/api/session/ses_test/recap" },
+    { method: "POST", url: "http://localhost:3000/api/session/ses_missing/recap" },
+    { method: "POST", url: "http://localhost:3000/api/session/ses_test/recap" },
+  ])
 })
 
 const session = {

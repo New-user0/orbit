@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
-import path from "node:path"
 import { classify } from "../src/framework/argv"
+import { runOrb } from "./fixture/orb"
 import { PrintBooleanFlags, RootValueFlags, Subcommands } from "../src/commands/commands"
 
 // The words of the message are exactly the tokens that follow the flags: the parser sees each boolean flag in its inline
@@ -67,13 +67,7 @@ test("a subcommand name is any command the root dispatches on", () => {
 })
 
 async function helpFlags(args: string[]) {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
-    cwd: path.join(import.meta.dir, ".."),
-    stdout: "pipe",
-    stderr: "pipe",
-    stdin: "ignore",
-  })
-  const [, help] = await Promise.all([child.exited, new Response(child.stdout).text()])
+  const help = (await runOrb(args)).stdout
   return help.split(/\r?\n/).flatMap((line) => {
     // A flag can list a second long name as its alias, such as `--max-steps, --max-turns`.
     const match = line.match(
@@ -94,7 +88,10 @@ test("the flag tables match the flags that orb --help and orb -p --help print", 
   const print = await helpFlags(["-p", "--help"])
 
   const values = [...root, ...print].filter((flag) => flag.value)
-  expect([...new Set(values.map((flag) => flag.long))].sort()).toEqual([...RootValueFlags.long].sort())
+  // --rewind-files takes a value that the help does not print.
+  expect([...new Set([...values.map((flag) => flag.long), "rewind-files"])].sort()).toEqual(
+    [...RootValueFlags.long].sort(),
+  )
   expect([...new Set(values.flatMap((flag) => (flag.short ? [flag.short] : [])))].sort()).toEqual(
     [...RootValueFlags.short].sort(),
   )

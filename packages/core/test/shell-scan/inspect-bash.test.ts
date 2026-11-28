@@ -475,31 +475,37 @@ describe("ShellScan.inspect cost", () => {
     if (result.kind === "scanned") expect(result.commands).toHaveLength(1024)
   })
 
+  // Both sizes are timed in one child, in turns, over nine rounds after a warm-up, and the fastest round of each is
+  // compared. Each round runs the small input eight times as often, so both timings span about as long and a busy
+  // machine interrupts either as often. A busy machine slows some rounds, rarely the fastest of both, so the load of one
+  // moment no longer reads as growth (CI run 40144686534 saw 23 with one timing of each); a check that grows faster than
+  // linearly is slower in every round, its fastest included.
   test("bracket checks grow linearly", async () => {
     const source = new URL("../../src/shell/scan.ts", import.meta.url).href
-    const time = async (count: number) => {
-      const child = Bun.spawn({
-        cmd: [
-          process.execPath,
-          "-e",
-          `const { ShellScan } = await import(${JSON.stringify(source)});
-           const input = "echo " + "[".repeat(${count}); ShellScan.inspect(input);
-           const start = performance.now(); for (let run = 0; run < 20; run++) ShellScan.inspect(input); console.log(performance.now() - start)`,
-        ],
-        stdout: "pipe",
-        stderr: "ignore",
-        timeout: 8000,
-      })
-      const elapsed = Number(await new Response(child.stdout).text())
-      // A child killed at its deadline prints nothing, which would read as zero and pass the ratio.
-      expect(await child.exited).toBe(0)
-      expect(Number.isFinite(elapsed) && elapsed > 0).toBe(true)
-      return elapsed
-    }
-    const small = await time(15000)
-    const large = await time(60000)
-    // Linear growth gives a ratio near 4. Quadratic growth gives near 16.
-    expect(large / Math.max(small, 1)).toBeLessThan(10)
+    const child = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "-e",
+        `const { ShellScan } = await import(${JSON.stringify(source)});
+         const sizes = [{ count: 8000, runs: 24 }, { count: 64000, runs: 3 }].map((size) => ({ ...size, input: "echo " + "[".repeat(size.count) }));
+         sizes.forEach((size) => ShellScan.inspect(size.input));
+         const time = (size) => { const start = performance.now(); for (let run = 0; run < size.runs; run++) ShellScan.inspect(size.input); return (performance.now() - start) / size.runs };
+         const rounds = Array.from({ length: 9 }, () => sizes.map(time));
+         console.log(JSON.stringify(sizes.map((_, size) => Math.min(...rounds.map((round) => round[size])))))`,
+      ],
+      stdout: "pipe",
+      stderr: "ignore",
+      timeout: 15000,
+    })
+    const output = await new Response(child.stdout).text()
+    // A child killed at its deadline prints nothing, which must fail rather than pass the ratio.
+    expect(await child.exited).toBe(0)
+    const [small, large] = JSON.parse(output) as number[]
+    expect(Number.isFinite(small) && small > 0 && Number.isFinite(large)).toBe(true)
+    // The time of one run each. Eight times the input: linear growth gives a ratio near 8 and quadratic growth one near
+    // 64. The sizes are eight apart, not four, so the two stay apart on a fast machine too, where a fixed cost narrows
+    // both.
+    expect(large / small).toBeLessThan(20)
   }, 20000)
 })
 

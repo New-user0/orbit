@@ -8,7 +8,7 @@
 import os from "node:os"
 import path from "node:path"
 import { expect, test } from "bun:test"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./fixture/render"
 import type { JsonValue } from "@orbit/client/promise"
 import { RunPermissionBody } from "../src/mini/footer.permission"
 import { permissionInfo } from "../src/mini/permission.shared"
@@ -81,6 +81,15 @@ const misleading = (row: Row) => {
   const lexical = lexicalOf(raw)
   return (row.truth.places ?? []).some((place) => slashed(path.resolve(place)) === lexical) ? undefined : raw
 }
+// The links of a row's request, as the server put them there, and where each client's warning says they end
+// (m5-link-warning).
+type End = { place: string; outside: boolean }
+const linksOf = (row: Row) =>
+  ((row.request.metadata?.files ?? []) as { link?: End; fromLink?: End }[]).flatMap((file) =>
+    [file.link, file.fromLink].filter((link): link is End => link !== undefined),
+  )
+const ends = (link: End) => `Linkends${link.outside ? "outside" : "inside"}theproject`
+const tail = (value: string) => slashed(value.split(/[\\/]/).slice(-2).join("/"))
 const request = (row: Row): MiniPermissionRequest => ({
   id: "per_matrix",
   sessionID: "ses_matrix",
@@ -105,7 +114,7 @@ test("the matrix has every tool, every spelling and both trust states", () => {
     "Write",
   ])
   const spellings = new Set(golden.map((row) => row.id.split("/")[1]))
-  for (const name of ["relative path", "absolute path", "dot-dot path", "absolute path outside", "tilde path", "link"])
+  for (const name of ["relative path", "absolute path", "dot-dot path", "absolute path outside", "tilde path", "link", "link inside"])
     expect(spellings.has(name)).toBe(true)
   expect(golden.some((row) => row.id.endsWith("/trusted"))).toBe(true)
   expect(golden.some((row) => row.id.endsWith("/untrusted"))).toBe(true)
@@ -161,10 +170,12 @@ for (const row of rows)
   })
 
 // The real component, drawn: a place that is shown is on the screen, and so is no decoy.
-for (const row of rows.filter((item, index) => index % 4 === 0 || !item.id.startsWith("Edit"))) {
+for (const row of rows.filter(
+  (item, index) => index % 4 === 0 || !item.id.startsWith("Edit") || linksOf(item).length > 0,
+)) {
   test(`Mini draws the prompt for ${row.id} from the request`, async () => {
     for (const mono of [false, true]) {
-      const app = await testRender(
+      const app = await testRenderTimed(
         () => (
           <RunPermissionBody
             request={request(row)}
@@ -187,6 +198,13 @@ for (const row of rows.filter((item, index) => index % 4 === 0 || !item.id.start
         for (const place of expected) expect(frame).toContain(toolPath(place, { home: true }))
         if (row.truth.url) expect(frame).toContain(row.truth.url)
         for (const resource of resourcesOf(row)) expect(frame).toContain(resource)
+        // A link warning only where the request names one, and then each place it ends at.
+        const joined = frame.replace(/[\s│┃█▀▄─]/g, "")
+        for (const link of linksOf(row)) {
+          expect(joined).toContain(ends(link))
+          expect(slashed(joined)).toContain(tail(link.place))
+        }
+        if (linksOf(row).length === 0) expect(joined).not.toMatch(/Linkends|linkedpaths/)
         // Every changed line of the request's patches is on the screen, as the changed text, and no decoy change is.
         if (!mono)
           for (const patch of patchesOf(row))
@@ -198,6 +216,125 @@ for (const row of rows.filter((item, index) => index % 4 === 0 || !item.id.start
     }
   })
 }
+
+// The terminal UI's short prompt while an Edit or Write is reviewed in the linked editor (clients-ux-15 part 3): it names
+// the file of the request's place, and where a link leads, from the request alone. Drawn as the real component.
+async function drawCompact(row: Row, editor = "Test Editor", focusAlways = false) {
+  const { EditorDiffPrompt } = await import("../src/routes/session/permission")
+  const { ConfigProvider } = await import("../src/config")
+  const { ClientProvider } = await import("../src/context/client")
+  const { DataProvider } = await import("../src/context/data")
+  const { Keymap } = await import("../src/context/keymap")
+  const { InteractivityProvider } = await import("../src/context/interactivity")
+  const { LocationProvider } = await import("../src/context/location")
+  const { ThemeProvider } = await import("../src/context/theme")
+  const { ToastProvider } = await import("../src/ui/toast")
+  const { emptyThemeSource } = await import("./fixture/fixture")
+  const { createApi, createEventStream, createFetch } = await import("./fixture/tui-client")
+  const { TestTuiContexts } = await import("./fixture/tui-environment")
+  const { createTuiResolvedConfig } = await import("./fixture/tui-runtime")
+  const transport = createFetch(() => undefined, createEventStream())
+  const app = await testRenderTimed(
+    () => (
+      <TestTuiContexts directory={world.project} paths={{ home: os.homedir() }}>
+        <ConfigProvider config={createTuiResolvedConfig({ animations: false })}>
+          <Keymap.Provider>
+            <ClientProvider api={createApi(transport.fetch)}>
+              <DataProvider directory={world.project}>
+                <LocationProvider>
+                  <ThemeProvider mode="dark" source={emptyThemeSource}>
+                    <ToastProvider>
+                      <InteractivityProvider enabled>
+                        <EditorDiffPrompt
+                          request={{ id: "per_matrix", sessionID: "ses_matrix", save: ["*"], ...row.request }}
+                          editor={editor}
+                          onSelect={() => {}}
+                        />
+                      </InteractivityProvider>
+                    </ToastProvider>
+                  </ThemeProvider>
+                </LocationProvider>
+              </DataProvider>
+            </ClientProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 220, height: 30, kittyKeyboard: true },
+  )
+  try {
+    await app.renderOnce()
+    await Bun.sleep(0)
+    await app.renderOnce()
+    if (focusAlways) {
+      app.mockInput.pressArrow("down")
+      await Bun.sleep(0)
+      await app.renderOnce()
+    }
+    return app.captureCharFrame()
+  } finally {
+    app.renderer.destroy()
+  }
+}
+
+// With Always allow focused, the short prompt says what the grant covers, as the full dialog does: for an Edit or Write
+// that is every edit in the project, not this one file. The question and the link warning stay on screen.
+for (const row of rows.filter((item) => item.tool === "Edit" || item.tool === "Write"))
+  test(`the terminal UI's compact prompt for ${row.id} says what Always allow grants while it is focused`, async () => {
+    const before = (await drawCompact(row)).replace(/\s+/g, "")
+    expect(before).not.toContain("Thiswillalwaysallow")
+    const flat = (await drawCompact(row, "Test Editor", true)).replace(/\s+/g, "")
+    expect(flat).toContain(`Thiswillalwaysallow${row.request.action}forthisproject.`)
+    expect(flat).toContain("ReviewinginTestEditor")
+    const file = ((row.request.metadata?.files ?? []) as { place?: string; link?: { outside: boolean } }[])[0]
+    expect(flat).toContain(`Makethischangeto${path.basename(file!.place!)}?`)
+    if (file?.link) expect(flat).toContain(`Linkends${file.link.outside ? "outside" : "inside"}theproject`)
+  })
+
+for (const row of rows.filter((item) => item.tool === "Edit" || item.tool === "Write"))
+  test(`the terminal UI's compact prompt for ${row.id} names the request's place and no decoy`, async () => {
+    const frame = await drawCompact(row)
+    const flat = frame.replace(/\s+/g, "")
+    expect(flat).toContain("ReviewinginTestEditor")
+    expect(frame).not.toContain("DECOY")
+    const own = misleading(row)
+    if (own !== undefined) expect(slashed(flat)).not.toContain(slashed(own).replace(/\s+/g, ""))
+    const file = ((row.request.metadata?.files ?? []) as { place?: string; link?: { place: string; outside: boolean } }[])[0]
+    expect(flat).toContain(`Makethischangeto${path.basename(file!.place!)}?`)
+    // A link warning only where the request names one: where the file really is, and whether that is outside.
+    if (file?.link) {
+      expect(flat).toContain(ends(file.link))
+      expect(slashed(flat)).toContain(tail(file.link.place))
+    } else expect(flat).not.toMatch(/Linkends|linkedpaths/)
+  })
+
+// The prompt writes out the editor's name itself, whoever hands it the name.
+test("the compact prompt writes out the editor name it is given", async () => {
+  const frame = await drawCompact(golden.find((row) => row.tool === "Edit")!, "Ed\u001b[31mitor\u202e")
+  expect(frame).not.toContain("\u001b")
+  expect(frame).not.toContain("\u202e")
+  expect(frame.replace(/\s+/g, "")).toContain("ReviewinginEd\\x1b[31mitor\\u{202e}")
+})
+
+test("the link rows of the matrix name where the link leads", () => {
+  // Without these the link checks above would be vacuous.
+  const changes = ["Edit", "Write", "NotebookEdit", "Patch", "Patch (add over)", "Patch (move onto)", "Patch (move)"]
+  for (const tool of changes)
+    for (const spelling of ["link", "link inside"]) {
+      const linked = golden.filter((row) => row.id.startsWith(`${tool}/${spelling}/`))
+      expect([tool, spelling, linked.length]).toEqual([tool, spelling, 2])
+      for (const row of linked) {
+        const name = tool === "NotebookEdit" ? "file.ipynb" : tool.includes("move") ? "file-moved.txt" : "file.txt"
+        const folder = spelling === "link" ? world.outside : `${world.project}/src`
+        const files = (row.request.metadata?.files ?? []) as { from?: string; link?: End; fromLink?: End }[]
+        for (const file of files) {
+          expect([row.id, file.link]).toEqual([row.id, { place: `${folder}/${name}`, outside: spelling === "link" }])
+          const from = file.from === undefined ? undefined : { place: `${folder}/file.txt`, outside: spelling === "link" }
+          expect([row.id, file.fromLink]).toEqual([row.id, from])
+        }
+      }
+    }
+})
 
 // The model picks the order of an MCP call's arguments, so the value that matters can come after a long one. The argument
 // text is whole in the presentation and on Mini's screen.
@@ -216,7 +353,7 @@ test("an MCP call's arguments are shown whole by the presentation and by Mini, w
   expect(text(present(longArguments))).toContain("#leak-HIDDEN")
   expect(text(present(longArguments))).not.toContain("more characters")
   expect(text(permissionInfo(request(longArguments), undefined, true))).toContain("#leak-HIDDEN")
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <RunPermissionBody
         request={request(longArguments)}

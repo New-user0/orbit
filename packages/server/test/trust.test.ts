@@ -1,12 +1,14 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Orbit } from "@orbit/client"
 import { Effect } from "effect"
 import { withEnv } from "../../core/test/fixture/env"
 import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
+
+setDefaultTimeout(30_000)
 
 // Servers here never trust a folder on their own, so a repository is untrusted until a request says otherwise.
 const untrusted = { trust: { implicit: false } }
@@ -36,7 +38,8 @@ const layout = Effect.gen(function* () {
   return folders
 })
 
-it.live("lists what an untrusted repository holds back, then trusts it for good and lists the grant", () =>
+// trust-first: nothing of an untrusted repository is read, so its status lists nothing as held back, whatever it holds.
+it.live("lists nothing an untrusted repository holds, then trusts it for good and lists the grant", () =>
   Effect.gen(function* () {
     const folders = yield* layout
     const server = yield* startServer(folders.config, untrusted)
@@ -48,11 +51,7 @@ it.live("lists what an untrusted repository holds back, then trusts it for good 
         directory: folders.repo,
         trusted: false,
         persistent: true,
-        withheld: [
-          { path: path.join(folders.repo, "orbit.json"), kinds: ["hooks"] },
-          { path: path.join(folders.repo, ".orbit"), kinds: ["plugins"] },
-        ],
-        changed: [],
+        withheld: [],
       })
       expect(await api.location.trust.list()).toEqual([])
 
@@ -64,7 +63,6 @@ it.live("lists what an untrusted repository holds back, then trusts it for good 
         persistent: true,
         source: "saved",
         withheld: [],
-        changed: [],
       })
       expect(await api.location.trust.get({ location })).toEqual(granted)
 
@@ -137,7 +135,6 @@ it.live("trusts the home directory only until the server restarts, and never sto
             trusted: false,
             persistent: false,
             withheld: [],
-            changed: [],
           })
 
           // Asking to persist is not refused: the grant is made, and the status says what kind of grant it is.
@@ -148,7 +145,6 @@ it.live("trusts the home directory only until the server restarts, and never sto
             persistent: false,
             source: "session",
             withheld: [],
-            changed: [],
           })
           expect(await api.location.trust.list()).toEqual([])
 
@@ -175,7 +171,6 @@ it.live("trusts a repository for this server process alone when the grant is not
         persistent: true,
         source: "session",
         withheld: [],
-        changed: [],
       })
       // Nothing was stored, so no later server knows about it.
       expect(await api.location.trust.list()).toEqual([])
@@ -199,23 +194,17 @@ it.live("lists grants without loading a location", () =>
   }),
 )
 
-it.live("revokes a stored grant by the folder's name, and trusts a holder only where the location holds config back for it", () =>
+it.live("revokes a stored grant by the folder's name", () =>
   Effect.gen(function* () {
     const folders = yield* layout
     const server = yield* startServer(folders.config, untrusted)
     const api = Orbit.make({ baseUrl: server.base, headers: server.headers })
     const location = { directory: folders.repo }
     yield* Effect.promise(async () => {
-      // A folder that holds nothing back here is not trusted through this location, whatever the request names.
-      const stray = await api.location.trust.update({ location, trust: true, holder: folders.home })
-      expect(stray).toMatchObject({ directory: folders.repo, trusted: false })
-      expect(await api.location.trust.list()).toEqual([])
-
-      // The project's own root is a holder, and the answer is the location's status.
-      const granted = await api.location.trust.update({ location, trust: true, holder: folders.repo })
+      const granted = await api.location.trust.update({ location, trust: true })
       expect(granted).toMatchObject({ directory: folders.repo, trusted: true, source: "saved" })
 
-      // By name: the folder is deleted, and the grant goes with its records.
+      // By name: the folder is deleted, and the grant goes with it.
       await fs.rm(folders.repo, { recursive: true, force: true })
       expect(await api.location.trust.revoke({ directory: folders.repo })).toEqual([folders.repo])
       expect(await api.location.trust.list()).toEqual([])

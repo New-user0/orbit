@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
 import { scriptedModel } from "./fixture/scripted-model"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const model = scriptedModel(["ok"])
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-managed-bypass-"))
@@ -41,7 +42,7 @@ await Promise.all([
 
 afterAll(async () => {
   model.stop()
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 async function orb(args: string[], managed: string, extra: Record<string, string | undefined> = {}) {

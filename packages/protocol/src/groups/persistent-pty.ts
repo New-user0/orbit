@@ -4,7 +4,13 @@ import { PtyTicket } from "@orbit/schema/pty-ticket"
 import { Session } from "@orbit/schema/session"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { ForbiddenError, InvalidRequestError, PtyNotFoundError, ServiceUnavailableError } from "../errors.js"
+import {
+  ForbiddenError,
+  InvalidRequestError,
+  PtyNotFoundError,
+  ServiceUnavailableError,
+  UntrustedFolderError,
+} from "../errors.js"
 import { PTY_CONNECT_TICKET_QUERY, PTY_CONNECT_TOKEN_HEADER, PTY_CONNECT_TOKEN_HEADER_VALUE } from "./pty.js"
 
 export { PTY_CONNECT_TICKET_QUERY, PTY_CONNECT_TOKEN_HEADER, PTY_CONNECT_TOKEN_HEADER_VALUE }
@@ -47,7 +53,7 @@ export const PersistentPtyGroup = HttpApiGroup.make("server.experimental")
       params: { sessionID: Session.ID },
       payload: PersistentPty.CreateInput,
       success: Schema.Struct({ data: PersistentPty.Info }),
-      error: errors,
+      error: [...errors, UntrustedFolderError],
     }),
   )
   .add(

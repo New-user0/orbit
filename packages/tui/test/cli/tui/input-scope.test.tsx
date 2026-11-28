@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import type { PermissionRequest } from "@orbit/client"
 import type { TextareaRenderable } from "@opentui/core"
-import { testRender, type JSX } from "@opentui/solid"
+import { type JSX } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { createSignal, onMount } from "solid-js"
 import { ConfigProvider } from "../../../src/config"
@@ -77,7 +78,7 @@ async function mountPanes(
     )
   }
 
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts directory={root} paths={{ home: root, state: root, worktree: root }}>
         <ConfigProvider config={createTuiResolvedConfig({ animations: false }, { keybindings })}>

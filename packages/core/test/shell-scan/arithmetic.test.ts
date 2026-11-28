@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { ShellScan } from "../../src/shell/scan.js"
+import { runProgram } from "../fixture/run-program"
 
 describe("Bash arithmetic expansions", () => {
   test.each([
@@ -116,10 +117,10 @@ describe("Bash arithmetic real-shell oracle", () => {
 
   for (const shell of ["bash", "zsh"]) {
     const executable = Bun.which(shell)
-    test.skipIf(!executable).each(expressions)(`${shell} evaluates %s independently`, (expression, output) => {
+    test.skipIf(!executable).each(expressions)(`${shell} evaluates %s independently`, async (expression, output) => {
       for (const argument of [expression, `"${expression}"`]) {
         const source = `value=2; other=3; third=4; printf '%s\\n' ${argument}`
-        const execution = Bun.spawnSync(
+        const execution = await runProgram(
           [
             executable!,
             ...(shell === "bash" ? ["--noprofile", "--norc"] : ["-f"]),

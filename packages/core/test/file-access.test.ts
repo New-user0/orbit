@@ -14,6 +14,7 @@ import { AppNodeBuilder } from "@orbit/core/effect/app-node-builder"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location, tempLocationLayer } from "./fixture/location"
 import { untrustedProjectNodes } from "./fixture/project-trust"
+import { runProgram } from "./fixture/run-program"
 import { shortName } from "./fixture/short-name"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
@@ -338,7 +339,7 @@ describe("FileAccess in a project that is not trusted", () => {
       return Effect.gen(function* () {
         const { project, outside } = yield* layout
         yield* Effect.promise(() => fs.symlink(outside, path.join(project, "linked folder"), "junction"))
-        const short = shortName(project, "linked folder")
+        const short = yield* Effect.promise(() => shortName(project, "linked folder"))
         expect(short).toEqual(expect.stringContaining("~"))
         yield* Effect.gen(function* () {
           const access = yield* FileAccess.Service
@@ -481,7 +482,7 @@ describe.skipIf(process.platform !== "linux")("FileAccess.authorizeRead refuses 
           await fs.symlink("/proc/self/fd/0", path.join(project, "fd-link"))
           await fs.symlink("/dev/stdin", path.join(project, "stdin-link"))
           await fs.writeFile(path.join(project, "plain.txt"), "plain")
-          const made = Bun.spawnSync(["mkfifo", path.join(project, "pipe")])
+          const made = await runProgram(["mkfifo", path.join(project, "pipe")])
           expect(made.exitCode).toBe(0)
         })
         const refused = [
@@ -507,4 +508,60 @@ describe.skipIf(process.platform !== "linux")("FileAccess.authorizeRead refuses 
         }).pipe(provideProject(project, requests, trusted))
       })
     })
+})
+
+describe("FileAccess.link", () => {
+  // A link to the folder that holds it leads above where its path would plainly be: one place nests in the other without
+  // being it, so that is a link on the way, inside the project. Only the same place names none.
+  it.live("names a link that leads to the folder that holds it, and none for a plain folder", () =>
+    Effect.gen(function* () {
+      const access = yield* FileAccess.Service
+      const location = yield* Location.Service
+      const docs = path.join(location.directory, "docs")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(docs)
+        await fs.symlink(docs, path.join(docs, "up"), "junction")
+      })
+      const real = yield* Effect.promise(() => fs.realpath(docs))
+      expect(access.link(yield* access.resolve({ path: "docs/up", kind: "directory" }))).toEqual({
+        place: AbsolutePath.make(real),
+        outside: false,
+      })
+      expect(access.link(yield* access.resolve({ path: "docs", kind: "directory" }))).toBeUndefined()
+    }).pipe(provide([])),
+  )
+
+  // m5-link-warning, classes 4 and 6: the value is worked out from what `resolve` found, in memory. A host that does not
+  // exist takes seconds to fail when it is looked up, so a quick answer is one that contacted nothing.
+  it.live("names a share a link leads to without contacting it", () =>
+    Effect.gen(function* () {
+      const access = yield* FileAccess.Service
+      const location = yield* Location.Service
+      const absolute = AbsolutePath.make(path.join(location.directory, "net", "a.txt"))
+      const share = AbsolutePath.make(
+        process.platform === "win32" ? "\\\\orbit-test.invalid\\share\\a.txt" : "//orbit-test.invalid/share/a.txt",
+      )
+      const before = performance.now()
+      expect(access.link({ absolute, place: absolute, leads: share, resource: "net/a.txt" })).toEqual({
+        place: share,
+        outside: true,
+      })
+      expect(performance.now() - before).toBeLessThan(100)
+    }).pipe(provide([])),
+  )
+
+  // Only the same place is no link (class 4): one that holds the spelled place, or is held by it, is not that place.
+  it.live("names a link for a place above or below the spelled one, and none for the same place", () =>
+    Effect.gen(function* () {
+      const access = yield* FileAccess.Service
+      const location = yield* Location.Service
+      const root = yield* Effect.promise(() => fs.realpath(location.directory))
+      const absolute = AbsolutePath.make(path.join(location.directory, "a", "b"))
+      const linked = (...parts: string[]) =>
+        access.link({ absolute, place: absolute, leads: AbsolutePath.make(path.join(root, ...parts)), resource: "a/b" })
+      expect(linked("a", "b")).toBeUndefined()
+      for (const parts of [["a"], ["a", "b", "below"], ["other"]])
+        expect(linked(...parts)).toEqual({ place: AbsolutePath.make(path.join(root, ...parts)), outside: false })
+    }).pipe(provide([])),
+  )
 })

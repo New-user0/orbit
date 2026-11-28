@@ -19,7 +19,7 @@ export type InstanceConfiguration = SdkInstances.Configuration
 
 export type Interface = Omit<OrbitClient, "plugin" | "workspace"> & {
   readonly sessions: Omit<OrbitClient["session"], "create" | "get" | "move"> & {
-    readonly create: Session.Interface["create"]
+    readonly create: EmbeddedHost.Interface["sessions"]["create"]
     // The protocol's error, as the HTTP client gives it: an unknown session reads the same through either transport.
     readonly get: (input: { readonly sessionID: Session.ID }) => Effect.Effect<Session.Info, SessionNotFoundError>
     readonly move: Session.Interface["move"]

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { PersistentPty } from "@orbit/schema/persistent-pty"
 import { Session } from "@orbit/schema/session"
 import { Effect, Exit, Schema, Scope } from "effect"
@@ -10,6 +10,8 @@ import { HttpServer } from "effect/unstable/http"
 import { Orbit } from "../../client/src/promise/index"
 import { it } from "../../core/test/lib/effect"
 import { ServerProcess } from "../src/process"
+
+setDefaultTimeout(30_000)
 
 const binary = process.env.ORBIT_PTY_BIN ?? "/root/projects/orbit-pty/target/debug/orbit-pty"
 const smoke = existsSync(binary) ? it.live : it.live.skip

@@ -122,8 +122,9 @@ export interface Traits<Input = unknown> {
   /** Whether a new user message ends the call or waits for it. Defaults to `"block"`. */
   readonly interruptBehavior?: InterruptBehavior
   /**
-   * The length, in characters, above which a result of this tool should be written to a file rather than sent in
-   * full. A positive number; `Infinity` means the result is never written to a file.
+   * The length, in characters, above which a result of this tool is written to a file and the model gets a preview
+   * instead. The configured ceiling (`tool_output.max_result_chars`, 50,000 by default) caps it. A positive number;
+   * `Infinity` means the result is never written to a file, whatever the ceiling.
    */
   readonly maxResultChars?: number
   /**
@@ -261,6 +262,11 @@ export interface Result<Output extends ValueSchema<any> | undefined = ValueSchem
   readonly output?: OutputValue<Output>
   readonly content?: string | ReadonlyArray<Content>
   readonly metadata?: Metadata
+  /**
+   * The input that ran, when it is not the call's own: an Edit or Write a person revised while approving it. Only the
+   * `execute.after` hooks see it, as their `input`; the recorded call and what the model reads keep the call's input.
+   */
+  readonly input?: unknown
 }
 
 export type Info<

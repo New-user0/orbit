@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import type { OrbitEvent } from "@orbit/client"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { mkdirSync, watch } from "fs"
 import path from "path"
 import { ConfigProvider, useConfig } from "../../src/config"
@@ -150,7 +150,7 @@ async function renderSessionTabs(
     return <box />
   }
 
-  const app = await testRender(() => (
+  const app = await testRenderTimed(() => (
     <TestTuiContexts paths={{ state }}>
       <TuiAppProvider value={{ name: "test", version: "test", channel: "test" }}>
         <StorageProvider>

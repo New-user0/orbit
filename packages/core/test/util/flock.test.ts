@@ -59,8 +59,10 @@ describe("util.flock", () => {
       ),
     )
 
-    expect(out.map((x) => x.code)).toEqual(Array.from({ length: n }, () => 0))
-    expect(out.map((x) => x.stderr.toString()).filter(Boolean)).toEqual([])
+    // Each worker's exit code with what it wrote, so a worker that fails shows its error (class 14).
+    expect(out.map((x) => ({ code: x.code, stderr: x.stderr.toString() }))).toEqual(
+      Array.from({ length: n }, () => ({ code: 0, stderr: "" })),
+    )
 
     const lines = (await fs.readFile(done, "utf8"))
       .split("\n")
@@ -198,6 +200,33 @@ describe("util.flock", () => {
     expect(hit).toBe(true)
     expect(await exists(breaker)).toBe(false)
   })
+
+  // Outside Windows a breaker folder that cannot be made (here: a lock folder the account cannot write) is refused for
+  // good, so the contender fails with that error at once instead of waiting out the lock's timeout as for a lock that is
+  // being released. Root writes past the mode, so the row needs an ordinary account.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "a contender whose breaker folder cannot be made fails with that error at once",
+    async () => {
+      await using tmp = await tmpdir("flock-test-")
+      const dir = path.join(tmp.path, "locks")
+      const key = "flock:refused-breaker"
+      const lockDir = lock(dir, key)
+      await fs.mkdir(lockDir, { recursive: true })
+      const old = new Date(Date.now() - 2_000)
+      await fs.utimes(lockDir, old, old)
+      await fs.chmod(dir, 0o555)
+      try {
+        const started = performance.now()
+        const answer = await Flock.withLock(key, async () => "ran", { dir, staleMs: 200, timeoutMs: 10_000 }).catch(
+          (error: NodeJS.ErrnoException) => `failed: ${error.code ?? error.message}`,
+        )
+        expect(answer).toBe("failed: EACCES")
+        expect(performance.now() - started).toBeLessThan(5_000)
+      } finally {
+        await fs.chmod(dir, 0o755)
+      }
+    },
+  )
 
   test("fails clearly if lock dir is removed while held", async () => {
     await using tmp = await tmpdir("flock-test-")

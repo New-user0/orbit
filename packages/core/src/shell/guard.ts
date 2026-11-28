@@ -144,7 +144,15 @@ export const facts = Effect.fn("ShellGuard.facts")(function* (input: Input) {
       external: internal ? undefined : reached,
       unresolved: !internal && reached === undefined,
       why: "refused" as const,
-      targets: [lexical, actual].flatMap((target) => (target ? [target.resource] : [])),
+      // Until the folder is trusted, the resource of a path that a link of the project leads out is the place it leads
+      // to, so the path as the project spells it joins, as a trusted folder names it: a deny written for that spelling
+      // decides the command as it decides the file tools (class 3). The probes only deny, so this only adds refusals.
+      targets: [
+        ...[lexical, actual].flatMap((target) => (target ? [target.resource] : [])),
+        ...(lexical.externalDirectory?.escaped
+          ? [path.relative(location.directory, lexical.absolute).replaceAll("\\", "/")]
+          : []),
+      ],
     }
   })
 
@@ -386,8 +394,9 @@ export const prepare = Effect.fn("ShellGuard.prepare")(function* (input: Authori
     Effect.provideService(PowerShellParse.Service, parser),
   )
   const ps = isPowerShell(analysis)
-  // The scanners stop by themselves after half a second, so an input over the length limit is still read for the folders
-  // it changes to and the words it names; only the portable scanner, which is quadratic on some inputs, never sees it.
+  // Every parse refuses an input over the length limit (`ShellParse.read`), so the scanners give up on it and it is split
+  // into fragments below, which still name the folders it changes to; the portable scanner, quadratic on some inputs,
+  // is not even started for it.
   const scanned = ps
     ? undefined
     : yield* scanBash(input.command, input.shell, input.cwd.absolute, input.portable && !analysis.opaque)
@@ -423,7 +432,8 @@ export const prepare = Effect.fn("ShellGuard.prepare")(function* (input: Authori
     ...(fragmentary ? [...fragmentWords(input.command, ps), ...fragmentWords(input.command, ps, true)] : []),
   ]
   const escaped = yield* access.escaped(literal.map((operand) => FileAccess.resolvePath(input.cwd.absolute, native(operand))))
-  const external = access.externalRequest([input.cwd, ...gathered.external, ...escaped], input.base)
+  const folders = access.externalRequest([input.cwd, ...gathered.external, ...escaped], input.base)
+  const external = folders && { ...folders, shell: true }
   const requested = request(analysis, input.command, scanned, gathered.findings)
   const shell: Permission.AssertInput | undefined = requested && {
     action: "Bash",

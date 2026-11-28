@@ -161,6 +161,8 @@ export const UsageRecorded = Event.durable({
   schema: {
     ...Base,
     source: Schema.Literals(["title", "compaction"]),
+    /** The model the call used; unset on records written before they named it. */
+    model: Model.Ref.pipe(optional),
     cost: Money.USD,
     tokens: TokenUsage.Info,
   },
@@ -177,6 +179,8 @@ export const SideQueryRecorded = Event.durable({
     purpose: Schema.String.annotate({
       description: "What the side query was for, such as webfetch.summarize or session.away_summary.",
     }),
+    /** The model the call used; unset on records written before they named it. */
+    model: Model.Ref.pipe(optional),
     cost: Money.USD,
     tokens: TokenUsage.Info,
   },
@@ -192,6 +196,35 @@ export const UsageUpdated = Event.ephemeral({
   },
 })
 export type UsageUpdated = typeof UsageUpdated.Type
+
+/**
+ * How full the model's context is, published after each measured response and, with `stale` set, after each completed
+ * compaction. Ephemeral: a client that never saw it loses nothing it can read from the log.
+ */
+export const ContextUpdated = Event.ephemeral({
+  type: "session.context.updated",
+  schema: {
+    ...Base,
+    used: NonNegativeInt.annotate({
+      description: "Prompt tokens in use: the latest measured response, or an estimate when stale.",
+    }),
+    window: NonNegativeInt.annotate({ description: "The model's input window less the room kept for the summary." }),
+    threshold: NonNegativeInt.annotate({ description: "The context size at which automatic compaction starts." }),
+    auto: Schema.Boolean.annotate({ description: "Whether automatic compaction is on." }),
+    percentLeft: NonNegativeInt.annotate({
+      description: "Percent of the threshold (automatic compaction on) or of the window (off) still free.",
+    }),
+    state: Schema.Literals(["ok", "warning", "error"]),
+    blocking: NonNegativeInt.annotate({
+      description: "With automatic compaction off, the size at which a request is refused before it is sent.",
+    }).pipe(optional),
+    paused: Schema.Boolean.annotate({
+      description: "Whether repeated failures paused automatic compaction for this turn.",
+    }),
+    stale: Schema.Boolean.annotate({ description: "True after a compaction or a clearing, until the next measured response." }),
+  },
+})
+export type ContextUpdated = typeof ContextUpdated.Type
 
 export const Deleted = Event.durable({
   type: "session.deleted",
@@ -311,6 +344,33 @@ export const Synthetic = Event.durable({
   },
 })
 export type Synthetic = typeof Synthetic.Type
+
+// The away summary: a short recap for a person returning to the session, written by a small model. Only its text is
+// recorded; where it falls in the history says which turn it summarizes.
+export const RecapRecorded = Event.durable({
+  type: "session.recap.recorded",
+  ...options,
+  schema: {
+    ...Base,
+    text: Schema.String.annotate({
+      description: "The recap, with control and bidirectional characters already written out as escapes.",
+    }),
+  },
+})
+export type RecapRecorded = typeof RecapRecorded.Type
+
+// Old tool results stop being sent to the model. Only the facts are recorded; the placeholder is rendered when the
+// history is lowered, so the stored results, an export and every client's view keep the full output.
+export const ContextCleared = Event.durable({
+  type: "session.context.cleared",
+  ...options,
+  schema: {
+    ...Base,
+    trigger: Schema.Literals(["idle", "pressure"]),
+    tools: Schema.NonEmptyArray(SessionMessage.ContextClearedTool),
+  },
+})
+export type ContextCleared = typeof ContextCleared.Type
 
 export namespace Skill {
   export const Activated = Event.durable({
@@ -590,6 +650,20 @@ export namespace Tool {
     },
   })
   export type Failed = typeof Failed.Type
+
+  /**
+   * The message budget sends this completed result as the wrapper of a saved copy from now on. Keyed by the message and
+   * the call, because a provider's call IDs need not be unique across messages. Internal: no client renders it.
+   */
+  export const Overridden = Event.durable({
+    type: "session.tool.overridden",
+    ...options,
+    schema: {
+      ...ToolBase,
+      override: SessionMessage.ToolOverride,
+    },
+  })
+  export type Overridden = typeof Overridden.Type
 }
 
 export const RetryScheduled = Event.durable({
@@ -622,7 +696,8 @@ export namespace Compaction {
     type: "session.compaction.delta",
     schema: {
       ...Base,
-      text: Schema.String,
+      /** Text characters received so far in the current summary request. The text itself never travels. */
+      characters: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
     },
   })
   export type Delta = typeof Delta.Type
@@ -638,6 +713,7 @@ export namespace Compaction {
       providerContext: SessionMessage.CompactionCompleted.fields.providerContext,
       text: Schema.String,
       recent: Schema.String,
+      retain: SessionMessage.CompactionCompleted.fields.retain,
       // Repeats the internal `session.usage.recorded` figures: that event never reaches clients, and it
       // stays the accounting source for session totals and stats.
       cost: SessionMessage.CompactionCompleted.fields.cost,
@@ -685,6 +761,7 @@ export const Definitions = Event.inventory(
   Permissions,
   Viewed,
   UsageUpdated,
+  ContextUpdated,
   Deleted,
   Forked,
   InboxDelivered,
@@ -697,6 +774,8 @@ export const Definitions = Event.inventory(
   Execution.Interrupted,
   InstructionsUpdated,
   Synthetic,
+  RecapRecorded,
+  ContextCleared,
   Skill.Activated,
   Shell.Started,
   Shell.Ended,
@@ -733,6 +812,7 @@ export const DurableDefinitions = Event.inventory(
   UsageRecorded,
   SideQueryRecorded,
   MessageContentUpdated,
+  Tool.Overridden,
 )
 export const EphemeralDefinitions = Event.inventory(
   ...Definitions.filter((definition) => definition.durability === "ephemeral"),

@@ -5,8 +5,9 @@ import { ToolNames } from "@orbit/schema/tool-names"
 import { Cause, Effect } from "effect"
 import { resolve } from "node:path"
 import type { ACPConnection } from "./connection"
+import { literal, subagentName } from "./markdown"
 import { ACPPromise } from "./promise"
-import { declaredFields, pendingToolCall, resourcePath, stringValue, type ToolInput } from "./tool"
+import { declaredFields, patchSides, pendingToolCall, resourcePath, stringValue, type ToolInput } from "./tool"
 
 type PermissionEvent = Extract<EventSubscribeOutput, { type: "permission.asked" }>
 type Tool = { readonly name: string; readonly input: ToolInput }
@@ -59,7 +60,7 @@ const ask = Effect.fnUntraced(function* (input: Input) {
   const rawInput: ToolInput = caller
     ? declaredFields(caller.name, caller.input)
     : { ...request.metadata, resources: request.resources }
-  const previews = [...servedPreviews(view, input.cwd), ...argumentsContent(view)]
+  const previews = [...linksContent(view), ...servedPreviews(view, input.cwd), ...argumentsContent(view)]
   const toolCallID = input.event.data.source?.id ?? input.event.data.id
   const result = yield* input.connection.requestPermission({
     sessionId: input.clientSessionID,
@@ -70,8 +71,12 @@ const ask = Effect.fnUntraced(function* (input: Input) {
         state: {
           input: rawInput,
           title: prefixedTitle(
-            input.titlePrefix,
-            permissionTitle(toolName, view, caller?.input, previews, request, caller !== undefined, input.cwd),
+            subagentName(input.titlePrefix),
+            // An editor can fold a call's content, so the title too says that a link is on the way.
+            prefixedTitle(
+              PermissionView.linkSummary(view.links),
+              permissionTitle(toolName, view, caller?.input, previews, request, caller !== undefined, input.cwd),
+            ),
           ),
         },
         cwd: input.cwd,
@@ -102,45 +107,37 @@ function prefixedTitle(prefix: string | undefined, title: string | undefined) {
 const isEditFamily = (name: string) =>
   PermissionView.action(name) === "edit" || ["patch", "notebook_edit"].includes(PermissionView.action(name))
 
+/** Where each link of the request leads, absolute as the locations are and written out on its line (class 9). */
+function linksContent(view: PermissionView.View): ToolCallContent[] {
+  return view.links.map((link) => ({
+    type: "content",
+    content: {
+      type: "text",
+      // A warning of two paths has a tilde of one that can pair with a tilde of the other, and strike out what is between.
+      text: PermissionView.linkWarning(link, (path) => literal(path, link.file === link.place)),
+    },
+  }))
+}
+
 /**
  * The files of the request, drawn from their unified patches: the removed and context lines against the added ones. They
  * are the server's own diffs, what it will write (an Edit converts line endings to the file's, which a replace on the
  * client's copy of old_string does not), and a model-added key in the calling input adds none.
  */
 function servedPreviews(view: PermissionView.View, cwd: string): ToolCallContent[] {
-  return view.files.map((file) => {
-    const before: string[] = []
-    const after: string[] = []
-    let hunks = 0
-    file.patch.split("\n").forEach((line) => {
-      if (line.startsWith("@@")) {
-        if (hunks++ === 0) return
-        before.push("...")
-        after.push("...")
-        return
-      }
-      if (hunks === 0 || line.startsWith("\\")) return
-      const text = line.slice(1)
-      if (line.startsWith("-")) before.push(text)
-      else if (line.startsWith("+")) after.push(text)
-      else if (line.startsWith(" ")) {
-        before.push(text)
-        after.push(text)
-      }
-    })
-    return diff(resourcePath(file.place ?? file.file, cwd), before.join("\n"), after.join("\n"))
-  })
+  return view.files.map((file) => ({
+    type: "diff",
+    path: resourcePath(file.place ?? file.file, cwd),
+    ...patchSides(file.patch),
+  }))
 }
 
 /** The arguments of an MCP call as the server sends them, which its caller (Code Mode's Execute) does not show. */
 function argumentsContent(view: PermissionView.View): ToolCallContent[] {
   return view.arguments === undefined
     ? []
-    : [{ type: "content", content: { type: "text", text: `Arguments: ${view.arguments}` } }]
-}
-
-function diff(path: string, oldText: string, newText: string): ToolCallContent {
-  return { type: "diff", path, oldText, newText }
+    : // The arguments are one value a model chose, written so Markdown shows them as they are; the label stays outside.
+      [{ type: "content", content: { type: "text", text: `Arguments: ${literal(view.arguments)}` } }]
 }
 
 function permissionTitle(
@@ -159,38 +156,49 @@ function permissionTitle(
   switch (PermissionView.action(request.action)) {
     case "external_directory": {
       const directory = request.resources.find(isPath)
-      return (
-        stringValue(metadata.description) ??
-        stringValue(metadata.command) ??
-        stringValue(metadata.parentDir) ??
-        (directory && `Access external directory ${wildcardDirectory(directory)}`)
-      )
+      const called = stringValue(metadata.description) ?? stringValue(metadata.command)
+      // One line, since this question is asked just before a change through a link out, and as it is (classes 8, 9).
+      if (called !== undefined) return literal(called.trim())
+      const parent = stringValue(metadata.parentDir)
+      if (parent !== undefined) return literal(parent)
+      return directory && `Access external directory ${literal(wildcardDirectory(directory))}`
     }
     case "webfetch": {
       // The method is part of what is approved: a Code Mode POST must not read like the GET that was allowed.
+      // The URL, query and pattern are whole, as they run, and read as they are (classes 6, 8 and 9).
       const method = view.method
-      return method && method !== "GET" && method !== "HEAD" ? `${method} ${view.url ?? ""}`.trim() : view.url
+      const url = view.url === undefined ? undefined : literal(view.url)
+      return method && method !== "GET" && method !== "HEAD" ? `${method} ${url ?? ""}`.trim() : url
     }
-    case "websearch":
-      return stringValue(callerInput?.query)
+    case "websearch": {
+      const query = stringValue(callerInput?.query)
+      return query === undefined ? undefined : literal(query)
+    }
     case "grep":
     case "glob":
-      return view.pattern
+      return view.pattern === undefined ? undefined : literal(view.pattern)
     case "read":
     case "edit":
     case "write":
     case "patch":
     case "notebook_edit":
     case "list":
-    case "lsp":
+    case "lsp": {
       // The file the server named for its rules: relative to the project inside it, absolute outside it. Whatever the
       // calling tool's input spelled changes nothing. A trusted link that leads out keeps its link spelling as the
       // resource, so when that resource is not the place the tool acts on, the real place is the title.
-      if (files.length === 1 && (view.places.length === 0 || samePlace(files[0], view.places[0], cwd))) return files[0]
-      return view.places[0] ?? files[0] ?? view.files[0]?.file
+      const named =
+        files.length === 1 && (view.places.length === 0 || samePlace(files[0], view.places[0], cwd))
+          ? files[0]
+          : (view.places[0] ?? files[0] ?? view.files[0]?.file)
+      // One line, so a break in a file's name starts no line that reads as a link warning (class 9).
+      return named === undefined ? undefined : literal(named)
+    }
     default:
       // A request whose caller is not its tool (an MCP call, a Workflow agent) names the action and what it reaches.
-      return owned ? undefined : [toolName, ...request.resources.filter((resource) => resource !== "*")].join(" ")
+      return owned
+        ? undefined
+        : literal([toolName, ...request.resources.filter((resource) => resource !== "*")].join(" "))
   }
 }
 

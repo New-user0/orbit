@@ -26,7 +26,7 @@ describe("acp compaction markers over the wire", () => {
   test("marks a /compact turn without forwarding the summary text", async () => {
     const compacted = await compactTurn((sessionID, id) => [
       durableEvent("session.compaction.started", { sessionID, reason: "manual", recent: "", inputID: id }),
-      ephemeralEvent("session.compaction.delta", { sessionID, text: summary }),
+      ephemeralEvent("session.compaction.delta", { sessionID, characters: summary.length }),
       durableEvent("session.compaction.ended", { sessionID, reason: "manual", text: summary, recent: "" }),
     ])
     await using acp = compacted.acp
@@ -36,6 +36,22 @@ describe("acp compaction markers over the wire", () => {
       marker(acp.sessionId, { status: "completed", messageId: compacted.id, reason: "manual" }),
     ])
     expect(compacted.response.stopReason).toBe("end_turn")
+  })
+
+  // context-memory-2 part 2 (class 12): the text after the command is sent as the instructions, as typed.
+  test("the compact command passes the text after it as instructions, line breaks kept", async () => {
+    await using acp = await startSession()
+    const typed = await acp.prompt(acp.sessionId, "/compact  focus on tests\nkeep the db notes ")
+    const bare = await acp.prompt(acp.sessionId, "/compact")
+    const blank = await acp.prompt(acp.sessionId, "/compact   ")
+
+    expect([typed.stopReason, bare.stopReason, blank.stopReason]).toEqual(["end_turn", "end_turn", "end_turn"])
+    const compacts = acp.server.submissions.flatMap((item) => (item.kind === "compact" ? [item] : []))
+    expect(compacts).toHaveLength(3)
+    expect(compacts[0]?.instructions).toBe("focus on tests\nkeep the db notes")
+    // The bare command and a blank one send no instructions key.
+    expect(compacts[1]).not.toHaveProperty("instructions")
+    expect(compacts[2]).not.toHaveProperty("instructions")
   })
 
   test("marks a failed /compact turn with the full compaction error", async () => {
@@ -61,7 +77,7 @@ describe("acp compaction markers over the wire", () => {
           textDelta(sessionID, "msg_before", "before"),
           stepEnded(sessionID, "msg_before"),
           durableEvent("session.compaction.started", { sessionID, reason: "auto", recent: "" }),
-          ephemeralEvent("session.compaction.delta", { sessionID, text: summary }),
+          ephemeralEvent("session.compaction.delta", { sessionID, characters: summary.length }),
           durableEvent("session.compaction.ended", { sessionID, reason: "auto", text: summary, recent: "" }),
           textDelta(sessionID, "msg_after", "after"),
           stepEnded(sessionID, "msg_after"),
@@ -140,7 +156,7 @@ describe("acp compaction markers over the wire", () => {
           id,
           childCreated("ses_child", sessionID, "Explore"),
           durableEvent("session.compaction.started", { sessionID: "ses_child", reason: "auto", recent: "" }),
-          ephemeralEvent("session.compaction.delta", { sessionID: "ses_child", text: summary }),
+          ephemeralEvent("session.compaction.delta", { sessionID: "ses_child", characters: summary.length }),
           durableEvent("session.compaction.ended", {
             sessionID: "ses_child",
             reason: "auto",

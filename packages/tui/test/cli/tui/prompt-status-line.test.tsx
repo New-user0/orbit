@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { RGBA } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { StatusLine, type StatusLineBus } from "../../../src/component/prompt/status-line"
@@ -41,14 +41,14 @@ function setup(options: { sessionID?: string; colors?: boolean; outputs: string[
   }
 }
 
-async function draw(app: Awaited<ReturnType<typeof testRender>>) {
+async function draw(app: Awaited<ReturnType<typeof testRenderTimed>>) {
   await app.renderOnce()
   return app.captureCharFrame()
 }
 
 test("an emitted step end of this session changes the drawn line, and another session's does not", async () => {
   const test = setup({ sessionID: "ses_1", outputs: ["first\n", "second\n", "third\n"] })
-  const app = await testRender(test.element, { width: 30, height: 2 })
+  const app = await testRenderTimed(test.element, { width: 30, height: 2 })
   try {
     await wait(50)
     expect(await draw(app)).toContain("first")
@@ -73,7 +73,7 @@ test.each([
   "session.execution.interrupted",
 ])("%s refreshes the line, on the home screen for any session", async (type) => {
   const test = setup({ outputs: ["before\n", "after\n"] })
-  const app = await testRender(test.element, { width: 30, height: 2 })
+  const app = await testRenderTimed(test.element, { width: 30, height: 2 })
   try {
     await wait(50)
     expect(await draw(app)).toContain("before")
@@ -87,7 +87,7 @@ test.each([
 
 test("a change of what the line watches (the selected model) refreshes it", async () => {
   const test = setup({ sessionID: "ses_1", outputs: ["before\n", "after\n"] })
-  const app = await testRender(test.element, { width: 30, height: 2 })
+  const app = await testRenderTimed(test.element, { width: 30, height: 2 })
   try {
     await wait(50)
     expect(await draw(app)).toContain("before")
@@ -99,9 +99,49 @@ test("a change of what the line watches (the selected model) refreshes it", asyn
   }
 })
 
+// The prompt hands the edited command, or none once the folder is not trusted or hooks are off. No session event
+// follows, and the interval is a minute away: the change itself stops the hanging run, and an edited command is drawn.
+test.each([
+  { name: "is edited", next: "new" as string | undefined, line: "fresh" },
+  { name: "goes away", next: undefined, line: undefined },
+])("a command that $name while the old one hangs stops it at once", async (row) => {
+  const [command, setCommand] = createSignal<string | undefined>("old")
+  const runs: Array<{ command: string; signal: AbortSignal }> = []
+  const app = await testRenderTimed(
+    () => (
+      <StatusLine
+        command={command}
+        interval={() => 60_000}
+        colors={() => false}
+        payload={() => ({})}
+        on={() => () => {}}
+        watch={() => []}
+        fg={RGBA.fromHex("#808080")}
+        run={(value, _stdin, signal) => {
+          runs.push({ command: value, signal })
+          return value === "old" ? new Promise<string>(() => {}) : Promise.resolve("fresh\n")
+        }}
+      />
+    ),
+    { width: 30, height: 2 },
+  )
+  try {
+    await wait(50)
+    setCommand(row.next)
+    await wait(450)
+    const frame = await draw(app)
+    expect({ stopped: runs[0]!.signal.aborted, fresh: frame.includes("fresh") }).toEqual({
+      stopped: true,
+      fresh: row.line !== undefined,
+    })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("unmounting removes the event subscriptions", async () => {
   const test = setup({ sessionID: "ses_1", outputs: ["x\n"] })
-  const app = await testRender(test.element, { width: 30, height: 2 })
+  const app = await testRenderTimed(test.element, { width: 30, height: 2 })
   await wait(50)
   expect([...test.handlers.values()].flat().length).toBe(5)
   app.renderer.destroy()
@@ -118,7 +158,7 @@ test.each([
 ])("%s is drawn unchanged, with colors on and off", async (_name, glyph) => {
   for (const colors of [true, false]) {
     const test = setup({ colors, outputs: [`main ${glyph} ok\n`] })
-    const app = await testRender(test.element, { width: 40, height: 2 })
+    const app = await testRenderTimed(test.element, { width: 40, height: 2 })
     try {
       await wait(50)
       const frame = await draw(app)
@@ -134,7 +174,7 @@ test("colors are drawn only when status_line.colors is on", async () => {
   const red = RGBA.fromHex("#cd0000")
   const spansOf = async (colors: boolean) => {
     const test = setup({ colors, outputs: ["\u001b[31mred\u001b[0m plain\n"] })
-    const app = await testRender(test.element, { width: 30, height: 2 })
+    const app = await testRenderTimed(test.element, { width: 30, height: 2 })
     try {
       await wait(50)
       await app.renderOnce()
@@ -162,7 +202,7 @@ test.each([
 ])("%s is not drawn raw, with colors on and off", async (_name, char, written) => {
   for (const colors of [true, false]) {
     const test = setup({ colors, outputs: [`main${char}txt.exe\n`] })
-    const app = await testRender(test.element, { width: 40, height: 2 })
+    const app = await testRenderTimed(test.element, { width: 40, height: 2 })
     try {
       await wait(50)
       const frame = await draw(app)

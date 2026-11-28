@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { isolatedEnv } from "./fixture/environment"
+import { runOrb } from "./fixture/orb"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-managed-add-"))
 const managed = path.join(root, "managed")
@@ -23,7 +24,7 @@ const registry = Bun.serve({
 
 afterAll(async () => {
   await registry.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 // A second organization whose allow list names one server, so an unlisted one is refused for not being on it.
@@ -54,23 +55,16 @@ await Bun.write(
 )
 
 async function run(directory: string, args: string[], cwd = path.join(root, "project")) {
-  const pkg = path.join(import.meta.dir, "..")
   await fs.mkdir(cwd, { recursive: true })
-  const child = Bun.spawn([process.execPath, `--config=${bunfig}`, "run", path.join(pkg, "src/index.ts"), ...args], {
+  return runOrb(args, {
+    home: root,
     cwd,
-    env: isolatedEnv(root, {
+    bun: [`--config=${bunfig}`],
+    env: {
       ORBIT_MANAGED_DIR: directory,
       npm_config_registry: `http://127.0.0.1:${registry.port}/`,
-    }),
-    stdout: "pipe",
-    stderr: "pipe",
+    },
   })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  return { stdout, stderr, exitCode }
 }
 
 const configured = async () =>
@@ -147,9 +141,11 @@ describe("orb plugin add under managed settings", () => {
     expect(requests.length).toBe(before)
   })
 
+  // Limit 55 s: a start of `orb` and a registry request. Over 50 loaded runs (4 cores, busy loops, cold transpiler cache)
+  // p50 11.8 s, p95 20.0 s, at most 25.6 s.
   test("contacts the registry for a package the lists do not touch", async () => {
     const before = requests.length
     await orb("plugin", "add", "@corp/fine@^1")
     expect(requests.length).toBeGreaterThan(before)
-  })
+  }, 55_000)
 })

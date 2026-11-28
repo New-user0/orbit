@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Headless runs against a local Tachyon stand-in, configured only through the TACHYON_* variables the Python SDK
 // reads. The first agent step answers 401, which must trigger one fresh token exchange and a retry.
@@ -36,7 +37,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await Promise.all(servers.map((server) => server.stop(true)))
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("a headless run reaches Tachyon with the gateway headers and recovers from a 401", async () => {
@@ -63,7 +64,8 @@ test("orb doctor reports Tachyon settings by name and probes the configured mode
   const origin = `http://127.0.0.1:${mock.server.port}`
   const local = await run(origin, {}, ["doctor"])
   expect(local.stdout).toMatch(/ok tachyon\s+set: TACHYON_CHAT_COMPLETION_BASE_URL/)
-  expect(local.stdout).toMatch(/ok git\s+\S*git/)
+  // The path may hold spaces (C:\Program Files\Git\...), so the line is matched up to its end.
+  expect(local.stdout).toMatch(/ok git\s+[^\r\n]*git/)
   expect(local.stdout).not.toContain("api-key")
   expect(mock.calls).toEqual([])
 

@@ -117,7 +117,7 @@ from its files (`packages/cli/test/trust.test.ts`, the rows for `core.fsmonitor`
 for the failures). A repository with no remote is named by its path until it is
 trusted and by its first commit afterwards; the sessions made before trust move to that project (`project-trust-id.test.ts`,
 `project-trust-previous.test.ts`, which also covers Mercurial folders and `.git/orbit`). Memory notes saved under the
-path-named ID are moved to the new one when the folder is opened (`tool-memory.test.ts`), and snapshots taken after a
+path-named ID are moved to the new one when the folder is opened (`memory-instructions.test.ts`), and snapshots taken after a
 grant, before the folder was opened again, can be restored (`snapshot-trust-restart.test.ts`). Saved "always allow"
 answers stay with the old ID, so Orbit asks again.
 
@@ -329,6 +329,96 @@ run with `--standalone` and `ORBIT_TRUST_PROJECT=1`, or pass `trust: { implicit:
 also suit CI and tests. See "The headless commands stop in an untrusted folder, and `orb trust` trusts one" and "The
 terminal UI asks whether to trust a folder" under Clients.
 
+### Nothing in a folder loads or runs until you trust it
+
+The note above describes a folder that loads with parts left out. That is gone: as the reference does, Orbit now reads
+nothing a folder supplies, and starts no work there, until you trust the folder. Its `orbit.json`, `orbit.local.json`
+and `.orbit` directory, and the files other agent products keep there, are not read at all while it is untrusted, so
+its agents, commands, skills, output styles and plugins do not appear either. Your own config, managed settings and
+`--settings` load as before.
+
+What changed:
+
+- The terminal UI asks about the folder it starts in whenever that folder is not trusted, whatever the folder holds.
+  The question lists nothing from the folder, because nothing was read; it offers "Trust this folder" (or "Trust until
+  Orbit restarts" for a home directory or a filesystem root) and "Exit", and starts on "Trust this folder", as the
+  reference's does. Exit and Escape end the terminal UI with exit status 1, and `n` with status 0. A session in another
+  untrusted folder is asked about with "Trust this folder" and "Not now"; "Not now" keeps the terminal UI open, and the
+  server refuses that session's work. When the trust read fails, times out or answers with something that is not a
+  trust status, the question opens anyway.
+- The prompt on Home and in a session takes no keys, and shows no placeholder, until the trust of the folder in view
+  has been read and, when it is the folder the terminal UI started in and is not trusted, until you trust it. Whatever
+  you type before then, Enter included, goes nowhere: nothing is sent, and it cannot answer the question. A `--prompt`
+  is sent once the prompt opens. Once open, the prompt stays open for the run; a question about the start folder that
+  opens after that, such as after `orb trust --revoke` in another terminal, starts on "Exit", so an Enter meant for the
+  prompt does not trust the folder.
+- Every headless door refuses an untrusted folder, even one with no config at all: `orb run` (with or without `--bare`),
+  `orb -p`, stream-json input, `orb loop`, `orb flow run`, `orb eval`, `orb doctor --probe`, `orb session import`
+  (for the folder the session lands in), `orb mini`, an ACP `session/new`,
+  `session/load` or `session/resume` (a JSON-RPC error whose `data.type` is `untrusted_folder`), and an SDK host that
+  does not set `trust: { implicit: true }`. The server refuses a session, an imported session, a prompt, a command, a
+  skill, a synthetic message, a shell command (in a session or through `POST /api/shell`), a compaction, a fork, a move
+  into the folder, text generated from a session (`session.generate`, and the title Orbit writes when you clear one),
+  the instruction preview, an instruction note (whatever its scope), a terminal (`pty.create` and a session's
+  terminal), a worktree (create, remove and refresh), an MCP connection and a file write there with `UntrustedFolderError` (HTTP 403), which names the folder. A server older
+  than workspace trust cannot say, so the CLI stops there too.
+- A grant for a folder now covers every folder below it, as the reference's walk up the parents does, and a trust
+  status names the folder whose grant applies as `granted`. The walk starts from where the folder really is: a folder
+  that does not exist yet is placed by the part of its path that does, and one below a link that leads nowhere is
+  covered by no folder above it. Revoking a folder that a parent's grant covers leaves it trusted, and `orb trust
+  --revoke` names the folder whose grant to end; `orb trust` on such a folder gives it a grant of its own. A grant for
+  the home directory or a filesystem root still lasts only until Orbit restarts, and covers that folder alone.
+- `orb flow ls`, `show`, `cost`, `trace`, `watch` and `approve` need the folder trusted before they open its run store,
+  and take `--trust`, `--standalone` and `--server` like `orb flow run`. `orb doctor` and `orb session import` take
+  `--trust` too, and `orb doctor --probe` lists the models of the folder it asks about and probes (the one your shell
+  names in `PWD`), not of the folder the process runs in.
+- A terminal or a shell command (`POST /api/shell`) checks the folder it is asked to start in as well as the Location's
+  or the session's folder, and is refused when either is untrusted. A file write (`fs.write`) is refused when the folder
+  it really lands in, once every link in its path is followed, is not trusted, unless that folder is Orbit's temporary
+  folder. A worktree is not made in a `directory` that is not trusted.
+- A folder that a request, a plugin, the model or a config names besides its Location is read once, from a folder of
+  its own, and the folder checked is the folder acted in. Each reads `~` and `~/...` as your home folder, a Git Bash,
+  Cygwin or WSL drive spelling as that Windows drive, a relative path from its own folder, and the name in Unicode's
+  composed form; a name with a null byte is refused (HTTP 400). What each reads from, where it used to be the server's
+  working folder or the spelling as it came:
+  - A session's move (`POST /api/session/:id/move`, a plugin's `session.move`, the model's `session_move` tool, and the
+    worktree tools' moves): the session's own folder. A move into a folder that is not trusted is refused by each of
+    them, the route with `UntrustedFolderError` and the others with `WorkspaceTrust.UntrustedError`, both naming the
+    folder as it really is.
+  - `pty.create`, `shell.create` and `fs.write`: the Location's folder. `~` is now your home folder, where it used to be
+    a folder named `~` there.
+  - A session's terminal (`persistentPty.create`): the session's folder. For a session Orbit does not know, only an
+    absolute `cwd` is taken (HTTP 400 otherwise).
+  - `worktree.create`: the project's folder, for its `directory` and `from`.
+  - A local MCP server's `cwd`, whether a config, a plugin or `PUT /api/experimental/mcp/:server` names it: the
+    Location's folder. The server waits until that folder's project is trusted as well as the Location's, and its status
+    names the folder it waits for; `PUT /api/experimental/mcp/:server` answers `UntrustedFolderError` (HTTP 403) at once
+    instead of adding it.
+- The Effect SDK's `sessions.create` refuses a folder that is not trusted (the one named, or the parent's) with
+  `WorkspaceTrust.UntrustedError`, as `sessions.move` does for its destination; it used to create the session.
+- ACP `session/new`, `session/load`, `session/resume` and `session/fork` refuse an additional directory that is not
+  trusted, with the same `untrusted_folder` error as for the session's own folder, and grant nothing.
+- A resumed `orb flow` or `orb eval` run uses a worktree that its run store names only when it lies below the
+  repository's `.orbit/worktrees`; any other folder, or a link there that leads out, is not used (one log line), and the
+  check or reviewer runs where the run does.
+- `orb flow ls`, `show`, `cost`, `trace`, `watch`, `approve`, `resume`, `replay`, `clean`, `orb eval` and the terminal
+  UI's runs dialog look for the run store no higher than the project's folder, starting from where the folder really
+  is, so a store in a repository above it is not opened. The runs dialog shows and decides nothing in a folder that is
+  not trusted.
+- A plugin can no longer create a session in a folder that is not trusted, move one there, or send a session there a prompt,
+  a command, a synthetic message or a compaction, or generate text from it: those calls fail with `WorkspaceTrust.UntrustedError`, which names the
+  folder.
+- A session that began in a folder that is still untrusted, under an earlier release, takes no more work until the
+  folder is trusted, and is not resumed after a restart until then. The same holds for a background subagent whose
+  folder is no longer trusted when the server restarts: it is not resumed, its parent is not told that it failed, and
+  the next start after the folder is trusted resumes it and tells the parent then.
+
+**Affects:** scripts, CI jobs and SDK hosts that ran in folders nobody trusted, and anyone who answered "Not now" in the
+terminal UI and kept working.
+
+**What to do:** trust the folder with `orb trust`, pass `--trust` for one run, or pass `trust: { implicit: true }` to
+the host you embed. In the terminal UI, answer the question with "Trust this folder".
+
 ### A folder's model, provider and budget settings wait for it to be trusted
 
 An untrusted folder can no longer pick a model, a provider or a budget, because every one of them is paid for by you.
@@ -531,42 +621,6 @@ holds a relative entry that Orbit's own lookups used to honor.
 **What to do:** Move variables you want in Orbit's child processes into `env`. Replace a relative `PATH` entry with an
 absolute one.
 
-### Changed project config asks to be trusted again
-
-A trusted folder used to keep every part of its project config on for good, whatever a `git pull`, a branch switch or an
-edit did to it afterwards. Now Orbit records, when you trust a folder, a digest of the parts of each project and local
-config source that start programs: the `hooks`, `mcp`, `plugins`, `providers`, `shell`, `formatter`, `lsp`, `env`,
-`sandbox` and `skills` fields of the settings files (the other products' hook settings and `.mcp.json` included), the
-plugin files and `package.json` of a `.orbit` directory, the `hooks` in the front matter of its skills and agents, and
-the `mcp_servers` in the front matter of its agents. Permissions, commands and grants are not digested. When one of them
-differs from the record, only that kind of that file or directory is left out, as in an untrusted folder, and the rest of
-the folder keeps running: a new hook does not stop its MCP servers. Reformatting a file, reordering keys, comments and
-line endings are not changes, and neither is removing a file or a field. Trust the changes and the kind comes back.
-A digest that cannot be computed, such as a locked file, counts as changed until it can be.
-
-The `skills` setting now has a kind of its own (`skills`) where an untrusted folder used to report it as `settings`.
-
-Links are followed when they stay inside the project. A `.orbit/plugins` folder, a plugin file or folder, or an `agents` or
-`skills` folder that is a link to another folder of the same project counts for its real contents, so editing the target or
-adding a plugin there asks again. A link that leads out of the project is not read at all: the digest holds its name and
-where the link points, so pointing it somewhere else asks, editing what it points at does not, and a project plugin behind
-such a link is not loaded, in the server or in the terminal UI, whether the folder is trusted or not.
-
-You are asked once after each change to executable config, however it got there: a `git pull`, a branch switch or an
-edit. Orbit does not tell its own writes from anyone else's, so a command that edits project config, such as `orb mcp
-add` at project scope, asks as well. A folder you trusted before this version has no record, so each of its sources
-asks once, and so does a nested folder's config that no grant has recorded yet. The headless commands (`orb run` and the
-others) stop with the kinds and the files that changed, `orb trust` renews the grant ("Trusted … again"), `--trust`
-accepts the changes for one run, and the terminal UI, Mini and VS Code ask "Trust the changes?". `Trust.Status` has a new
-`changed` list, and the kinds in it are in `withheld` too. A server older than this version sends no `changed`, which
-the clients read as none.
-
-**Affects:** anyone who trusted a project folder, SDK callers and clients that read `Trust.Status`, and plugins or
-scripts that edit executable project config while Orbit runs.
-
-**What to do:** Look at what changed, then trust it with `orb trust` or the dialog. Nothing for config that only you edit
-in a folder you have not trusted.
-
 ### Config `env` cannot set Orbit's own control variables
 
 `env` in any settings document now skips `ORBIT_MANAGED_DIR`, `ORBIT_TRUST_PROJECT`, `ORBIT_CONFIG`, `ORBIT_CONFIG_DIR`, `ORBIT_CONFIG_CONTENT`, `ORBIT_CONFIG_CONTENT_FILE` and `ORBIT_PASSWORD`, in any spelling, with one "unsupported" diagnostic at the entry's own path. Before, a trusted project's or your own `env` could hand them to every program Orbit starts, so an `orb` started from a hook or an approved command could read another managed folder or trust its folder implicitly. A nested `orb` now inherits these names exactly as the parent process has them.
@@ -696,6 +750,88 @@ A prompt of your own for an agent has its `${ORBIT_TOOL_GUIDANCE}` placeholder f
 actually offered: on a PowerShell session the line reads PowerShell, and a model that loses Edit and Write gets no line
 for them. Your own words around the placeholder stay as written. Workflow subagents also get the brief alone as their
 first message.
+
+### A trusted folder's config loads as it is, and nothing above the project is read
+
+As the reference does, a folder you trust now loads its config as it is whenever Orbit reads it, and Orbit reads a
+project's config only from the project itself. What changed:
+
+- A trusted folder's config is no longer held back when it changes after the grant, and nothing asks about it again.
+  The hooks, MCP servers, plugins, providers and other executable config that a `git pull`, a branch switch or an edit
+  brings load as they stand; a plugin added to `.orbit/plugins` is loaded too. `orb run` and the other headless commands
+  no longer stop with "changed since the folder was trusted", `orb trust` on a folder with a saved grant of its own says
+  it is already trusted, and the terminal UI and VS Code no longer ask "Trust the changes?". This ends the re-ask that
+  an earlier version added, which recorded a digest of each source's executable config at the grant and held back a
+  kind that differed. A project that a grant for a folder above it covers now uses its own hooks as well; they used to
+  read as changed since that grant.
+- `orbit.json`, `orbit.local.json`, `.orbit` and other products' project folders are read from the folder Orbit starts
+  in and its parents up to the project's root (the nearest folder with `.git` or `.hg`, or the start folder outside a
+  repository), and never from a folder above it, even when you trust that folder and its grant covers the project. The
+  walk starts from where the start folder really is, so a folder reached through a link is walked from its target.
+  Instruction files keep their own walk up the folders, with one change: in a trusted project, a rule in a `.orbit/rules`
+  folder above it is now read wherever its links lead, as the `AGENTS.md` beside it already was. It used to be kept
+  inside the folder it sits in. Nothing above a project that is not trusted loads, as before.
+- A project's custom themes in `.orbit/themes` wait for the folder to be trusted, as everything else it supplies does,
+  and come only from the project's root down to the start folder. Your own themes load as before. Mini reads the same
+  folders, and where its own walk would take a `.git` file that the server does not accept as a repository, it starts
+  no higher than the folder the server decided trust for, as the terminal UI does.
+- VS Code's banner for a folder that is not trusted says that nothing there loads, and no work starts there, until you
+  trust it. It used to list what the folder held back, which was empty once nothing of the folder was read.
+- `orb trust <folder> --for <location>` is gone, and so are the `holder` field of `POST /api/location/trust`,
+  `Trust.Status.changed`, and the `directory` and `persistent` fields of `Trust.Withheld`. `Trust.Status.withheld` is
+  always empty and goes in a later release. A client older than this version reads a status without `changed` as
+  nothing changed; a server older than this version that still sends it is not asked about by a newer client.
+- The records that earlier versions kept of what each grant approved (`trust-fingerprint/` in Orbit's key-value store)
+  are left where they are and never read.
+
+**Affects:** people with config in a folder that holds several repositories, anyone who relied on being asked about
+changed config, and SDK hosts that read `changed` or send `holder`.
+
+**What to do:** move config from a folder above your projects into each project, or into your own config (the global
+config folder, or `.orbit` in your home folder). Look over what a pull brings into a folder you trust, or end the trust
+with `orb trust --revoke`.
+
+### Idle sessions are removed after 30 days (`cleanup_period_days`)
+
+The Orbit server now removes a session, with its subagents, its forks and their saved tool results and scratchpads,
+once none of them has changed for `cleanup_period_days` days (default 30). A session that is shared, has queued input
+or was running when the server stopped is kept. The first pass runs 10 minutes after the server starts, later ones every
+24 hours, and a pass waits while a session was active in the last minute. Sessions from before this version count their
+idle time from the first start of this version, so nothing is removed until 30 days after the upgrade. `orb stats`
+keeps counting removed sessions. `0` removes every session that can be removed at the next pass; sessions are still
+saved while they are used. A value that is not a whole number of 0 or more, a config file with errors while the key is
+set, a config file that does not parse, a config file that cannot be read, or an organization's remote config that cannot be fetched (for example while offline) skips the cleanup; this includes the managed settings files and a file the server reads again after it changes. A file that sets one value twice and keeps one of them has no error. A bare run
+(`orb run --bare`, `orb -p --bare`) removes nothing. The flat `tool_*` files of earlier versions in the saved-results folder follow the same period instead of a
+fixed 7 days. A pass removes the saved-result and scratchpad folders only of sessions removed from the same database
+from this version on, so the folders of sessions removed earlier, and those of another channel's or `ORBIT_DB`'s
+sessions, stay where they are; delete them by hand if you no longer need them.
+
+**Affects:** everyone who keeps sessions for longer than 30 days without changing them.
+
+**What to do:** set `cleanup_period_days` to a larger number in your own config to keep sessions longer.
+
+### A trust grant no longer starts an MCP server you turned off
+
+A local MCP server that waits for its folder to be trusted used to start when the grant came, even if you had
+disconnected it while it waited. It now stays disconnected until you connect it again. A server that was being started
+at the moment of the grant now starts as well; before, it kept waiting until the next grant.
+
+**Affects:** people who disconnect a local MCP server in a folder they have not yet trusted.
+
+**What to do:** connect the server when you want it, for example with `/mcp`.
+
+### A skills folder made in another product's folder loads without a restart
+
+A `skills` folder made inside another agent product's folder that is already there, such as `.agents`, now loads its
+skills while Orbit runs. On Linux nothing reported that folder before: Orbit watched only the product folder's own
+entry beside it, so its skills waited for the next config change or a restart (Windows reported it through the
+folder's change time). The skills folder is also listed only once its watch is in place, so a skill written while the
+watch is being made is found (`packages/core/test/config/reload.test.ts`, 'loads skills when ... is there at startup
+and its skills folder comes later' and 'lists a compatibility skills folder after its watch is in place').
+
+**Affects:** people who add a `skills` folder to `.agents` or a vendor's dot-directory while Orbit runs.
+
+**What to do:** Nothing.
 
 ## Clients
 
@@ -916,7 +1052,9 @@ and after it reconnects.
 - **The question:** when the folder in view, on Home or in a session, is untrusted and holds something of its own back,
   a dialog lists the files and directories that hold it, by path from the folder, with what each holds, and offers
   "Trust this folder" or "Not now". Enter on its own is "Not now", so a key typed ahead of the dialog never trusts a
-  folder, and closing the dialog with Esc counts as "Not now". Either one keeps it from opening by itself again for that
+  folder, and closing the dialog with Esc counts as "Not now". (Since trust-first the question about the folder the
+  terminal UI starts in offers Exit, starts on "Trust this folder", and comes while the prompt takes no keys; see
+  "Nothing in a folder loads or runs until you trust it".) Either one keeps it from opening by itself again for that
   folder until the terminal UI restarts. A dialog is about one folder: if another comes into view while it is open,
   such as when a session in another clone opens, it closes without counting as "Not now", and the terminal UI asks
   about the folder now in view once it has the answer for it. A home directory or a filesystem root is offered "Trust
@@ -1763,6 +1901,470 @@ which one of those folders is a link.
 
 **What to do:** nothing. If clean names a link, remove the link and run it again.
 
+### A rewind picker in the terminal UI, and Rewind in the message dialog
+
+`/rewind` (also `/checkpoint`) opens a picker that lists your prompts, oldest first, each with the files its own file
+tools changed (`<name> +A -D` or `N files +A -D`), and a `(current)` row. A command you ran with `!` is a row too, drawn
+as `! <command>` without a file line; it offers only `Conversation only`, which puts the command back in the input in
+shell mode, because the server keeps no checkpoint for a shell command. To undo a command's file edits, use `Code only`
+on the row of the prompt after it. Sending the put-back command commits the staged rewind first, as sending a prompt
+does, so the command and its output stay in the conversation. Choosing a prompt asks the server what a code rewind would change on disk now and offers
+`Code and conversation`, `Conversation only` and `Code only` when at least one file would change, or only
+`Conversation only` otherwise; `Do nothing` goes back. The server answers that question only for a session that is not
+running, so choosing a prompt while the session runs interrupts it and waits for it first. Every option also interrupts
+the session and waits for it before acting. A conversation rewind is staged as `/undo` stages one, so `/redo` brings it
+back until your next prompt, and puts the prompt back in the input; `Code only` puts the files back at once, with no
+redo, and leaves the input alone. While a chosen rewind runs the picker shows `Rewinding…` and Esc does nothing; a
+refused rewind keeps the picker open with a line naming what failed. If the picker was closed another way meanwhile
+(ctrl+c or a click outside it), a refusal is shown as a notice instead. A prompt you queued while the session ran stays
+queued through the rewind; steering it, or sending a new prompt, commits the rewind first, so it runs in the rewound
+conversation.
+
+The list moves with the dialog keys every picker uses (up and down, ctrl+p and ctrl+n, Home and End, Enter to choose),
+so keys you set for `dialog.select.prev`, `next`, `home`, `end` and `submit` apply to it too, and also with j and k.
+Ctrl, shift or alt with up, or shift+k, selects the oldest prompt; the same with down, or shift+j, selects `(current)`.
+The list stops at its first and last rows, and page up and page down do nothing in it. Every row is three lines tall,
+so the list does not move when the file lines arrive. `n` closes the list, the `This conversation has no prompt to
+return to.` picker and the error line, as Esc does; Enter does nothing when there is nothing to rewind.
+
+The list follows the conversation while it is open, with one `(current)` row, always last. The highlight keeps its
+place in the list: a prompt or `!` command that arrives while `(current)` is highlighted is highlighted itself, and one
+that arrives while an older prompt is highlighted leaves the highlight there. When another client stages or clears a
+revert, the rows behind it leave or come back. If the highlighted row leaves, no row is highlighted and Enter does
+nothing; down goes to `(current)`, and up steps back one place at a time. A prompt's file line is asked again
+when its reply finishes a step, when the next prompt arrives after it, and when the session moves to another folder
+(streamed text alone asks nothing). A `!` command run while the reply runs does not end the prompt's range, as the
+server's own count does not, so a step the reply finishes after it still asks again. A line that failed to load is asked again once the terminal UI
+reconnects to its server. The confirm step keeps the prompt it was opened for; if another client's revert has taken
+that prompt out of the conversation, choosing an option sends nothing and shows `Could not rewind: that prompt is no
+longer in the conversation.`
+
+The confirm step quotes up to the first four lines of the prompt. Its options wrap: up on the first reaches `Do
+nothing`, down on `Do nothing` reaches the first. Page up and page down (`dialog.select.page_up`, `page_down`) go to the
+first and the last option, and Home and End do the same. Pressing a digit (also a full-width one) chooses that option
+at once without moving the highlight; Enter chooses the highlighted option and marks it with `✓`. While a chosen rewind
+runs no key moves the options and none is highlighted. `n` does nothing in the confirm step.
+
+Pressing Esc twice within 800 ms on an empty prompt of an idle session opens the same picker. It opens nothing when the
+session shows no message, including when a staged revert has taken back every prompt. While a session runs, Esc keeps
+interrupting it as before.
+
+The message dialog's `Revert`, which staged a revert with its files at once, is now `Rewind`. It opens the picker on its
+confirm step for that prompt, where `Do nothing` closes the picker instead of going back to the list. When only
+replies with nothing in them follow the prompt and no file would change, it rewinds the conversation at once and puts
+the prompt back in the input, without asking. While it finds that out (stopping a running session first) the picker
+already replaces the dialog and shows `Checking files…`; Esc then gives the rewind up, and a session it stopped stays
+stopped. When the answer comes it looks at the conversation again: if another client's revert has taken the prompt
+back meanwhile, it sends nothing and shows `Could not rewind: that prompt is no longer in the conversation.`, and if
+the reply has gained something, it opens the confirm step instead. A reply that holds only reasoning, is waiting to retry or shows only that
+it was interrupted has nothing in it; a reply that failed with an error does not, since the error is drawn, so it opens
+the confirm step. Notices, compaction summaries and prompts still waiting to be sent do not count as something after
+the prompt; a command run with `!` or a skill does. A prompt still waiting in the inbox (queued or steering) is no row
+of the picker, and `Rewind` on it closes the dialog without interrupting the session or changing anything.
+
+Interrupting a prompt (Esc twice while it runs) before its reply holds any text, tool call or error, with nothing typed
+and nothing queued, now rewinds the conversation to before that prompt and puts it back in the input; the prompt-history
+entry that this submit added is dropped, whatever the prompt held: plain text, a pasted block shown as
+`[Pasted ~N lines]`, or a mentioned file or agent. A prompt that repeated the newest entry added none, so nothing is
+dropped. Nothing is dropped either for a slash command, whose prompt is the command's text rather than what was typed,
+or when this window added another entry after the prompt's, such as a `!` command, and the entry of a `!` command is
+never dropped. Entries that other terminal UI windows saved meanwhile stay. Files are not touched.
+
+**Affects:** people who use the terminal UI's message dialog or press Esc on an idle prompt, or interrupt a prompt with
+Esc twice before its reply holds anything.
+
+**What to do:** Nothing. Use `Rewind`, then `Code and conversation`, where you used `Revert`.
+
+### A recap when you come back to a session
+
+When the terminal has been unfocused for five minutes, the terminal UI and Mini now ask the server for a short recap of
+the session in view: one to three sentences that name the task and the next step. It is drawn as a muted row led by
+`※`. A turn that is still running, including one that was already under way when the client opened the session, holds
+the request until it ends, whether it succeeds, fails or is stopped, and coming back first cancels it. There is at most one
+recap per prompt or `!` command, however many clients ask or however often the terminal loses focus. The recap is
+written by the provider's small model, or by `agents.side.model` when you set one, never by the session's own model;
+with neither, no recap is made. It sees the last 30 messages, less any assistant replies at their start, so that the
+conversation opens on your prompt or on a tool result, with
+no system prompt and no tools, so the tool calls and results among them go as text, and it is never sent to a model
+afterwards. Only the main conversation is recapped: while a subagent's session is in view, the terminal UI asks for the
+recap of the conversation that started it and waits for that conversation's turn to end, and a prompt another
+agent wrote does not count as one of yours. A recap you come back during is dropped,
+and its estimated cost is still counted, as for a side query that times out. A terminal that does not report focus
+never asks, and one that lost focus while the client was still starting begins the wait once the client has started. The server adds the route
+`POST /api/session/:sessionID/recap` and the durable event `session.recap.recorded`, and session message lists can
+hold a `recap` message, whose text is stored with its control and bidi characters written out, both when the server
+writes it and when `orb session import` brings it in from a file. `orb export --sanitize` redacts a recap's text as it does a
+prompt's.
+
+**Affects:** people who use the terminal UI or Mini with a provider that has a small model or with `agents.side.model`
+set, who see the row and pay for one small call per prompt they step away from, and SDK and API clients that switch on
+message or event types.
+
+**What to do:** set `session.recap.after_minutes` in your `cli.json` to another number of minutes, or to 0 to turn
+the recap off. A value above 35791 minutes waits 35791 minutes, the longest a timer holds. A project's `cli.json` cannot set it. Clients that switch on message types should skip `recap`.
+
+### Opt-in tool labels and prompt suggestions for stream-json runs
+
+`orb -p` and `orb run` take two new flags, both off unless given and both only with `--input-format stream-json` and
+stream-json output. `--tool-labels` asks the side model for a short label after each finished batch of tool calls and
+writes it as a `tool_label` line (`messageID`, `toolIDs`, `label`) before the result of that batch's message; a batch
+that was interrupted gets none. `--prompt-suggestions` asks the session's own model, with the conversation, what you
+might type next after each result that was not interrupted, and writes a `prompt_suggestion` line (`suggestion`). A new
+`user`, `interrupt` or `end` line drops a suggestion still being written, and when standard input closes the run waits up
+to five seconds for one. Each label and each suggestion is a model call that spends tokens. Without the flags nothing is asked.
+
+The server has two new routes for this, `POST /api/session/:sessionID/assist/label` and
+`POST /api/session/:sessionID/assist/suggestion`. They store nothing and send nothing to the session; they answer with
+the text, or with `null` and the reason there is none (for a suggestion: a conversation with fewer than two replies, a
+failed last reply, a last reply that wrote more than 10,000 uncached tokens, a pending approval or form, Plan mode, a
+running session, a subagent's session, or a filter that dropped the text). Both refuse a session whose folder is not
+trusted with `UntrustedFolderError`.
+
+**Affects:** programs that drive `orb -p` or `orb run` with stream-json, and SDK callers.
+
+**What to do:** Nothing. Pass the flags to get the lines; escape the text before you print it, as for any model text.
+
+### `/memory` lists and opens instruction files and memory folders
+
+The terminal UI has a `/memory` command. It lists the instruction files the folder loaded, in load order with each
+import under the file that imported it, then your own `ORBIT.md` and the project's `AGENTS.md` when they are missing,
+and the warnings about the files. While memory is on it also lists the memory folder, the team memory folder (while
+`memory.team` is on) and one folder per agent with a memory scope. Choosing a file creates it empty when it is not there
+and opens it in `$VISUAL`, `$EDITOR`, or else notepad on Windows or the first of `code`, `vi` and `nano` found on PATH;
+choosing a folder makes it and opens it in the system's file manager. A file is never handed to the system's opener. The
+first row turns memory on or off by writing `memory.enabled` to your own config. The file you open is focused the next
+time, also when it was just created from the user or project row. Rows that open something say they are unavailable
+when the server is not on this machine, and when the server cannot list (a folder that is not trusted, an older server)
+the dialog closes with its message. The server answers at `GET /api/location/memory` and
+`POST /api/location/memory`, both refusing a folder that is not trusted (the `POST` answers 503 when the file or
+folder cannot be made), and `PATCH /api/experimental/config` takes
+`memory.enabled` (`null` removes it). That `PATCH` now answers only after every folder the server has open has reloaded
+its config, so a setting read back right after the write already has the new value; before, it showed the old value
+until the file watch caught up, or for good with watching off.
+
+**Affects:** terminal UI users, and SDK callers that read the new routes or the new key.
+
+**What to do:** Nothing. Set `$VISUAL` or `$EDITOR` to choose the editor `/memory` opens.
+
+### `/context` draws a grid of what fills the window, and `orb run "/context"` prints a report
+
+The terminal UI's `/context` used to estimate the conversation from the messages it had loaded, at four characters a
+token, and draw one bar per row. It now asks the server, which counts what the session's next request would carry by
+category: the base prompt, tools outside MCP, MCP tool schemas, agent definitions, instructions, skill listings and the
+conversation, with the reserve kept below the window (the auto-compaction reserve, or 3,000 tokens of compaction
+headroom with automatic compaction off) and the room left. Tools loaded on demand are counted in no total: the dialog
+leaves them out of its legend and its grid, and its MCP tool schemas heading says when some load on demand, while the
+report below lists them. The dialog draws a grid
+of squares beside a legend (10 by 10, 20 by 10 for a window of a million tokens or more, and 5 by 5 or 5 by 10 below
+80 columns), then lists the MCP tool schemas, the agent definitions by scope, the instructions and the skill listings,
+then ways to free room: the window is nearly full, one tool's calls and results take a large share, what Read returned
+is large, the instructions are large (named by their paths in the session's folder), or automatic compaction is off. Viewing a
+subagent's session shows its main session's context. A model whose window is not known gets the rows and the total,
+with no grid, percentages or suggestions. A folder that is not trusted, a server older than this client, an answer
+that cannot be read and no answer in time each show one line; one entry of the answer that cannot be read, such as a
+category from a newer server, is left out with a log line and the rest is shown.
+
+`orb run "/context"` and `orb -p "/context"` used to send the text to the model as a prompt. They now print the same
+counts as a Markdown report, with every table (the tools outside MCP, the base prompt parts and the conversation by kind
+too), and send nothing to the model. `--format result` and `orb -p --output-format json` print one result line whose
+`result` is the report; `orb run --format json` prints one `{"type":"context_usage","sessionID","usage"}` line. `--file`
+with `/context` is refused. The run's own session is reported (`--session`, `--continue`, `--resume`, or a new one), a
+subagent's session is refused, and the folder must be trusted, as for any run.
+
+The server answers at `GET /api/session/:sessionID/context/usage` (`client.session.contextUsage`). It refuses a folder
+that is not trusted with `UntrustedFolderError` (403), a subagent's session with the new `MainSessionOnlyError` (409,
+naming the parent), an unknown agent with `AgentNotFoundError` (404), and a model that does not resolve or an
+instruction source that cannot be read with `ServiceUnavailableError` (503, `service` `model` or `instructions`). It
+records nothing and asks no model.
+
+**Affects:** terminal UI users, scripts that ran `orb run "/context"` or `orb -p "/context"` and read the model's answer,
+and SDK callers.
+
+**What to do:** Nothing, unless a script relied on `/context` reaching the model; send other text for that.
+
+### `/cost` covers the whole session and its subagents, and `orb run "/cost"` prints it
+
+The terminal UI's `/cost` (and `/usage`) used to total the responses its client had loaded, and said that the breakdown
+covered only the newest ones when older history was not loaded. It now asks the server, which sums the session and every
+subagent from stored rows, so the figures no longer depend on how much history was loaded. The dialog shows the total
+amount spent (cents above $0.50, four places below it, and "unknown" when no price is known), the subagents' share, the
+time the providers spent answering, the elapsed time, the lines the edit tools changed, then one row per provider and
+model with its cost and its tokens in, out, read from the cache and written to it (and reasoning when there are any). Spend that no row
+explains (responses a rewind removed, and usage records written before this version) shows as Other, so the total stays
+exact. Titles, side requests, discarded attempts and every compaction call (including one that failed or was cancelled) now
+record the model they used and appear under it; a session whose compactions all predate this version counts them from their messages, and once it compacts again the earlier compactions' spend shows as Other. A
+session with no model response yet shows a line of zero usage. Each row names its provider beside the model.
+
+Lines changed are counted from this version on, from the per-file counts of every finished Edit, Write and Patch
+(NotebookEdit does not count). A session from before this version shows no lines changed row; a new session and a fork
+start at zero, and a session that was never counted stays uncounted.
+
+`orb run "/cost"` and `orb -p "/cost"` (and `/usage`) used to send the text to the model. They now print the same block
+of lines and send nothing to the model. `--format result` and `orb -p --output-format json` print one result line whose
+`result` is the block; `orb run --format json` prints one `{"type":"cost","sessionID","cost"}` line. `--file` with
+`/cost` is refused. The block reads the session's model catalog, so a model listed without a price reads "unknown" there
+as in the dialog (if the catalog cannot be read, one line says so and a recorded $0 stays $0). Token figures are compact (`in 1.2K`), as in the dialog, and a session with no usage prints one `Tokens:` line without the `Per model:` heading. An unknown session or a server older than this client ends the run with exit code 1 and its message.
+
+The server answers at `GET /api/session/:sessionID/cost` (`client.session.cost`), reading stored rows only: it needs no
+trusted folder and answers an unknown session with `SessionNotFoundError` (404). `session.usage.recorded` and
+`session.side_query.recorded` events gain an optional `model`, and the database gains the columns behind it (a
+migration runs on first start).
+
+**Affects:** terminal UI users, scripts that ran `orb run "/cost"` or `orb -p "/cost"` and read the model's answer, SDK
+callers, and anyone who reads the usage events.
+
+**What to do:** Nothing, unless a script relied on `/cost` or `/usage` reaching the model; send other text for that.
+
+### The context figure counts what the prompt held, without the response's output
+
+The context figure in the terminal UI's footer, the sidebar, the prompt, Mini's footer and the payload the terminal UI
+hands a status-line command (`context.used` and `context.percent`) added the newest response's output and reasoning
+tokens to its prompt. It now counts input, cache read and cache write only, the same figure `/context` shows: the
+response's own output is not in the window until the next request carries it. The figure and its percentage read lower
+than before after a long answer.
+
+**Affects:** terminal UI and Mini users who watch the context figure, and authors of status-line scripts that read
+`context.used` or `context.percent`.
+
+**What to do:** Nothing.
+
+### Prompt suggestions in the terminal UI and Mini
+
+`cli.json` takes `prompt.suggestions`, off unless set to `true`, and the settings dialog has a "Prompt suggestions" row
+under Input that writes it. With it on, the terminal UI and Mini ask the server what you might type next whenever a
+turn of the session in view ends well after the model replied in it (not after a failed or stopped turn, not after a
+subagent's, and not after a busy period with no model reply, such as a `/compact` or a redo), and draw the
+answer dimmed in the empty prompt, cut to the row. In the terminal UI, a turn of the main session that ends while one
+of its subagents' sessions is in view is asked about too, and its answer is drawn when you go back to the main
+session. Tab or the Right arrow puts it in the input, with the cursor at its end; only these two keys take a
+suggestion that starts with `!` into shell mode, with the command after it. Enter sends it as a prompt, unless it was
+cut, in which case Enter puts the whole text in the input first; either way a leading `!` stays part of the prompt
+text, so Enter never runs a suggestion as a shell command. A suggestion that is a slash command on its own, such as
+`/help`, runs that command as typing it would. In the terminal UI, a row too narrow to draw even the first character
+of a suggestion draws none and no key takes it, and while another pane has the keys it is not drawn and no key takes
+it; it is drawn again when the prompt has them back. Model text is drawn and sent with its control and format
+characters written out, so what you see is what is sent. Typing hides it and cancels an ask still out; erasing the input shows it
+again; sending a prompt, running a slash command from the list, a turn starting in the session or, in the terminal UI,
+rewinding its conversation ends it. An answer that comes while you are typing or while a
+turn runs is dropped. The terminal UI asks nothing while the session's folder is not trusted. Mini checks only the
+folder it starts in; for a session of another folder (`orb mini -s`) it sends the ask, and the server refuses it while
+that folder is not trusted, before any model call. A refusal, a failure or an older server draws nothing. A project's `cli.json` cannot set the key.
+
+**Affects:** terminal UI and Mini users who turn it on, who pay for one call on the session's own model, with the
+conversation, after each turn.
+
+**What to do:** Nothing. Set `prompt.suggestions` to `true` in your `cli.json`, or use the settings row, to turn it on.
+
+### VS Code reviews Edit and Write approvals in the editor, and each prompt can show and restore its changes
+
+When the Orbit chat in VS Code gets an Edit or Write approval, the diff now opens beside the chat on its own, with the
+file as it is on the left and the proposal on the right, which you can edit. Saving (or the tab's Accept button)
+approves your version once; closing the tab approves the proposal as it stands; the tab's Reject button declines. The
+card keeps its buttons, and the first answer from anywhere wins; the tab then closes. Tabs that Orbit closes itself
+answer nothing: when the question is answered elsewhere, when you send a new prompt, start a New Session or pick a
+session from history (every Orbit tab closes then, and the question stays waiting on its card), and when the window
+closes. The card says to answer in the editor only while its review tab is open: once Orbit closes that tab, or you
+close it and the service refuses or does not take the answer in time, the card goes back to its buttons alone. Only
+the answered question's tabs close; the review tabs of other questions stay open and still
+answer. When the question is answered, a new prompt is sent or the window closes while its tab is still opening, no tab
+opens. "Open diff" on a question that is open for review brings its tab forward and opens no second one. Moving
+the tab to another editor group or window answers nothing either. Before, "Open diff"
+showed a read-only diff and only the card could answer. When the question is answered elsewhere while the tab holds
+unsaved edits, the tab closes without asking whether to save them, and those edits are not sent. The tab's title names
+the file; the documents in it are called `proposal` with the file's extension.
+
+Only a save you make answers. With `files.autoSave` on, VS Code's own save after a delay or when the editor loses focus
+keeps your edits in the tab and sends nothing: save with Ctrl+S or press Accept to approve them. Closing the tab still
+approves the proposal as the agent wrote it, without your auto-saved edits. If the service does not answer a save in
+time, the note says so and points to the card, which shows whether the question is still waiting.
+
+Other questions with files (Patch, a move, several files, a notebook) open as a read-only preview from the card's "Open
+diff", as before, and so does every question from an Orbit service older than the edited reply. A file is opened only
+when it is really inside the session's folder and inside one of the window's folders: a file elsewhere, behind a link
+that leads out, or on a share is shown on the card only, with a note. When the file changed since the agent read it,
+nothing opens and the warning no longer names the file.
+
+Each message you send gets two links once the service has taken it: "View changes" opens one multi-file diff of what
+that prompt changed with the file tools, and "Restore files" asks for confirmation, with the number of files and lines,
+before it puts them back as they were before the prompt. Neither works in a folder that is not trusted. When the
+service cannot list one prompt's changes (for example a prompt that moved into a worktree), the chat gives the
+service's reason; when it does not answer within ten seconds, the chat says so. A background service older than this
+release cannot list one prompt alone: it ignores the request to and lists the whole turn's changes under the same
+title. Run `orb service restart` after upgrading so that the service is the new one.
+
+**Affects:** VS Code users of the Orbit chat.
+
+**What to do:** Nothing. To keep using only the card, close the review tab with the card's buttons instead: closing the
+tab itself approves the proposal.
+
+### The terminal UI opens Edit and Write approvals in VS Code's diff
+
+When the terminal UI is linked to VS Code through Orbit's bridge, an Edit or Write approval of one file now opens its
+diff in the editor, beside the file you work in, and the terminal shows a short prompt instead of the diff: which editor
+it opened in, the file's name and the usual options. While Always allow is focused, the short prompt says what it
+grants, as the full dialog does. Saving the right-hand side approves your version once, closing the
+tab approves the proposal as it stands, and the tab's Reject button declines. Answering in the terminal still works and
+closes the tab. Once you answer, the short prompt stays until the server takes the answer; when the server refuses it,
+the full dialog comes back with the server's reason. In VS Code's own terminal the prompt also asks you to save in the editor to answer. When VS Code cannot
+open the diff (the file is not inside the session's folder and one of the window's folders, it changed since the agent
+read it, it is too large to send, or VS Code fails to open the tab), when Orbit closes the tab itself, or when the link
+drops, the full dialog comes back in the terminal. Sending a prompt or a command closes every Orbit diff tab in the
+window; a `!` command does not. Before, the diff was shown only in the terminal.
+
+It does not open for a Patch, a notebook, several files, a folder that is not trusted, or a VS Code extension or
+terminal UI from before this release; those keep the full dialog. To keep every diff in the terminal, set
+`"diffs": { "tool": "terminal" }` in `cli.json`, or choose Diff tool in `/config`, which lists it while an editor is
+linked.
+
+The approval of an Edit or Write whose file is reached through a link now says where the link leads, and whether that
+is inside or outside the project, in the full dialog and in the short prompt (see "Every approval of a file change says
+where a link leads" under Permissions).
+
+**Affects:** terminal UI users running in a VS Code window with the Orbit extension, and scripts that read Edit and
+Write permission requests (a file entry may now carry `link`).
+
+**What to do:** Nothing. Update the VS Code extension and the terminal UI together to get the editor review; either one
+alone keeps working as before.
+
+### A slash command's prompt is shown as the command you ran
+
+A prompt you gave as a slash command, such as `/review src/a.ts`, was shown everywhere as the command's expansion, the
+prompt text the model reads. The terminal UI now shows it as you typed it, `/review src/a.ts`, on the rewind picker's row
+and in its quote, in the transcript and its Markdown copy (`/copy`, and `/export` as Markdown), the queue dock, the
+timeline and the fork list, and every place that puts a prompt
+back in the input (a rewind, an interrupt before the reply, undoing a queued prompt, a fork, Mini) gives back
+`/review src/a.ts`, or `/review ` for a command run with no arguments, so sending it runs the command again. The model
+still reads the expansion. A skill activated for the session through the API is a row of the rewind picker too, drawn
+`/<name>`; its rewind offers only the conversation and puts `/<name> ` back in the input. The terminal UI has no slash
+command for a skill, so sending that text sends it as a prompt.
+
+The server records the command on the prompt it admits: the user message and the inbox item have an optional
+`command: { name, arguments }`. A prompt sent through `session.prompt` cannot set it, and the prompt a subagent command
+gives its child has none. A sanitized export redacts the command's name and its arguments, as it redacts the text and a
+skill's name.
+
+**Affects:** terminal UI and Mini users who run slash commands, and SDK or HTTP clients that read user messages or inbox
+items.
+
+**What to do:** Nothing. A client that shows a user message may show `command` the same way.
+
+### Over ACP, text a model or a file chose reads as it is in titles and content
+
+An editor that renders an ACP call's content, and some that render its title, as Markdown could draw a link, an image or
+a heading out of what a model or a repository wrote: the description or command that titles a question about an outside
+folder, a fetch's URL, a search's pattern or query, an MCP call's arguments, a shell call's command, a call's name, and
+a subagent's title in front of its calls. Each of these is now written so Markdown shows it as it is, as paths already
+were: on one line, unchanged where Markdown draws it letter for letter, and otherwise in a code span. A URL is always in
+a code span, since Markdown would make it a link. Nothing is cut but a subagent's title.
+
+What a tool gave back goes in a call's content the same way: the text of a file a Read opened, another tool's output and
+the text of an error are sent as they are when they are one line that Markdown leaves alone, and otherwise in a fenced
+code block whose fence no line of them can close, so they keep their lines.
+
+**Affects:** ACP editors, and anything that matches an ACP call's title or reads its content.
+
+**What to do:** Nothing, unless something matches such a title exactly: allow for the backticks of a code span, or match
+on the call's `rawInput`. Something that reads a call's text content should allow for the fence around it, or read the
+call's `rawOutput`.
+
+### Trusting or untrusting a folder answers once its plugins have changed
+
+Trusting a folder (the TUI's trust dialog, `orb trust`, `--trust`, VS Code, or `location.trust.update`) read the
+folder's config before it answered, but the providers, agents and commands of the folder come from plugins that start
+again a moment later. A client that listed models right after the grant, as `orb doctor --probe --trust` does, could
+get the list of before the grant. The answer now comes once the plugins that are already on the machine have started.
+A plugin package the folder names that still has to be installed does not hold the answer: it starts when its install
+finishes, as at startup. A revoke, a second grant or a model list that comes while that install still runs is answered
+without waiting for it either, and an install that a revoke leaves with nothing to bring is stopped.
+
+The TUI's trust dialog closes on that answer. It used to close as soon as a read of the folder's status said trusted,
+which the server's `trust.updated` event brings before the grant answers, so it could close while the folder's plugins
+were still starting. Trusting the folder somewhere else, with `orb trust` or in another client, still closes it at once
+when no grant of its own is waiting.
+
+Ending trust works the same way. `location.trust.update` with `trust: false` and `orb trust --revoke` (the
+`trust.revoke` route) used to answer while the folder's provider, plugins and commands were still active. They now read
+the config again and stop the folder's plugins before they answer.
+
+The model list and the default model of a folder (`model.list`, `model.default`) also wait for the plugins that are on
+the machine to start now, as its agents and commands already did, so the first list after a folder is opened holds its
+providers. A package that still has to be installed does not hold the list. An editor's first ACP session in a busy
+machine no longer fails because the models were not listed yet.
+
+**Affects:** clients and scripts that trust or untrust a folder and then list or use its models, agents or commands.
+
+**What to do:** Nothing. A wait or a retry after a grant or a revoke is no longer needed.
+
+### A private server that stops before it is ready says why
+
+When `orb`, `orb acp`, `orb flow` or the TUI started a private server that exited before it was ready, the error said
+only "Standalone server exited before reporting readiness". It now names the server's exit code and the end of what it
+wrote to stderr, escaped. The server also waits up to five seconds for orbit.db when the previous command's server is
+still closing it, where it used to exit at once with "database is locked".
+
+**Affects:** anyone who runs Orbit commands one after another in a script or a test.
+
+**What to do:** Nothing.
+
+### A lock on Windows waits while its folder is still being removed
+
+Orbit serializes some work across processes (the TUI's tabs, config writes, plugin updates) with a lock
+folder. On Windows, making that folder could fail with "operation not permitted" right after the previous holder
+removed it, and removing it could fail with "resource busy" while another program had a file in it open. Both used to
+fail the work at once. A contender now waits for the lock as it would for one that is held, up to the lock's timeout
+(five minutes unless the caller sets another), and the holder's release waits up to five seconds for the other handle
+before it fails with the original error. Other systems still fail at once.
+
+**Affects:** Windows users who run more than one TUI or client at once.
+
+**What to do:** Nothing. Where a lock is denied for good (an access list), the error now comes at the lock's timeout,
+naming the lock, instead of at once.
+
+### Writes of state and config files wait for a reader on Windows
+
+On Windows, replacing a file that another program has open fails until that program lets go of it. The TUI's state
+files, the TUI and plugin config files, the background service's config and registration and the VS Code extension's
+IDE lock are written by replacing the file, so a write could fail while another TUI or a client was reading it. Such a
+write now tries again for up to five seconds, and then fails with the original error.
+
+**Affects:** Windows users who run more than one TUI or client at once.
+
+**What to do:** Nothing.
+
+### On Windows a server keeps watching a config folder after nothing uses it
+
+Orbit watches folders such as a project's `.orbit` and its skills folders for changes. On Windows, ending such a watch
+can crash the process in the native watcher Orbit uses (parcel-bundler/watcher#262), so a server on Windows no longer
+ends a watch when a folder is closed, its config is read again or its trust changes. It keeps the watch without
+reporting what it sees and uses it again the next time that folder is watched. The kept watches end when the server (or
+the program that embeds Orbit) shuts down, and a kept watch of a folder that was deleted or moved is dropped when that
+path is watched again. While a watch is kept, Windows does not let you rename a folder that contains the watched one,
+the same as while the folder is open in a session.
+
+**Affects:** Windows users who rename or move a project folder while the background server that opened it still runs.
+
+**What to do:** Stop the server first (`orb service stop`), or close the program that embeds Orbit, then rename the
+folder. Deleting the folder still works while the server runs.
+
+### A slow status line command is no longer cut off after 2 s
+
+The status line used to stop its command 2 s after starting it and keep the old line, so a script that took longer
+(for example a cold start on a busy machine) never showed its output until something else ran it again. A run may now
+last up to ten minutes, the default time limit of a hook command, and is then stopped with what it started; the next
+change or interval runs the command again. When the session, the selection, the vim mode or the command itself
+changes, the next run starts 300 ms later as before and first stops the command still running from the earlier change,
+together with what it started, and only the newest run's output is drawn. This also holds when the change leaves no
+command to run: the folder in view is no longer trusted, managed settings turn hooks off, or `status_line` is removed.
+The interval leaves a running command alone while it is still the configured one, and stops it once the command has
+been edited or removed. Closing the terminal UI stops it as before. Until it ends or is stopped, a slow command keeps
+the last good line. On Windows the stop ends the processes from the last one started back to `cmd.exe`, so on a busy
+machine a command line with several steps (`a & b`) can still start its next step while it is being stopped.
+
+**Affects:** people with a `status_line` command, in particular one that can take longer than 2 s.
+
+**What to do:** Nothing. A script that relied on being stopped after 2 s should end on its own; one that runs for more
+than ten minutes is stopped.
+
 ## Permissions
 
 Changes to what Orbit asks about before it acts, and to how rules and saved approvals apply.
@@ -2219,6 +2821,242 @@ Orbit now reads `fhx` as `Format-Hex` only under PowerShell 7 and `lp` as `Out-P
 
 **What to do:** Write `Format-Hex` in full under Windows PowerShell 5.1 to keep it read-only.
 
+### An Edit or Write approval can be answered with your own version of the file
+
+A pending Edit or Write question now carries `revisable: true`, and it can be answered once with the whole file as you
+want it: `content` on `POST /api/session/:sessionID/permission/:requestID/reply` (and on the SDK's
+`permission.reply`). The reply names no file: the server diffs your text against the file as the question read it,
+records that diff as `files` on `permission.replied` with the question's place, and the tool writes your text where it
+resolved before asking, after the usual check that the file has not changed since. The file's byte order mark is kept.
+When your text differs from the proposal, an Edit tells the model that you adjusted it while approving it;
+the proposal itself, sent back unchanged, gets the usual result. Text equal to the file as it was read is taken as a
+reject. Before, a `content` field was dropped and the proposal was written. A PostToolUse hook still gets the model's
+proposal as `tool_input` after a revised reply, so a hook that needs what was written reads an Edit's
+`tool_response.files`, the diff of the file as written (a Write's `tool_response` names only the file, so its hook
+reads the file).
+
+In an ACP client, a completed Edit or Write now shows the diff the tool recorded of what it wrote, live and when a
+session is loaded, instead of one built from the model's `old_string` and `new_string`. A completed Write shows a diff
+too, and a call that recorded no diff shows none.
+
+In the terminal UI and in Mini, a completed Write is drawn from the diff the tool recorded instead of the model's
+`content`: a new file shows the text that was written, a file that was overwritten shows the diff of the change, and a
+call that recorded no diff shows no text: the terminal UI names the file and Mini says
+the Write completed.
+
+`content` with an `always` or `reject` decision, or on any other question (Patch, NotebookEdit, shell, search, web,
+MCP), is refused with a 400 `InvalidRequestError` whose `field` is `content`, and the question stays pending.
+
+A plugin cannot answer with its own version: the plugin context's `permission.reply` has no `content` field, and a
+reply that carries one anyway is refused with `Permission.RevisionError`, leaving the question pending and the file as
+it was.
+
+**Affects:** clients, SDK callers and plugins that answer approvals; listeners of `permission.replied`; ACP clients; the terminal UI and Mini.
+
+**What to do:** Nothing. Send `content` only for a request marked `revisable`, with a `once` decision.
+
+### Every approval of a file change says where a link leads
+
+A file change whose path goes through a link now warns in every client that asks about it. Before, only the terminal UI
+warned, for an Edit or Write of one file, and the full dialog dropped the warning while Always allow was focused.
+
+- **Requests.** A Patch or NotebookEdit request carries `link` (`{ "place", "outside" }`) on each linked file entry, as
+  Edit and Write requests do, and a move also carries `fromLink` when the file it moves from is behind a link.
+- **Words.** The warning begins "Link ends outside the project" or "Link ends inside the project" and then names where
+  the link leads. Several are counted, for example "2 linked paths, 1 outside the project", and named one by one with the
+  ones that end outside first. These words replace the terminal UI's earlier ones.
+- **A link that is deleted or moved.** When Patch deletes or moves a path that is itself a link, the request, the diff's
+  header and the call's progress name the link, which is what is removed, where they named the file it leads to. `link` or
+  `fromLink` says where it leads, and that file is not removed. So do the call's result (`D shown.txt`, `applied` and
+  `files`) and its error where it fails, which in an untrusted folder named the file outside.
+- **A link removed from a folder that a link leads to.** Where such a link is in a folder that the path reaches through
+  another link, a deny or ask rule for the folder it is removed from now decides the delete or move, as it does when
+  that folder is named directly, and a folder outside the project is asked about (`external_directory`) before it is
+  removed from. Before, the link could be removed with only the file it leads to asked about.
+- **A link removed in a folder that is not trusted yet.** Where a link of the project leads out, a deny or ask rule
+  written for the path of the link as the project spells it, relative or absolute, now also decides a Patch that deletes
+  that link or moves it away. Before, only the rules for the place the link leads to applied there, so the link could be
+  removed without a question.
+- **A file written or read through a link in a folder that is not trusted yet.** The same now holds for every file
+  tool: where a link of the project leads out, a deny or ask rule written for the path as the project spells it decides
+  an Edit, Write, NotebookEdit, Patch or Read through that path. Before, such a rule did not apply, so the file the link
+  leads to could be written or read without a question even where you had denied the path. A Read or Edit deny written
+  that way also stops a shell command that reads, writes or removes the file through the link, as it does in a trusted
+  folder; before, such a command reached the file the link leads to. Where the session folder is below the project's
+  folder, a rule written as `../out/*` for such a path now decides too; before, it did only in a trusted folder.
+- **Policies through a link.** A deny in `experimental.policies` or an organization's statement now refuses a file tool
+  or Read through a link where it names the path as the project spells it (`Edit:out/*`) or as the place the link leads
+  to, in a trusted folder and in one that is not trusted yet. A policy written with an absolute path now also decides a
+  file named relative to the session folder, as a rule does: its deny refuses the file, and a later allow lifts a broad
+  deny of it, so a policy that denies everything and then allows a few paths (`Edit:*` deny, then `Edit:src/*` allow)
+  lets a file tool work on those paths, in a project reached through a link too. Before, a policy met only the
+  request's resource, so such a call went ahead. A policy that allows the spelling of a link never lifts a deny of where
+  it leads. A plugin's `permission.evaluate` hook is shown a file tool's resource by where it is among its `aliases`,
+  and the places a resource leads to as `leads`: keyed by resource like `aliases`, one list of spellings per place.
+- **Terminal UI and Mini.** The warning stays while Always allow is chosen and while you type why you reject, and a
+  request of several files warns too. Where a warning is too long to stay whole, or a path in it holds a warning's own
+  words, a summary stays and the warning is in what scrolls, under the grant while Always allow is focused (the reject
+  stage has the summary only). On a narrow screen the summary is short, for example "Link ends outside" or
+  "2 links, 1 outside". Mini puts the grant, and the edit's title, above the lines of the links.
+- **Every question of the terminal UI's dialog, with a link or without one.**
+  - What does not fit under the title scrolls, with a bar in the dialog's right padding, where a long command, list of
+    patterns or grant was clipped or drawn over the options. While there is more, page up and page down (or ctrl+alt+b
+    and ctrl+alt+f), home and end scroll the question, where they scrolled the conversation before, and the dialog's
+    bottom border says "pgup/pgdn scroll". The commands are `permission.prompt.page.up`, `permission.prompt.page.down`,
+    `permission.prompt.first` and `permission.prompt.last`, in the permission context of the keybindings file. The wheel
+    scrolls too, less than three rows a step in a body that is that short.
+  - A wrapped line is indented under its first word, so a long command, folder or resource can take a row more than it
+    did, and its end can need a scroll where it fitted before. A grant wraps by the character.
+  - A title is one line, with a line break written out as `\n`, wraps by the character, and is cut with "…" where it
+    would leave the body no row, or the grant too few while Always allow is focused. What was cut is whole in what
+    scrolls: an edit's names, or any other title under its icon.
+  - The dialog is fitted to the rows the session has. While a question is asked, the plan and the other docks above it
+    show only in the rows it leaves them, losing whole rows from the bottom up (on an 80x24 screen an edit leaves the
+    plan its header row and none of its steps; the dialog keeps its 15 rows first), and the session's blank row
+    at the bottom and the one of "Jump to latest" go where the dialog has fewer than 15 rows. On the lowest screens the
+    top of the border goes, and then its bottom, so that every option stays on screen. The reject stage drops its blank
+    rows there, and a long reason scrolls in its field.
+  - The blank rows between the lines of a grant stay while they fit and go before a pattern would.
+  - Under 60 columns, or where the dialog has fewer than 15 rows, the blank row under the title and the key hints give
+    way to a warning, title or grant that fits without them. That can hide the "ctrl+f fullscreen" hint; the key still
+    works. The blank row also goes for a link's warning that fits whole without it.
+  - In the editor's short prompt, which has no fullscreen, the row about saving shows only where the question, the
+    warning and the grant fit whole with it. The "Reviewing in" row goes on the lowest screens. Each of the two is one
+    row, shortened in the middle where the screen is too narrow for it or the editor's name is too long.
+- **ACP.** The title of a permission request begins with the warning's summary, for example
+  "Link ends outside the project: /srv/shared/a.txt". For a subagent's request the subagent's title comes before it, as
+  in "Review code: Link ends outside the project: /srv/shared/a.txt". That title is now one line, cut to 40 characters
+  with "...", and in backticks where Markdown would change it or it holds a warning's words, also on a request with no
+  link. The content names each link before the diffs.
+  Both are read as Markdown by some clients, so a path that Markdown would change, such as `C:\Users\me\.orbit` or
+  `__init__.py`, is now in backticks there, also in the title of an edit, a read or an outside folder with no link.
+- **VS Code.** The chat's card lists the warnings above the diff, and the title of the chat's diff tab says
+  "behind a link", for example "Orbit: a.txt behind a link (k3x9qa)".
+- **File names.** In the approval of an edit, read, list or outside folder, a name is one line: a line break or line
+  separator, a control or invisible character, a run of spaces, a space at either end and any other space are written
+  out (`\n`, `\x1b`, `\x20`, `\u{2028}`), and a wrapped name is indented. A diff's header writes out a line break in
+  a name too.
+
+The warning changes no decision, rule or saved approval.
+
+**Affects:** people who approve file changes in a project with links; scripts and SDK callers that read Patch and
+NotebookEdit permission requests; ACP clients or scripts that match permission titles; people and organizations whose
+policies name files, and plugins with a `permission.evaluate` hook.
+
+**What to do:** Nothing, unless something matches an ACP permission title from its start or exactly: allow for the
+warning (and a subagent's title) before the name and for backticks around it, or match on the call's `locations`.
+
+### A configuration policy refuses a file to the editor field, the file-change reminder and the shell
+
+A `permission` statement in `experimental.policies`, or one of your organization's, refused the Read or Edit tool but not
+the checks that run no plugin hook: the editor's selection still reached the model with a prompt, a file the session had
+read was still reported when it changed, and `cat secret/x` or a redirect into it passed the shell's own check. Those
+checks now take the policies' answer too, for a plain path and for one through a link, in a trusted and an untrusted
+folder. A policy here only refuses; it never allows what the rules do not.
+
+**Affects:** people and organizations that refuse files with configuration policies.
+
+**What to do:** Nothing. A policy you relied on for the Read tool now covers these checks as well.
+
+### A mentioned file that a read rule refuses is left out of the prompt
+
+A file or folder you mention in a prompt (`@path`, sent as a file attachment) reached the model whole, even when a Read
+deny rule or a configuration policy refused it to the Read tool. Such a mention is now left out of the prompt with one
+log line, as the editor's selection already was, for a plain path and for one through a link, in a trusted and an
+untrusted folder. A mention outside the project, and the editor's file there, are also left out when a deny for the
+folder they are in (`external_directory`) refuses that folder to the Read tool; a mentioned folder is decided by its own
+folder. The prompt and its other mentions are sent as before.
+
+**Affects:** people who refuse files with Read deny rules or policies and mention files in prompts, from any client.
+
+**What to do:** Nothing. Allow the file, or paste what you need from it, if you meant the model to read it.
+
+### The terminal UI and the VS Code chat send the editor's file and selection with the prompt
+
+The file open in your editor and the text you selected used to reach the model as a hidden message that the terminal UI
+or the VS Code chat wrote itself, so no Read deny rule or policy was checked against that file. Both now send them with
+the prompt as its editor field, which the server leaves out, with one log line, when a Read rule, a policy or a deny for
+the file's outside folder refuses the file, as it does for a mention. The model reads the same kind of note as before.
+The terminal UI sends the first highlighted range when several are selected, and the VS Code chat no longer names the
+file's language. A message sent while the agent is still working keeps the field with the prompt, but the model is not
+shown it, as for any prompt. The VS Code chat still sends the problems it reports as a hidden message.
+
+**Affects:** people who select code in an editor connected to the terminal UI, or send with the VS Code chat's file
+chip on.
+
+**What to do:** Nothing. A file your rules refuse is no longer sent; allow it if you meant the model to read it.
+
+### ACP reads an editor's embedded file from disk, after your read rules
+
+An editor that sends an @-mentioned file to `orb acp` with its text (an embedded resource with a `file:` address) had
+that text passed to the model as it was. Orbit now sends it on as a mention of the file, with the lines of a `#L12-14`
+or `#L12:14` address as its range, so the server reads the file from disk once your Read rules and policies let its
+path through, and leaves it out when they refuse it. Unsaved changes in the editor are not sent; a file that cannot be
+read is named by its address, as a linked file is. A `file:` address that names another computer is never read. The
+scheme is read in any case, so `FILE:` and `File:` addresses, and one with a space before it, are mentions too, for an
+embedded resource and a resource link alike. The text of a resource with any other address (an unsaved buffer, an MCP
+resource) is sent as before.
+
+**Affects:** ACP clients such as Zed that send embedded context.
+
+**What to do:** Save the file before you mention it if the model should read your latest edits.
+
+### ACP sends the rest of the text a model or a server chose so that it reads as it is
+
+Over ACP, a form's message (a subagent's title and the form's title) and its fields' titles, descriptions and option
+labels are sent as code spans when Markdown would change them, as approval titles already are. The model's own Markdown
+in message and thought chunks, live and on `session/load`, is sent as written except that an invisible word joiner
+(U+2060) follows every `!` before a `[` and every `<` before a letter, `/`, `!` or `?`, and a `!` or a `<` that ends a
+chunk. A client draws the text as the model wrote it, but an image becomes a link to its address, which nothing
+fetches, a raw HTML tag reads as text, and an autolink such as `<https://example.com/>` shows its angle brackets around
+a link. Text copied out of the client carries the joiners, which some editors, terminals and compilers do not ignore.
+Inline code takes them too, since renderers read a backtick in different ways: `` `Vec<T>` `` and `` `vec![1]` `` are
+sent with a joiner after the `<` and the `!`, which a person does not see but a copy of the code carries. The only text
+sent without joiners is a fenced code block that opens at the start of the text or right after a blank line, at most
+three spaces in (and at no indentation once a list item has started in the text), with no list or quote mark in front
+of its fence and no `|` after it, before any line of the text that starts with a `[` behind indentation and list or
+quote marks, and that closes with a run of the same mark at least as long, at most three spaces in, with only spaces
+after it. A fence right below a line of text, in a list item or a quote takes joiners, and so does every later fence in
+the text after a fence line that opens no such block, after a closing run four or more spaces or a tab in or with
+anything but spaces after it, after a line that starts to the left of an indented opening fence, after a line with a
+tilde or the start of a bare address (`www.`, `http`, `ftp:`), and after a line that starts with a `[`. Such a line may
+open a link reference definition such as `[r]: /u "`, whose label and title `marked` reads on over blank lines and fence
+lines, so Orbit no longer tries to tell where a definition ends. The cost, beside the joiner in inline code: a code
+block anywhere after a task item such as `- [ ] Do it`, a line that starts with a link such as `[docs](/docs)`, or a
+definition carries joiners in its `<` and `![`, which a person does not see but a copy of the code carries. A text
+that follows, with no tool call between, a text that ended inside a block or a line that may go on, or one after which
+no fence is taken as code (a `[` line, for one), takes joiners in every fence, since a client may draw the two as one
+block (a reply cut off at its output limit and its retry, for example); a fence that starts it is sent unchanged only where it would be after the lines that ended the text
+before. Command, model and
+mode names and descriptions, a session's title in `session/list` and a failed turn's error message are one line, with
+control characters written out.
+
+**Affects:** ACP clients that draw forms, Markdown or these names; scripts that match them.
+
+**What to do:** Match on the text Markdown shows, not on the raw characters.
+
+### A slash command's prompt is `/name args` in Copy, Mini, the VS Code chat and ACP
+
+The terminal UI's message menu Copy, Mini's replay of a resumed session, the VS Code chat when it reopens a session and
+an ACP client's `session/load` replay now show a slash command's prompt as the command you typed, `/name args`, as the
+terminal UI's rows and transcript do. The expansion is still what the model reads.
+
+**Affects:** people who copy or replay a command's prompt.
+
+**What to do:** Nothing.
+
+### A shell command over 10,000 characters is asked about as a whole
+
+The shell analysis already treated a command longer than 10,000 characters as one it cannot read, but the older
+command scan, the scan for redirections and the scan for paths read inputs of any length, and a very long one could stop
+the parser for the rest of the process, so later commands were misread. All of them now refuse such a command before
+reading it, and the command is asked about as a whole. Each read
+also starts from a fresh parser, so a slow earlier command no longer changes how the next one is read.
+
+**Affects:** people who approve very long shell commands.
+
+**What to do:** Nothing.
+
 ## Plugins and SDK
 
 Changes to the tool API that plugins and code built on the SDK use.
@@ -2364,6 +3202,77 @@ client types, which gain one optional field. `@orbit/flow/plain` still exports t
 `@orbit/util/plain`.
 
 **What to do:** Nothing. Show `displayName` when it is present and fall back to `name`.
+
+### A `session.context` hook can be called for a request that is only measured
+
+`/context` builds the request the next step would send, through the same `session.context` hooks, to count it, and
+never sends it. The hook's event then carries `analysis: true`, in the effect plugin API and now in the promise plugin
+API's `SessionContext` type too. A hook that only shapes the request needs no change; a hook with a side effect, such as
+one that starts work or records something for each request, should return early when `analysis` is set, as Orbit's own
+warming hook does.
+
+**Affects:** plugins with a `session.context` hook that has side effects.
+
+**What to do:** Skip the side effect when `event.analysis` is `true`.
+
+### A post-tool hook is told what ran after a revised Edit or Write
+
+When you approved an Edit or Write with your own version of the file, a `PostToolUse` hook, and the `execute.after` event
+of a plugin, still got the model's proposal as the call's input. They now get what was written: a Write's `content` is
+your text, and an Edit is one edit of the whole file, its `old_string` the file as the request read it, its `new_string`
+your version and `replace_all` false. A version equal to the proposal leaves the model's input. A `PreToolUse` hook, the
+recorded call and what the model reads keep the model's input. A tool's result may now carry the `input` that ran for
+this.
+
+**Affects:** hooks and plugins that check or format what an Edit or Write wrote.
+
+**What to do:** Nothing, unless a hook relied on the model's `old_string` after a revision: it is the whole file now.
+
+### Routes that read what plugins add answer once a Location's plugins are active
+
+A Location starts its plugins on the first request that names it, and the plugins add providers (the configured ones
+too), agents, integrations, MCP servers, references, version controls and web search providers. These routes used to
+answer that request before the plugins were active, so the first answer missed what they add: `websearch.providers`,
+`websearch.query`, `model.list`, `model.default`, `provider.list`, `provider.get`, `agent.get`, `integration.get`,
+`integration.connect.key`, `integration.oauth.connect`, `integration.oauth.status`, `integration.oauth.complete`,
+`integration.command.connect`, `integration.command.status`, `mcp.list`, `mcp.connect`, `mcp.disconnect`, `mcp.remove`,
+`reference.list`, `vcs.get`, `vcs.base`, `vcs.status`, `vcs.branch.list` and `vcs.diff`. A list came back without the
+plugin's entries, and a lookup failed with "not found" (for example "Provider not found" or "Web search provider not
+found"). They now wait for the plugins, as `agent.list`, `command.list`, `skill.list` and `integration.list` already did,
+so the first answer is complete. `mcp.resource.catalog` does not wait: it lists the resources of the servers connected
+at that moment, and a server's first connection is made in the background in any case.
+
+**Affects:** SDK and HTTP clients that ask a fresh Location for any of these, and code that retried those requests until
+the answer filled in.
+
+**What to do:** Nothing. A retry loop that waited for a model, provider or other plugin entry to appear can go.
+
+### A plugin folder with a broken link named like an entry is not loaded
+
+A plugin folder is no longer loaded, by the server or by the terminal UI, when it holds a link that loops or leads out
+of the folder and that the runtime could take as an entry, even when the runtime would have loaded a different entry.
+Both ask the same check of every local plugin folder, the user's own and a project's, before they read or import an
+entry, so a folder with only a `tui` entry is left out too, and so is a global folder whose `tui.ts` links to a file
+outside it. That covers a link named `server`, `index`, `tui` or `rpc` with any extension (`index.md` too), for
+example a looping `server.mjs` beside a good `server.ts`. The names match in any case on every platform, so `TUI.ts`, `Server.mjs` and `INDEX.js` count too: the
+runtime takes them on Windows and macOS. Inside a folder with one of those names, such as `server/`, it also covers a
+link named `index` with any extension, a `package.json` that is a link, and a link on the way of the `main` that the
+folder's `package.json` names (each step of that path, with or without an extension, and the `index` of a folder a step
+names). Such a folder can itself be a link to a folder (a junction on Windows), and so can a folder a step of `main`
+names: what is behind the link is checked the same way. A `..` in `main` is followed both from the link and from the
+folder the link leads to. Until now only the entry files the runtime picked were checked, and Bun 1.4.5 passes over a link that loops as
+if the file were not there, so such a folder could be loaded from its other entries. Both also check every entry the
+runtime picked, so a folder whose `server/package.json` or `tui/package.json` `main` climbs out of it with `..` is left
+out by both; the terminal UI used to look only at the tui entry, and only in a project's folder. The folder's own
+plugin is the only one left out; the other plugins load as before
+(`packages/core/test/config/plugin-source-bad-entry.test.ts` for the server, and the "a plugin folder with a looping
+link named like a tui entry" and "a plugin folder whose package.json main climbs out with .." rows of
+`packages/tui/test/plugin-trust.test.ts` for the terminal UI).
+
+**Affects:** plugin folders that keep a link with one of those names, or in one of those places, that loops or points
+outside the folder.
+
+**What to do:** Remove the link, rename it, or point it at a file inside the plugin folder.
 
 ## Agent loop
 
@@ -2905,6 +3814,139 @@ taken a snapshot of before.
 
 **What to do:** Nothing.
 
+### Undo puts back only what Orbit's file tools changed
+
+Undoing to a prompt (`/undo`, a revert with its files) used to put back every file that changed during the steps after
+it, including what a shell command, a subagent or you changed by hand. It now puts back only the files that the
+session's own Edit, Write, Patch and NotebookEdit calls changed, and only where git sees a difference; a shell
+command's edits stay as they are (`session-revert-files.test.ts`, "undoes only the file-tool edits when /undo stages a
+conversation revert with its files"). To record what it changed, Write now names its file in the completed call, as
+Edit already did, and a Patch move names its source beside its destination.
+
+Undo and the code-only rewind count only the file-tool calls made in the folder the session is in now. After the
+session has moved (EnterWorktree, ExitWorktree or a session move), a file that a file tool changed in the other folder
+is a different file from the one with the same name here, so a shell edit to the one here stays; calls made here
+before the session left and came back still count (`session-revert.test.ts`, "Session.revert names from another
+folder"). A Write recorded before this upgrade did not name its file in its result, so it counts by the path it was
+given; a Patch move recorded before the upgrade names only its destination, so undoing it does not bring the source
+back.
+
+An undo to a prompt from before such a move used to fail (the server answered 500) whenever a step in another folder had
+changed a file, because it asked this folder's git for a snapshot that only the other folder's snapshot repository
+holds. It now puts back what the file tools changed here, from this folder's own snapshots, and leaves the other folder
+as it is; the code-only rewind and its dry run answer that such a prompt has no checkpoint, as before
+(`session-revert.test.ts`, "Session.revert across a folder switch"). Two related changes keep this true later on:
+committing an undo (by sending the next prompt) now keeps the record of each move among the messages it removes, so
+the transcript still shows that the session moved, and moving a session that has an undo staged commits that undo
+first, as a prompt does, so a redo is no longer offered in the new folder ("commits a staged undo when the session
+moves, so a redo there touches nothing").
+
+A restore now skips, with a log line, a file whose folder became a link after the snapshot (a junction, a dangling link
+or a link to a share), a file whose own name is now a link or a folder, and a file one of whose folders is now a file
+of yours; the other files still go back. Before, git wrote through the link, removed a junction's target files on
+Windows, removed a folder with what it held, removed your file to make the folder again, or the whole restore failed.
+No folder is removed with what it holds. A file that git fails to put back no longer stops the rest:
+the others go back and the restore then reports that it failed (`snapshot-restore-links.test.ts`). A tracked folder
+that became a link no longer stops snapshots: git refuses a path beyond a link, which made every later snapshot fail on
+Linux, so a rewind answered that snapshots were unavailable. The files behind the link now leave the snapshot and the
+rest is recorded (`snapshot-restore-links.test.ts`, "takes the capture without the files behind the link, and records
+the control"). On Windows a snapshot no longer stores the files that a junction in the project leads to ("does not
+capture the files a link leads to").
+
+An Edit, Write, Patch or NotebookEdit call that fails after it changed a file now names that file in the failed call
+too, so an undo or a rewind puts it back.
+
+An undo with its files now fails, and stages nothing, when Orbit cannot take the snapshot of the files it compares the
+edits with (git fails on the snapshot repository, say). Before, it staged the conversation alone and reported success
+without putting any file back (`session-revert.test.ts`, "fails a revert with its files when the capture before it
+fails, and stages one without its files"). Undoing the conversation alone still works.
+
+**Affects:** people who undo after letting the agent run shell commands that change files, and folders whose layout
+changed to links after a step.
+
+**What to do:** Undo shell edits yourself, for example with git.
+
+### Rewind a prompt's files without touching the conversation
+
+`POST /api/session/:sessionID/revert/files` with `{ messageID, dryRun? }` puts back, as they were when that prompt's
+work began, the files that the session's own file tools changed, and leaves the conversation as it is. It takes effect
+at once and has no redo. A dry run answers `canRewind` with the files that would change (absolute paths) and the lines
+the rewind would add (`insertions`) and remove (`deletions`). It refuses a busy session (409 `SessionBusyError`), a
+folder that is no longer trusted (403 `UntrustedFolderError`), an unknown message (404), and a message with no checkpoint,
+a folder without snapshots or a restore that failed (409 `RewindFilesError` with `reason`; a dry run answers
+`canRewind: false` instead). `orb run --rewind-files <message id>` and `orb -p --rewind-files <message id>` call it
+once; they need `--session`, `--continue` or `--resume`, take no prompt, print one line and exit. A file that git leaves
+out of snapshots (one the repository ignores, or an untracked file over 2 MB) is not rewound, and neither is a file
+whose name or folder is now a link, nor one where a folder now stands, nor one whose folder is now a file; the dry run
+leaves those out too. Prompts delivered together (sent while a step ran) share the checkpoint of the step after them.
+
+`GET /api/session/:sessionID/diff` takes `scope=prompt`, which diffs from `from` to the next prompt and counts only the
+file tools' edits, so a prompt steered in while the session was busy gets its own diff; `scope=turn`, the default, is
+unchanged.
+
+**Affects:** SDK callers and scripts that call `orb run` or `orb -p`.
+
+**What to do:** Nothing.
+
+### An imported session keeps no checkpoint ID that is not a snapshot tree
+
+Importing a session (`orb session import` or `POST /api/experimental/session/import`) now drops, with a log line, a
+step's start or end checkpoint that is not a git tree ID and a changed path that is not a plain name inside the
+project, and keeps the rest of the step. Such a value used to reach git: `--output=<file>` made viewing the session's
+diff write that file. Comparing, restoring and rewinding refuse such an ID before git starts.
+
+**Affects:** imported sessions whose files were edited by hand.
+
+**What to do:** Nothing.
+
+### A conversation-only revert leaves the files an earlier staged revert put back
+
+Staging a revert without its files (`files: false`) while a revert with its files was already staged first put those
+files back to their latest content, and then moved the boundary. It now leaves every file as it is and keeps the staged
+revert's list of files, so `/redo` still puts back everything the staged reverts changed (`session-revert.test.ts`,
+"Session.revert conversation only over a staged revert").
+
+**Affects:** SDK callers that stage a revert with `files: false`, and the terminal UI's `Conversation only`.
+
+**What to do:** Nothing.
+
+### A shell command or a skill commits a staged revert, as a prompt does
+
+A command a person runs with `!` (`POST /api/session/:id/shell`) and a skill activated through
+`POST /api/session/:id/skill` while a revert is staged now commit that revert first, as a prompt (and so a slash
+command) and a compaction already did. Before, the command and its output, or the skill's message, landed after the
+staged boundary, so the terminal UI drew them nowhere and the next prompt's commit deleted them
+(`session-owned.test.ts`, "commits a staged revert before a person's shell command, and keeps the work" and "... skill,
+and keeps the work", rows of one table with the prompt, the queued prompt and the compaction). After a `!` command or a
+skill, `/redo` no longer brings the reverted messages back.
+
+**Affects:** SDK callers, plugins that activate a skill, and terminal UI users who run a `!` command after `/undo` or a
+rewind. The terminal UI sends a skill as a prompt, so it already committed.
+
+**What to do:** Run `/redo` before the command or the skill if you want the reverted messages back.
+
+### A prompt waiting in the inbox outlives a staged revert, and commits it when delivered
+
+A prompt that waits in the inbox (queued, or steering into a session that was interrupted) when a revert is staged now
+stays there when the revert is committed, as a queue outlives a rewind; before, the commit deleted every pending item
+enqueued after the boundary. Only the notices that the rewound work left waiting are still dropped. When such a prompt
+is delivered (you steer it, a wake reaches an idle boundary, or a step boundary takes it), the server commits the staged
+revert first, as it does for a new prompt. Before, it was delivered behind the boundary: the terminal UI drew it
+nowhere, the model still saw the rewound steps, and the next commit deleted it. A waiting compaction or move commits
+the revert the same way when the session takes it up (`session-owned.test.ts`, "commits a staged revert before a
+person's queued prompt from before the revert, steered", "... delivered at the idle boundary", "... steering prompt from
+before the revert, delivered with a notice of the rewound work" and "... prompt, keeping one queued before the revert";
+`session-runner.test.ts`, "a drain delivering a queued prompt / a steering prompt / a queued compaction / a queued move
+over a staged revert commits the revert first"; `data.test.tsx`, "removes committed revert messages from local state";
+`rewind-picker.test.tsx`, "a prompt queued before a conversation rewind is drawn in the rewound conversation once it is
+steered").
+
+**Affects:** people who queue a prompt while a session runs and then use `/undo` with `/redo`, the rewind picker or an
+SDK revert; SDK callers that read the inbox after a commit. As before, the terminal UI's `/undo` takes a newest prompt
+that is still waiting out of the inbox instead of staging a revert.
+
+**What to do:** Delete a queued prompt from the queued prompts list if you do not want it after the rewind.
+
 ## Prompts and instructions
 
 What the model is told about itself and the place it works in.
@@ -3059,7 +4101,7 @@ Three notes are now written while a user message is lowered, from fields the mes
 
 - A message that the person sent while the agent was working, and that is steered in right after a round of tool calls, gets a short note ahead of it saying so and that it must be acted on once the current task is done. The person's words stay outside the note, unchanged. Such a message gets only the note and its text: its `@agent` hints and its `editor` field are stored but not shown to the model, because only a prompt sent while idle carries them. A slash command typed mid-turn is steered like any other input, so its expanded text gets the note too (recorded as a deviation; see FU-M4-35). Input that waited in the queue, a first prompt, a prompt after idle, an interruption or a checkpoint, and a steer that follows a final text-only step get no note. A message that a subagent or workflow tool sent to a child session gets a note naming the parent agent as the sender.
 - Each distinct `agents` entry of a prompt adds one hint that the person asked for that agent and that the `Agent` tool starts it. Admission now drops entries that name an agent the tool cannot start (unknown or primary-only); before, a mention had no effect on the model at all.
-- A prompt can carry `editor`: the absolute path of the file open in the editor and, optionally, a 1-based inclusive line range with the selected text. The model reads one note, with the path and the text in a data block after it; the text is cut to 2,000 characters after line endings are normalized, and the note says how many were left out. Admission drops the field (and keeps the prompt) when the path is relative for the platform the server runs on (on Linux and macOS a Windows spelling such as `C:...`, `\...` or `\host...` is relative; a `~name/` spelling counts as relative; only `~`, `~/` and, on Windows, `~\` mean the home folder), cannot be resolved, is denied by a `Read` rule, or the range ends before it starts. `session.command` accepts the field but does not carry it. The VS Code chat and the terminal UI keep sending the editor context as a hidden item until a later change moves them.
+- A prompt can carry `editor`: the absolute path of the file open in the editor and, optionally, a 1-based inclusive line range with the selected text. The model reads one note, with the path and the text in a data block after it; the text is cut to 2,000 characters after line endings are normalized, and the note says how many were left out. Admission drops the field (and keeps the prompt) when the path is relative for the platform the server runs on (on Linux and macOS a Windows spelling such as `C:...`, `\...` or `\host...` is relative; a `~name/` spelling counts as relative; only `~`, `~/` and, on Windows, `~\` mean the home folder), cannot be resolved, is denied by a `Read` rule, or the range ends before it starts. `session.command` accepts the field but does not carry it. The VS Code chat and the terminal UI kept sending the editor context as a hidden item until m5-quality moved them onto the field ("The terminal UI and the VS Code chat send the editor's file and selection with the prompt").
 
 `orb run --bare` and vanilla instances keep the mid-turn note and drop the hints and the editor note. On a normal instance, compaction summaries and session generations (/btw and the keep-alive warm-up) lower a prompt like the main request, so they share its cache and see the selection; retained recent messages never carry the hints or the editor note. A redacted session export now replaces `editor.path` and the selected text.
 
@@ -3147,6 +4189,85 @@ bodies as message text, because a response can carry text from a project's files
 (the same JSON, re-indented).
 
 **What to do:** Nothing.
+
+### A file changed after the agent wrote it is reported to the model
+
+When a file that a session wrote with its file tools is changed afterwards outside the
+conversation (by you, an editor, a formatter or a shell command), the next step of that session gets a hidden reminder
+with the changed lines, numbered as `Read` numbers them, with eight unchanged lines around each change and at most
+8,192 characters in all. The reported change then counts as read, so the edit tools do not refuse the file as changed
+on disk. Before, the model learned of such a change only when an edit was refused. A change counts as read only once
+its reminder is stored: when the check runs out of time, is stopped, or a compaction ends while it runs, no file counts
+as read because of it, the edit tools still refuse a changed file, and the change is reported at a later step. Each
+step starts checking the files within a short time budget, and gives each file half of it, so a file that is slow to
+check or read, or never answers, costs only its own share and the other files are reported. A check that is still
+running when the budget ends keeps the rest of its share. When a step has no time for every file, the files the
+session wrote most recently are checked first, and the next step goes on with the files not yet checked; a change to a
+file whose check ran out of its share is reported once a later check finishes in time. The
+changed lines of small changes are worked out before those of large rewrites, so a formatter rewriting many large files
+does not hold up a one-line change.
+
+Only what the session itself wrote is watched: a file it only read is not reported, and reading a file after writing it
+ends the watch. A touch, a change of line endings or of the final line break alone, a notebook, an image, a file with a
+NUL byte, a folder in the file's place and a file longer than one read are not reported. A deleted file is forgotten. A
+file that a `Read` deny rule names, or that a link now leads to, is skipped, as is a file outside the project that an
+`external_directory` deny rule covers, a file of the project that has become a link leading out of it, a file outside
+it that no longer really is where the session wrote it because the file, its folder or a folder above it has become a
+link or junction, and, once the project's trust is revoked, any file outside it. A subagent's session is told about the files it wrote, and what Orbit
+holds about its files is released when its run ends, as it is when a session is deleted. Clients show nothing for
+these rows, and `orb run --bare` adds none.
+
+After a restart, the first step of each main session rebuilds what it saw from its history since the latest compaction:
+a whole `Read`, a `Write` (whether or not the call succeeded), and an `Edit` or `Patch` that succeeded, whose files are
+read from disk as they are then. A later `Patch` that deletes or moves a file away, or a later `NotebookEdit`, drops
+what earlier calls showed of that file, so the session's own patch is never reported as someone else's change. Changes
+made while Orbit was not running are then reported, and a file known this way can be edited without a new read. The
+rebuild works from the newest call back, within a budget of its own: a file from history that is slow to check or
+read, and the oldest files when there is no time for all of them, are left out of it, and a rebuild that does not finish within the
+step's time limit is not tried again until Orbit restarts. Only
+files inside the project that `Read` would open without a question are rebuilt, at most the 100 named most recently: a
+file under an ask rule, such as the built-in one for `.env` files, is left out. A subagent is never rebuilt: a
+continued or resumed one starts with nothing watched, so it must read a file again before it edits it. A file tracked for freshness is now dropped once a
+session tracks more than 100 files or 25 MB of written text, least recently used first, and must be read again before
+an edit.
+
+**Affects:** everyone who edits files the agent wrote while a session runs, and clients that list hidden
+`session.synthetic` rows, which now see rows of kind `file-change`.
+
+**What to do:** Nothing.
+
+### The active built-in output style is named on every step
+
+When `output_style` names a built-in style (`explanatory` or `learning`, in any letter case), the main conversation gets
+a short hidden reminder on each step that its replies follow that style. The default style and a style that a file defines add
+nothing, and subagents and `orb run --bare` get nothing.
+
+**Affects:** people who use a built-in output style.
+
+**What to do:** Nothing.
+
+### An opt-in reminder of how much of the context window is used
+
+With `ORBIT_ENABLE_CONTEXT_USAGE_REMINDER` set to `1` or `true` in the server's environment, the main conversation gets
+a hidden line on each step: how many tokens the newest response used, out of the model's context window less the
+smaller of its output limit and 20,000 tokens, and how many are left. It is off by default, says nothing when the
+model's window is not known, and is not sent to subagents or by `orb run --bare`.
+
+**Affects:** people who set the variable.
+
+**What to do:** Nothing; set the variable to turn the reminder on.
+
+### An instruction file left out for leading outside is named, and a note never goes through a link to nothing
+
+A file of the walk (such as `AGENTS.md`) or a rule that is a link and was left out because it leads outside the
+project's folders used to be dropped with a log line only. The instruction status now lists it as a warning of type
+`outside`, which `/memory` shows as a row of its own; nothing about it reaches the model. Separately, a `#` note whose
+file is a link that leads nowhere is now refused as `outside` in a trusted project too: before, on Windows, the note
+created the file the link pointed at.
+
+**Affects:** people whose instruction file is a link out of the project, and clients that read the instruction status.
+
+**What to do:** Nothing. To load such a file, put the file itself in the project in place of the link.
 
 ## Shell sandbox
 
@@ -3274,6 +4395,271 @@ an empty entry of a POSIX `PATH` still does.
 `error` field of a shell result's metadata.
 
 **What to do:** Nothing. Put commands that must not cancel each other in separate steps, or end them with `|| true`.
+
+### A large tool result is saved in the session's folder and the model sees a preview
+
+Before, a tool result longer than 2,000 lines or 50 KiB (UTF-8 bytes) was cut to that size, the whole text was written
+to a flat `tool-output/tool_<id>` file in Orbit's data folder, and the stored result kept only the cut text. Now size is
+counted in characters. A text-only result above its threshold is written whole to
+`<data>/tool-output/<session ID>/<message ID>-<call ID>-<hash>.txt` (`.json`, pretty-printed, when the result has several
+text parts), and the stored result keeps the tool's own full content with a `persisted` entry in its metadata. The model
+gets a `<saved-output>` block instead: the size, the file's path, and the first 2,000 characters (cut back to a line
+break past the first 1,000). Clients and `execute.after` hooks still see the tool's own content. A result that holds an
+image, a PDF or another file part is sent whole, and so is a result whose file cannot be written. The call ID in the
+file name keeps only letters, digits, `_` and `-` (at most 64), and the hash keeps two IDs that differ only in other
+characters or in letter case apart.
+
+The threshold is the tool's declared limit capped by `tool_output.max_result_chars`, which defaults to `max_bytes` and
+otherwise 50,000 characters. Read and the shell never save (the shell keeps its own capture limits and full-output
+file); Grep declares 20,000, so a larger search is saved; MCP tools declare 100,000, so under the default ceiling their
+results are saved above 50,000 characters instead of being cut at 50 KiB; other tools use the ceiling. `max_lines` and `max_bytes` now bound only the shell's own capture of a command's output.
+An untrusted folder cannot set any `tool_output` key.
+
+A session reads the files in its own folder without the question about folders outside the project. Another session's
+folder, a subagent's for its parent, the parent's for a subagent and the source's for a fork are asked about, and so are
+the flat `tool_*` files of earlier builds, which the seven-day cleaning still removes.
+
+**Affects:** people who read tool results in logs or exported sessions, scripts that looked for `tool_*` files or the
+`truncated` and `outputPath` metadata on results that were not from the shell, and people who set `tool_output`.
+
+**What to do:** Nothing, unless you parse result text or metadata. Set `tool_output.max_result_chars` in your own
+config to save results at another size.
+
+### A tool result with nothing in it says so
+
+Before, a tool that returned no content was stored as the text `undefined` (or `null` for an MCP tool whose server sent
+no content), an empty result could stop the step, and a shell command that printed nothing returned `(no output)`. Now
+every successful result that is empty, blank or only whitespace is stored and sent as `(<tool> ran and gave nothing
+back)`, with the name the model called. A silent shell command's own result text is blank, so the same line applies;
+its exit and timeout notices still follow as before, and a background command's stored output is its notice alone.
+Failed calls are not changed.
+
+**Affects:** people and scripts that read tool results, and plugins that compare a silent shell result with
+`(no output)`.
+
+**What to do:** Nothing, unless you match the old texts.
+
+### A very long tool error is cut in the middle
+
+A failed tool call whose message is longer than 10,000 characters now keeps its first and last 5,000 characters with a
+line counting what was cut between them. The cut message is what is stored, shown by clients and sent to the model.
+Nothing of a failure is saved to a file.
+
+**Affects:** people who read long tool errors, such as a failing build's output.
+
+**What to do:** Nothing.
+
+### A shell result keeps the start of the output, and the rest is saved
+
+Before, a shell command's result kept the last 50 KiB and at most 2,000 lines of its output, followed by a line that
+named the full-output file. Now it keeps the first 30,000 bytes (`tool_output.max_bytes`, at most 150,000), cut back
+to a whole character, and `max_lines` is no longer read. When the output is longer, the step links the command's output
+file, cut to 64 MB, into the session's tool-output folder and the model gets the `<saved-output>` block with the file's
+size before the cut, its path and a preview of the head, which starts at its first line that is not blank; the notices
+after the output follow the block. Output whose head is all blank lines still gets the block, with an empty preview,
+instead of being reported as no output. A command whose exit code reads as a failure is never saved: its text is cut to its
+first and last 5,000 characters. The shell declares a 30,000-character result limit, so a head raised past that by `max_bytes` is saved by
+the step like any other result. A background command's completion message and the result of a command you run with
+`!` carry the head too, and both name the output file when the output did not fit. An output file
+that cannot be read is named in the result instead of giving an empty one, and a link planted at its path is not
+followed.
+
+A finished command dropped from memory (after 25 newer ones) no longer deletes its output file when a result did not
+take all of it; the seven-day cleaning removes it later.
+
+**Affects:** people and scripts that read shell results, and people who set `tool_output.max_lines` or `max_bytes`.
+
+**What to do:** Nothing. Remove `max_lines` from your config at your convenience; it is still accepted.
+
+### Background tasks can be turned off
+
+A new setting, `"background_tasks": false`, keeps work in the foreground. The shell tool (Bash or PowerShell) no longer
+offers `run_in_background` and the Agent tool no longer offers `background`; a call that passes either runs in the
+foreground. A shell command still running at its timeout is stopped instead of moving to the background, moving
+running work to the background leaves shell commands and the subagents of the Agent and Workflow tools where they
+are, and the tool descriptions drop the background guidance. A command defined to run as a subagent still runs in the
+background. A project's or local value applies only once the folder is trusted.
+
+**Affects:** people who want every command and subagent to finish before the model goes on.
+
+**What to do:** Nothing, unless you want it: set `"background_tasks": false` in your own config.
+
+### A background command is stopped at 5 GB of output, and a subagent's commands end with it
+
+A shell command that has left the foreground is killed at once (no grace period) once its output file passes 5 GB,
+checked every five seconds; its completion message starts with a line saying so. When the run that an Agent call
+started ends, whether it finished or failed, in the foreground or the background, and also when a background subagent
+resumed after a restart ends, every shell command the subagent still has running is killed and reports nothing to it,
+and every shell notice still waiting for the subagent is withdrawn. A command you ran in the subagent's session with `!`
+is yours: it keeps running and its notice stays.
+
+**Affects:** people who start long background commands, and subagents that leave servers or watchers running.
+
+**What to do:** Nothing. Start a long-lived server from the main session, not from a subagent, if it must outlive the
+subagent's run.
+
+### A shell timeout written as a string is accepted
+
+The shell tool reads `timeout` written as a decimal string, such as `"5000"`, as that number of milliseconds. Any other
+string, such as `"5s"`, is still invalid input, and the tool's schema still asks for an integer.
+
+**Affects:** models that send numbers as strings.
+
+**What to do:** Nothing.
+### Memory is kept with the file tools, and the Memory tool is gone
+
+Before, the model saved notes with a `Memory` tool, and Orbit regenerated `MEMORY.md` from them after every save and
+showed the new index to the session at once. Now the model writes memory files with Write and Edit into the project's
+memory folder (`<data>/memory/<project ID>/`, or the folder `memory.directory` names) and keeps `MEMORY.md` itself. A
+memory file may carry `name`, `description` and `type` front matter. Writes and reads in that folder ask no question,
+even under an `edit: ask` or `read: ask` rule or in plan mode. A deny rule there wins over any ask and over plan mode;
+as elsewhere, a later allow rule of yours lifts it. A shell command that names the folder, or runs in it, is asked about
+as before, even by an agent that allows every command. The main thread's prompt gets a guide to memory, except when a
+`system_prompt`, a `system_prompt_file` with text or an agent's own prompt takes the place of Orbit's. When the guide
+goes in the middle of a session, the model is told that memory is switched off only when it is; after a switch to such
+an agent it is told only that the guide no longer applies.
+`MEMORY.md` loads after the instruction files, cut at 200 lines and 25,000 characters with a note to the model, and a
+change to it reaches a session from its next compaction or in a new session. A Read of a memory file more than a day old starts with a note of its age. The index Orbit generated before is
+kept, without the line that named the tool. New: `memory.enabled`, `memory.directory` (read only from your own, local,
+command-line and managed configs) and `ORBIT_DISABLE_AUTO_MEMORY`; `orb run --bare` turns memory off. A
+`memory.directory` of `~/` that names home or a folder above it is not used, with or without trailing separators
+(`~/./`, `~//`, `~/../`), and the default folder is kept; so is one whose path leads through a link to a network
+share. A deny rule written for a `memory.directory` that is a link also decides a file named by the folder's real path. A `MEMORY.md` that links out of the memory folder, or to a
+network share, is not loaded, and notes moved over from before trust add no line to a `MEMORY.md` that is a link.
+
+**Affects:** people with permission rules or hooks written for the `Memory` tool, which now name no tool, and anyone
+who reads the memory folder.
+
+**What to do:** Nothing for existing notes in the default folder. If you set `memory.directory`, Orbit neither reads
+the default folder nor moves anything into yours: move the notes, and their `MEMORY.md`, from
+`<data>/memory/<project ID>/` to your folder yourself. Notes saved before a folder was trusted keep moving to the
+default folder. Move a rule written for `Memory` to `Edit` and `Read` on the memory folder, and set
+`"memory": { "enabled": false }` or `ORBIT_DISABLE_AUTO_MEMORY=1` to switch memory off.
+
+### Team memory, kept in the repository, and no credentials written into it
+
+New: `memory.team`, off by default. When the last config that sets it turns it on, memory is on and the project is
+trusted, the model also keeps team memory in `.orbit/team-memory/` at the project's root, which is committed with the
+code and so shared with everyone who works in the repository. Its guide then names both folders, says which kind of
+memory goes where, and forbids secrets in team memory; the team folder is made with the guide; the folder's own
+`MEMORY.md` loads after the private index, wrapped in a `<team-memory source="repository">` tag, with the same caps and
+front matter handling; and Read, Write and Edit in the folder ask no question, while a deny rule still wins. Team memory
+is on only for a plain folder: a `.orbit/team-memory` that is a link (out of the project, to a network share, or to the
+project itself, `.orbit`, `.git` or any other folder in it, or to a folder that is not there), or one under an `.orbit`
+that is a link, turns team memory
+off for that project, and a team `MEMORY.md` that links out of the folder is not loaded. The config watch of a
+project's `.orbit` no longer reloads anything when a file below its `team-memory` folder changes; a skill, agent or
+command in a folder of that name further down still reloads.
+
+Whatever `memory.team` says, and in a project that is not trusted too, Write, Edit (its `new_string`) and Patch (the
+lines each hunk adds, not its context lines, and the whole of a file it moves in) refuse to write text that looks like a credential into
+`.orbit/team-memory/`, before anything is asked or written, including through a link elsewhere in the project that leads
+into the folder. The tool error names the kinds of credential found, never the text. The rules are 36 high-confidence
+patterns from gitleaks v8.30.1; keyword rules such as `password = ...` are not among them. NotebookEdit and Bash are not
+scanned.
+
+**Affects:** people who want to share memory with their team, and anyone who keeps a file that looks like a token in a
+folder called `.orbit/team-memory`.
+
+**What to do:** Nothing. To share memory, set `"memory": { "team": true }` in your own config, or in a trusted project's,
+and commit `.orbit/team-memory/`.
+
+### The tool results of one step share a size budget
+
+Before, each tool result was measured on its own, so a step that ran many tools in parallel could send all of their
+results to the model however large they were together. Now, before each request, the results of the newest step are
+added up. When they pass `tool_output.max_message_chars` (200,000 characters by default), the largest are saved to the
+session's tool-output folder and sent as the same `<saved-output>` preview a large single result gets, one after
+another until the rest fit; equal sizes go in call order. A step's results are decided once: the request after them is
+the first to carry them, and every later request, a fork and compaction send the same text. Automatic compaction, and
+the refusal of a request that no longer fits when automatic compaction is off, measure that same text. Results of a
+tool without a result limit (such as Read), results already saved on their own, failed calls, results from tools the
+provider runs and results that hold an image or another file part neither count nor go. A result whose file cannot be
+written is sent whole. The stored result keeps the tool's own content, and clients show it as before. A sanitized
+export (`orb session export --sanitize`) leaves the choice out, so an import of it sends the redacted text. An
+untrusted folder cannot set the key (`tool_output` is withheld whole).
+
+**Affects:** people whose model runs many tools in one step, such as several large searches at once.
+
+**What to do:** Nothing. Set `tool_output.max_message_chars` in your own config to change the budget.
+
+### An agent's memory scope gives it a memory folder of its own
+
+An agent definition's `memory` field (`user`, `project` or `local`) used to be read and then ignored. While memory is
+on it now gives the agent a folder of its own: `user` keeps it in `<data>/memory/agents/<agent id>/` for every project
+(`memory.directory` does not move it), `project` in `.orbit/agent-memory/<agent id>/` of the session's folder, meant to
+be committed, and `local` in `.orbit/agent-memory-local/<agent id>/`, meant to stay out of version control (Orbit
+writes no ignore entry for it). The agent gets a block with the memory guide, a line on its scope and its own
+`MEMORY.md` (cut at 200 lines and 25,000 characters), as the main thread, as a subagent and in a fork, also under its
+own prompt, under your `system_prompt` and with `context.instructions: false`; its folder is made with the block, and a
+change to its `MEMORY.md` reaches a session from its next compaction or in a new session. An agent with a `tools` list
+gets `Write`, `Edit` and `Read` added to it where they are missing; `disallowed_tools` is left as written. Read,
+Write and Edit in every agent's memory folder, in all three scopes, ask no question, while a deny rule still wins and a
+shell command is asked about as before; this holds whether or not memory is on. The `project` and `local` folders count
+only once the project is trusted and only while `.orbit` and the scope's folder are plain folders: a link there (out of
+the project, onto its own files, to a network share or to nothing) turns that scope off. An agent whose id is not a
+plain name gets no folder. The config watch of a project's `.orbit` no longer reloads anything when a file below
+`agent-memory` or `agent-memory-local` changes.
+
+**Affects:** people with agents that set `memory`, and anyone with permission rules that ask before edits under
+`.orbit/agent-memory`, `.orbit/agent-memory-local` or `<data>/memory/agents`.
+
+**What to do:** Nothing. Commit `.orbit/agent-memory/` to share an agent's project memory, and add
+`.orbit/agent-memory-local/` to your ignore file if you keep local scopes. To keep an agent from writing its memory
+without a question, write a deny rule for its folder.
+
+### A project can seed a user-scope agent's memory
+
+A trusted project may now ship `.orbit/agent-memory-snapshots/<agent id>/`, holding a `snapshot.json` with a non-empty
+`updatedAt` and the files an agent should start with. While memory is on, an agent with `memory: user` that your own,
+the project's, the local or the managed config defines, and whose folder `<data>/memory/agents/<agent id>/` holds no
+Markdown file yet, gets those files copied into it, with `.snapshot-synced.json` naming the snapshot. The copied
+`MEMORY.md` then reaches that agent in every project, since the user scope is shared. A folder that already holds a
+Markdown file is left as it is, whatever the snapshot's time, and nothing is asked. The copy happens the first time a
+session or `/memory` needs memory in the folder, and again after the agents change. Before, the folder was ignored.
+
+**Affects:** people whose projects ship agent memory snapshots, and anyone with user-scope agents.
+
+**What to do:** Nothing. To keep a snapshot out of an agent's memory, put any Markdown file in its folder first.
+
+### An interrupted agent memory snapshot copy leaves nothing behind
+
+Stopping a session while it copied an agent memory snapshot could leave only some of the snapshot's files in the agent's
+folder and no `.snapshot-synced.json`. Because that folder then held a Markdown file, later sessions kept it as your
+memory and never finished the copy. The files are now copied into a hidden folder beside the agent's folder
+(`.<agent id>.snapshot-` and a few random characters) and moved into place once all of them are there. A stop during the
+copy takes effect at once, however large the snapshot, removes that folder and leaves the agent's folder as it was, so
+the next session copies the snapshot whole; only the move into place, which is quick, finishes first
+(`memory-agent-snapshot.test.ts`).
+
+**Affects:** people whose projects ship agent memory snapshots.
+
+**What to do:** Nothing. A folder that an earlier build left part-copied stays as it is; delete its files to have the
+next session copy the snapshot again. A hidden `.<agent id>.snapshot-` folder that a crash leaves in
+`<data>/memory/agents` can be deleted.
+
+### An agent memory snapshot copies at most 200 files of at most 250,000 bytes each
+
+A project's agent memory snapshot was copied whole, whatever the number and size of its files. A file over 250,000 bytes
+is now left out with one log line, and at most 200 files are copied: the first by name, in code-point order, with one log
+line for the rest. An interrupt just after the hidden folder of the copy is made no longer leaves that folder behind.
+
+**Affects:** projects that ship agent memory snapshots with more than 200 files or with files over 250,000 bytes.
+
+**What to do:** Keep a snapshot within the bounds, or split a large file.
+
+### Orbit started from Git Bash finds Git Bash as its shell
+
+On Windows Orbit finds Git Bash next to the `git` it finds on `PATH`. Git Bash puts its own `git`, in Git's
+`ucrt64\bin` folder (`mingw64\bin` in older releases, `clangarm64\bin` on ARM), first on the `PATH` it hands to the
+programs it starts, and Orbit looked
+for Git Bash only next to the copies in Git's `cmd` and `bin` folders. So an Orbit started from Git Bash found no Git
+Bash, and `SHELL=/usr/bin/bash`, which Git Bash sets, or a bare `bash` resolved to another shell. Orbit now also finds Git
+Bash from that copy, so both resolve to Git Bash's `bin\bash.exe`.
+
+**Affects:** Windows users who start Orbit from Git Bash.
+
+**What to do:** Nothing. Set `shell` in your config to choose another shell.
 
 ## Files and web tools
 
@@ -3470,6 +4856,21 @@ with one of them, asks are approved without being shown.
 root command without `-p` now gets the usual usage error.
 
 **What to do:** Nothing, unless you want to drive Orbit from a program. See `orb -p --help` for the line shapes.
+
+### A stream-json `end` stops work that was sent but has not started
+
+An `end` line stopped the work that was running, but a message sent just before it whose work had not yet started (its
+busy period had no event yet) was not stopped: the model was still called and the run reported success. `end` now also
+withdraws every message that was taken in and is still queued, and interrupts the session whenever any message sent on the
+stream has no result yet. A program that sends a `user` line and then `end` at once gets a stopped run, not an answer.
+A `SIGINT` while the stream to the server breaks also no longer leaves the process spinning: it ends, and a second
+`SIGINT` is still heard.
+
+**Affects:** programs that drive `orb -p` or `orb run` with `--input-format stream-json` and send `end` right after a
+message.
+
+**What to do:** To get an answer before finishing, wait for the message's `result` line before sending `end`, or close
+standard input instead, which lets queued work finish.
 
 ### The question tool has limits and option previews
 
@@ -3712,6 +5113,32 @@ naming the program and the full path of the `bin` folder copy that would work.
 
 **What to do:** Install ripgrep so that it is on PATH, or copy the program into Orbit's `bin` folder.
 
+### A Patch diff keeps its indentation
+
+The Patch tool used to strip the indentation that every line of a hunk shared from the diff on its approval question
+and on its result. A client that applied that diff to the file, as VS Code's Open diff does, found that it did not apply
+and warned that the file had changed. The diff is now the file's own, so it applies to the file the question names.
+
+**Affects:** VS Code users who open the diff of a Patch approval, and clients that show a Patch diff.
+
+**What to do:** Nothing. A client that wants the shared indentation removed for display trims it itself.
+
+### A slow or failed first read of the Ollama model list is tried again soon
+
+When the first read of the Ollama server's model list fails or takes longer than its 1 second limit, Orbit now asks
+again after 1 second, then after 2, 4 and so on up to the refresh interval, until the server answers. It used to wait
+for the whole interval, and it kept the failed read as a fresh answer for 30 seconds, so every location that started in
+that time, and every node of a workflow that named an Ollama model, found no Ollama models ("Provider ollama has no
+models here"). A read that fails is no longer kept, so the next location asks the server itself. Once the server has
+answered, the list is read again only at the interval, as before, and a failure then keeps the models already listed.
+A configuration change that points Orbit at another Ollama server, or changes its key, starts over: when the first read
+of the new server fails, Orbit asks it again after 1 second, then 2, 4 and so on, instead of only at the interval.
+
+**Affects:** people who run Ollama on the same machine, for example one that is still starting or busy when Orbit
+starts.
+
+**What to do:** Nothing.
+
 ## System prompt
 
 ### The base system prompt is rewritten, with a fixed list of sections
@@ -3903,7 +5330,7 @@ highest-priority of those that sets a replacement decides, and an empty string c
   added later is recorded the same way) and what session generations spend (`/btw`, warming, plugin and doctor calls),
   in the session and in its subagents. They used to count only responses, compaction and titles.
 - A response that the provider cut off before it reported usage (a stream that failed part way, a side query that
-  timed out after it was sent, a title or compaction call that failed) is counted by an estimate priced with the model's
+  timed out after it was sent, a title or summary compaction call that failed) is counted by an estimate priced with the model's
   own rates, so recovery after it (continuing the reply, retrying, the fallback model) runs under a cost limit
   instead of ending the turn as `limit.cost-unknown`. A request the provider refused before it began costs nothing.
   An attempt that reported usage and was then retried is counted too.
@@ -4087,3 +5514,364 @@ In YAML an alias names a value that an anchor wrote earlier, and Orbit's readers
 **Affects:** projects whose front matter, workflow or suite files repeat large values through YAML aliases, or nest that deep.
 
 **What to do:** Write the repeated values out, or repeat them less.
+
+## Automatic compaction follows the context window less the summary's room, and a failed one no longer fails the turn
+
+- **Where it starts.** The summary now keeps the smaller of the model's output limit, `output_token_cap` and 20,000
+  tokens free, and automatic compaction starts 13,000 tokens below the window that is left (`compaction.buffer`
+  replaces the 13,000). The summary never keeps more than half the window, and compaction never starts below half the
+  window, so a small window, a model whose output limit fills its window, or a large buffer cannot make every request
+  compact. On a 200,000-token window with a 32,000-token output limit it starts at 167,000 tokens; it used to
+  start at 180,000. A model with an unknown window never compacts automatically and is never refused locally, as before
+  (`session-context-window.test.ts`, "automatic compaction threshold"; `session-runner.test.ts`, "context accounting").
+- **A failed automatic compaction keeps the turn going.** The failure is still recorded as a `compaction.failed`
+  message, but the request is sent without it. It used to end the step with the compaction's error. Three failures in a
+  turn pause automatic compaction until the next turn, and a paused turn also skips the rebuild after a provider
+  rejects a request as too long, so the provider's error ends the step. Input steered into a running turn does not
+  restart the count.
+- **At most one automatic compaction per request.** A retry, a fallback switch or a continuation resends the same
+  request and no longer compacts a second time. A resume after the output limit is a new request and is checked again.
+- **With automatic compaction off, a request that cannot fit is refused.** When the conversation reaches 3,000 tokens
+  below the window that is left, the step fails with the new `context.limit` error, whose message names `/compact`,
+  and no request is sent. On a window under about 46,000 tokens the limit is the point where automatic compaction
+  would have started (half the window at least), so the refusal comes no earlier than that. Clients show it as they
+  show any other failed execution.
+- **New event.** `session.context.updated` reports how full the context is after each measured response, and again
+  with `stale: true` after each compaction. It is not stored.
+- **Native compaction spend.** A native compaction call that reports no usage is recorded with zero tokens, which a
+  turn limit reads as unknown spend, and one that fails or is interrupted after the provider began to answer is
+  recorded as an estimate (`session-native-compaction.test.ts`). A request the provider refused costs nothing, as
+  before. Only a summary compaction call that failed was counted before.
+
+**Affects:** people who set `compaction.buffer` or `output_token_cap`, run with `compaction.auto` off, set
+`--max-cost` or `--max-tokens` with native compaction, or read `session.execution.failed` from scripts or SDKs.
+
+**What to do:** Nothing. A buffer you set still sets how far below the window compaction starts, measured from the
+window less the summary's room instead of the whole window; lower it if compaction now starts earlier than you want.
+
+## Summary compaction writes a handoff from everything since the last checkpoint
+
+- **One prompt, no verbatim tail.** Every summary compaction, automatic or manual, now sends the same prompt: the
+  conversation since the newest checkpoint (that checkpoint's summary included, and the latest exchange too), then a
+  request to think in an `<analysis>` block and write a nine-section `<handoff>`. The earlier seven-heading template,
+  its "update" variant and the retry that asked again for a missing heading are gone, and a summary no longer keeps
+  the newest 15,000 tokens as text beside it. `compaction.keep.tokens` now shapes native compaction only. A checkpoint
+  stored with recent text keeps its wrapper and renders as before; one stored without recent text now reaches the model as the resume message below
+  (`session-compaction.test.ts`; `session-runner-message.test.ts`, "checkpoint resume message").
+- **What is stored.** The `<analysis>` block is never stored: every closed block is removed, and so is one that was cut
+  off, through to the end of the reply. The handoff block is the first one that opens outside an analysis, so an analysis that names the `<handoff>` tag is not mistaken for it. The `<handoff>` block is stored under a `Summary:` heading, and runs of blank
+  lines collapse to one. A handoff that quotes an `<analysis>` tag is stored whole, with its later sections. A summary that a `compaction` hook supplies is formatted the same way, on a native-compaction model too, and one with nothing left outside the analysis fails as "Compaction produced no summary". A reply that is only an
+  unfinished analysis fails as "Compaction produced no summary". A reply that stopped at the output limit is stored as
+  it is, where it used to fail (`session-compaction.test.ts`, "analysis never stored").
+- **The next request.** A summary checkpoint reaches the model as one user message that says the conversation
+  grew past the context window and its earlier part now lives in the summary, followed by the summary. An automatic compaction adds a line telling the
+  model to carry on with the interrupted task, through as many messages as it takes, without asking the person
+  anything; a manual one does not
+  (`session-runner-message.test.ts`).
+- **A reply with no text gets one more request.** The first request shares the main request's system prompt, tools and
+  settings; any text it returns is used, and a tool call in it is never run. When it returns no text, or fails, one
+  fallback request follows, with a one-line system prompt, no media (an image or a document becomes `[image]` or
+  `[document]`), no reasoning options from hooks, the session model without its reasoning variant (a model whose own defaults reason still reasons), only the `Read` tool and at most 20,000 output tokens. A second reply without text fails
+  as "Compaction produced no summary" (`session-compaction.test.ts`, "a reply with no text gets one fallback request").
+  The summary request asks for output sized for the room that request leaves in the window, never less than 3,000 tokens (`session-compaction.test.ts`, "sized for the room it leaves"). A reply with text and a tool call uses the text (same file, "a reply with text and a tool call").
+- **Too long to summarize.** A summary request is no longer shortened to fit before it is sent. When the fallback is
+  rejected as too long, the oldest round groups are dropped (those that cover the gap the provider reports, or a fifth
+  of them), and the request is sent again, at most three times. Then the compaction fails with "This conversation no
+  longer fits in a compaction request. Rewind a few messages, then compact again." (`session-compaction.test.ts`, "prompt-too-long").
+
+**Affects:** people who read the stored summary of a compaction, plugins and SDK callers that read
+`session.compaction.ended` or the compaction hook's summary, and anyone who relied on the text tail beside a summary.
+
+**What to do:** Nothing. A conversation that is too long to summarize in one request now asks you to rewind a few
+messages, where it used to shrink the request in steps.
+
+## `/compact` takes instructions, and a running compaction streams a count, not its reply
+
+- **Instructions.** `/compact focus on tests` in the terminal UI, Mini and ACP adds the text after the command to the
+  summary prompt, trimmed. The `session.compact` request, the generated clients and the plugin host take the same text as
+  `instructions`; blank text counts as none, and a bare `/compact` is unchanged. A line break inside the text is kept
+  on the server route and in ACP (`session-compact.test.ts` in the server, `acp/compaction.test.ts`). In the terminal UI
+  Enter at the command list still runs a bare `/compact`; Tab fills in `/compact ` so you can type the text, and a
+  project command that is also named `compact` still takes `/compact <text>` (`compact-admission.test.tsx`). Mini
+  parses the same spellings and also leaves `/compact <text>` to a project command named `compact` (a bare `/compact`
+  stays the built-in) (`prompt.shared.test.ts`, `runtime.queue.test.ts`, `footer.view.test.tsx`).
+- **One pending compaction.** A `/compact` with instructions while another compaction is waiting replaces it (the
+  waiting one is cancelled); one without instructions, or with the same instructions, joins it and keeps its
+  instructions. A compaction that is already running is not waiting, so a new request runs after it
+  (`session-compact.test.ts`).
+- **A native-compaction model.** A manual compaction with instructions on a model that compacts natively is made as a
+  summary compaction, because only a summary can follow them. A bare `/compact` there stays native
+  (`session-native-compaction.test.ts`).
+- **The streamed event.** `session.compaction.delta` now carries `characters`, the count of reply text received in the
+  current summary request (it starts again at zero for each request), instead of the text. Plugins and SDK callers that
+  read the reply while it streamed must wait for `session.compaction.ended`
+  (`session-compaction.test.ts`).
+- **What you see.** After 30 seconds a running compaction in the terminal UI adds how long it has run and an estimate of
+  the reply's tokens (the character count divided by four) to its row, and never shows the reply; on a narrow row the
+  token figure goes first, then the time (`compaction-progress.test.tsx`). Mini no longer writes the summary as it
+  streams: it writes the stored summary whole when the compaction ends (`stream-v2.transport.test.ts`).
+
+**Affects:** plugins and SDK callers that read `session.compaction.delta` text, and Mini users who watched the summary
+stream.
+
+**What to do:** Read the summary from `session.compaction.ended`.
+
+## The terminal UI warns when the context is almost full
+
+The full-screen terminal UI now draws the latest `session.context.updated` report of the session in view in the prompt's
+footer row, after the model and location, on one line. The line replaces the context bar and gives the footer shortcuts
+their place when the row cannot hold both; a very short row cuts it at its end, keeping its start and percent.
+
+- **When it shows.** Only for a report whose state is `warning` or `error` and that is not `stale`. Before any report,
+  below the warning band, after a compaction, and for a state this client does not know, the footer is as before.
+- **Words.** With automatic compaction on, a muted `N% left before auto-compaction`, also while repeated failures have
+  paused it. With it off, `Context almost full (N% left) · run /compact` in the warning or error feedback color.
+- **When it hides.** It is hidden while a revert is staged (`/undo`) and drawn again when the revert is cleared. The
+  report is forgotten when the session is deleted, another model is selected, the configuration changes, the
+  session moves to another location, a revert is
+  committed or the event stream reconnects, and the line stays hidden until the next measured response. It is hidden
+  too while a narrow footer hides its details for the interrupt hint, and drawn in shell mode as in normal mode.
+- **Plugins.** `context.data.session.context(sessionID)` returns the latest report of a loaded session, or `undefined`.
+- Mini, ACP, VS Code and SDK hosts draw nothing.
+
+**Affects:** people who use the full-screen terminal UI and run long sessions.
+
+**What to do:** Nothing. Run `/compact` when the line asks for it.
+
+## Old tool results are left out of what the model is sent
+
+The model is no longer sent every old tool result for ever. Before a request, the oldest results of the tools whose
+output is bulky and rarely needed again are replaced, in what the model receives, by one line
+(`[Earlier tool output cleared to free context space]`), keeping the newest five results.
+
+- **Which results.** Those of `Read`, `Bash` (or `PowerShell`), `Grep`, `Glob`, `WebSearch`, `WebFetch`, `Edit`, `Write`
+  and `Patch`, under the names they were recorded with as well (including `bash` and `apply_patch`, which sessions migrated from the first version keep). Notebook edits, language-server calls, MCP tools,
+  agents, task output, todo lists and skills are never cleared, nor is a result that the provider ran itself. A failed
+  call is cleared like a finished one. The call itself, with its input, stays.
+- **When, idle.** On the first request an hour or more after the newest assistant message's response ended (the
+  provider's prompt cache has expired by then; time spent waiting for its tools, such as an open permission prompt,
+  counts). This applies to every main session, whether the prompt came from the terminal UI, `orb run`, ACP or the SDK:
+  unlike the reference, which skips the time trigger outside its interactive thread, the runner has no per-prompt
+  source and one session moves between those clients.
+- **When, pressure.** Also when automatic compaction is due: the clearing runs first and the compaction only follows if
+  the context is still over its threshold. A subagent's session clears nothing, and neither do `/compact` and the
+  compaction that recovers from a provider rejection as too long.
+- **What stays.** The transcript, the stored results, exports and every client keep the full output; only the request
+  changes. Unlike the reference, which shows the results again on the next prompt, the clearing is recorded
+  (`session.context.cleared`, with message and call IDs only) and lasts for the rest of the session, after a restart and
+  in forks made after it. A revert to a point before it brings the results back.
+- **Repeat reads.** A clearing makes the session forget which files it has already shown, so reading a file again after
+  a clearing returns its text and not the "unchanged" stub that pointed at the cleared result. A file read earlier can
+  still be edited without reading it again.
+- **The footer.** The context report is `stale` after a clearing until the next response, and the terminal UI hides its
+  warning until then.
+
+Set `compaction.clear` to `false` in your own config to turn it off. An untrusted folder's `orbit.json` cannot set it, as with the
+rest of `compaction`.
+
+**Affects:** people with long sessions, and scripts that compare a request with the stored history. The model may ask
+for a file or command again that it can no longer see.
+
+**What to do:** Nothing. Set `compaction.clear` to `false` to keep every old result in the request.
+
+## The main thread is told that tool output can be cleared
+
+The baseline of a main conversation now ends its built-in part with a section on tool output, after the scratchpad and
+before the entries of the API. It holds one sentence that asks the model to note in its reply anything it will need
+again from a tool result, because the output may be cleared later. While `compaction.clear` is on (the default), a
+short notice comes first: older tool output is replaced with a short note saying it was cleared, and the output of the
+newest five calls is never cleared. The notice follows the setting the clearing itself follows, so it is there exactly
+when the session clears.
+
+- **Who gets it.** The main thread on Orbit's own prompt and an exact fork of it. A subagent, an agent with a prompt of
+  its own, a `system_prompt` or `system_prompt_file` of yours, `orb run --bare` and a vanilla instance do not, the same
+  places the memory guide goes without.
+- **When you change the setting.** Turning `compaction.clear` on or off during a session reaches the model as one
+  update at its next step; the start of the conversation is not rewritten.
+- **Sessions that started before.** They receive the section as an update at their next step.
+
+**Affects:** people who read or compare the first request of a session, and prompt-cache tooling that expects the old
+baseline.
+
+**What to do:** Nothing.
+
+## A checkpoint can keep the messages from one point on
+
+A completed compaction can now keep the messages from one point onward, word for word, beside its summary. The checkpoint
+stores one fact, `retain`: the ID of the first message it keeps. The summary covers only what came before that message.
+
+- **Nothing sets it yet.** No command, setting or automatic compaction names a message to keep from, so every checkpoint
+  Orbit writes today has no `retain` and behaves as before. The field is there for later compaction modes.
+- **`session.context`.** When a checkpoint keeps messages, the list holds them before the checkpoint, in the order they
+  were recorded: the kept messages, then the checkpoint, then everything after it. The model's request still opens with
+  the checkpoint, then the kept messages unchanged, then the newer ones. A checkpoint without `retain` is the first
+  message of the list, as before.
+- **A stored `retain` that does not fit** (a message that is not in the session, one at or after the checkpoint, an
+  instruction update or a compaction, or one from before the previous checkpoint's view) is not trusted: the history then
+  also holds what the checkpoint summarized, back to the previous view, and one warning is logged. An imported document
+  whose `retain` is not a message ID is refused, and an edited database whose `retain` is not one fails to load that
+  history like any other row that does not decode.
+- **Reminders.** The plan, todo and verification reminders for the newest prompt stand right before it, after the kept
+  messages, as they do in a history that kept nothing. Every reader gives a checkpoint the same kept span: an earlier
+  checkpoint of a native model between the kept start and the new checkpoint does not make `session.context` skip it.
+- **Forks and reverts.** A fork that includes the checkpoint keeps its kept span; a fork that stops inside the span has
+  no checkpoint. A revert to a kept message removes the checkpoint with it, and the history falls back to the one before.
+- **Asking for a message that is not there.** A compaction that names a message outside the active history fails with
+  `compaction.unavailable` ("The message to keep from is not in the active history") and stores nothing.
+- **Automatic compactions.** When a compaction started by the context filling up keeps messages and the checkpoint with
+  them would still be at or above the automatic threshold, it is replaced by a full summary that keeps nothing (the model
+  is called a second time). A compaction a person asked for is kept as asked.
+
+**Affects:** SDK callers and clients that read `session.context` or the `retain` field of a completed compaction, and
+scripts that assume the checkpoint is the first message of the list.
+
+**What to do:** Nothing. Treat a checkpoint with `retain` as the start of the model's view, not of the list.
+
+## After a compaction the model gets its files, subagents, plan and skills back
+
+Every completed compaction (automatic, after an overflow, `/compact`, a provider's own compaction, and in a subagent's
+session) now stores one more message right after the checkpoint. It is hidden from clients (it has no description) and
+the model reads it after the summary. Before, the model saw only the summary.
+
+- **Files.** The five files the session touched most recently before the compaction (read, edited, written, notebook
+  edits and patches, newest first) are read again now and shown as `Read` shows them. A folder that `Read` listed takes
+  none of the five places. A file that cannot be read is left out, and the next one is not taken in its place. An image,
+  a PDF, a file cut short by `Read`'s page limit or one over 5,000 tokens is named in one line instead, with a pointer
+  to `Read`. A file that a read in the part of the history the checkpoint kept shows (any range, but not a read answered
+  with the unchanged stub) is not repeated, and the plan file, instruction files such as `AGENTS.md` (rule files
+  excepted) and a memory folder's `MEMORY.md` never come back this way.
+- **Who decides what is read.** No file is read in a folder that is not trusted. Each file passes, at that moment and on
+  its real path, the checks the read tool would make: a link that now leads out of the project, a dangling link, a
+  share or device path, a link that leads to a share (which is refused without being opened, so no connection is made
+  to the host it names), a deny rule (also on where a link leads, and `external_directory` for a file outside the
+  project) or a file outside the project that the session only read keeps it out. A file named only by history (after a
+  restart, a fork or an import) is read only when the read tool would read it without asking, so an ask rule such as
+  the one on `.env` keeps it out. So does an ask rule on where a file leads once it has become a link.
+- **Background subagents** that are still running, or whose result has not arrived, get a note each: still running (do
+  not start another), finished, failed (with the error) or stopped.
+- **The plan file** of the session comes back with its path and content when it has any, read only from its own place
+  in `~/.orbit/plan`. A session whose ID is not of the plain shape (an imported one, for example) gets no plan here.
+- **Skills** the session used, through the `Skill` tool, `/skill` or a prompt, before any earlier compaction included,
+  come back newest first, each cut to its first 5,000 tokens with a note on how to load the rest.
+- **Room.** Files take at most 50,000 tokens and skills 25,000, and both take only what the room below the automatic
+  compaction threshold allows after the checkpoint and after the subagent notes and the plan, which are not limited. A
+  file or skill that does not fit is left out, and a smaller one after it can still fit. With no room left, files and
+  skills are left out. The limits count each file and skill, but not the skills' heading or the lines that join the
+  parts, so the message can pass the room by a little. Right after the compaction, while nothing but this message
+  follows the checkpoint, it does not start another compaction; the subagent notes and the plan are not limited, so a
+  large plan can still bring a later step over the threshold.
+- **The todo and task lists survive a compaction.** The message carries them (in its metadata, not its text), so the
+  periodic todo reminder after the checkpoint lists them again, until the model writes a new list.
+- **A restored file counts as read.** The model can edit a file it was shown here without reading it again, and an
+  identical whole `Read` of it answers that the file is unchanged. A file only named in a one-line note, or left out,
+  still needs a read before an edit.
+- **Failures.** A problem while building this message logs one warning and leaves the compaction completed. A restarted,
+  forked, or exported and imported session keeps the message it has and does not build a second one.
+
+**Affects:** everyone whose sessions compact; SDK callers and clients that read `session.context` see one more hidden
+`synthetic` message after a completed checkpoint, with `metadata.rehydration`.
+
+**What to do:** Nothing. To keep a file out of this re-read, deny `Read` on it.
+
+## The wording added in this release was written again, and some labels and reason names changed
+
+The texts this release added were rewritten in Orbit's own sentences. These rules of the wording they replace are
+among those the tests named here pin: the handoff describes the work in progress, keeps all feedback and every important
+concept that came up, and follows compaction instructions from your own or the project's instruction files or from your
+messages, beside its own sections (`session-compaction.test.ts`); the line after an automatic compaction bans questions
+for the whole continuation (`session-runner-message.test.ts`); the memory guide leaves out how any bug was fixed, gives
+what is seen now precedence over a note, saves on request at once within its left-out list, removes on request only
+what is to be forgotten (deleting a file only when nothing else is left in it) and takes it out of `MEMORY.md` too,
+wants a short index and bans secrets from team memory whoever asks (`memory-instructions.test.ts`,
+`memory-team-instructions.test.ts`); the note on an old memory file has what it says checked against the current code
+before it is relied on (`memory-store.test.ts`). One rule is
+narrower on purpose: when you ask to keep something from the left-out list, the guide has the model ask you only for
+what was unexpected in it, where it used to accept what was surprising or worth keeping. The screens show the same
+figures under new wording and names, and the usage line of `/cost` has a new format.
+
+- **Model-facing text.** The compaction prompt and its closing line (the nine handoff sections are now Goal, Technical
+  ground, Code touched, Errors and corrections, Reasoning so far, The person's messages, Still to do, Where things stand
+  and What comes next; the `<analysis>` and `<handoff>` blocks and the `Compaction instructions` section name are kept),
+  the line after a summary, the away-summary request, the note about a file changed outside the conversation, the notes
+  for skills and running subagents after a compaction, the batch-label and next-message prompts, the memory guide (its
+  headings, and the `Reason:` and `Applies when:` lines it asks for in a feedback or project memory), the note on an old
+  memory file, the refusal of a secret in team memory, the note on an edit the person revised, the shell tool's timeout
+  sentence, the notice when a background command's output passes its size limit, the saved-output wrapper, the line
+  for a tool that returned nothing (`(<tool> ran and gave nothing back)`), and the line of an agent's memory block
+  with no index entries. The wrapper no longer says that all of a result was saved, because a shell output over 64 MB
+  is cut first, and calls its head the opening of up to 2,000 characters. The compaction failure for a conversation too
+  long to summarize now reads "This conversation no longer fits in a compaction request. Rewind a few messages, then
+  compact again." (`session-compaction.test.ts`, "prompt-too-long").
+- **Suggestion and label reasons (API).** `POST …/assist/suggestion` answers with new reason names. The filters: `empty`
+  is now `no_text`, `done` `just_done`, `meta_text` `self_reference`, `meta_wrapped` `bracketed`, `error_message`
+  `error_text`, `prefixed_label` `labelled`, `too_few_words` `one_word`, `too_many_words` `over_twelve_words`, `too_long`
+  `too_many_characters`, `multiple_sentences` `several_sentences`, `has_formatting` `markup`, `evaluative` `verdict` and
+  `assistant_voice` `assistant_phrasing`. The session states: `early_conversation` is now `too_early`,
+  `last_response_error` `reply_failed`, `cache_cold` `cache_expired`, `pending_permission` `awaiting_approval`,
+  `elicitation_active` `awaiting_form`, `plan_mode` `planning` and `aborted` `cancelled` (`subagent`, `busy` and
+  `unavailable` stay). `POST …/assist/label` answers `no_text` where it answered `empty`, and `interrupted` where it
+  answered `aborted` (`packages/server/test/session-assist.test.ts`).
+- **`/context`.** Each renamed text, old to new:
+  - Title of the report, of the dialog and of its entry in the command palette: `Context usage` → `Context window`. The
+    report's total: `**Tokens:**` → `**In use:**`, whose figures now read `50,000 of 200,000 (25%)` where they
+    read `50,000 / 200,000 (25%)`.
+  - Categories, in the report and, where it draws them, the dialog: `System prompt` → `Base prompt`, `System tools` → `Tools outside MCP`,
+    `MCP tools` → `MCP tool schemas`, `MCP tools (deferred)` → `MCP tool schemas (on demand)`,
+    `System tools (deferred)` → `Tools outside MCP (on demand)`, `Custom agents` → `Agent definitions`,
+    `Instruction files` → `Instructions`, `Skills` → `Skill listings`, `Messages` → `Conversation`,
+    `Autocompact buffer` → `Auto-compaction reserve`, `Compact buffer` → `Compaction headroom` and
+    `Free space` → `Room left`. The report marks a tool's token count `(deferred)` → `(on demand)`.
+  - Tables of the report: `Usage by category` → `Breakdown`, `System prompt sections` → `Base prompt parts`,
+    `Message breakdown` → `Conversation by kind`, `Top tools` → `Heaviest tools` and
+    `Top attachments` → `Heaviest added context`. The tables named after a category take its new name.
+  - Columns: in Breakdown `Category` → `Part` and `Percentage` → `Share`; in MCP tool schemas
+    `Server` → `From server`; in Base prompt parts `Section` → `Part`; in Agent definitions
+    `Scope` → `Defined in`; in Instructions `Type` → `Source` and `Path` → `File`; in Heaviest tools
+    `Call tokens` → `In calls` and `Result tokens` → `In results`; in Heaviest added context
+    `Attachment` → `What was added`.
+  - Rows of Conversation by kind: `Tool calls` → `Calls to tools`, `Tool results` → `What tools returned`,
+    `Attachments` → `Added context`, `Assistant text` → `Replies` and `User text` → `Prompts`.
+  - The dialog alone: `Estimated usage by category` → `Estimated breakdown`, with or without a known window,
+    `Loaded` → `Loaded now`, `Available` → `Loaded on demand`, `some are loaded on demand` → `some load on demand`,
+    `Suggestions` → `Ways to free room` and `saves about` → `frees about`. Its headings take the categories' new names,
+    and each suggestion's title and advice are reworded.
+
+  (`packages/cli/test/run/context-report.test.ts`, `packages/tui/test/component/dialog-context.test.tsx`,
+  `packages/tui/test/context-suggestions.test.ts`).
+- **`/cost`.** The rows of `orb run "/cost"` are renamed, old to new: `Total cost` → `Spent`,
+  `Total API duration` → `Model time`, `Total wall duration` → `Elapsed`, `Total code changes` → `Lines changed`
+  (`+12 / -3 lines` where it read `12 lines added, 3 lines removed`), `Usage by model` → `Per model` and, with no
+  model yet, `Usage` → `Tokens`. The values start further left, and a model's cost moved from the end of its line to
+  just after its name. The dialog's rows take the same names (they were `Total cost`, `API time`, `Wall time`,
+  `Code changes`, `By model` and `Usage`). In both, each model's tokens read
+  `in 1.2K · out 300 · from cache 500 · to cache 60` where they read
+  `1.2K input, 300 output, 500 cache read, 60 cache write`
+  (`packages/cli/test/run/cost-run.test.ts`, `packages/tui/test/component/dialog-cost.test.tsx`).
+- **`/memory`.** The first row reads Memory across sessions, and still turns the whole of memory on or off, reading as
+  well as saving. The others read Project instructions, Personal instructions, Browse saved memories, Browse
+  team memories and Browse memories of agent `<name>`, and a file's line reads `File:` or `In the repository:`.
+- **Rewind.** The picker asks "Roll back to just before which prompt?", or with no prompt says "This conversation has no
+  prompt to return to." The confirm step's last option is `Do nothing`, it names more than two files as "3 files, a.ts
+  among them", and its warning reads "Restores only what Orbit's edit tools changed; changes from shell commands or
+  outside Orbit stay."
+  The message dialog describes Rewind as "roll back to just before this prompt", and the `session.rewind` key as "Roll
+  back to an earlier prompt".
+
+**Affects:** scripts and tests that match on any of these texts or labels, SDK callers that read a suggestion's
+`reason`, and every session's first request after the upgrade (prompt caches are cold once).
+
+**What to do:** Update matches on the old wording and on the old reason names. Nothing else.
+
+## Building Orbit
+
+### Building and pushing Orbit needs Bun 1.4.5
+
+The repository now pins Bun 1.4.5 (`packageManager` in the root `package.json`, the `bun-types` override, `bun.lock`
+and `tools/linux-test/Dockerfile`), up from 1.4.2. Bun 1.4.2 could crash a long-lived parallel test worker on Windows
+when a finished test file's global was collected while a FinalizationRegistry cleanup was still queued
+(oven-sh/bun#44279, fixed in 1.4.3). The pre-push hook (`.husky/pre-push`) now refuses a Bun older than 1.4.5, and
+CI's `setup-bun` installs the pinned version.
+
+**Affects:** people who build Orbit or run its tests from a checkout, and anyone who pushes to the repository.
+
+**What to do:** Upgrade Bun with `bun upgrade` (or install 1.4.5), then run `bun install` again.

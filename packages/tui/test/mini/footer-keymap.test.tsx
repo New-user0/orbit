@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import { Keymap } from "../../src/context/keymap"
 import { resolve } from "../../src/config"
 import { expect, test } from "bun:test"
@@ -98,11 +98,11 @@ async function renderSubagent(interrupt: "ctrl+i" | "none") {
     )
   }
 
-  const app = await testRender(() => <Harness />, { width: 100, height: 8, kittyKeyboard: true })
+  const app = await testRenderTimed(() => <Harness />, { width: 100, height: 8, kittyKeyboard: true })
   return { app, interrupted }
 }
 
-async function openSubagent(app: Awaited<ReturnType<typeof testRender>>) {
+async function openSubagent(app: Awaited<ReturnType<typeof testRenderTimed>>) {
   await app.renderOnce()
   expect(app.renderer.currentFocusedEditor?.plainText).toBe("")
   app.mockInput.pressArrow("down")

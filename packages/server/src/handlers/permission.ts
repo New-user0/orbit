@@ -6,7 +6,7 @@ import { Session } from "@orbit/core/session"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { PermissionNotFoundError } from "@orbit/protocol/errors"
+import { InvalidRequestError, PermissionNotFoundError } from "@orbit/protocol/errors"
 import { response, sessionInfo } from "../location"
 import { missingSession } from "./session-error"
 
@@ -78,8 +78,19 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
         Effect.fn(function* (ctx) {
           const owned = yield* requireOwnedRequest(ctx.params.sessionID, ctx.params.requestID)
           yield* owned.permission
-            .reply({ requestID: ctx.params.requestID, reply: ctx.payload.decision, message: ctx.payload.message })
-            .pipe(Effect.catchTag("Permission.NotFoundError", () => missingRequest(ctx.params.requestID)))
+            .reply({
+              requestID: ctx.params.requestID,
+              reply: ctx.payload.decision,
+              message: ctx.payload.message,
+              content: ctx.payload.content,
+            })
+            .pipe(
+              Effect.catchTag("Permission.NotFoundError", () => missingRequest(ctx.params.requestID)),
+              Effect.catchTag(
+                "Permission.RevisionError",
+                (error) => new InvalidRequestError({ message: error.reason, field: "content" }),
+              ),
+            )
           return HttpApiSchema.NoContent.make()
         }),
       )

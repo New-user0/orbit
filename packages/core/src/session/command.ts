@@ -30,6 +30,8 @@ export const execute = Effect.fn("SessionCommand.execute")(function* (input: {
           files: input.files,
           agents: input.agents,
           skills: input.skills,
+          // What the person ran, recorded on the prompt the command admits so a client can show it as typed.
+          command: { name: input.command, arguments: input.text },
         },
         delivery: input.delivery ?? "steer",
       },

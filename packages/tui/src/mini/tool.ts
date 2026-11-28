@@ -26,6 +26,7 @@ import {
   toolDisplayContent,
   toolDisplayMetadata,
   webSearchProviderLabel,
+  writtenFile,
 } from "../util/tool-display"
 import { formatPath } from "../util/path-format"
 import { isRecord } from "../util/record"
@@ -530,18 +531,24 @@ function patchTitle(file: PatchFile, directory?: string): string {
   return `# Patched ${toolPath(file.file, { directory })}`
 }
 
+// Only a completed Write is drawn here, and from the diff it recorded rather than the model's content: an approval answered
+// with the person's own version writes that version (class 8). A call that recorded no diff draws no snapshot.
 function snapWrite(p: ToolProps): ToolSnapshot | undefined {
-  const file = p.input.path || ""
-  const content = p.input.content || ""
-  if (!file && !content) {
+  const written = writtenFile(p.metadata)
+  if (!written) {
     return undefined
+  }
+
+  const title = `# Wrote ${displayPath(p, written.file)}`
+  if (written.text === undefined) {
+    return { kind: "diff", items: [{ title, diff: written.patch, file: written.file }] }
   }
 
   return {
     kind: "code",
-    title: `# Wrote ${displayPath(p, file)}`,
-    content,
-    file,
+    title,
+    content: written.text,
+    file: written.file,
   }
 }
 

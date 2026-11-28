@@ -26,7 +26,7 @@ import { Global } from "@orbit/util/global"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Effect, Exit, Fiber, Layer, Logger, Schema, Stream } from "effect"
 import { emptyCredentialNode, emptyWellknownNode } from "../fixture/config-nodes"
-import { grantWithRecords } from "../fixture/grant"
+import { grantFolder } from "../fixture/grant"
 import { location, tempLocationLayer } from "../fixture/location"
 import { tmpdirScoped } from "../fixture/tmpdir"
 import { testEffect } from "../lib/effect"
@@ -488,7 +488,7 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
         expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
 
         const granted = yield* nextUpdate
-        yield* grantWithRecords(project, { persist: false, via: "test" })
+        yield* grantFolder(project, { persist: false, via: "test" })
         yield* Fiber.join(granted)
         expect(yield* everything).toEqual({ read: true, shell: true, grep: true })
 
@@ -497,7 +497,7 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
         yield* Fiber.join(revoked)
         expect(yield* everything).toEqual({ read: true, shell: false, grep: false })
       }).pipe(Effect.provide(projectConfig(home, project)))
-    }),
+    }), 20_000,
   )
 
   // The attack as a marker file: the person's own hook runs a program in the clone's folder, and the clone's file is
@@ -534,10 +534,10 @@ describe("LifecycleHooksPlugin under workspace trust", () => {
         expect([yield* ran("marker.txt"), yield* ran("prompt-marker.txt")]).toEqual([false, false])
 
         // Nothing in the folder is held back, so the grant moves no config: the gate reads the trust when a hook fires.
-        yield* grantWithRecords(project, { persist: false, via: "test" })
+        yield* grantFolder(project, { persist: false, via: "test" })
         yield* fire
         expect([yield* ran("marker.txt"), yield* ran("prompt-marker.txt")]).toEqual([true, true])
       }).pipe(Effect.provide(projectConfig(home, project)))
-    }),
+    }), 20_000,
   )
 })

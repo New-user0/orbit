@@ -1,6 +1,7 @@
 import { EOL } from "node:os"
 import path from "node:path"
-import { readFile, rename, writeFile } from "node:fs/promises"
+import { readFile, writeFile } from "node:fs/promises"
+import { replaceFile } from "@orbit/util/replace-file"
 import { Effect } from "effect"
 import { applyEdits, modify, parse, type ParseError } from "jsonc-parser"
 import { Global } from "@orbit/util/global"
@@ -61,7 +62,7 @@ export async function removePluginConfig(configPath: string, spec: string) {
   )
   const temporary = configPath + ".tmp"
   await writeFile(temporary, updated.endsWith("\n") ? updated : updated + "\n", { mode: 0o600 })
-  await rename(temporary, configPath)
+  await replaceFile(temporary, configPath)
   return true
 }
 

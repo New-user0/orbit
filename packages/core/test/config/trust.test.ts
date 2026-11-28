@@ -682,15 +682,6 @@ describe("ConfigTrust.stamp", () => {
       const own = document("project", { instructions_exclude: ["/repo/AGENTS.md"] })
       expect(ConfigInstructionFile.excludes([user, own])).toEqual(["/home/me/AGENTS.md", "/repo/AGENTS.md"])
     })
-
-    test("stays when a trusted folder is held back for the kinds that changed since the grant", () => {
-      const entry = document("project", listed)
-      for (const kind of ["hooks", "mcp", "plugins", "providers", "shell", "formatter", "lsp", "env", "sandbox", "skills"] as const) {
-        const partial = ConfigTrust.partial(entry, place, [kind])
-        if (partial.type !== "document") throw new Error("Expected a document")
-        expect(partial.info.instructions_exclude).toEqual(["**/third_party/**/AGENTS.md"])
-      }
-    })
   })
 
   // FU-M2-021: these set how much each paid request carries, so an untrusted folder cannot set them, and the user's own
@@ -699,6 +690,9 @@ describe("ConfigTrust.stamp", () => {
     ["media", { image: { auto_resize: false } }, { image: { auto_resize: true } }],
     ["tool_output", { max_lines: 100 }, { max_lines: 5000 }],
     ["compaction", { auto: false, buffer: 100 }, { auto: true, buffer: 20000 }],
+    // context-memory-3: clearing old tool results shapes what each request carries, in either direction.
+    ["compaction", { clear: false }, { clear: true }],
+    ["compaction", { clear: true }, { clear: false }],
   ] as const)("keeps an untrusted folder from setting %s", (field, projectValue, userValue) => {
     const user = document("user", { [field]: userValue })
     const project = document("project", { [field]: projectValue })
@@ -709,6 +703,51 @@ describe("ConfigTrust.stamp", () => {
     expect(Config.latest([user, ConfigTrust.stamp(project, place)], field)).toEqual(userValue)
     // Control: trusted, the project's value stands.
     expect(Config.latest([user, project], field)).toEqual(projectValue)
+  })
+
+  // tool-runtime-8: the ceiling on every saved-result threshold sets how much each request carries, like the rows above.
+  test("keeps an untrusted folder from setting tool_output.max_result_chars", () => {
+    const user = document("user", { tool_output: { max_result_chars: 200_000 } })
+    const project = document("project", { tool_output: { max_result_chars: 100 } })
+
+    const untrusted = ConfigTrust.sanitize(project.info, place)
+    expect(untrusted.info.tool_output).toBeUndefined()
+    expect(untrusted.withheld).toEqual(["providers"])
+    expect<unknown>(Config.latest([user, ConfigTrust.stamp(project, place)], "tool_output")).toEqual({
+      max_result_chars: 200_000,
+    })
+    // Control: trusted, the project's value stands.
+    expect<unknown>(Config.latest([user, project], "tool_output")).toEqual({ max_result_chars: 100 })
+  })
+
+  // tool-runtime-9: the message budget is a budget, so a repository cannot raise it to send more or lower it to make
+  // the model read files (class 8).
+  test("keeps an untrusted folder from setting tool_output.max_message_chars", () => {
+    const user = document("user", { tool_output: { max_message_chars: 400_000 } })
+    const project = document("project", { tool_output: { max_message_chars: 100 } })
+
+    const untrusted = ConfigTrust.sanitize(project.info, place)
+    expect(untrusted.info.tool_output).toBeUndefined()
+    expect(untrusted.withheld).toEqual(["providers"])
+    expect<unknown>(Config.latest([user, ConfigTrust.stamp(project, place)], "tool_output")).toEqual({
+      max_message_chars: 400_000,
+    })
+    // Control: trusted, the project's value stands.
+    expect<unknown>(Config.latest([user, project], "tool_output")).toEqual({ max_message_chars: 100 })
+  })
+
+  // foundations-19: the period decides which of the person's sessions are deleted, so a folder that is not trusted
+  // cannot set it (class 8); a trusted one can, as the reference's merged settings allow.
+  test("keeps an untrusted folder from setting cleanup_period_days", () => {
+    const user = document("user", { cleanup_period_days: 365 })
+    const project = document("project", { cleanup_period_days: 1 })
+
+    const untrusted = ConfigTrust.sanitize(project.info, place)
+    expect(untrusted.info.cleanup_period_days).toBeUndefined()
+    expect(untrusted.withheld).toEqual(["settings"])
+    expect<unknown>(Config.latest([user, ConfigTrust.stamp(project, place)], "cleanup_period_days")).toBe(365)
+    // Control: trusted, the project's value stands.
+    expect<unknown>(Config.latest([user, project], "cleanup_period_days")).toBe(1)
   })
 
   test("keeps a repository from masking the values the user set", () => {

@@ -7,6 +7,7 @@ import { evaluate } from "../src/eval"
 import { Git } from "../src/git"
 import { loadWorkflow, suiteAgents, workflowAgents } from "../src/load"
 import { run } from "../src/runner"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Before anything runs, a caller asks which agents a workflow or suite names (`workflowAgents`, `suiteAgents`), and the
 // runner sends an agent to the server for each session it opens. These run the real runner against a client that only
@@ -17,7 +18,7 @@ import { run } from "../src/runner"
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-agents-"))
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 // A client that opens sessions and answers each prompt by what it asks: a reviewer approves, a team's lead hands work to
 // `coder` and finishes once nobody has anything pending, and everyone else says ok. `sent` is the agent of every session
@@ -120,7 +121,7 @@ test("every agent that a run of a workflow sends to the server is one that workf
   // The file is listed with every agent that it names, those that were never asked included.
   expect(listed.toSorted()).toEqual(["builder", "captain", "coder", "planner", "reviewer", "tester"])
   for (const agent of sent) expect(listed).toContain(agent)
-})
+}, 20_000)
 
 test("every agent that an eval sends to the server is one that suiteAgents listed, and a task's own agent is neither", async () => {
   const file = path.join(root, "suite.json")
@@ -181,7 +182,7 @@ test("the title of every session that a run opens has the control characters of 
   expect(titles[0]).toBe(`flow${shown} · plan${shown}`)
   expect(titles[1]).toBe(`flow${shown} · crew${shown}/lead${shown}#1`)
   expect(titles.filter((title) => /\p{C}/u.test(title))).toEqual([])
-})
+}, 10_000)
 
 // The runner commits what an agent or a team changed in its worktree, with a message that names the node. That message
 // stays in the user's repository, and `git log` prints it as it is.

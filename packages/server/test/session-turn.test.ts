@@ -42,6 +42,7 @@ it.live("takes turn options on a prompt and returns them, with the delivery, on 
         database: { path: ":memory:" },
         fs: { filewatcher: false },
         models: { fetch: false },
+        trust: { implicit: true },
       },
       {
         overrides: [

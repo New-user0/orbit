@@ -1,0 +1,91 @@
+This reply must be plain text, and it must not call any tool.
+
+- Every tool is off for this one message: reading, searching, editing and running commands alike.
+- Nothing has to be looked up, because the full conversation is above you.
+- You get exactly one message. If it holds a tool call, the call is refused and no handoff gets saved.
+- The message is made of two blocks of text: <analysis> first, <handoff> second.
+
+The conversation above is about to leave the context, and a thorough account of it, your <handoff>, takes its place. Whoever carries on, most likely you, must be able to resume the work from the handoff alone. Copy names, design choices, code patterns and any other technical detail they will need into it exactly as they appeared: once the conversation is gone, the handoff is the only place they survive. Above all, it should show two things: what the person asked for in so many words, and the work you have done up to now.
+
+Use the <analysis> block as scratch space before the handoff, so that nothing slips through. In it:
+
+1. Walk the whole conversation in order, and at every stage write down:
+   - the person's request and the intent behind it
+   - the approach you took
+   - the decisions made, and each concept that played a part
+   - specifics such as file names, function signatures and edits, with whole code wherever it counts
+   - each error, and what fixed it
+   - everything the person said about your work. Where they redirected you matters most: without it, the next stage repeats what they rejected
+2. Read your notes back against the conversation, correct what is wrong and fill in what is missing.
+
+The <handoff> block holds these nine sections, in this order:
+
+1. Goal: every explicit request the person made and what they are trying to achieve, in full.
+2. Technical ground: each concept or technology of weight that the conversation touched on, such as a language, a library or a framework, including any that was only discussed.
+3. Code touched: each file or piece of code that was looked at, created or changed, with why it matters and what happened to it. Lean towards what happened last, and copy in full the code a successor would need.
+4. Errors and corrections: each failure you met and the fix that ended it. Add all that the person said about either, whether they confirmed it, qualified it or objected. Their redirections need the most care: a correction that drops out of the handoff gets made a second time.
+5. Reasoning so far: which problems and questions are settled and which you were still chasing, so that a successor neither works the first kind out again nor forgets the second.
+6. The person's messages: every message the person wrote, leaving out tool results. Read in order, they show how the goals and the feedback shifted.
+7. Still to do: the tasks the person explicitly asked for that remain unfinished.
+8. Where things stand: a successor turns here first to find their place, so tell them exactly what you were in the middle of when the handoff was asked for and how far it had got. Take that from the closing messages, the person's as well as yours. It can be an edit, and just as well an investigation, a test run, a design discussion or a question the person has yet to answer. Where files or code are part of it, give each path and quote the lines that count.
+9. What comes next: at most a single step, which must rest directly on two things, the person's most recent explicit request and the state that section 8 reports. Give the step with a verbatim quote of the latest exchange that pins down the task and the point it reached. When nothing of section 8 is left to do, the step may only be one the person has clearly asked for; without such a request this section stays empty. Never bring back a side request, or an older one already finished, until the person has agreed to it.
+
+Lay your reply out like this sample:
+
+<example>
+<analysis>
+[Notes from your walk through the conversation, checked against it]
+</analysis>
+
+<handoff>
+1. Goal:
+   [Each request in full, and the aim behind it]
+
+2. Technical ground:
+   - [One concept or technology to a line]
+   - [...]
+
+3. Code touched:
+   - [Path, or the piece of code]
+      - [Its part in the work]
+      - [Whether you only looked at it, created it or edited it, and how it differs now]
+      - [The code a successor needs, uncut]
+   - [...]
+
+4. Errors and corrections:
+   - [What went wrong]:
+     - [What put it right]
+     - [Any reaction of the person, favourable or not]
+   - [...]
+
+5. Reasoning so far:
+   [What is settled, and what you were still finding out]
+
+6. The person's messages:
+   - [The person's own words, one entry for each time they wrote]
+   - [...]
+
+7. Still to do:
+   - [Asked for and still unfinished]
+   - [...]
+
+8. Where things stand:
+   [What you were in the middle of and how far it had got, with any paths and code it involves]
+
+9. What comes next:
+   [One step with its quote, or nothing]
+</handoff>
+</example>
+
+Directions for this summary may already be in the context above, usually under a heading of their own like the two below: in an instruction file, whether the person's own or a project's, in a message from the person, or elsewhere. When the context holds such directions, write the handoff so that it honours them alongside the sections listed earlier.
+<example>
+## Compaction instructions
+Record which test suites passed and the commands that ran them.
+</example>
+
+<example>
+# Compaction instructions
+Spend the detail on the API redesign; the README edits need one line.
+</example>
+
+With all of that in mind, turn the whole conversation above into a handoff laid out as the sample shows, accurate and complete.

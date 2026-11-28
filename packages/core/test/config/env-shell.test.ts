@@ -24,11 +24,10 @@ const configLayer = Layer.succeed(
   Config.Service,
   Config.Service.of({
     entries: () => Effect.sync(() => entries),
+    rejected: () => Effect.succeed([]),
     compatEnabled: () => Effect.succeed(Config.defaultCompat.enabled),
     compat: () => Effect.succeed(Config.defaultCompat),
     changes: () => Stream.never,
-    fingerprints: () => Effect.succeed([]),
-    pluginsChanged: () => Effect.succeed(false),
     notify: () => Effect.void,
   }),
 )

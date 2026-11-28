@@ -54,7 +54,7 @@ const Files = Schema.Array(Schema.Struct({ uri: Schema.String, name: Schema.opti
 const Delivery = Schema.optional(Schema.String)
 const PromptBody = Schema.Struct({ id: Schema.String, text: Schema.String, files: Files, delivery: Delivery })
 const CommandBody = Schema.Struct({ name: Schema.String, text: Schema.String, files: Files, delivery: Delivery })
-const CompactBody = Schema.Struct({ id: Schema.String })
+const CompactBody = Schema.Struct({ id: Schema.String, instructions: Schema.optional(Schema.String) })
 const SyntheticBody = Schema.Struct({
   text: Schema.String,
   description: Schema.optional(Schema.String),
@@ -298,6 +298,12 @@ export const textDelta = (sessionID: string, assistantMessageID: string, delta: 
 
 export const reasoningDelta = (sessionID: string, assistantMessageID: string, delta: string, ordinal = 0) =>
   ephemeralEvent("session.reasoning.delta", { sessionID, assistantMessageID, ordinal, delta })
+
+export const textEnded = (sessionID: string, assistantMessageID: string, text: string, ordinal = 0) =>
+  durableEvent("session.text.ended", { sessionID, assistantMessageID, ordinal, text })
+
+export const reasoningEnded = (sessionID: string, assistantMessageID: string, text: string, ordinal = 0) =>
+  durableEvent("session.reasoning.ended", { sessionID, assistantMessageID, ordinal, text })
 
 export const stepEnded = (
   sessionID: string,
@@ -707,6 +713,13 @@ function startServer(options: WireOptions, changed: () => void) {
             }),
             { headers: { "content-type": "text/event-stream" } },
           )
+        }),
+      },
+      // Every folder of these tests is trusted: ACP opens no session in one that is not (trust-first).
+      "/api/location/trust": {
+        GET: route((_req, query) => {
+          const directory = query["location[directory]"] ?? "/workspace"
+          return Response.json({ directory, trusted: true, persistent: true, source: "saved", withheld: [], changed: [] })
         }),
       },
       "/api/model": { GET: catalogRoute("model") },

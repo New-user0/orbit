@@ -224,6 +224,38 @@ describe("Read repeat stubs", () => {
       }),
   )
 
+  // context-memory-3: a clearing leaves old read results out of what the model is sent, so a repeat read must show the
+  // text again. The marks hold the path the read resolved, which the result does not, so every mark of the session goes;
+  // freshness stays, because the file did not change.
+  it.live("Context.Cleared forgets the repeat-read marks and keeps freshness", () =>
+    Effect.gen(function* () {
+      const { file, sessionID, bus } = yield* setup
+      const ledger = yield* FileLedger.Service
+      const location = yield* Location.Service
+      const other = (yield* (yield* Session.Service).create({
+        location: Location.Ref.make({ directory: location.directory }),
+      })).id
+      const mark = (id: Session.ID) => ledger.markRead(id, file, "1:default", "digest")
+
+      yield* ledger.recordRead(sessionID, file, { mtimeMs: 1 })
+      yield* mark(sessionID)
+      yield* mark(other)
+      expect(yield* mark(sessionID)).toBe(true)
+
+      yield* bus.publish(SessionEvent.ContextCleared, {
+        sessionID,
+        trigger: "idle",
+        tools: [{ assistantMessageID: SessionMessage.ID.make("msg_gone"), id: "call_gone" }],
+      })
+
+      expect(yield* mark(sessionID)).toBe(false)
+      // Another session's marks are its own.
+      expect(yield* mark(other)).toBe(true)
+      // Freshness stays: an edit after a clearing needs no new read.
+      yield* ledger.assertFresh(sessionID, file, "notes.txt", { mtimeMs: 1, digest: "x" })
+    }),
+  )
+
   it.live("never stubs a directory listing", () =>
     Effect.gen(function* () {
       const { sessionID, registry } = yield* setup

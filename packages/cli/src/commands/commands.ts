@@ -48,6 +48,9 @@ const PermissionParams = {
 
 // What a run that sends one message and prints the answer takes, shared by `orb run` and `orb -p`.
 const HeadlessParams = {
+  // Puts back the files that the named session's file tools changed since a prompt's work began, then exits. Left out of
+  // --help, as the reference leaves its own flag out.
+  rewindFiles: Flag.string("rewind-files").pipe(Flag.withHidden, Flag.optional),
   bare: Flag.boolean("bare").pipe(
     Flag.withDescription(
       "Run on a private server without project config or instruction files (AGENTS.md and the like), for reproducible scripts",
@@ -95,6 +98,18 @@ const HeadlessParams = {
     ),
     Flag.optional,
   ),
+  toolLabels: Flag.boolean("tool-labels").pipe(
+    Flag.withDescription(
+      'Opt-in, with --input-format stream-json: after each finished batch of tool calls, ask the side model for a short label and print it as a {"type":"tool_label","messageID","toolIDs","label"} line before the result. Each label is a model call and spends tokens',
+    ),
+    Flag.withDefault(false),
+  ),
+  promptSuggestions: Flag.boolean("prompt-suggestions").pipe(
+    Flag.withDescription(
+      'Opt-in, with --input-format stream-json: after each result, ask the session\'s model what you might type next and print it as a {"type":"prompt_suggestion","suggestion"} line. Each suggestion sends the conversation to the model and spends tokens',
+    ),
+    Flag.withDefault(false),
+  ),
 }
 
 // The flags that only `orb -p` takes, which the root command lists so that --help shows them.
@@ -102,7 +117,7 @@ const PrintParams = {
   ...HeadlessParams,
   outputFormat: Flag.choice("output-format", ["text", "json", "stream-json"]).pipe(
     Flag.withDescription(
-      'Output format with -p: "text" prints the answer; "json" prints one JSON result object; "stream-json" prints one JSON line per event, starting with an init line {type, protocol: 1, sessionID, cwd, agent, model, version} (a run that fails before its prompt is sent prints only the result line) and ending with the result line. The result object has type "result", sessionID, is_error, subtype, outcome (succeeded, failed or interrupted), reason, result, structured_output, error, steps, duration_ms, cost, tokens and rejected (requests that were rejected because nobody could approve them), and counts the steps of subagents',
+      'Output format with -p: "text" prints the answer; "json" prints one JSON result object; "stream-json" prints one JSON line per event, starting with an init line {type, protocol: 1, sessionID, cwd, agent, model, version} (a run that fails before its prompt is sent prints only the result line) and ending with the result line. The result object has type "result", sessionID, is_error, subtype, outcome (succeeded, failed or interrupted), reason, result, structured_output, error, steps, duration_ms, cost, tokens and rejected (requests that were rejected because nobody could approve them), and counts the steps of subagents. --tool-labels and --prompt-suggestions add tool_label and prompt_suggestion lines',
     ),
     Flag.optional,
   ),
@@ -445,6 +460,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       description: "Check network, TLS, provider settings and, with --probe, reachability of each provider",
       params: {
         ...ServerParams,
+        ...TrustParams,
         probe: Flag.boolean("probe").pipe(
           Flag.withDescription("Send one short request to one model per available provider"),
           Flag.withDefault(false),
@@ -513,6 +529,8 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         Spec.make("approve", {
           description: "Decide a gate a run is waiting on; then resume the run",
           params: {
+            ...ServerParams,
+            ...TrustParams,
             run: Argument.string("run").pipe(Argument.withDescription("Run ID")),
             gate: Argument.string("gate").pipe(Argument.withDescription("Gate ID")),
             reject: Flag.boolean("reject").pipe(
@@ -525,6 +543,8 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         Spec.make("cost", {
           description: "Show tokens and cost of a run by node and model",
           params: {
+            ...ServerParams,
+            ...TrustParams,
             run: Argument.string("run").pipe(Argument.withDescription("Run ID")),
             format: Flag.choice("format", ["table", "json"]).pipe(Flag.withDefault("table")),
           },
@@ -547,6 +567,8 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         Spec.make("watch", {
           description: "Show a run's nodes live until it stops",
           params: {
+            ...ServerParams,
+            ...TrustParams,
             run: Argument.string("run").pipe(
               Argument.withDescription("Run ID; the newest run when omitted"),
               Argument.optional,
@@ -556,6 +578,8 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         Spec.make("trace", {
           description: "Show a run's timeline, or export it as OpenTelemetry traces",
           params: {
+            ...ServerParams,
+            ...TrustParams,
             run: Argument.string("run").pipe(Argument.withDescription("Run ID")),
             format: Flag.choice("format", ["timeline", "otlp"]).pipe(
               Flag.withDescription("timeline (default) or OTLP JSON on stdout"),
@@ -582,12 +606,16 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         Spec.make("ls", {
           description: "List recent runs in this repository",
           params: {
+            ...ServerParams,
+            ...TrustParams,
             format: Flag.choice("format", ["table", "json"]).pipe(Flag.withDefault("table")),
           },
         }),
         Spec.make("show", {
           description: "Show the nodes and events of a run",
           params: {
+            ...ServerParams,
+            ...TrustParams,
             run: Argument.string("run").pipe(Argument.withDescription("Run ID")),
             format: Flag.choice("format", ["table", "json"]).pipe(Flag.withDefault("table")),
           },
@@ -807,6 +835,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
           description: "Import session data from a JSON file or URL",
           params: {
             ...ServerParams,
+            ...TrustParams,
             file: Argument.string("file").pipe(Argument.withDescription("JSON file or URL to import")),
             directory: Flag.string("directory").pipe(
               Flag.withDescription("Directory in which to import the session"),
@@ -873,7 +902,7 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
       },
     }),
     Spec.make("trust", {
-      description: "Trust a folder, so that the project config it holds back can run",
+      description: "Trust a folder, so that what it holds loads and work can start there",
       params: {
         ...ServerParams,
         directory: Argument.string("directory").pipe(
@@ -887,12 +916,6 @@ const Root = Spec.make(typeof ORBIT_CLI_NAME === "string" ? ORBIT_CLI_NAME : "or
         list: Flag.boolean("list").pipe(
           Flag.withDescription("List the folders that are trusted for good"),
           Flag.withDefault(false),
-        ),
-        for: Flag.string("for").pipe(
-          Flag.withDescription(
-            "Trust the folder through this location: the folder is above the project of that location and holds back config for it, which the refusal that names the command says",
-          ),
-          Flag.optional,
         ),
       },
     }),
@@ -973,6 +996,7 @@ export const RootValueFlags = {
     "max-cost",
     "max-tokens",
     "fallback-model",
+    "rewind-files",
     "file",
     "title",
     "completions",
@@ -997,6 +1021,8 @@ export const PrintBooleanFlags: Readonly<Record<string, string | undefined>> = {
   bare: undefined,
   thinking: undefined,
   "include-partial-messages": undefined,
+  "tool-labels": undefined,
+  "prompt-suggestions": undefined,
   verbose: undefined,
   "print-logs": undefined,
 }

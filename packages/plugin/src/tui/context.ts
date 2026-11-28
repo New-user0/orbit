@@ -71,6 +71,7 @@ export interface Data {
     get(sessionID: string): SessionInfo | undefined
     root(sessionID: string): string
     family(sessionID: string): string[]
+    context(sessionID: string): Extract<OrbitEvent, { type: "session.context.updated" }>["data"] | undefined
     cost(sessionID: string): number
     status(sessionID: string): "idle" | "running"
     readonly pending: {
@@ -410,8 +411,11 @@ export interface KeymapCommand {
   readonly slash?: {
     readonly name: string
     readonly aliases?: string[]
-    /** Keeps the slash command in the prompt and passes its raw input to run. */
-    readonly arguments?: true
+    /**
+     * Keeps the slash command in the prompt and passes its raw input to run. With "optional", Enter at the command
+     * list still runs the command without input, and Tab keeps the command in the prompt for its input.
+     */
+    readonly arguments?: true | "optional"
   }
   /** Promotes the command in discovery UI. */
   readonly suggested?: boolean | (() => boolean)

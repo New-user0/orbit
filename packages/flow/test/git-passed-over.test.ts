@@ -6,6 +6,8 @@ import os from "node:os"
 import path from "node:path"
 import { Git } from "../src/git"
 import { run } from "../src/runner"
+import { runProgram } from "../../core/test/fixture/run-program"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // Classes 1 and 3: `orb flow run` in a trusted folder `sub`, inside a repository `clone` that nobody trusted and whose
 // config and hooks name a program that records each run. A `.git` in `sub` either leads git into `clone` (a `gitdir:`
@@ -22,7 +24,7 @@ afterAll(async () => {
   // A row makes a folder that cannot be searched; open it again so that it can be removed.
   for (const name of await fs.readdir(root))
     await fs.chmod(path.join(root, name, "clone", "sub", ".git", "objects"), 0o755).catch(() => undefined)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 const unix = (file: string) => file.replaceAll("\\", "/")
 
@@ -52,13 +54,13 @@ async function outer() {
   const folder = path.join(root, `case-${++count}`)
   const clone = path.join(folder, "clone")
   await fs.mkdir(path.join(clone, "sub"), { recursive: true })
-  const vcs = (...args: string[]) => expect(Bun.spawnSync(["git", ...args], { cwd: clone }).exitCode).toBe(0)
-  vcs("init", "-q", "-b", "main")
-  vcs("config", "user.email", "t@t")
-  vcs("config", "user.name", "t")
+  const vcs = async (...args: string[]) => expect((await runProgram(["git", ...args], { cwd: clone })).exitCode).toBe(0)
+  await vcs("init", "-q", "-b", "main")
+  await vcs("config", "user.email", "t@t")
+  await vcs("config", "user.name", "t")
   await Bun.write(path.join(clone, "a.txt"), "one\n")
-  vcs("add", "-A")
-  vcs("commit", "-qm", "one", "--no-gpg-sign")
+  await vcs("add", "-A")
+  await vcs("commit", "-qm", "one", "--no-gpg-sign")
   const marker = path.join(folder, "ran")
   const program = path.join(folder, "program.sh")
   await Bun.write(program, `#!/bin/sh\necho ran >> "${unix(marker)}"\n`)
@@ -69,8 +71,8 @@ async function outer() {
     await Bun.write(path.join(hooks, hook), `#!/bin/sh\n"${unix(program)}"\n`)
     await fs.chmod(path.join(hooks, hook), 0o755)
   }
-  vcs("config", "core.hooksPath", unix(hooks))
-  vcs("config", "core.fsmonitor", unix(program))
+  await vcs("config", "core.hooksPath", unix(hooks))
+  await vcs("config", "core.fsmonitor", unix(program))
   return { folder, clone, sub: path.join(clone, "sub"), ran: () => existsSync(marker) }
 }
 
@@ -130,8 +132,8 @@ const passed: readonly (readonly [string, (sub: string) => Promise<void>])[] = [
 ]
 
 // What a plain git in `folder` uses as its common directory, and as its work tree.
-const plain = (folder: string, flag: string) => {
-  const child = Bun.spawnSync(["git", "rev-parse", "--path-format=absolute", flag], { cwd: folder, stderr: "ignore" })
+const plain = async (folder: string, flag: string) => {
+  const child = await runProgram(["git", "rev-parse", "--path-format=absolute", flag], { cwd: folder })
   return realpathSync.native(child.stdout.toString().trim())
 }
 
@@ -153,7 +155,7 @@ for (const [name, make] of pointers)
   test(`a trusted run in sub uses no git of the untrusted repository above, for ${name}`, async () => {
     const found = await outer()
     await make(found.sub)
-    expect(path.relative(path.join(found.clone, ".git"), plain(found.sub, "--git-common-dir")).startsWith("..")).toBe(false)
+    expect(path.relative(path.join(found.clone, ".git"), await plain(found.sub, "--git-common-dir")).startsWith("..")).toBe(false)
     const lines: string[] = []
 
     const result = await trustedRun(found.sub, { directory: found.sub, canonical: found.sub }, lines)
@@ -167,7 +169,7 @@ for (const [name, make] of passed) {
   test(`a trusted run in sub uses no git of the untrusted repository above, for ${name}`, async () => {
     const found = await outer()
     await make(found.sub)
-    expect(plain(found.sub, "--show-toplevel")).toBe(found.clone)
+    expect(await plain(found.sub, "--show-toplevel")).toBe(found.clone)
 
     const result = await trustedRun(found.sub, { directory: found.sub, canonical: found.sub })
 
@@ -193,12 +195,12 @@ test("a trusted run in the repository itself uses its git and runs its program (
 
   expect(result.status).toBe("succeeded")
   expect(found.ran()).toBe(true)
-})
+}, 15_000)
 
 test("a trusted run in a linked worktree that the repository lists uses its git, with the repository as the main checkout (control)", async () => {
   const found = await outer()
   const worktree = path.join(found.folder, "linked")
-  expect(Bun.spawnSync(["git", "-c", "core.hooksPath=", "-c", "core.fsmonitor=false", "worktree", "add", "-q", "--detach", worktree], { cwd: found.clone }).exitCode).toBe(0)
+  expect((await runProgram(["git", "-c", "core.hooksPath=", "-c", "core.fsmonitor=false", "worktree", "add", "-q", "--detach", worktree], { cwd: found.clone })).exitCode).toBe(0)
   const linked = realpathSync.native(worktree)
   expect(found.ran()).toBe(false)
 
@@ -206,4 +208,4 @@ test("a trusted run in a linked worktree that the repository lists uses its git,
 
   expect(result.status).toBe("succeeded")
   expect(found.ran()).toBe(true)
-})
+}, 15_000)

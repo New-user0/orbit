@@ -5,7 +5,9 @@ import path from "node:path"
 import { Global } from "@orbit/util/global"
 import { Effect } from "effect"
 import { ConfigOverlay } from "../src/config-overlay"
+import { runProgram } from "../../core/test/fixture/run-program"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // --settings takes a config file or the JSON itself. The value's shape decides which, never the disk (a folder can ship
 // a file named after the text a person types). A file travels by path so that the references inside it resolve beside
@@ -17,12 +19,35 @@ const typed = path.join(root, "typed")
 const opened = path.join(root, "opened")
 const overlays = path.join(Global.Path.state, "overlays")
 
+// The 8.3 short name of a folder (Windows), or undefined where the volume makes none.
+const shortName = async (target: string) => {
+  if (process.platform !== "win32") return undefined
+  const short = (
+    await runProgram(
+      [
+        "powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:SHORT_OF).ShortPath",
+      ],
+      { env: { ...process.env, SHORT_OF: target } },
+    )
+  ).stdout
+    .toString()
+    .trim()
+  return short === "" || short.toLowerCase() === target.toLowerCase() ? undefined : short
+}
+
+// Decided at load so a volume without short names reports a skip and not a pass. The project folder does not exist until
+// the e2e rows' beforeAll, so the root (which does) is probed and the rest appended.
+const rootShort = await shortName(root)
+
 beforeAll(async () => {
   await fs.mkdir(typed, { recursive: true })
   await fs.mkdir(opened, { recursive: true })
 })
 
-afterAll(() => fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }))
+afterAll(() => removeTree(root))
 
 const build = (settings: string[], extra: Partial<Parameters<typeof ConfigOverlay.build>[0]> = {}) =>
   ConfigOverlay.build({ settings, cwd: typed, ...extra })
@@ -450,58 +475,47 @@ describe("what the private server loads", () => {
     expect(list.filter((entry) => entry.scope === "flag").map((entry) => entry.info.shell)).toEqual(["flag-shell"])
   })
 
-  test("a file the person named is not held back in a folder nothing trusts, and the project's own file stays held back", async () => {
+  // One row per `orb` start, each with its own limit: three cold starts of `orb debug config` once shared one 30 s limit,
+  // which a loaded Windows runner passed (CI run 45701859003, Windows cli 5/6), as the orb -p gate's starts did
+  // (FU-M3-365). Every assertion is kept.
+  const untrusted = { ORBIT_TRUST_PROJECT: undefined }
+  test("a file the person named is not held back in a folder nothing trusts", async () => {
     const team = path.join(project, "team.json")
     await Bun.write(team, '{"shell":"team-shell","username":"team-user"}')
-    const untrusted = { ORBIT_TRUST_PROJECT: undefined }
     const named = await entries(["--settings", team], untrusted)
     const flag = named.filter((entry) => entry.scope === "flag")
     expect(flag).toHaveLength(1)
     expect(flag[0]).not.toHaveProperty("trusted")
     expect(flag[0].info.shell).toBe("team-shell")
-
-    // The folder's own orbit.json, named again, loads once, at its scope and still withheld.
-    const own = await entries(["--settings", path.join(project, "orbit.json")], untrusted)
-    const documents = own.filter((entry) => entry.path === path.join(project, "orbit.json"))
-    expect(documents).toHaveLength(1)
-    expect(documents[0]).toMatchObject({ scope: "project", trusted: false })
-    expect(documents[0].info.shell).toBeUndefined()
-    expect(scopes(own)).not.toContain("flag")
-    if (process.platform === "win32") {
-      const upper = await entries(["--settings", path.join(project, "ORBIT.JSON")], untrusted)
-      expect(scopes(upper)).not.toContain("flag")
-    }
   })
 
-  // The 8.3 short name of a folder (Windows), or undefined where the volume makes none.
-  const shortName = (target: string) => {
-    if (process.platform !== "win32") return undefined
-    const short = Bun.spawnSync(
-      [
-        "powershell.exe",
-        "-NoProfile",
-        "-Command",
-        "(New-Object -ComObject Scripting.FileSystemObject).GetFolder($env:SHORT_OF).ShortPath",
-      ],
-      { env: { ...process.env, SHORT_OF: target } },
-    )
-      .stdout.toString()
-      .trim()
-    return short === "" || short.toLowerCase() === target.toLowerCase() ? undefined : short
-  }
+  // The folder's own orbit.json, named again, is not read at all: not at its own scope, which an untrusted folder's
+  // files are not read in (trust-first), and not as a flag document, whose scope would apply none of the folder's trust.
+  test("the project's own file, named with --settings in a folder nothing trusts, is not read", async () => {
+    const own = await entries(["--settings", path.join(project, "orbit.json")], untrusted)
+    const documents = own.filter((entry) => entry.path === path.join(project, "orbit.json"))
+    expect(documents).toEqual([])
+    expect(JSON.stringify(own)).not.toContain("project-shell")
+    expect(scopes(own)).not.toContain("flag")
+  })
 
-  // Decided at load so a volume without short names reports a skip and not a pass.
-  // The project folder does not exist until beforeAll, so the root (which does) is probed and the rest appended.
-  const rootShort = shortName(root)
+  test.skipIf(process.platform !== "win32")(
+    "the project's own file, named in another case in a folder nothing trusts, is not read as a flag document (Windows)",
+    async () => {
+      const upper = await entries(["--settings", path.join(project, "ORBIT.JSON")], untrusted)
+      expect(scopes(upper)).not.toContain("flag")
+    },
+  )
+
   const projectShort = rootShort === undefined ? undefined : path.join(rootShort, "e2e", "work", "project")
   test.skipIf(projectShort === undefined)(
-    "the folder's own file, named from a folder spelled by its 8.3 short name, still loads once and withheld",
+    "the folder's own file, named from a folder spelled by its 8.3 short name, is not read as a flag document either",
     async () => {
       const short = projectShort!
       const list = await entries(["--settings", "./orbit.json"], { ORBIT_TRUST_PROJECT: undefined }, short)
       expect(list.filter((entry) => entry.scope === "flag" && entry.path !== undefined)).toEqual([])
       expect(JSON.stringify(list.filter((entry) => entry.scope === "flag"))).not.toContain("project-shell")
-      expect(list.filter((entry) => entry.scope === "project")).toMatchObject([{ trusted: false }])
+      expect(list.filter((entry) => entry.scope === "project")).toEqual([])
     },
   )
 

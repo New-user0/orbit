@@ -20,6 +20,7 @@ import { FSUtil } from "@orbit/util/fs-util"
 import { Global } from "@orbit/util/global"
 import { emptyCredentialNode, emptyWellknownNode } from "./fixture/config-nodes"
 import { location } from "./fixture/location"
+import { runProgram } from "./fixture/run-program"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
@@ -435,6 +436,60 @@ describe("ManagedSettings.read", () => {
 })
 
 const secured = process.platform !== "win32" && process.getuid?.() !== 0
+// icacls by its full path: a bare name is looked for in the working folder first on Windows (class 10).
+const icacls = (...args: string[]) =>
+  runProgram([path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe"), ...args])
+// Windows PowerShell by its full path (class 10), running `command` with `file` in its environment.
+const powershell = (command: string, file: string) =>
+  Bun.spawn(
+    [
+      path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      // A failed .NET call ends only its own statement unless errors stop the script, so without this the helper would
+      // go on to say it locked a file it never opened.
+      `$ErrorActionPreference = 'Stop'; ${command}`,
+    ],
+    { env: { ...process.env, ORBIT_HELD_FILE: file }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+  )
+// Locks the whole of `file` from a PowerShell child until the scope ends. Windows checks a lock on every read, whatever
+// the account and however the reader opened the file, so no reader gets the file's bytes while the child runs.
+const lock = (file: string) =>
+  Effect.acquireRelease(
+    Effect.promise(async () => {
+      // It waits on a timer, not on its input, so nothing but the release below ends it, and the lock with it.
+      const child = powershell(
+        "$held = [System.IO.File]::Open($env:ORBIT_HELD_FILE, 'Open', 'Read', 'ReadWrite'); $held.Lock(0, [Int64]::MaxValue); [Console]::Out.WriteLine('locked ' + $held.Name); [Console]::Out.Flush(); Start-Sleep -Seconds 300",
+        file,
+      )
+      const said = new TextDecoder().decode((await child.stdout.getReader().read()).value)
+      if (!said.startsWith("locked "))
+        throw new Error(`Could not lock ${file}: ${said}${await new Response(child.stderr).text()}`)
+      return child
+    }),
+    (child) =>
+      Effect.promise(async () => {
+        child.kill()
+        await child.exited
+      }),
+  )
+// Whether this account's backup privilege is enabled, which lets it open a file past an access list that denies it.
+// The GitHub Windows runner's account has it enabled; a developer's account does not.
+const backup = async () =>
+  (await runProgram([path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "whoami.exe"), "/priv"])).stdout
+    .toString()
+    .split(/\r?\n/)
+    .some((line) => /^SeBackupPrivilege\s.*\sEnabled$/.test(line.trim()))
+// What a plain read of `file` meets, with the call that failed: a lock fails the read, an access list or a file held
+// with no sharing fails the open.
+const attempt = (file: string) =>
+  Effect.promise(() =>
+    fs.readFile(file).then(
+      () => "read",
+      (error: NodeJS.ErrnoException) => `${error.code} ${error.syscall}`,
+    ),
+  )
 const base = { managed: { mcp: { deny: ["x"] } } }
 
 describe("ManagedSettings.read unreadable input", () => {
@@ -470,19 +525,35 @@ describe("ManagedSettings.read unreadable input", () => {
       listed: false,
     },
     {
-      name: "a file that an access list denies",
+      name: "a file this account cannot read",
       skip: process.platform !== "win32",
       setup: (directory: string) =>
         write(directory, { "managed-settings.json": base }).pipe(
+          // Locked first: the deny below would keep the helper out too.
+          Effect.andThen(lock(path.join(directory, "managed-settings.json"))),
+          // The row is about a file this account cannot read, so each step must be seen to bind before the product
+          // reads. The lock alone stops a plain read: the open succeeds and the read fails.
+          Effect.tap(() =>
+            attempt(path.join(directory, "managed-settings.json")).pipe(
+              Effect.map((outcome) => expect(outcome).toBe("EBUSY read")),
+            ),
+          ),
           Effect.andThen(
             Effect.acquireRelease(
-              Effect.sync(() =>
-                Bun.spawnSync(["icacls", path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)"]),
+              Effect.promise(() => icacls(path.join(directory, "managed-settings.json"), "/deny", "*S-1-1-0:(R)")),
+              () => Effect.promise(() => icacls(path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0")),
+            ),
+          ),
+          Effect.andThen(
+            Effect.all([attempt(path.join(directory, "managed-settings.json")), Effect.promise(backup)]).pipe(
+              Effect.map(([outcome, privileged]) =>
+                // The access list refuses the open where it binds. An account with the backup privilege opens past it
+                // and meets the lock.
+                expect({ privileged, outcome }).toEqual({
+                  privileged,
+                  outcome: privileged ? "EBUSY read" : "EPERM open",
+                }),
               ),
-              () =>
-                Effect.sync(() =>
-                  Bun.spawnSync(["icacls", path.join(directory, "managed-settings.json"), "/remove:d", "*S-1-1-0"]),
-                ),
             ),
           ),
         ),

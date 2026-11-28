@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { RGBA } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../fixture/render"
 import type { Context } from "@orbit/plugin/tui/context"
 import { SidebarContext } from "../../src/feature-plugins/sidebar/context"
 
@@ -40,7 +40,7 @@ function context(options?: { cost?: number; tokens?: number }) {
 }
 
 test("sidebar omits context before usage is available", async () => {
-  const app = await testRender(() => <SidebarContext context={context()} sessionID="session" />, {
+  const app = await testRenderTimed(() => <SidebarContext context={context()} sessionID="session" />, {
     width: 42,
     height: 8,
   })
@@ -55,7 +55,7 @@ test("sidebar omits context before usage is available", async () => {
 })
 
 test("sidebar shows available context usage", async () => {
-  const app = await testRender(() => <SidebarContext context={context({ tokens: 1234 })} sessionID="session" />, {
+  const app = await testRenderTimed(() => <SidebarContext context={context({ tokens: 1234 })} sessionID="session" />, {
     width: 42,
     height: 8,
   })

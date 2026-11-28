@@ -1,6 +1,7 @@
 import { Global } from "@orbit/util/global"
 import { ORBIT_CHANNEL, ORBIT_VERSION } from "../version"
 import { Hash } from "@orbit/util/hash"
+import { replaceFileEffect } from "@orbit/util/replace-file"
 import { Service } from "@orbit/client/effect/service"
 import { Effect, FileSystem, Option, Schema } from "effect"
 import { randomBytes } from "crypto"
@@ -138,7 +139,7 @@ const write = Effect.fn("cli.service-config.write")(function* (value: Info) {
   const temp = configFile + ".tmp"
   yield* fs.makeDirectory(path.dirname(configFile), { recursive: true })
   yield* fs.writeFileString(temp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 })
-  yield* fs.rename(temp, configFile)
+  yield* replaceFileEffect(fs, temp, configFile)
 })
 
 export const password = Effect.fn("cli.service-config.password")(function* (value?: string) {

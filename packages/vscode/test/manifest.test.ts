@@ -82,6 +82,9 @@ test("every command the extension contributes says what stands between it and wo
     "orbit.runs.watch": "starts orb flow watch in a terminal, which only reads",
     "orbit.mentionSelection":
       "starts nothing: sends a file reference to a connected terminal UI, which only inserts it into the prompt for the person to send",
+    "orbit.review.accept":
+      "answers the question through the server's reply route, which checks the text and writes it; the extension writes nothing",
+    "orbit.review.reject": "answers the question with a reject through the server's reply route; writes nothing",
   }
   const contributed: string[] = manifest.contributes.commands.map((item: { command: string }) => item.command)
 
@@ -118,4 +121,31 @@ test("a program is started in one place, and a session only by Controller.send",
   expect(send.indexOf("await this.gate()")).toBeGreaterThan(-1)
   expect(send.indexOf("await this.gate()")).toBeLessThan(send.indexOf("await this.create()"))
   expect(send.indexOf("await this.gate()")).toBeLessThan(send.indexOf("session.prompt("))
+})
+
+test("the extension writes no file but the bridge's lock", async () => {
+  const sources = new Map<string, string>()
+  for await (const file of new Bun.Glob("**/*.ts").scan({ cwd: path.join(root, "src") }))
+    sources.set(file.replaceAll("\\", "/"), await Bun.file(path.join(root, "src", file)).text())
+  const where = (pattern: RegExp) =>
+    [...sources]
+      .filter(([, text]) => pattern.test(text))
+      .map(([file]) => file)
+      .sort()
+
+  // Every Node call that writes, moves or removes a file. Only the bridge's lock file is written, and only there.
+  expect(
+    where(
+      /\b(?:fs|fsSync|promises)\s*\.\s*(?:write\w*|appendFile\w*|rename\w*|unlink\w*|rm\w*|copyFile\w*|cp\w*|truncate\w*|symlink\w*|link\w*|mkdir\w*|mkdtemp\w*|chmod\w*|utimes\w*)\s*\(/,
+    ),
+  ).toEqual(["ide-bridge.ts"])
+  expect(
+    where(
+      /import\s*\{[^}]*\b(?:write\w*|appendFile\w*|rename\w*|unlink\w*|rm\w*|copyFile\w*|cp|mkdir\w*)\b[^}]*\}\s*from\s*"(?:node:)?fs/,
+    ),
+  ).toEqual([])
+  expect(where(/\bBun\s*\.\s*write\s*\(/)).toEqual([])
+  // Nor does any file change go through VS Code: no workspace file call that writes, and no edit applied to a document.
+  expect(where(/\bworkspace\s*\.\s*fs\s*\.\s*(?:writeFile|delete|rename|copy|createDirectory)\s*\(/)).toEqual([])
+  expect(where(/\bworkspace\s*\.\s*applyEdit\s*\(|\bWorkspaceEdit\b/)).toEqual([])
 })

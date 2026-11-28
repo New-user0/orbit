@@ -1,5 +1,6 @@
 import { plain } from "@orbit/flow/plain"
 import { createMemo, createResource } from "solid-js"
+import { useClient } from "../context/client"
 import { useData } from "../context/data"
 import { useLocation } from "../context/location"
 import { useDialog } from "../ui/dialog"
@@ -8,7 +9,7 @@ import { DialogSelect } from "../ui/dialog-select"
 import { useToast } from "../ui/toast"
 
 // Orbit Flow runs of the current directory, their nodes, and decisions on gates waiting for one. The run store is a
-// local SQLite file, so this reads it directly; @orbit/flow loads only when the dialog opens.
+// local SQLite file, so this reads it directly, once the folder is trusted; @orbit/flow loads only when the dialog opens.
 //
 // The store is a file in the repository, so a clone brings its own, and the renderer writes text to the terminal as it
 // is. Everything the store says that the dialog shows goes through `plain`, which writes control and format characters
@@ -16,24 +17,35 @@ import { useToast } from "../ui/toast"
 
 const marks = { running: "…", waiting: "?", succeeded: "✓", failed: "✗" }
 
-async function open(directory: string) {
-  const { openStore } = await import("@orbit/flow")
-  return openStore(directory)
-}
-
-function useDirectory() {
+// The run store of the folder in view, or undefined while that folder is not trusted. The store is a file a clone ships,
+// so nothing reads or writes it before the person trusts the folder (the server is asked each time, and a failed answer
+// counts as no, class 7), and it is found no higher than the project's folder the server resolved, which is the folder
+// that decision covers (`Git.holder`, class 3, class 12).
+function useStore() {
   const location = useLocation()
   const data = useData()
-  return () => location.current?.directory ?? data.location.default().directory
+  const client = useClient()
+  const directory = () => location.current?.directory ?? data.location.default().directory
+  return {
+    directory,
+    open: async (folder: string) => {
+      const status = await client.api.location.trust.get({ location: { directory: folder } }).catch(() => undefined)
+      if (status?.trusted !== true) return undefined
+      const found = await client.api.location.get({ location: { directory: folder } }).catch(() => undefined)
+      const { openStore } = await import("@orbit/flow")
+      return openStore(folder, found?.project.directory ?? folder)
+    },
+  }
 }
 
 export function DialogFlowRuns() {
   const dialog = useDialog()
-  const directory = useDirectory()
-  const [runs] = createResource(directory, async (folder) => {
-    const store = await open(folder)
-    const list = store.runs(50)
-    store.close()
+  const store = useStore()
+  const [runs] = createResource(store.directory, async (folder) => {
+    const opened = await store.open(folder)
+    if (!opened) return []
+    const list = opened.runs(50)
+    opened.close()
     return list
   })
   const options = createMemo(() =>
@@ -57,11 +69,12 @@ export function DialogFlowRuns() {
 
 export function DialogFlowRun(props: { readonly run: string }) {
   const dialog = useDialog()
-  const directory = useDirectory()
-  const [nodes] = createResource(directory, async (folder) => {
-    const store = await open(folder)
-    const list = [...store.nodes(props.run).values()]
-    store.close()
+  const store = useStore()
+  const [nodes] = createResource(store.directory, async (folder) => {
+    const opened = await store.open(folder)
+    if (!opened) return []
+    const list = [...opened.nodes(props.run).values()]
+    opened.close()
     return list
   })
   const options = createMemo(() =>
@@ -101,11 +114,12 @@ export function DialogFlowRun(props: { readonly run: string }) {
 export function DialogFlowGate(props: { readonly run: string; readonly gate: string; readonly message: string }) {
   const dialog = useDialog()
   const toast = useToast()
-  const directory = useDirectory()
+  const store = useStore()
   const decide = async (approved: boolean, note?: string) => {
-    const store = await open(directory())
-    const error = store.decide(props.run, props.gate, approved, note)
-    store.close()
+    const opened = await store.open(store.directory())
+    if (!opened) return toast.show({ title: "Not decided", message: "This folder is not trusted.", variant: "error" })
+    const error = opened.decide(props.run, props.gate, approved, note)
+    opened.close()
     if (error) return toast.show({ title: "Not decided", message: plain(error), variant: "error" })
     toast.show({
       title: approved ? `Approved ${plain(props.gate)}` : `Rejected ${plain(props.gate)}`,

@@ -41,8 +41,8 @@ export const isUnresolved = (file: string) => file.startsWith(prefix)
 /**
  * The share that a link on the way to a file names, when one does: opening a path through such a link connects to the
  * share, which is a request to a host that the repository chose. The links are read one part at a time, which touches no
- * share, and the share is named as the link says. Only Windows has them. This is a leaf, so that the trust decision, the
- * fingerprints and every loader ask the same question the same way.
+ * share, and the share is named as the link says. Only Windows has them. This is a leaf, so that the trust decision and
+ * every loader ask the same question the same way.
  */
 export const of = (
   fs: Reader,

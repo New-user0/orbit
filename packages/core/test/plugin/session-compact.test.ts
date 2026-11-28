@@ -50,3 +50,29 @@ it.live("Promise plugins can admit session compaction", () =>
     )
   }),
 )
+
+it.live("Effect and Promise plugins pass compaction instructions", () =>
+  Effect.gen(function* () {
+    const plugins = yield* Plugin.Service
+    const sessions = yield* Session.Service
+    const context = yield* PluginHost.make(plugins)
+    const effectSession = yield* context.session.create({ title: "Effect plugin instructions" })
+    const promiseSession = yield* context.session.create({ title: "Promise plugin instructions" })
+
+    const admitted = yield* context.session.compact({ sessionID: effectSession.id, instructions: " focus " })
+    expect(admitted.payload).toEqual({ instructions: "focus" })
+    expect(yield* sessions.inbox(effectSession.id)).toContainEqual(admitted)
+
+    yield* PluginPromise.fromPromise({
+      id: "test.session-compact-instructions",
+      async setup(ctx) {
+        const result = await ctx.session.compact({ sessionID: promiseSession.id, instructions: " focus " })
+        expect(result.payload).toEqual({ instructions: "focus" })
+      },
+    }).effect(context)
+
+    expect(yield* sessions.inbox(promiseSession.id)).toContainEqual(
+      expect.objectContaining({ type: "compaction", payload: { instructions: "focus" } }),
+    )
+  }),
+)

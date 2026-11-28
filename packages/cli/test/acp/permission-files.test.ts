@@ -202,7 +202,7 @@ describe("keys a tool does not declare, added by the model to its own input, cha
       resources: ["https://ok.example/doc"],
       metadata: { url: "https://ok.example/doc", format: "markdown" },
     })
-    expect(result.call?.title).toBe("https://ok.example/doc")
+    expect(result.call?.title).toBe("`https://ok.example/doc`")
   })
 
   // A tool with no declared fields in the table keeps its arguments, which the prompt shows only as the raw input.

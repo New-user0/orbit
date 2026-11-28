@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // A local Ollama model without native tool calling. Orbit describes its tools in the prompt and the model answers
 // with a <tool_call> block in plain text, which must still create the file.
@@ -55,7 +56,7 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-text-tools-"))
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("a model without native tool calling creates a file through text tool calls", async () => {

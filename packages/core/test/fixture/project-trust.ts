@@ -26,6 +26,7 @@ export const trustedProject = Layer.mock(ProjectTrust.Service, {
   supplies: () => Effect.succeed(true),
   trustedSource: () => Effect.succeed(true),
   git: () => Effect.succeed(true),
+  folder: (directory) => Effect.succeed({ directory, trusted: true, persistent: true }),
 })
 
 /**

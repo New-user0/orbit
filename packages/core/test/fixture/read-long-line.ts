@@ -30,6 +30,11 @@ const outcome = await Effect.gen(function* () {
   )
 }).pipe(Effect.provide(layer), Effect.scoped, Effect.runPromise)
 
-console.log(
-  JSON.stringify({ outcome, ms: performance.now() - started, maxRssMb: process.resourceUsage().maxRSS / 1024 }),
-)
+// Linux folds the peak memory of the process that started this one into getrusage's maxRSS when the program is exec'd,
+// so a parent that once held 800 MB makes every child report 800 MB. VmHWM is the peak of this process's own image.
+const peakKb =
+  process.platform === "linux"
+    ? Number(/^VmHWM:\s+(\d+) kB$/m.exec(await Bun.file("/proc/self/status").text())?.[1])
+    : process.resourceUsage().maxRSS
+
+console.log(JSON.stringify({ outcome, ms: performance.now() - started, maxRssMb: peakKb / 1024 }))

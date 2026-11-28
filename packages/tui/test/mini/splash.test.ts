@@ -1,7 +1,7 @@
 import { mark } from "../../src/logo"
 import { expect, test } from "bun:test"
 import { RGBA, TextAttributes, type ScrollbackWriter } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import { entrySplash, entrySplashLayout, exitSplash, splashMeta } from "../../src/mini/splash"
 import { stringWidth } from "../../src/util/string-width"
 
@@ -15,7 +15,7 @@ const theme = {
 }
 
 async function renderSplash(writer: ScrollbackWriter, width: number) {
-  const app = await createTestRenderer({ width, height: 8, footerHeight: 4 })
+  const app = await createTestRendererTimed({ width, height: 8, footerHeight: 4 })
   try {
     const snapshot = writer({
       width,
@@ -147,7 +147,7 @@ test.each(["entry", "exit"])("%s commits one scrollback snapshot without reflow 
       ? entrySplash({ version: "local", detail: "~/src/wt/oc-mini-v2", theme })
       : exitSplash({ title: "Review mini layout", session_id: sessionID, theme })
   const result = await renderSplash(writer, 24)
-  const app = await createTestRenderer({
+  const app = await createTestRendererTimed({
     width: 24,
     height: 8,
     footerHeight: 4,

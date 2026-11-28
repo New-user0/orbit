@@ -1,4 +1,5 @@
 import { beforeEach, expect } from "bun:test"
+import { SessionRehydration } from "@orbit/core/session/rehydration"
 import { LLMEvent, LanguageModel, ToolDefinition, type LLMRequest } from "@orbit/ai"
 import { OpenAIChat } from "@orbit/ai/protocols"
 import { TestLLM } from "@orbit/ai/testing"
@@ -37,6 +38,7 @@ import { SessionTurn } from "@orbit/core/session/turn"
 import { SideQuery } from "@orbit/core/side-query"
 import { SkillInstructions } from "@orbit/core/skill/instructions"
 import { Tool } from "@orbit/core/tool"
+import { ToolOutput } from "@orbit/core/tool-output"
 import { Event } from "@orbit/schema/event"
 import { Money } from "@orbit/schema/money"
 import { SessionEvent as SessionEventSchema } from "@orbit/schema/session-event"
@@ -45,6 +47,7 @@ import { LayerNode } from "@orbit/util/effect/layer-node"
 import { Context, DateTime, Duration, Effect, Fiber, Layer, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { testEffect } from "./lib/effect"
+import { noMemory } from "./lib/memory"
 import { noScratchpad } from "./lib/scratchpad"
 import { noVcsSnapshot } from "./lib/vcs-snapshot"
 import { stubSnapshot } from "./lib/tool"
@@ -100,6 +103,7 @@ const catalogModels = Layer.mock(Model.Service, {
 })
 const builtins = Layer.mock(InstructionBuiltIns.Service, {
   preferences: () => Effect.succeed(Instructions.empty),
+  toolResults: () => Instructions.empty,
   load: () =>
     Effect.succeed(
       Instructions.make({
@@ -127,6 +131,7 @@ const it = testEffect(
         SessionReminders.node,
         InstructionBuiltIns.node,
         PluginHooks.node,
+        ToolOutput.node,
         llmClient,
       ]),
       [
@@ -138,7 +143,10 @@ const it = testEffect(
         SessionRunnerModel.node.replace(models),
         InstructionBuiltIns.node.replace(builtins),
         noScratchpad,
+        noMemory,
         noVcsSnapshot,
+        // No files, jobs or plan to restore here; session-rehydration.test.ts covers them.
+        SessionRehydration.node.replace(SessionRehydration.noopLayer),
         InstructionDiscovery.node.replace(
           Layer.mock(InstructionDiscovery.Service, { project: true, global: true, load: () => Effect.succeed(empty) }),
         ),
@@ -172,6 +180,7 @@ const setup = (config?: {
   readonly pinned?: boolean
   readonly pinnedMissing?: boolean
   readonly variant?: string
+  readonly model?: string
   readonly activation?: Effect.Effect<void>
 }) =>
   Effect.gen(function* () {
@@ -205,7 +214,7 @@ const setup = (config?: {
         title: "Side query",
         version: "test",
         agent: Agent.ID.make("build"),
-        model: { providerID: "test", id: "side-primary", ...(config?.variant ? { variant: config.variant } : {}) },
+        model: { providerID: "test", id: config?.model ?? "side-primary", ...(config?.variant ? { variant: config.variant } : {}) },
       })
       .run()
       .pipe(Effect.orDie)
@@ -337,6 +346,21 @@ it.effect("object() forces one tool call and decodes its input", () =>
   }),
 )
 
+// clients-ux-23 part 2: the record of a finished call names the model that answered, so /cost can itemize it.
+it.effect("a finished side query records the model that answered", () =>
+  Effect.gen(function* () {
+    const { db, sideQuery } = yield* setup()
+    const test = yield* TestLLM.Test
+    yield* test.push(answer("pear"))
+
+    const result = yield* sideQuery.text(base)
+
+    const rows = yield* db.select().from(SessionUsageTable).where(eq(SessionUsageTable.session_id, sessionID)).all().pipe(Effect.orDie)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ provider_id: "test", model_id: String(result.model.id) })
+  }),
+)
+
 it.effect("object() reports malformed input, a missing call and a call to another tool as InvalidOutputError", () =>
   Effect.gen(function* () {
     const { sideQuery } = yield* setup()
@@ -395,6 +419,8 @@ it.effect("a side query that times out after the request was sent records an est
     const rows = yield* db.select().from(SessionUsageTable).where(eq(SessionUsageTable.session_id, sessionID)).all().pipe(Effect.orDie)
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ kind: "side_query", source: base.purpose })
+    // The estimate for a call that was cut off names the model it was sent to (clients-ux-23 part 2).
+    expect(rows[0]).toMatchObject({ provider_id: "test", model_id: "side-small" })
     // The prompt is estimated and the reply is taken at the model's output limit, priced at the model's rates.
     expect(rows[0]!.tokens_input).toBeGreaterThan(0)
     expect(rows[0]!.tokens_output).toBe(32_000)
@@ -577,5 +603,43 @@ it.effect("text() reports a tool-call answer and a blank answer as InvalidOutput
       "SideQuery.InvalidOutputError",
       "SideQuery.InvalidOutputError",
     ])
+  }),
+)
+
+const loadSelected = (variant?: string, model?: string) =>
+  Effect.gen(function* () {
+    const { store } = yield* setup({ ...(variant ? { variant } : {}), ...(model ? { model } : {}) })
+    const context = yield* SessionContext.Service
+    const session = yield* store.get(sessionID)
+    if (!session) return yield* Effect.die("Missing fixture session")
+    return yield* context.load({
+      session,
+      agent: { id: Agent.ID.make("build"), info: Agent.Info.default(Agent.ID.make("build")) },
+      instructions: Instructions.empty,
+      tools: { definitions: [] } as never,
+    })
+  })
+
+it.effect("load sets the model without its reasoning variant when the session selected a variant", () =>
+  Effect.gen(function* () {
+    const loaded = yield* loadSelected("high")
+    expect(String(loaded.model.ref.variant)).toBe("high")
+    expect(String((yield* (loaded.unreasoned ?? Effect.succeed(undefined)))?.ref.variant)).toBe("none")
+  }),
+)
+
+it.effect("load leaves the unreasoned model unset when the session selected no variant", () =>
+  Effect.gen(function* () {
+    const loaded = yield* loadSelected()
+    expect(String(loaded.model.ref.variant)).toBe("default")
+    expect(yield* (loaded.unreasoned ?? Effect.succeed(undefined))).toBeUndefined()
+  }),
+)
+
+it.effect("load leaves the unreasoned model unset when the catalog does not list the session model", () =>
+  Effect.gen(function* () {
+    const loaded = yield* loadSelected("high", "side-small")
+    expect(String(loaded.model.ref.variant)).toBe("high")
+    expect(yield* (loaded.unreasoned ?? Effect.succeed(undefined))).toBeUndefined()
   }),
 )

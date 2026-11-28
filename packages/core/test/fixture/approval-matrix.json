@@ -18,6 +18,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{outside}/file.txt",
@@ -75,6 +83,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{outside}/file.txt",
@@ -132,6 +148,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{project}/src/file.txt",
@@ -189,6 +213,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{project}/src/file.txt",
@@ -246,6 +278,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "../{outsideName}/file.txt",
@@ -303,6 +343,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "../{outsideName}/file.txt",
@@ -360,6 +408,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{outside}/file.txt",
@@ -417,6 +473,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{outside}/file.txt",
@@ -456,6 +520,144 @@
     }
   },
   {
+    "id": "Edit/link inside/trusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "alias/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/alias/file.txt"
+        ],
+        "files": [
+          {
+            "file": "alias/file.txt",
+            "patch": "Index: alias/file.txt\n===================================================================\n--- alias/file.txt\n+++ alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/alias/file.txt",
+            "link": {
+              "place": "{project}/src/file.txt",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Edit/link inside/untrusted",
+    "tool": "Edit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "alias/file.txt",
+      "old_string": "alpha",
+      "new_string": "beta"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/alias/file.txt"
+        ],
+        "files": [
+          {
+            "file": "alias/file.txt",
+            "patch": "Index: alias/file.txt\n===================================================================\n--- alias/file.txt\n+++ alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/alias/file.txt",
+            "link": {
+              "place": "{project}/src/file.txt",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file.txt"
+        }
+      ]
+    }
+  },
+  {
     "id": "Edit/link/trusted",
     "tool": "Edit",
     "input": {
@@ -474,6 +676,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "linked/file.txt",
@@ -496,7 +706,11 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file.txt"
+            "place": "{outside}/file.txt",
+            "link": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -531,6 +745,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "linked/file.txt",
@@ -553,7 +775,11 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file.txt"
+            "place": "{outside}/file.txt",
+            "link": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -588,6 +814,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "src/file.txt",
@@ -645,6 +879,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "src/file.txt",
@@ -702,6 +944,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "~/tmp/{outsideName}/file.txt",
@@ -759,6 +1009,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "~/tmp/{outsideName}/file.txt",
@@ -816,6 +1074,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -858,6 +1124,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -900,6 +1174,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -942,6 +1224,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -984,6 +1274,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -1026,6 +1324,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -1068,6 +1374,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -1110,6 +1424,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -1134,6 +1456,106 @@
     }
   },
   {
+    "id": "LSP/link inside/trusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "alias/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "alias/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/alias/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "LSP/link inside/untrusted",
+    "tool": "LSP",
+    "input": {
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "action": "diagnostics",
+      "path": "alias/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "alias/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/alias/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
     "id": "LSP/link/trusted",
     "tool": "LSP",
     "input": {
@@ -1152,6 +1574,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -1194,6 +1624,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -1236,6 +1674,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -1278,6 +1724,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -1320,6 +1774,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -1362,6 +1824,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "action": "diagnostics",
@@ -1404,6 +1874,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "{outside}/file.ipynb",
@@ -1423,7 +1901,7 @@
         "files": [
           {
             "file": "{outside}/file.ipynb",
-            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
             "status": "modified",
             "additions": 17,
             "deletions": 1,
@@ -1462,6 +1940,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "{outside}/file.ipynb",
@@ -1481,7 +1967,7 @@
         "files": [
           {
             "file": "{outside}/file.ipynb",
-            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
             "status": "modified",
             "additions": 17,
             "deletions": 1,
@@ -1520,6 +2006,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "{project}/src/file.ipynb",
@@ -1578,6 +2072,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "{project}/src/file.ipynb",
@@ -1636,6 +2138,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "../{outsideName}/file.ipynb",
@@ -1655,7 +2165,7 @@
         "files": [
           {
             "file": "{outside}/file.ipynb",
-            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
             "status": "modified",
             "additions": 17,
             "deletions": 1,
@@ -1694,6 +2204,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "../{outsideName}/file.ipynb",
@@ -1713,7 +2231,7 @@
         "files": [
           {
             "file": "{outside}/file.ipynb",
-            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
             "status": "modified",
             "additions": 17,
             "deletions": 1,
@@ -1752,6 +2270,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "{outside}/file.ipynb",
@@ -1771,7 +2297,7 @@
         "files": [
           {
             "file": "{outside}/file.ipynb",
-            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
             "status": "modified",
             "additions": 17,
             "deletions": 1,
@@ -1810,6 +2336,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "{outside}/file.ipynb",
@@ -1829,7 +2363,7 @@
         "files": [
           {
             "file": "{outside}/file.ipynb",
-            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
             "status": "modified",
             "additions": 17,
             "deletions": 1,
@@ -1845,6 +2379,146 @@
       "files": [
         {
           "place": "{outside}/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/link inside/trusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "alias/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/alias/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "alias/file.ipynb",
+            "patch": "Index: alias/file.ipynb\n===================================================================\n--- alias/file.ipynb\n+++ alias/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{project}/alias/file.ipynb",
+            "link": {
+              "place": "{project}/src/file.ipynb",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file.ipynb"
+        }
+      ]
+    }
+  },
+  {
+    "id": "NotebookEdit/link inside/untrusted",
+    "tool": "NotebookEdit",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "notebook_path": "alias/file.ipynb",
+      "mode": "replace",
+      "cellId": "calc",
+      "source": "print(2)"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.ipynb"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/alias/file.ipynb"
+        ],
+        "files": [
+          {
+            "file": "alias/file.ipynb",
+            "patch": "Index: alias/file.ipynb\n===================================================================\n--- alias/file.ipynb\n+++ alias/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
+            "status": "modified",
+            "additions": 17,
+            "deletions": 1,
+            "place": "{project}/alias/file.ipynb",
+            "link": {
+              "place": "{project}/src/file.ipynb",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.ipynb"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file.ipynb"
         }
       ]
     }
@@ -1868,6 +2542,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "linked/file.ipynb",
@@ -1887,11 +2569,15 @@
         "files": [
           {
             "file": "{outside}/file.ipynb",
-            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
             "status": "modified",
             "additions": 17,
             "deletions": 1,
-            "place": "{outside}/file.ipynb"
+            "place": "{outside}/file.ipynb",
+            "link": {
+              "place": "{outside}/file.ipynb",
+              "outside": true
+            }
           }
         ]
       }
@@ -1926,6 +2612,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "linked/file.ipynb",
@@ -1945,11 +2639,15 @@
         "files": [
           {
             "file": "{outside}/file.ipynb",
-            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
             "status": "modified",
             "additions": 17,
             "deletions": 1,
-            "place": "{outside}/file.ipynb"
+            "place": "{outside}/file.ipynb",
+            "link": {
+              "place": "{outside}/file.ipynb",
+              "outside": true
+            }
           }
         ]
       }
@@ -1984,6 +2682,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "src/file.ipynb",
@@ -2042,6 +2748,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "src/file.ipynb",
@@ -2100,6 +2814,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "~/tmp/{outsideName}/file.ipynb",
@@ -2119,7 +2841,7 @@
         "files": [
           {
             "file": "{outside}/file.ipynb",
-            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
             "status": "modified",
             "additions": 17,
             "deletions": 1,
@@ -2158,6 +2880,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "notebook_path": "~/tmp/{outsideName}/file.ipynb",
@@ -2177,7 +2907,7 @@
         "files": [
           {
             "file": "{outside}/file.ipynb",
-            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n/ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n/ No newline at end of file\n",
+            "patch": "Index: {outside}/file.ipynb\n===================================================================\n--- {outside}/file.ipynb\n+++ {outside}/file.ipynb\n@@ -1,1 +1,17 @@\n-{\"cells\":[{\"cell_type\":\"code\",\"execution_count\":null,\"id\":\"calc\",\"metadata\":{},\"outputs\":[],\"source\":[\"print(1)\"]}],\"metadata\":{},\"nbformat\":4,\"nbformat_minor\":5}\n\\ No newline at end of file\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"id\": \"calc\",\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"print(2)\"\n+   ]\n+  }\n+ ],\n+ \"metadata\": {},\n+ \"nbformat\": 4,\n+ \"nbformat_minor\": 5\n+}\n\\ No newline at end of file\n",
             "status": "modified",
             "additions": 17,
             "deletions": 1,
@@ -2217,6 +2947,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: {outside}/file.txt\n+beta\n*** End Patch"
@@ -2275,6 +3013,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: {outside}/file.txt\n+beta\n*** End Patch"
@@ -2333,6 +3079,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: {project}/src/file.txt\n+beta\n*** End Patch"
@@ -2391,6 +3145,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: {project}/src/file.txt\n+beta\n*** End Patch"
@@ -2449,6 +3211,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: ../{outsideName}/file.txt\n+beta\n*** End Patch"
@@ -2507,6 +3277,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: ../{outsideName}/file.txt\n+beta\n*** End Patch"
@@ -2565,6 +3343,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: {outside}/file.txt\n+beta\n*** End Patch"
@@ -2623,6 +3409,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: {outside}/file.txt\n+beta\n*** End Patch"
@@ -2662,6 +3456,146 @@
     }
   },
   {
+    "id": "Patch (add over)/link inside/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Add File: alias/file.txt\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.txt"
+      ],
+      "metadata": {
+        "filepath": "alias/file.txt",
+        "paths": [
+          "{project}/alias/file.txt"
+        ],
+        "diff": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "alias/file.txt",
+            "patch": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/alias/file.txt",
+            "link": {
+              "place": "{project}/src/file.txt",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (add over)/link inside/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Add File: alias/file.txt\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.txt"
+      ],
+      "metadata": {
+        "filepath": "alias/file.txt",
+        "paths": [
+          "{project}/alias/file.txt"
+        ],
+        "diff": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "alias/file.txt",
+            "patch": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/alias/file.txt",
+            "link": {
+              "place": "{project}/src/file.txt",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file.txt"
+        }
+      ]
+    }
+  },
+  {
     "id": "Patch (add over)/link/trusted",
     "tool": "Patch",
     "input": {
@@ -2681,6 +3615,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: linked/file.txt\n+beta\n*** End Patch"
@@ -2703,7 +3645,11 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file.txt"
+            "place": "{outside}/file.txt",
+            "link": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -2739,6 +3685,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: linked/file.txt\n+beta\n*** End Patch"
@@ -2761,7 +3715,11 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file.txt"
+            "place": "{outside}/file.txt",
+            "link": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -2797,6 +3755,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: src/file.txt\n+beta\n*** End Patch"
@@ -2855,6 +3821,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: src/file.txt\n+beta\n*** End Patch"
@@ -2913,6 +3887,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: ~/tmp/{outsideName}/file.txt\n+beta\n*** End Patch"
@@ -2971,6 +3953,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Add File: ~/tmp/{outsideName}/file.txt\n+beta\n*** End Patch"
@@ -3029,6 +4019,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n*** Move to: {outside}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3053,8 +4051,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           },
           {
             "file": "{outside}/file-moved.txt",
@@ -3103,6 +4101,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n*** Move to: {outside}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3127,8 +4133,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           },
           {
             "file": "{outside}/file-moved.txt",
@@ -3177,6 +4183,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {project}/src/file.txt\n*** Move to: {project}/src/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3201,8 +4215,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/src/file-moved.txt",
-            "from": "{project}/src/file.txt"
+            "from": "{project}/src/file.txt",
+            "place": "{project}/src/file-moved.txt"
           },
           {
             "file": "src/file-moved.txt",
@@ -3251,6 +4265,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {project}/src/file.txt\n*** Move to: {project}/src/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3275,8 +4297,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/src/file-moved.txt",
-            "from": "{project}/src/file.txt"
+            "from": "{project}/src/file.txt",
+            "place": "{project}/src/file-moved.txt"
           },
           {
             "file": "src/file-moved.txt",
@@ -3325,6 +4347,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: ../{outsideName}/file.txt\n*** Move to: ../{outsideName}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3349,8 +4379,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           },
           {
             "file": "{outside}/file-moved.txt",
@@ -3399,6 +4429,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: ../{outsideName}/file.txt\n*** Move to: ../{outsideName}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3423,8 +4461,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           },
           {
             "file": "{outside}/file-moved.txt",
@@ -3473,6 +4511,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n*** Move to: {outside}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3497,8 +4543,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           },
           {
             "file": "{outside}/file-moved.txt",
@@ -3547,6 +4593,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n*** Move to: {outside}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3571,8 +4625,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           },
           {
             "file": "{outside}/file-moved.txt",
@@ -3602,6 +4656,194 @@
     }
   },
   {
+    "id": "Patch (move onto)/link inside/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: alias/file.txt\n*** Move to: alias/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.txt",
+        "alias/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "alias/file.txt, alias/file-moved.txt",
+        "paths": [
+          "{project}/alias/file.txt",
+          "{project}/alias/file-moved.txt"
+        ],
+        "diff": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\nIndex: {project}/alias/file-moved.txt\n===================================================================\n--- {project}/alias/file-moved.txt\n+++ {project}/alias/file-moved.txt\n@@ -1,1 +1,1 @@\n-omega\n+beta\n\n",
+        "files": [
+          {
+            "file": "alias/file-moved.txt",
+            "patch": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "from": "{project}/alias/file.txt",
+            "place": "{project}/alias/file-moved.txt",
+            "link": {
+              "place": "{project}/src/file-moved.txt",
+              "outside": false
+            },
+            "fromLink": {
+              "place": "{project}/src/file.txt",
+              "outside": false
+            }
+          },
+          {
+            "file": "alias/file-moved.txt",
+            "patch": "Index: {project}/alias/file-moved.txt\n===================================================================\n--- {project}/alias/file-moved.txt\n+++ {project}/alias/file-moved.txt\n@@ -1,1 +1,1 @@\n-omega\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/alias/file-moved.txt",
+            "link": {
+              "place": "{project}/src/file-moved.txt",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt",
+        "{project}/alias/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file-moved.txt",
+          "from": "{project}/alias/file.txt"
+        },
+        {
+          "place": "{project}/alias/file-moved.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move onto)/link inside/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: alias/file.txt\n*** Move to: alias/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.txt",
+        "alias/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "alias/file.txt, alias/file-moved.txt",
+        "paths": [
+          "{project}/alias/file.txt",
+          "{project}/alias/file-moved.txt"
+        ],
+        "diff": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\nIndex: {project}/alias/file-moved.txt\n===================================================================\n--- {project}/alias/file-moved.txt\n+++ {project}/alias/file-moved.txt\n@@ -1,1 +1,1 @@\n-omega\n+beta\n\n",
+        "files": [
+          {
+            "file": "alias/file-moved.txt",
+            "patch": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "from": "{project}/alias/file.txt",
+            "place": "{project}/alias/file-moved.txt",
+            "link": {
+              "place": "{project}/src/file-moved.txt",
+              "outside": false
+            },
+            "fromLink": {
+              "place": "{project}/src/file.txt",
+              "outside": false
+            }
+          },
+          {
+            "file": "alias/file-moved.txt",
+            "patch": "Index: {project}/alias/file-moved.txt\n===================================================================\n--- {project}/alias/file-moved.txt\n+++ {project}/alias/file-moved.txt\n@@ -1,1 +1,1 @@\n-omega\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/alias/file-moved.txt",
+            "link": {
+              "place": "{project}/src/file-moved.txt",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt",
+        "{project}/alias/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file-moved.txt",
+          "from": "{project}/alias/file.txt"
+        },
+        {
+          "place": "{project}/alias/file-moved.txt"
+        }
+      ]
+    }
+  },
+  {
     "id": "Patch (move onto)/link/trusted",
     "tool": "Patch",
     "input": {
@@ -3621,6 +4863,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: linked/file.txt\n*** Move to: linked/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3645,8 +4895,16 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
+            "from": "{outside}/file.txt",
             "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "link": {
+              "place": "{outside}/file-moved.txt",
+              "outside": true
+            },
+            "fromLink": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           },
           {
             "file": "linked/file-moved.txt",
@@ -3654,7 +4912,11 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt"
+            "place": "{outside}/file-moved.txt",
+            "link": {
+              "place": "{outside}/file-moved.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -3695,6 +4957,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: linked/file.txt\n*** Move to: linked/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3719,8 +4989,16 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
+            "from": "{outside}/file.txt",
             "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "link": {
+              "place": "{outside}/file-moved.txt",
+              "outside": true
+            },
+            "fromLink": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           },
           {
             "file": "{outside}/file-moved.txt",
@@ -3728,7 +5006,11 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt"
+            "place": "{outside}/file-moved.txt",
+            "link": {
+              "place": "{outside}/file-moved.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -3769,6 +5051,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: src/file.txt\n*** Move to: src/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3793,8 +5083,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/src/file-moved.txt",
-            "from": "{project}/src/file.txt"
+            "from": "{project}/src/file.txt",
+            "place": "{project}/src/file-moved.txt"
           },
           {
             "file": "src/file-moved.txt",
@@ -3843,6 +5133,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: src/file.txt\n*** Move to: src/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3867,8 +5165,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/src/file-moved.txt",
-            "from": "{project}/src/file.txt"
+            "from": "{project}/src/file.txt",
+            "place": "{project}/src/file-moved.txt"
           },
           {
             "file": "src/file-moved.txt",
@@ -3917,6 +5215,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: ~/tmp/{outsideName}/file.txt\n*** Move to: ~/tmp/{outsideName}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -3941,8 +5247,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           },
           {
             "file": "{outside}/file-moved.txt",
@@ -3991,6 +5297,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: ~/tmp/{outsideName}/file.txt\n*** Move to: ~/tmp/{outsideName}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4015,8 +5329,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           },
           {
             "file": "{outside}/file-moved.txt",
@@ -4065,6 +5379,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n*** Move to: {outside}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4089,8 +5411,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           }
         ]
       }
@@ -4128,6 +5450,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n*** Move to: {outside}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4152,8 +5482,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           }
         ]
       }
@@ -4191,6 +5521,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {project}/src/file.txt\n*** Move to: {project}/src/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4215,8 +5553,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/src/file-moved.txt",
-            "from": "{project}/src/file.txt"
+            "from": "{project}/src/file.txt",
+            "place": "{project}/src/file-moved.txt"
           }
         ]
       }
@@ -4254,6 +5592,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {project}/src/file.txt\n*** Move to: {project}/src/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4278,8 +5624,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/src/file-moved.txt",
-            "from": "{project}/src/file.txt"
+            "from": "{project}/src/file.txt",
+            "place": "{project}/src/file-moved.txt"
           }
         ]
       }
@@ -4317,6 +5663,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: ../{outsideName}/file.txt\n*** Move to: ../{outsideName}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4341,8 +5695,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           }
         ]
       }
@@ -4380,6 +5734,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: ../{outsideName}/file.txt\n*** Move to: ../{outsideName}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4404,8 +5766,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           }
         ]
       }
@@ -4443,6 +5805,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n*** Move to: {outside}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4467,8 +5837,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           }
         ]
       }
@@ -4506,6 +5876,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n*** Move to: {outside}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4530,8 +5908,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           }
         ]
       }
@@ -4545,6 +5923,164 @@
         {
           "place": "{outside}/file-moved.txt",
           "from": "{outside}/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/link inside/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: alias/file.txt\n*** Move to: alias/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.txt",
+        "alias/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "alias/file.txt, alias/file-moved.txt",
+        "paths": [
+          "{project}/alias/file.txt",
+          "{project}/alias/file-moved.txt"
+        ],
+        "diff": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "alias/file-moved.txt",
+            "patch": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "from": "{project}/alias/file.txt",
+            "place": "{project}/alias/file-moved.txt",
+            "link": {
+              "place": "{project}/src/file-moved.txt",
+              "outside": false
+            },
+            "fromLink": {
+              "place": "{project}/src/file.txt",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt",
+        "{project}/alias/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file-moved.txt",
+          "from": "{project}/alias/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch (move)/link inside/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: alias/file.txt\n*** Move to: alias/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.txt",
+        "alias/file-moved.txt"
+      ],
+      "metadata": {
+        "filepath": "alias/file.txt, alias/file-moved.txt",
+        "paths": [
+          "{project}/alias/file.txt",
+          "{project}/alias/file-moved.txt"
+        ],
+        "diff": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "alias/file-moved.txt",
+            "patch": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "from": "{project}/alias/file.txt",
+            "place": "{project}/alias/file-moved.txt",
+            "link": {
+              "place": "{project}/src/file-moved.txt",
+              "outside": false
+            },
+            "fromLink": {
+              "place": "{project}/src/file.txt",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt",
+        "{project}/alias/file-moved.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file-moved.txt",
+          "from": "{project}/alias/file.txt"
         }
       ]
     }
@@ -4569,6 +6105,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: linked/file.txt\n*** Move to: linked/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4593,8 +6137,16 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
+            "from": "{outside}/file.txt",
             "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "link": {
+              "place": "{outside}/file-moved.txt",
+              "outside": true
+            },
+            "fromLink": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -4632,6 +6184,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: linked/file.txt\n*** Move to: linked/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4656,8 +6216,16 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
+            "from": "{outside}/file.txt",
             "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "link": {
+              "place": "{outside}/file-moved.txt",
+              "outside": true
+            },
+            "fromLink": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -4695,6 +6263,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: src/file.txt\n*** Move to: src/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4719,8 +6295,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/src/file-moved.txt",
-            "from": "{project}/src/file.txt"
+            "from": "{project}/src/file.txt",
+            "place": "{project}/src/file-moved.txt"
           }
         ]
       }
@@ -4758,6 +6334,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: src/file.txt\n*** Move to: src/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4782,8 +6366,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{project}/src/file-moved.txt",
-            "from": "{project}/src/file.txt"
+            "from": "{project}/src/file.txt",
+            "place": "{project}/src/file-moved.txt"
           }
         ]
       }
@@ -4821,6 +6405,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: ~/tmp/{outsideName}/file.txt\n*** Move to: ~/tmp/{outsideName}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4845,8 +6437,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           }
         ]
       }
@@ -4884,6 +6476,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: ~/tmp/{outsideName}/file.txt\n*** Move to: ~/tmp/{outsideName}/file-moved.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -4908,8 +6508,8 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file-moved.txt",
-            "from": "{outside}/file.txt"
+            "from": "{outside}/file.txt",
+            "place": "{outside}/file-moved.txt"
           }
         ]
       }
@@ -4947,6 +6547,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5005,6 +6613,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5063,6 +6679,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {project}/src/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5121,6 +6745,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {project}/src/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5179,6 +6811,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: ../{outsideName}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5237,6 +6877,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: ../{outsideName}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5295,6 +6943,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5353,6 +7009,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: {outside}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5392,6 +7056,146 @@
     }
   },
   {
+    "id": "Patch/link inside/trusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: alias/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.txt"
+      ],
+      "metadata": {
+        "filepath": "alias/file.txt",
+        "paths": [
+          "{project}/alias/file.txt"
+        ],
+        "diff": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "alias/file.txt",
+            "patch": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/alias/file.txt",
+            "link": {
+              "place": "{project}/src/file.txt",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Patch/link inside/untrusted",
+    "tool": "Patch",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "file_path": "DECOY-MODEL-ADDED/file_path.txt",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "patchText": "*** Begin Patch\n*** Update File: alias/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.txt"
+      ],
+      "metadata": {
+        "filepath": "alias/file.txt",
+        "paths": [
+          "{project}/alias/file.txt"
+        ],
+        "diff": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n\n",
+        "files": [
+          {
+            "file": "alias/file.txt",
+            "patch": "Index: {project}/alias/file.txt\n===================================================================\n--- {project}/alias/file.txt\n+++ {project}/alias/file.txt\n@@ -1,1 +1,1 @@\n-alpha\n+beta\n",
+            "status": "modified",
+            "additions": 1,
+            "deletions": 1,
+            "place": "{project}/alias/file.txt",
+            "link": {
+              "place": "{project}/src/file.txt",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file.txt"
+        }
+      ]
+    }
+  },
+  {
     "id": "Patch/link/trusted",
     "tool": "Patch",
     "input": {
@@ -5411,6 +7215,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: linked/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5433,7 +7245,11 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file.txt"
+            "place": "{outside}/file.txt",
+            "link": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -5469,6 +7285,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: linked/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5491,7 +7315,11 @@
             "status": "modified",
             "additions": 1,
             "deletions": 1,
-            "place": "{outside}/file.txt"
+            "place": "{outside}/file.txt",
+            "link": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -5527,6 +7355,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: src/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5585,6 +7421,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: src/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5643,6 +7487,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: ~/tmp/{outsideName}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5701,6 +7553,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "patchText": "*** Begin Patch\n*** Update File: ~/tmp/{outsideName}/file.txt\n@@\n-alpha\n+beta\n*** End Patch"
@@ -5758,6 +7618,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{outside}/file.txt"
@@ -5799,6 +7667,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{outside}/file.txt"
@@ -5840,6 +7716,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{project}/src/file.txt"
@@ -5881,6 +7765,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{project}/src/file.txt"
@@ -5922,6 +7814,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "../{outsideName}/file.txt"
@@ -5963,6 +7863,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "../{outsideName}/file.txt"
@@ -6004,6 +7912,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{outside}/file.txt"
@@ -6045,6 +7961,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{outside}/file.txt"
@@ -6068,6 +7992,104 @@
     }
   },
   {
+    "id": "Read/link inside/trusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "alias/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "alias/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/alias/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
+    "id": "Read/link inside/untrusted",
+    "tool": "Read",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "alias/file.txt"
+    },
+    "request": {
+      "action": "Read",
+      "resources": [
+        "alias/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/alias/file.txt"
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt"
+      ],
+      "files": []
+    }
+  },
+  {
     "id": "Read/link/trusted",
     "tool": "Read",
     "input": {
@@ -6086,6 +8108,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "linked/file.txt"
@@ -6127,6 +8157,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "linked/file.txt"
@@ -6168,6 +8206,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "src/file.txt"
@@ -6209,6 +8255,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "src/file.txt"
@@ -6250,6 +8304,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "~/tmp/{outsideName}/file.txt"
@@ -6291,6 +8353,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "~/tmp/{outsideName}/file.txt"
@@ -6332,6 +8402,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{outside}/file.txt",
@@ -6388,6 +8466,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{outside}/file.txt",
@@ -6444,6 +8530,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{project}/src/file.txt",
@@ -6500,6 +8594,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{project}/src/file.txt",
@@ -6556,6 +8658,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "../{outsideName}/file.txt",
@@ -6612,6 +8722,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "../{outsideName}/file.txt",
@@ -6668,6 +8786,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{outside}/file.txt",
@@ -6724,6 +8850,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "{outside}/file.txt",
@@ -6762,6 +8896,142 @@
     }
   },
   {
+    "id": "Write/link inside/trusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "alias/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/alias/file.txt"
+        ],
+        "files": [
+          {
+            "file": "alias/file.txt",
+            "patch": "Index: alias/file.txt\n===================================================================\n--- alias/file.txt\n+++ alias/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{project}/alias/file.txt",
+            "link": {
+              "place": "{project}/src/file.txt",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file.txt"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Write/link inside/untrusted",
+    "tool": "Write",
+    "input": {
+      "path": "DECOY-MODEL-ADDED/path.txt",
+      "filePath": "DECOY-MODEL-ADDED/filePath.txt",
+      "filepath": "DECOY-MODEL-ADDED/filepath.txt",
+      "notebook_path": "DECOY-MODEL-ADDED/notebook.ipynb",
+      "cwd": "DECOY-MODEL-ADDED/cwd",
+      "workdir": "DECOY-MODEL-ADDED/workdir",
+      "paths": [
+        "DECOY-MODEL-ADDED/paths.txt"
+      ],
+      "files": [
+        {
+          "file": "DECOY-MODEL-ADDED/files.txt",
+          "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
+        }
+      ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
+      "url": "https://decoy-model-added.example/",
+      "method": "POST",
+      "file_path": "alias/file.txt",
+      "content": "written\n"
+    },
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "alias/file.txt"
+      ],
+      "metadata": {
+        "paths": [
+          "{project}/alias/file.txt"
+        ],
+        "files": [
+          {
+            "file": "alias/file.txt",
+            "patch": "Index: alias/file.txt\n===================================================================\n--- alias/file.txt\n+++ alias/file.txt\n@@ -0,0 +1,1 @@\n+written\n",
+            "status": "added",
+            "additions": 1,
+            "deletions": 0,
+            "place": "{project}/alias/file.txt",
+            "link": {
+              "place": "{project}/src/file.txt",
+              "outside": false
+            }
+          }
+        ]
+      }
+    },
+    "truth": {
+      "places": [
+        "{project}/alias/file.txt"
+      ],
+      "files": [
+        {
+          "place": "{project}/alias/file.txt"
+        }
+      ]
+    }
+  },
+  {
     "id": "Write/link/trusted",
     "tool": "Write",
     "input": {
@@ -6780,6 +9050,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "linked/file.txt",
@@ -6801,7 +9079,11 @@
             "status": "added",
             "additions": 1,
             "deletions": 0,
-            "place": "{outside}/file.txt"
+            "place": "{outside}/file.txt",
+            "link": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -6836,6 +9118,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "linked/file.txt",
@@ -6857,7 +9147,11 @@
             "status": "added",
             "additions": 1,
             "deletions": 0,
-            "place": "{outside}/file.txt"
+            "place": "{outside}/file.txt",
+            "link": {
+              "place": "{outside}/file.txt",
+              "outside": true
+            }
           }
         ]
       }
@@ -6892,6 +9186,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "src/file.txt",
@@ -6948,6 +9250,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "src/file.txt",
@@ -7004,6 +9314,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "~/tmp/{outsideName}/file.txt",
@@ -7060,6 +9378,14 @@
           "patch": "--- DECOY-MODEL-ADDED\n+++ DECOY-MODEL-ADDED\n@@ -1 +1 @@\n-a\n+b\n"
         }
       ],
+      "link": {
+        "place": "DECOY-MODEL-ADDED/link.txt",
+        "outside": false
+      },
+      "fromLink": {
+        "place": "DECOY-MODEL-ADDED/from-link.txt",
+        "outside": true
+      },
       "url": "https://decoy-model-added.example/",
       "method": "POST",
       "file_path": "~/tmp/{outsideName}/file.txt",

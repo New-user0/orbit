@@ -6,7 +6,7 @@ import {
   type NativeImage,
   type ScrollbackSurface,
 } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
+import { createTestRendererTimed } from "../fixture/render"
 import { RunScrollbackStream } from "../../src/mini/scrollback.surface"
 import { RUN_THEME_FALLBACK, RUN_THEME_MONO } from "../../src/mini/theme"
 import type { StreamCommit } from "../../src/mini/types"
@@ -36,7 +36,7 @@ afterEach(() => {
 async function setup(
   options: { width?: number; height?: number; footerHeight?: number; imagePreview?: boolean; mono?: boolean } = {},
 ) {
-  const renderer = await createTestRenderer({
+  const renderer = await createTestRendererTimed({
     width: options.width ?? 80,
     height: options.height ?? 24,
     footerHeight: options.footerHeight ?? 6,

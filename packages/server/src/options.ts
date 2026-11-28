@@ -49,6 +49,8 @@ export const ServerOptions = Schema.Struct({
       implicit: Schema.optional(Schema.Boolean),
     }),
   ),
+  // Whether the server removes idle sessions on `cleanup_period_days`. Unset means true; a bare run turns it off.
+  retention: Schema.optional(Schema.Boolean),
   windows: Schema.optional(
     Schema.Struct({
       gitbash: Schema.optional(Schema.String),

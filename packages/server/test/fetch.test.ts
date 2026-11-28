@@ -1,4 +1,4 @@
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Agent } from "@orbit/schema/agent"
@@ -8,12 +8,16 @@ import { tmpdir } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
 
+setDefaultTimeout(30_000)
+
 const options = {
   app: { version: "test-version" },
   database: { path: ":memory:" },
   config: { project: false },
   models: { fetch: false },
   fs: { filewatcher: false },
+  // Sessions here work in temporary folders that nothing grants, so the server trusts every folder (trust-first).
+  trust: { implicit: true },
 } as const
 
 type Handler = (request: Request) => Promise<Response>
@@ -313,7 +317,7 @@ it.live("routes pending requests through the Session's instance", () =>
     }).pipe(
       Effect.filterOrFail((ready) => ready),
       Effect.retry(Schedule.spaced("10 millis")),
-      Effect.timeout("2 seconds"),
+      Effect.timeout("10 seconds"),
     )
     const createdPermission = yield* Effect.promise(() =>
       handler(

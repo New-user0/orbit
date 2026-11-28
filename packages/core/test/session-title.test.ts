@@ -637,6 +637,9 @@ for (const [name, stream, records] of [
       expect(rows[0]!.tokens_input).toBeGreaterThan(0)
       expect(rows[0]!.tokens_output).toBeGreaterThan(0)
       expect(rows[0]!.cost).toBeGreaterThan(0)
+      // The record names the model that wrote the title (clients-ux-23 part 2).
+      expect(rows.map((row) => row.provider_id)).toEqual(Array(records).fill("test"))
+      expect(rows.every((row) => row.model_id === "title-model" || row.model_id === "title-small")).toBe(true)
     }),
   )
 

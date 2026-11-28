@@ -9,7 +9,9 @@ import { ProviderPlugins } from "@orbit/core/plugin/provider"
 import { Provider } from "@orbit/core/provider"
 import { Document, Event, Info } from "@orbit/schema/config"
 import { describe, expect } from "bun:test"
-import { Duration, Effect, Layer, Schema } from "effect"
+import { Clock, Duration, Effect, Layer, Schema } from "effect"
+import { HttpClient } from "effect/unstable/http"
+import { waitingClock } from "../lib/clock"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
@@ -35,6 +37,19 @@ function eventually<A>(
     yield* Effect.promise(() => Bun.sleep(1))
     return yield* eventually(effect, predicate, remaining - 1)
   })
+}
+
+// Like eventually, but bounded by the clock: Windows timers make a count of 1 ms sleeps a poor measure of time.
+function within<A>(effect: Effect.Effect<A>, predicate: (value: A) => boolean, ms: number): Effect.Effect<A, Error> {
+  const deadline = Date.now() + ms
+  const attempt: Effect.Effect<A, Error> = Effect.gen(function* () {
+    const value = yield* effect
+    if (predicate(value)) return value
+    if (Date.now() > deadline) return yield* Effect.fail(new Error(`Timed out after ${ms} ms waiting for value`))
+    yield* Effect.promise(() => Bun.sleep(20))
+    return yield* attempt
+  })
+  return attempt
 }
 
 describe("OllamaPlugin", () => {
@@ -232,6 +247,317 @@ describe("OllamaPlugin", () => {
         }),
       ({ server }) => Effect.promise(() => server.stop(true)),
     ),
+  )
+
+  // A server under load can answer /api/tags after its 1 second limit. Discovery then has no models, and until it is
+  // tried again every node and prompt that names an Ollama model fails with "has no models here" (FU-M3-385: the cli
+  // trust-doors control and the YAML `permissions:auto` row of flow.test.ts on a loaded runner).
+  const slowFirstTags = (delay: number) => {
+    const requests = { tags: 0 }
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        if (request.method === "GET") {
+          requests.tags++
+          if (requests.tags === 1) await Bun.sleep(delay)
+          return Response.json({ models: [summary("late:1b", "late-digest")] })
+        }
+        decodeShowRequest(await request.json())
+        return Response.json(show({ capabilities: ["completion", "tools"], context: 8192 }))
+      },
+    })
+    return { requests, server }
+  }
+
+  it.live(
+    "a first discovery that runs out of time is tried again soon, not after the interval",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => slowFirstTags(1_500)),
+        ({ requests, server }) =>
+          Effect.gen(function* () {
+            const modelState = yield* Model.Service
+            yield* addPlugin(server.url.origin, "1 hour")
+            const model = yield* within(
+              modelState.get(Provider.ID.make("ollama"), Model.ID.make("late:1b")),
+              (item) => item !== undefined,
+              8_000,
+            )
+            expect(model).toBeDefined()
+            expect(requests.tags).toBeGreaterThanOrEqual(2)
+          }),
+        ({ server }) => Effect.promise(() => server.stop(true)),
+      ),
+    15_000,
+  )
+
+  it.live(
+    "a discovery that ran out of time is not kept as a fresh answer for the next plugin of the same server",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => slowFirstTags(1_500)),
+        ({ requests, server }) =>
+          Effect.gen(function* () {
+            const modelState = yield* Model.Service
+            yield* addPlugin(server.url.origin, "30 seconds")
+            // A second Location of the same server starts its plugin; its first discovery asks the server again.
+            yield* addPlugin(server.url.origin, "30 seconds")
+            expect(requests.tags).toBeGreaterThanOrEqual(2)
+            expect(yield* modelState.get(Provider.ID.make("ollama"), Model.ID.make("late:1b"))).toBeDefined()
+          }),
+        ({ server }) => Effect.promise(() => server.stop(true)),
+      ),
+    15_000,
+  )
+
+  // Control: a discovery that answered in time is not asked again before its interval, so a retry after a failure
+  // never becomes polling.
+  it.live(
+    "a discovery that answered in time is not asked again before its interval",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => slowFirstTags(0)),
+        ({ requests, server }) =>
+          Effect.gen(function* () {
+            const modelState = yield* Model.Service
+            yield* addPlugin(server.url.origin, "1 hour")
+            expect(yield* modelState.get(Provider.ID.make("ollama"), Model.ID.make("late:1b"))).toBeDefined()
+            yield* Effect.promise(() => Bun.sleep(2_500))
+            expect(requests.tags).toBe(1)
+          }),
+        ({ server }) => Effect.promise(() => server.stop(true)),
+      ),
+    15_000,
+  )
+
+  // A server whose /api/tags answers come from `tags`, and plugins of it that run on a clock that moves only while the
+  // plugins and their requests wait (test/lib/clock.ts `waitingClock`). A row reads the clock's time at each request,
+  // so a slow or stalled runner can neither stretch a pause nor make a request count come out short.
+  const onWaitingClock = Effect.fn(function* (tags: (request: number) => Response) {
+    const time = yield* waitingClock
+    // A server that records the clock's time of each /api/tags request it gets.
+    const serve = Effect.fn(function* (answer: (request: number) => Response) {
+      const asked: number[] = []
+      const server = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Bun.serve({
+            port: 0,
+            fetch: async (request) => {
+              if (request.method === "GET") {
+                asked.push(time.now())
+                return answer(asked.length)
+              }
+              decodeShowRequest(await request.json())
+              return Response.json(show({ capabilities: ["completion", "tools"], context: 8192 }))
+            },
+          }),
+        ),
+        (server) => Effect.promise(() => server.stop(true)),
+      )
+      return { asked, origin: server.url.origin }
+    })
+    const served = yield* serve(tags)
+    const asked = served.asked
+    const http = yield* HttpClient.HttpClient
+    return {
+      asked,
+      // Another server on the same clock, for a row that points the plugin elsewhere.
+      serve,
+      plugin: (interval: Duration.Input) =>
+        addPlugin(served.origin, interval).pipe(
+          // A request holds the clock while it runs, so its own 1 second limit never ends it early.
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.transform(http, (response) => time.work(response)),
+          ),
+          Effect.provideService(Clock.Clock, time.clock),
+        ),
+      // The pauses between the first `requests` requests, once that many have come.
+      pauses: (requests: number) =>
+        within(
+          Effect.sync(() => asked.length),
+          (count) => count >= requests,
+          10_000,
+        ).pipe(Effect.map(() => asked.slice(1, requests).map((at, index) => at - asked[index]!))),
+    }
+  })
+  const pauses = Effect.fn(function* (interval: Duration.Input, tags: (request: number) => Response, requests: number) {
+    const served = yield* onWaitingClock(tags)
+    yield* served.plugin(interval)
+    return yield* served.pauses(requests)
+  })
+  const unavailable = () => new Response("unavailable", { status: 503 })
+
+  // The retry backs off: a server that keeps failing is asked after 1 s, then 2 s, then 4 s, not every second. The
+  // pauses after the second and third requests need a retry that failed to count as unanswered too, not only the first
+  // discovery.
+  it.live("a server that keeps failing is asked again after pauses that double", () =>
+    Effect.gen(function* () {
+      expect(yield* pauses("1 hour", unavailable, 4)).toEqual([1_000, 2_000, 4_000])
+    }),
+  )
+
+  // The doubling stops at the interval: with a 1.5 s interval a failing server is asked after 1 s, then every 1.5 s; a
+  // pause that kept doubling past it would wait 2 s and then 4 s.
+  it.live("a server that keeps failing is never asked after a pause longer than the interval", () =>
+    Effect.gen(function* () {
+      expect(yield* pauses("1500 millis", unavailable, 5)).toEqual([1_000, 1_500, 1_500, 1_500])
+    }),
+  )
+
+  // An interval shorter than the 1 s first pause is the longest pause too: the first retry already waits only the
+  // interval. A first pause of 1 s would ask after 1 s, then every 0.5 s.
+  it.live("a server that keeps failing with an interval under 1 s is asked again after the interval", () =>
+    Effect.gen(function* () {
+      expect(yield* pauses("500 millis", unavailable, 4)).toEqual([500, 500, 500])
+    }),
+  )
+
+  // A plugin that holds an inventory keeps its interval through a failure: the 1 s retry is only for a plugin that has
+  // nothing yet. Here the interval is 4 s and the server fails from its second request on; the backoff would ask 2 s
+  // after that failure, the interval asks 4 s after it.
+  it.live("a server that fails after it answered with models is asked again only after the interval", () =>
+    Effect.gen(function* () {
+      const tags = (request: number) =>
+        request > 1 ? unavailable() : Response.json({ models: [summary("kept:1b", "kept-digest")] })
+      expect(yield* pauses("4 seconds", tags, 3)).toEqual([4_000, 4_000])
+      const modelState = yield* Model.Service
+      expect(yield* modelState.get(Provider.ID.make("ollama"), Model.ID.make("kept:1b"))).toBeDefined()
+    }),
+  )
+
+  // An answer with no models is an answer too, so the plugin waits its interval after it and not the 1 s backoff of a
+  // plugin whose read failed. A backoff would find the cached answer fresh until the interval ends and ask only at the
+  // first pause past it: 7 s after the first request with a 4 s interval, where the interval asks after 4 s.
+  it.live("a server that answered with no models is asked again only after the interval", () =>
+    Effect.gen(function* () {
+      expect(yield* pauses("4 seconds", () => Response.json({ models: [] }), 3)).toEqual([4_000, 4_000])
+    }),
+  )
+
+  // An answer that came in time is kept for the interval: the next plugin of the same server takes it without asking.
+  // Both plugins run on one clock, so the row fails if the cache and the refresh loop read different clocks.
+  it.live("a discovery that answered is kept as a fresh answer for the next plugin of the same server", () =>
+    Effect.gen(function* () {
+      const served = yield* onWaitingClock(() => Response.json({ models: [summary("kept:1b", "kept-digest")] }))
+      yield* served.plugin("1 hour")
+      yield* served.plugin("1 hour")
+      expect(served.asked).toHaveLength(1)
+    }),
+  )
+
+  // A config reload that points the plugin at another server is a first read of that server, so its retry pauses start
+  // at 1 s again. Before the reload the plugin answered from the first server through six intervals, after which a pause
+  // that went on doubling would be the whole 30 s interval; the second server fails twice and then answers.
+  it.live("a reload to a server whose first read fails is asked again after 1 s, then 2 s", () =>
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      const config = yield* Config.Test
+      const modelState = yield* Model.Service
+      const first = yield* onWaitingClock(() => Response.json({ models: [summary("first:1b", "first-digest")] }))
+      const second = yield* first.serve((request) =>
+        request > 2 ? Response.json({ models: [summary("second:1b", "second-digest")] }) : unavailable(),
+      )
+      yield* first.plugin("30 seconds")
+      yield* first.pauses(7)
+      const asked = second.asked
+      yield* config.setEntries([configuration({ baseURL: `${second.origin}/v1` })])
+      yield* bus.publish(Event.Updated, {})
+      yield* within(
+        Effect.sync(() => asked.length),
+        (count) => count >= 3,
+        10_000,
+      )
+      expect(asked.slice(1, 3).map((at, index) => at - asked[index]!)).toEqual([1_000, 2_000])
+      yield* within(
+        modelState.get(Provider.ID.make("ollama"), Model.ID.make("second:1b")),
+        (model) => model !== undefined,
+        5_000,
+      )
+    }),
+  )
+
+  // Each way a first read can fail is a failure, never an answer with no models (FU-M3-385; class 6 and class 7): the
+  // plugin asks again 1 s after the failed read, then 2 s after the next one, and the failure is not kept as fresh, so
+  // a second plugin of the same server asks it too. The clock waits while a request that answers runs; a request that
+  // never answers lets it move, so that its own 1 second limit ends it. Each request is recorded with the plugin that
+  // made it and the clock's time when it began and ended.
+  const failures = [
+    { name: "a server that refuses the connection", refused: true, answer: () => Response.json({ models: [] }) },
+    { name: "a body that is not JSON", answer: () => new Response("<html>not json</html>", { status: 200 }) },
+    { name: "a body of the wrong shape", answer: () => Response.json({ models: "none" }) },
+    { name: "a 503", answer: unavailable },
+    { name: "a server that does not answer in time", hangs: true, answer: () => new Promise<Response>(() => {}) },
+  ]
+  for (const failure of failures)
+    it.live(
+      `a first read that fails with ${failure.name} is asked again after 1 s, then 2 s, and is not kept as fresh`,
+      () =>
+        Effect.gen(function* () {
+          const time = yield* waitingClock
+          const server = yield* Effect.acquireRelease(
+            Effect.sync(() => Bun.serve({ port: 0, fetch: () => failure.answer() })),
+            (server) => Effect.promise(() => server.stop(true)),
+          )
+          const origin = server.url.origin
+          // Nothing listens on a port whose server has stopped, so every connection to it is refused.
+          if (failure.refused) yield* Effect.promise(() => server.stop(true))
+          const asked: Array<{ by: string; at: number; done?: number }> = []
+          const http = yield* HttpClient.HttpClient
+          const plugin = (by: string) =>
+            addPlugin(origin, "1 hour").pipe(
+              Effect.provideService(
+                HttpClient.HttpClient,
+                HttpClient.transform(http, (response, request) => {
+                  if (!request.url.endsWith("/api/tags")) return response
+                  const entry: { by: string; at: number; done?: number } = { by, at: time.now() }
+                  asked.push(entry)
+                  const recorded = response.pipe(Effect.ensuring(Effect.sync(() => (entry.done = time.now()))))
+                  return failure.hangs ? recorded : time.work(recorded)
+                }),
+              ),
+              Effect.provideService(Clock.Clock, time.clock),
+            )
+          yield* plugin("first")
+          const first = () => asked.filter((entry) => entry.by === "first" && entry.done !== undefined)
+          yield* within(
+            Effect.sync(() => first().length),
+            (count) => count >= 3,
+            15_000,
+          )
+          expect(first().slice(1, 3).map((entry, index) => entry.at - first()[index]!.done!)).toEqual([1_000, 2_000])
+          yield* plugin("second")
+          expect(asked.filter((entry) => entry.by === "second").length).toBeGreaterThanOrEqual(1)
+        }),
+      30_000,
+    )
+
+  // Control: a server that answered with no models has answered; the plugin has nothing, but it does not ask again
+  // before its interval either.
+  it.live(
+    "a server that answered with no models is not asked again before its interval",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const requests = { tags: 0 }
+          const server = Bun.serve({
+            port: 0,
+            fetch: () => {
+              requests.tags++
+              return Response.json({ models: [] })
+            },
+          })
+          return { requests, server }
+        }),
+        ({ requests, server }) =>
+          Effect.gen(function* () {
+            yield* addPlugin(server.url.origin, "1 hour")
+            yield* Effect.promise(() => Bun.sleep(2_500))
+            expect(requests.tags).toBe(1)
+          }),
+        ({ server }) => Effect.promise(() => server.stop(true)),
+      ),
+    15_000,
   )
 
   it.live("replaces and restores the same-ID Models.dev provider", () =>

@@ -1,4 +1,4 @@
-import type { AuthenticateResponse, InitializeResponse } from "@agentclientprotocol/sdk"
+import type { AuthenticateResponse } from "@agentclientprotocol/sdk"
 import { describe, expect, test } from "bun:test"
 import { createAcpFixture, expectOk, initialize } from "./subprocess"
 
@@ -40,9 +40,7 @@ describe("acp initialize/auth subprocess", () => {
 
   test("initialize without terminal-auth metadata keeps auth command implicit", async () => {
     await using fixture = await createAcpFixture()
-    const initialized = expectOk(
-      await fixture.spawn().request<InitializeResponse>("initialize", { protocolVersion: 1 }),
-    )
+    const initialized = await initialize(fixture.spawn(), { protocolVersion: 1 })
 
     expect(initialized.authMethods?.[0]?.id).toBe("orbit-login")
     expect(initialized.authMethods?.[0]?._meta?.["terminal-auth"]).toBeUndefined()

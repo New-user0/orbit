@@ -3,6 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { isolatedEnv } from "./fixture/environment"
+import { removeTree } from "../../core/test/fixture/remove-tree"
 
 // A local Ollama stand-in whose server runs the model with a 4k window, far below what an agent turn needs.
 const discovery = { delay: 0 }
@@ -59,7 +60,7 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), "orbit-ollama-"))
 
 afterAll(async () => {
   await ollama.stop(true)
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+  await removeTree(root)
 })
 
 test("orb doctor warns when Ollama serves a context window too small for the agent", async () => {

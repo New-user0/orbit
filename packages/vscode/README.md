@@ -20,9 +20,19 @@ and starts it by its full path, so an `orb` in the folder you opened is never th
 
 - **Chat:** open the Orbit icon in the activity bar. Pick a model at the top, type, and press Enter. **Stop** interrupts
   the agent.
-- **Permissions:** when Orbit asks before an action, the chat shows a card. For file edits, **Show diff** opens the
-  proposed change in VS Code's diff view before you choose **Allow once**, **Always allow** or **Reject**. Which actions
-  ask is set by Orbit's `permissions` rules, the same as in the terminal.
+- **Permissions:** when Orbit asks before an action, the chat shows a card with **Allow**, **Always allow** and
+  **Reject**. Which actions ask is set by Orbit's `permissions` rules, the same as in the terminal.
+- **Reviewing changes:** an Edit or Write approval also opens beside the chat as a diff whose right side you can edit.
+  Save it (or press **Accept** on the tab) to approve your version, close the tab to approve the proposal as it is, or
+  press **Reject**. Other changes, such as a patch of several files, open read-only from the card's **Open diff**. A
+  file opens only when it is inside the session's folder and inside a folder of this window; otherwise the card shows
+  the change. Each message you sent has **View changes**, one diff of everything that prompt changed with the file
+  tools, and **Restore files**, which asks first and then puts those files back as they were before it. Orbit writes
+  every one of these changes through its service, never from the extension.
+- **The terminal UI's approvals:** when `orb` runs in a terminal of this window, its Edit and Write approvals open here
+  as the same editable diff, under the same checks. Save, close or **Reject** the tab, or answer in the terminal; the
+  terminal UI sends the answer to its service. Set `"diffs": { "tool": "terminal" }` in the terminal UI's `cli.json` to
+  keep its diffs in the terminal.
 - **From the editor** (right-click, or the Command Palette):
   - **Orbit: Ask About Selection** (`Ctrl+Esc` / `Cmd+Esc`) sends the selection with a question.
   - **Orbit: Explain Selection**.

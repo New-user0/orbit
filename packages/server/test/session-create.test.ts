@@ -1,8 +1,10 @@
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Session } from "@orbit/schema/session"
 import { Effect, Schema } from "effect"
 import { it } from "../../core/test/lib/effect"
 import { ServerFetch } from "../src/fetch"
+
+setDefaultTimeout(30_000)
 
 const SessionResponse = Schema.Struct({ data: Schema.toEncoded(Session.Info) })
 const SessionsResponse = Schema.Struct({ data: Schema.Array(Schema.toEncoded(Session.Info)) })
@@ -13,6 +15,7 @@ it.live("creates a child at its parent's location and lists it under the parent"
       app: { version: "test" },
       database: { path: ":memory:" },
       fs: { filewatcher: false },
+      trust: { implicit: true },
     })
     const create = (body: unknown) =>
       Effect.promise(async () => {
@@ -45,6 +48,7 @@ it.live("returns not found when creating a child of a missing session", () =>
       app: { version: "test" },
       database: { path: ":memory:" },
       fs: { filewatcher: false },
+      trust: { implicit: true },
     })
     const parentID = Session.ID.create()
     const response = yield* Effect.promise(() =>

@@ -6,7 +6,9 @@ import type { SessionHooks } from "@orbit/plugin/effect/session"
 import { Model } from "@orbit/schema/model"
 import { AbsolutePath } from "@orbit/schema/schema"
 import { Session } from "@orbit/schema/session"
+import { plain } from "@orbit/util/plain"
 import { Effect, Schema } from "effect"
+import { WorkspaceTrust } from "../../workspace-trust.js"
 
 export const RenameInput = Schema.Struct({
   sessionID: Schema.optionalKey(Session.ID).annotate({ description: "Omit to rename the current session." }),
@@ -129,7 +131,15 @@ export const Plugin = {
               }
             }).pipe(
               Effect.mapError(
-                (error) => new ToolFailure({ message: `Unable to move session to ${input.directory}`, error }),
+                (error) =>
+                  new ToolFailure({
+                    // The refusal names the folder the destination really is, as the session's folder reads it.
+                    message:
+                      error instanceof WorkspaceTrust.UntrustedError
+                        ? `${plain(error.directory)} is not trusted, so the session stays where it is. The person can trust it with \`orb trust\`, or by starting \`orb\` there.`
+                        : `Unable to move session to ${input.directory}`,
+                    error,
+                  }),
               ),
             ),
         })

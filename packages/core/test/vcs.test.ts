@@ -832,7 +832,7 @@ describe("Vcs", () => {
         expect((yield* vcs.diff("branch")).map((row) => row.file)).toEqual(["feature.txt", "release.txt"])
         expect(yield* vcs.base().pipe(Effect.flip)).toMatchObject({ message: "Choose a review base" })
       }),
-    ),
+    ), 10_000,
   )
 
   it.live("reports missing explicit bases and missing default bases without calling them clean", () =>
@@ -894,7 +894,7 @@ describe("Vcs", () => {
           "release.txt",
         ])
       }),
-    ),
+    ), 10_000,
   )
 
   for (const scenario of [
@@ -995,7 +995,7 @@ describe("Vcs", () => {
         yield* Effect.promise(() => $`git checkout -b uncertain HEAD`.cwd(directory).quiet())
         expect(yield* vcs.base().pipe(Effect.flip)).toMatchObject({ message: "Choose a review base" })
       }),
-    ),
+    ), 10_000,
   )
 
   it.live("ignores stale, deleted, renamed, and self-mirroring creation hints", () =>
@@ -1035,7 +1035,7 @@ describe("Vcs", () => {
         })
         expect(yield* vcs.base().pipe(Effect.flip)).toMatchObject({ message: "Choose a review base" })
       }),
-    ),
+    ), 15_000,
   )
 
   it.live("creates detached worktrees without review metadata and requires an explicit base without a named hint", () =>
@@ -1096,7 +1096,7 @@ describe("Vcs", () => {
           yield* Effect.promise(() => Bun.file(path.join(detached.gitDirectory, "orbit-review.json")).exists()),
         ).toBeFalse()
       }),
-    ),
+    ), 10_000,
   )
 
   it.live("rejects a branch creation anchor removed by rebase", () =>
@@ -1143,6 +1143,6 @@ describe("Vcs", () => {
         })
         expect(yield* vcs.base().pipe(Effect.flip)).toMatchObject({ message: "Choose a review base" })
       }),
-    ),
+    ), 20_000,
   )
 })

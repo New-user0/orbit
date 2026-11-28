@@ -1,4 +1,4 @@
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "./render"
 import type { AgentInfo, ModelInfo, SessionInfo } from "@orbit/client"
 import path from "node:path"
 import { ConfigProvider } from "../../src/config"
@@ -6,6 +6,7 @@ import { ArgsProvider, type Args } from "../../src/context/args"
 import { ClientProvider } from "../../src/context/client"
 import { DataProvider, useData } from "../../src/context/data"
 import { LocalProvider, useLocal } from "../../src/context/local"
+import type { LogSink } from "../../src/context/log"
 import { Keymap } from "../../src/context/keymap"
 import { LocationProvider, useLocation } from "../../src/context/location"
 import { PermissionProvider } from "../../src/context/permission"
@@ -31,6 +32,11 @@ export async function renderLocal(
     directory?: string
     /** The address the client says the server listens on; none by default. */
     url?: string
+    /** The terminal's size; 100 by 30 by default. */
+    width?: number
+    height?: number
+    /** Where the app's log lines go; nowhere by default. */
+    log?: LogSink
   } = {},
 ) {
   const temporary = await tmpdir()
@@ -60,9 +66,9 @@ export async function renderLocal(
     return <box />
   }
 
-  const setup = await testRender(
+  const setup = await testRenderTimed(
     () => (
-      <TestTuiContexts paths={{ state: temporary.path }}>
+      <TestTuiContexts paths={{ state: temporary.path }} log={input.log}>
         <ArgsProvider {...input.args}>
           <ConfigProvider config={createTuiResolvedConfig()}>
             <Keymap.Provider>
@@ -90,7 +96,7 @@ export async function renderLocal(
         </ArgsProvider>
       </TestTuiContexts>
     ),
-    { width: 100, height: 30, kittyKeyboard: true },
+    { width: input.width ?? 100, height: input.height ?? 30, kittyKeyboard: true },
   )
   await waitForModel(() => local !== undefined && local.model.ready)
   await data.location.sync()

@@ -195,10 +195,15 @@ export interface GenerateMethod {
   (request: LLMRequest, options?: StreamOptions): Effect.Effect<LLMResponse, AIError>
 }
 
+/** Called once the provider has begun to answer, so a caller can tell a refused request from one that was billed. */
+export interface CompactionObserver {
+  readonly onResponse?: () => void
+}
+
 export type CompactOperation = (
   request: LLMRequest,
   executor: RequestExecutor.Interface,
-  options?: Pick<StreamOptions, "http">,
+  options?: Pick<StreamOptions, "http"> & CompactionObserver,
 ) => Effect.Effect<CompactionResponse, AIError>
 
 export type TriggerCompactOperation = (
@@ -213,12 +218,12 @@ export interface CompactionOperations {
   readonly trigger?: TriggerCompactOperation
 }
 
-export interface EndpointCompactOptions extends Pick<StreamOptions, "http"> {
+export interface EndpointCompactOptions extends Pick<StreamOptions, "http">, CompactionObserver {
   readonly mechanism?: "endpoint"
   readonly webSocket?: never
 }
 
-export interface TriggerCompactOptions extends StreamOptions {
+export interface TriggerCompactOptions extends StreamOptions, CompactionObserver {
   readonly mechanism: "trigger"
 }
 

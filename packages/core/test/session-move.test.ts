@@ -29,6 +29,7 @@ import { offlineModels } from "./fixture/models"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { globalProjectNode } from "./lib/project"
+import { trustedProject } from "./fixture/project-trust"
 
 const it = testEffect(
   AppNodeBuilder.build(
@@ -53,11 +54,13 @@ const itWithActiveExecution = testEffect(
           LocationServiceMap.Service,
           LayerMap.make(
             (ref: Location.Ref) =>
-              Layer.merge(
+              Layer.mergeAll(
                 LayerNode.compile(Location.boundNode(ref), {
                   replacements: [Project.node.replace(globalProjectNode), offlineModels],
                 }),
                 Layer.succeed(SessionRunner.Service, { drain: () => Effect.never }),
+                // A drain starts only in a trusted folder (trust-first).
+                trustedProject,
               ) as unknown as Layer.Layer<LocationServices>,
           ),
         ),

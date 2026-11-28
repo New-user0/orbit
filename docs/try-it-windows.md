@@ -38,6 +38,9 @@ $MODEL = "ollama/qwen3:8b"               # replace with a name from the list abo
 orb doctor --probe --model $MODEL        # must report the model as reachable
 ```
 
+- **Folder:** the probe starts a short session in the current folder, so it stops in a folder you have not trusted. Run
+  it from a project folder you trust, or add `--trust` to trust the current one for this probe only.
+
 - **Ollama:** set `OLLAMA_CONTEXT_LENGTH=32768` where Ollama runs and in this terminal
   (`$env:OLLAMA_CONTEXT_LENGTH = "32768"`), then restart Ollama.
 - **Tachyon:** set your `TACHYON_*` variables (see [tachyon.md](tachyon.md)); models appear as

@@ -24,6 +24,7 @@ import { Agent as AgentSchema } from "@orbit/schema/agent"
 import { LayerNode } from "@orbit/util/effect/layer-node"
 import { location } from "./fixture/location"
 import { untrustedProjectNodes } from "./fixture/project-trust"
+import { junctionSpellings, junctionTemporary } from "./fixture/legacy-junction"
 import { tmpdirScoped } from "./fixture/tmpdir"
 import { it } from "./lib/effect"
 
@@ -97,7 +98,8 @@ describe("external_directory rules meet the real folder behind another spelling"
       `a deny for a folder blocks every spelling that leads there (${managed ? "managed" : "configured"})`,
       () =>
         Effect.gen(function* () {
-          const tmp = (yield* tmpdirScoped()).path
+          // Made where Windows' legacy junctions lead to it, so that their spellings name the folder (fixture/legacy-junction.ts).
+          const tmp = (yield* tmpdirScoped(undefined, junctionTemporary())).path
           const project = path.join(tmp, "project")
           const ssh = path.join(tmp, "home", ".ssh")
           const elsewhere = path.join(tmp, "elsewhere")
@@ -109,12 +111,11 @@ describe("external_directory rules meet the real folder behind another spelling"
             await fs.symlink(ssh, path.join(elsewhere, "k"), "junction")
             await fs.symlink(open, path.join(elsewhere, "o"), "junction")
           })
-          // Windows keeps old names for a user's folders as system junctions: `Local Settings` leads to `AppData\Local`.
-          const legacy = ssh.replace(/^(.*?\\Users\\[^\\]+)\\AppData\\Local\\/i, "$1\\Local Settings\\")
           const spellings = [
             ["plain path", path.join(ssh, "id_rsa")],
             ["link outside the project", path.join(elsewhere, "k", "id_rsa")],
-            ...(legacy === ssh ? [] : [["system junction", path.join(legacy, "id_rsa")] as const]),
+            // Windows keeps old names for a user's folders as system junctions: `Local Settings` leads to `AppData\Local`.
+            ...junctionSpellings(ssh).map((item) => [`system junction ${item.name}`, path.join(item.spelled, "id_rsa")] as const),
             ...(process.platform === "linux"
               ? [
                   ["/proc/self/root", path.join("/proc/self/root", ssh, "id_rsa")] as const,
@@ -122,6 +123,11 @@ describe("external_directory rules meet the real folder behind another spelling"
                 ]
               : []),
           ]
+          // A Windows run that cannot spell the folder through those junctions fails here, not by checking fewer spellings.
+          if (process.platform === "win32")
+            expect(spellings.map(([name]) => name)).toEqual(
+              expect.arrayContaining(["system junction Documents and Settings", "system junction Local Settings"]),
+            )
           const rule = {
             action: "external_directory",
             resource: `${slash(ssh)}/*`,

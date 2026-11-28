@@ -1,6 +1,6 @@
 export * as SessionPrompt from "./prompt.js"
 
-import { Base64, FileAttachment, Prompt } from "@orbit/schema/prompt"
+import { Base64, FileAttachment, Prompt, PromptCommand } from "@orbit/schema/prompt"
 import { PromptInput } from "@orbit/schema/prompt-input"
 import { SessionInbox } from "@orbit/schema/session-inbox"
 import type { Session } from "@orbit/schema/session"
@@ -29,6 +29,11 @@ export type Input = {
   skills?: PromptInput.Prompt["skills"]
   /** Not part of the plugin `session.prompt` hook payload: it is carried around the hook as admitted. */
   editor?: PromptInput.Prompt["editor"]
+  /**
+   * The slash command this prompt is the expansion of, from the command the server ran (`SessionCommand.execute`); no
+   * client input carries it. Not part of the plugin `session.prompt` hook payload either.
+   */
+  command?: PromptCommand
   metadata?: Record<string, unknown>
   /** Limits and a fallback for the turn this prompt belongs to. */
   turn?: SessionTurn.Options
@@ -69,7 +74,9 @@ export const prepare = Effect.fn("SessionPrompt.prepare")(function* (request: {
     const agents = input.agents ? yield* startableAgents(input.agents) : undefined
     const editor = request.input.editor ? yield* readableEditor(request.session, request.input.editor) : undefined
     const files = input.files
-      ? yield* Effect.forEach(input.files, materializeAttachment, { concurrency: 8 })
+      ? (yield* Effect.forEach(input.files, (file) => materializeAttachment(request.session, file), {
+          concurrency: 8,
+        })).filter((file) => file !== undefined)
       : undefined
     const requested = input.skills
     const selected = yield* Effect.gen(function* () {
@@ -102,6 +109,7 @@ export const prepare = Effect.fn("SessionPrompt.prepare")(function* (request: {
           skills: selected?.length ? selected : undefined,
           editor,
         }),
+        ...(request.input.command === undefined ? {} : { command: request.input.command }),
         metadata: event.metadata,
         turn: request.input.turn,
       }),
@@ -150,26 +158,45 @@ const readableEditor = Effect.fn("SessionPrompt.readableEditor")(function* (
   if (!home && !path.isAbsolute(editor.path))
     return yield* dropped("path is not absolute")
   if (editor.selection && editor.selection.end < editor.selection.start) return yield* dropped("selection ends before it starts")
-  const access = yield* FileAccess.Service
-  const permission = yield* Permission.Service
-  const target = yield* access.resolve({ path: editor.path, kind: "file" }).pipe(Effect.option)
-  if (target._tag === "None") return yield* dropped("path could not be resolved")
-  const denied = yield* permission
-    .denied({
-      action: "Read",
-      resources: [target.value.resource],
-      save: ["*"],
-      metadata: { paths: [target.value.place] },
-      ...leadsOf([target.value]),
-      sessionID: session.id,
-      agent: session.agent,
-    })
-    .pipe(Effect.orElseSucceed(() => true))
-  if (denied) return yield* dropped("a read rule denies the path")
+  const decided = yield* readCheck(session, editor.path)
+  if (decided.refused !== undefined) return yield* dropped(decided.refused)
   return editor
 })
 
+// Why the read rules, and through them the configuration policies, refuse `file` to the model at admission, where no
+// tool reads it, or the place they let through, which is the one to read. It resolves the path with the read tool's own
+// resolver, asks nobody and opens nothing. A place outside the project is decided as the read tool decides it: the read
+// rules, and a deny for the folder it is in (`external_directory`), the folder itself for a folder (classes 3 and 8).
+const readCheck = Effect.fn("SessionPrompt.readCheck")(function* (session: Session.Info, file: string) {
+  const access = yield* FileAccess.Service
+  const permission = yield* Permission.Service
+  const target = yield* access.resolve({ path: file }).pipe(Effect.option)
+  if (target._tag === "None") return { refused: "path could not be resolved" }
+  const base = { sessionID: session.id, agent: session.agent }
+  const external = access.externalRequest([target.value], base)
+  const [read, folder] = yield* Effect.forEach(
+    [
+      {
+        action: "Read",
+        resources: [target.value.resource],
+        save: ["*"],
+        metadata: { paths: [target.value.place] },
+        ...leadsOf([target.value]),
+        ...base,
+      },
+      ...(external === undefined ? [] : [external]),
+    ],
+    (request) => permission.denied(request).pipe(Effect.orElseSucceed(() => true)),
+  )
+  if (read) return { refused: "a read rule denies the path" }
+  if (folder) return { refused: "a rule denies the folder the path is in" }
+  return { place: target.value.place }
+})
+
+// A mentioned file or folder that a read rule or a policy refuses is left out of the prompt with one log line, as the
+// editor field is (classes 3 and 8): it reaches the model whole without a read. The prompt is admitted without it.
 const materializeAttachment = Effect.fn("SessionPrompt.materializeAttachment")(function* (
+  session: Session.Info,
   input: PromptInput.FileAttachment,
 ) {
   const label = attachmentLabel(input)
@@ -183,7 +210,8 @@ const materializeAttachment = Effect.fn("SessionPrompt.materializeAttachment")(f
         // Embedded text declares itself; sniffing it would read text that starts with "BM" as an image.
         mime: /^data:text\/plain[;,]/i.test(input.uri) ? "text/plain" : undefined,
       }
-    : yield* readFileAttachment(input.uri)
+    : yield* readFileAttachment(session, input.uri)
+  if (resolved === undefined) return undefined
   if (resolved.bytes.byteLength > MAX_ATTACHMENT_BYTES)
     return yield* new AttachmentError({
       uri: label,
@@ -228,7 +256,10 @@ const normalizeImageAttachment = Effect.fn("SessionPrompt.normalizeImageAttachme
   return { data: Base64.make(normalized.content.content), mime: normalized.content.mime }
 })
 
-const readFileAttachment = Effect.fn("SessionPrompt.readFileAttachment")(function* (uri: string) {
+const readFileAttachment = Effect.fn("SessionPrompt.readFileAttachment")(function* (
+  session: Session.Info,
+  uri: string,
+) {
   const fs = yield* FSUtil.Service
   const url = yield* Effect.try({
     try: () => new URL(uri),
@@ -238,7 +269,7 @@ const readFileAttachment = Effect.fn("SessionPrompt.readFileAttachment")(functio
     return yield* new AttachmentError({ uri, message: `Unsupported attachment URI: ${uri}` })
   const start = positiveInt(url.searchParams.get("start"))
   const end = positiveInt(url.searchParams.get("end"))
-  const target = yield* Effect.try({
+  const file = yield* Effect.try({
     try: () => {
       url.search = ""
       url.hash = ""
@@ -246,6 +277,14 @@ const readFileAttachment = Effect.fn("SessionPrompt.readFileAttachment")(functio
     },
     catch: () => new AttachmentError({ uri, message: `Invalid file URI: ${uri}` }),
   })
+  // Decided before anything of the path is opened, as the read tool decides it, and the place decided is what is read.
+  const decided = yield* readCheck(session, file)
+  if (decided.refused !== undefined)
+    return yield* Effect.logWarning("A mentioned file was dropped from the prompt").pipe(
+      Effect.annotateLogs({ reason: decided.refused, sessionID: session.id, uri }),
+      Effect.as(undefined),
+    )
+  const target = decided.place
   const info = yield* fs
     .stat(target)
     .pipe(Effect.mapError(() => new AttachmentError({ uri, message: `Unable to read attachment: ${uri}` })))
@@ -264,7 +303,7 @@ const readFileAttachment = Effect.fn("SessionPrompt.readFileAttachment")(functio
       source: { type: "uri" as const, uri },
       start: undefined,
       end: undefined,
-      name: path.basename(target),
+      name: path.basename(file),
       mime: "application/x-directory",
     }
   }
@@ -277,7 +316,7 @@ const readFileAttachment = Effect.fn("SessionPrompt.readFileAttachment")(functio
   const bytes = yield* fs
     .readFile(target)
     .pipe(Effect.mapError(() => new AttachmentError({ uri, message: `Unable to read attachment: ${uri}` })))
-  return { bytes, source: { type: "uri" as const, uri }, start, end, name: path.basename(target), mime: undefined }
+  return { bytes, source: { type: "uri" as const, uri }, start, end, name: path.basename(file), mime: undefined }
 })
 
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024

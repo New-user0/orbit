@@ -76,7 +76,8 @@ const ModelAlias = Schema.String.pipe(
 
 export const Memory = Schema.Literals(["user", "project", "local"]).annotate({
   identifier: "Agent.Memory",
-  description: "Which memory scope the agent keeps its notes in",
+  description:
+    "Which memory scope the agent keeps its notes in: user in <data>/memory/agents/<id>, project in .orbit/agent-memory/<id> (committed with the repository) or local in .orbit/agent-memory-local/<id> (not committed)",
 })
 export const Isolation = Schema.Literal("worktree").annotate({
   identifier: "Agent.Isolation",

@@ -1,23 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import { ClientError, Orbit } from "@orbit/client/promise"
 import { ORBIT_VERSION } from "../src/version"
-import path from "node:path"
 import { createMiniConnection, mergeInput as mergeInteractiveInput, resolveMiniTarget } from "../src/mini"
 import { mergeInput as mergeNonInteractiveInput, parseRunModel } from "../src/run/run"
 import { parseSessionTargetModel } from "../src/session-target"
+import { runOrb } from "./fixture/orb"
 
-async function cli(args: string[]) {
-  const child = Bun.spawn([process.execPath, "run", "src/index.ts", ...args], {
-    cwd: path.join(import.meta.dir, ".."),
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ])
-  return { stdout, stderr, exitCode }
+function cli(args: string[]) {
+  return runOrb(args)
 }
 
 describe("mini command", () => {
@@ -166,6 +156,16 @@ describe("mini command", () => {
           })
         if (url.pathname === "/api/location")
           return Response.json({ directory: process.cwd(), project: { id: "global", directory: process.cwd() } })
+        // The folder is trusted: a server that cannot say stops the run before any session (trust-first).
+        if (url.pathname === "/api/location/trust")
+          return Response.json({
+            directory: process.cwd(),
+            trusted: true,
+            persistent: true,
+            source: "saved",
+            withheld: [],
+            changed: [],
+          })
         if (url.pathname === "/api/session") {
           session = await request.json()
           return new Response("boom", { status: 500 })

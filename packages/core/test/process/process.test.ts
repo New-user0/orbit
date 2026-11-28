@@ -54,8 +54,11 @@ describe("AppProcess", () => {
       }),
     )
 
+    // The two streams come through two pipes, and the order across them is that of the reads, which load can change
+    // (FU-M4-172: "err 1" written 10 ms before "out 2" once arrived after it on a loaded Linux runner). What the option
+    // promises is every line, each stream in its own order.
     it.effect(
-      "captures stdout and stderr in emission order",
+      "captures stdout and stderr together, each stream in its own order",
       Effect.gen(function* () {
         const svc = yield* AppProcess.Service
         const script = [
@@ -64,7 +67,9 @@ describe("AppProcess", () => {
           'setTimeout(() => process.stdout.write("out 2\\n"), 20)',
         ].join(";")
         const result = yield* svc.run(cmd("-e", script), { combineOutput: true })
-        expect(result.output?.toString("utf8")).toBe("out 1\nerr 1\nout 2\n")
+        const lines = result.output?.toString("utf8").split("\n").filter(Boolean) ?? []
+        expect(lines.toSorted()).toEqual(["err 1", "out 1", "out 2"])
+        expect(lines.filter((line) => line.startsWith("out"))).toEqual(["out 1", "out 2"])
         expect(result.stdout.toString("utf8")).toBe("")
         expect(result.stderr.toString("utf8")).toBe("")
       }),

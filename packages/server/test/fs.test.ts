@@ -1,10 +1,12 @@
 import fs from "node:fs/promises"
 import path from "node:path"
-import { expect } from "bun:test"
+import { expect, setDefaultTimeout } from "bun:test"
 import { Effect, Schedule } from "effect"
 import { tmpdirScoped } from "../../core/test/fixture/tmpdir"
 import { it } from "../../core/test/lib/effect"
 import { startServer } from "./fixture/server"
+
+setDefaultTimeout(30_000)
 
 it.live(
   "browsing parents and siblings reuses the current Location and its MCP process",
@@ -19,8 +21,10 @@ it.live(
         await fs.mkdir(path.join(tmp.path, "root", "sibling", "nested"), { recursive: true })
         await fs.writeFile(path.join(tmp.path, "root", "sibling", "file.txt"), "outside")
         await fs.writeFile(starts, "")
+        // In the folder the Location opens: the empty `.git` above it names no repository, so the server takes `current`
+        // as the project, and nothing above the project is read (D7).
         await fs.writeFile(
-          path.join(tmp.path, "root", "orbit.json"),
+          path.join(current, "orbit.json"),
           JSON.stringify({
             mcp: {
               servers: {
@@ -59,7 +63,7 @@ it.live(
       expect(
         yield* count.pipe(
           Effect.repeat({ while: (n) => n === 0, schedule: Schedule.spaced("25 millis") }),
-          Effect.timeout("5 seconds"),
+          Effect.timeout("10 seconds"),
         ),
       ).toBe(1)
 

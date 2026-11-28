@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { RGBA } from "@opentui/core"
-import { testRender } from "@opentui/solid"
+import { testRenderTimed } from "../../fixture/render"
 import { expect, test } from "bun:test"
 import { assistantFooterFixtures } from "../../../src/feature-plugins/system/storybook/assistant-footer.fixtures"
 import { ConfigProvider } from "../../../src/config"
@@ -18,7 +18,7 @@ async function draw(label: string) {
   const position = fixture.messages.findIndex((message) => message.id === fixture.target)
   const message = fixture.messages[position]
   if (message.type !== "assistant") throw new Error("Expected an assistant")
-  const app = await testRender(
+  const app = await testRenderTimed(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>

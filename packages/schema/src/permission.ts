@@ -1,6 +1,7 @@
 export * as Permission from "./permission.js"
 
 import { Schema } from "effect"
+import { FileDiff } from "./file-diff.js"
 import { optional } from "./schema.js"
 import { ephemeral, inventory } from "./event.js"
 import { ascending } from "./identifier.js"
@@ -30,6 +31,9 @@ const RequestFields = {
   metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(optional),
   source: Source.pipe(optional),
   message: Schema.String.pipe(optional),
+  // Set on an Edit or Write question: a person may answer it once with their own version of the file instead of the
+  // proposal. The server keeps the text it read, so the reply carries only the new content.
+  revisable: Schema.Boolean.pipe(optional),
 }
 
 export const Request = Schema.Struct({
@@ -55,6 +59,9 @@ const Replied = ephemeral({
     sessionID: SessionID,
     requestID: ID,
     reply: Reply,
+    // Present when the person answered with their own version: the diff the server approved, from the file as the
+    // question read it to that version, at the place the question named. It is what the tool then writes.
+    files: Schema.Array(Schema.Struct({ ...FileDiff.Info.fields, place: Schema.String })).pipe(optional),
   },
 })
 export const Event = { Asked, Replied, Definitions: inventory(Asked, Replied) }

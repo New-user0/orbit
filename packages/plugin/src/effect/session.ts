@@ -2,6 +2,7 @@ import type { SessionApi } from "@orbit/client/effect/api"
 import type { GenerationOptionsFields, Message, SystemPart } from "@orbit/ai"
 import type { Agent } from "@orbit/schema/agent"
 import type { Model } from "@orbit/schema/model"
+import type { PromptCommand } from "@orbit/schema/prompt"
 import type { PromptInput } from "@orbit/schema/prompt-input"
 import type { Session } from "@orbit/schema/session"
 import type { SessionInbox } from "@orbit/schema/session-inbox"
@@ -34,6 +35,8 @@ export interface SessionContext extends SessionRequest {
   readonly agent: Agent.ID
   /** The configured `output_token_cap`, set only on a primary request, and only when the user configured one that lowered the model's own maximum. */
   readonly outputTokenCap?: number
+  /** Set when the request is only measured (the context usage analysis) and will never be sent, so a hook with side effects skips it. */
+  readonly analysis?: true
   tools: Record<string, { description: string; input: JsonSchema.JsonSchema }>
 }
 
@@ -159,7 +162,6 @@ export type SessionDomain = Pick<
   | "remove"
   | "switchAgent"
   | "switchModel"
-  | "prompt"
   | "generate"
   | "command"
   | "compact"
@@ -170,5 +172,12 @@ export type SessionDomain = Pick<
   | "wait"
   | "context"
 > & {
+  /**
+   * Admits a prompt, as the public prompt input does. `command` is the record a command definition passes on from its
+   * invocation (`...input.prompt`), so the prompt it admits is shown as the command that was run.
+   */
+  readonly prompt: (
+    input: Parameters<SessionApi<unknown>["prompt"]>[0] & { readonly command?: PromptCommand },
+  ) => ReturnType<SessionApi<unknown>["prompt"]>
   readonly hook: ModelHooks<SessionHooks>
 }
